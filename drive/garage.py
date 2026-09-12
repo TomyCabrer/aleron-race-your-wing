@@ -372,6 +372,49 @@ class CarBuild:
         kw["top"] = _top_aero(wt, T, lib)
         return kw
 
+    def mass_points(self, lib: "Library"):
+        """The three fitted wings as `cars.PointMass`, at their own stations.
+
+        This closes the loop task 3 opened: `aero.wing.wing_mass(spec)` is a
+        bottom-up floor for a designed wing and its mount (two skins, two tip
+        plates, two pylons of the mount standoff -- no ribs, no fasteners, no
+        body reinforcement), and the natural consumer of that number is the
+        car it is bolted to. A flank panel's mass acts at its slot `(x, h)`;
+        the top wing's at its own, which is 1.5 m up and behind the rear axle
+        and therefore the one that actually moves anything.
+
+        An empty slot contributes nothing, so the DEFAULT car -- no wings --
+        is untouched, which is why this is safe to charge at all: `cars.
+        with_masses` returns the same object when the total is zero.
+
+        Both flanks are charged. A mirrored build carries TWO panels, and
+        pretending it carries one to keep the numbers tidy would be exactly
+        the kind of stale book-keeping this batch exists to remove.
+
+        Measured on the seeded library: `flank-e423` 4.91 kg a side (the
+        published `fin` 4.85), `rear-s1223` 4.37 kg. A car with all three is
+        1024.18 kg against 1010, `wdist_f` 0.6122 against 0.6100, `h_cg`
+        0.5577 against 0.5500 -- the top wing at h = 1.57 m raises the CG by
+        7.7 mm on its own -- and `Izz` 1212.7 against 1200. Small, and not
+        nothing: 7.7 mm of CG height is 0.9 % more lateral load transfer, on
+        a car whose whole device is worth 2.35 %.
+        """
+        import cars
+        out = []
+        for key in SLOTS:
+            slot = self.slot(key)
+            spec = lib.wings.get(slot.wing)
+            if spec is None:
+                continue
+            # the same standoff the aero is analysed at (`_analyse` above):
+            # a deployed flank panel stands off DEV_OUT0 + DEV_OUT1, the top
+            # wing is carried on its own mount
+            stand = DEV_OUT0 + DEV_OUT1 if SLOT_ROLE[key] == "flank" else DEV_OUT0
+            out.append(cars.PointMass(float(wing_mass(spec, stand)),
+                                      round(slot.x, 4), round(slot.h, 4),
+                                      f"{key} wing {spec.name}"))
+        return tuple(out)
+
     def hud_kwargs(self, lib: "Library") -> dict:
         w = self.wings(lib)
         wl, wr, wt = w["left"], w["right"], w["top"]
@@ -2497,6 +2540,21 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
         and 0.3 < kw3["dev_left"].CL0 < 1.2, f"CL0 {kw3['dev_left'].CL0:.3f} CLa {kw3['dev_left'].CLa:.3f}")
     hud = b.hud_kwargs(lib)
     rep("hud kwargs", hud["dev_left"] and hud["top_on"] and hud["top_span"] > 1.0, str({k: hud[k] for k in ('dev_chord', 'top_span')}))
+    # --- the wings' MASS, charged to the car (task 7) --------------------
+    import cars as _cars
+    mp = b.mass_points(lib)
+    heavy = _cars.with_masses(_cars.CORSA_C, mp)
+    empty = CarBuild()
+    empty.clamp(lib)
+    rep("three fitted wings are charged to the car at their own stations",
+        len(mp) == 3 and all(0.5 < q.m < 20.0 for q in mp)
+        and heavy.m > _cars.CORSA_C.m and heavy.h_cg > _cars.CORSA_C.h_cg
+        and heavy.Izz > _cars.CORSA_C.Izz
+        and _cars.with_masses(_cars.CORSA_C, empty.mass_points(lib)) is _cars.CORSA_C,
+        f"{'+'.join(f'{q.m:.2f}' for q in mp)} = {heavy.m - _cars.CORSA_C.m:.2f} kg -> "
+        f"m {heavy.m:.2f}  wdist_f {heavy.wdist_f:.4f}  h_cg {heavy.h_cg:.4f} "
+        f"(+{1e3 * (heavy.h_cg - _cars.CORSA_C.h_cg):.1f} mm)  Izz {heavy.Izz:.1f}; "
+        f"an EMPTY build leaves the stock car the same object")
     path = os.path.join(tmp, "design.json")
     b.save(path)
     back = CarBuild.load(path)

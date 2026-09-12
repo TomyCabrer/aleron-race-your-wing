@@ -271,7 +271,21 @@ def limiting_axle(util_f, util_r, throttle=0.0, rpm=0.0,
 # ======================================================================= #
 _GG_CACHE = {'key': None, 'V': None, 'curve': None}
 _GG_STATS = {'calls': 0, 'recomputes': 0}
+#  The car the HUD measures AGAINST: the `%mg` force fractions and the g-g
+#  envelope's drag / power terms. Defaults to the Corsa C, so every module
+#  self-check and every headless renderer is unchanged; `set_car` points it
+#  at whatever `cars.py` spec the session is actually driving.
 _CAR = CorsaC()
+
+
+def set_car(car) -> None:
+    """Point the HUD reference car at the fitted one (drive.drive calls this
+    once per session). Drops the g-g cache: its curve is built from
+    `_CAR.CdA / Crr / m / P_wheel` and a stale one would draw the Corsa's
+    envelope round a 1780 kg 540i."""
+    global _CAR
+    _CAR = car if car is not None else CorsaC()
+    _GG_CACHE['key'] = None
 
 
 def gg_envelope(V, mu_scale=1.0, k_eff=0.0, x_w=X_W, h_w=H_W, n=91):
@@ -520,6 +534,9 @@ class HudData:
     engine: str = ''          # the Engine setting's HUD label ('75 HP' ...)
     eng_load: float = 0.0     # PowertrainOutput.load; the sound reads it
     track_name: str = ''
+    # --- which car, and what it weighs right now (the Car / Ballast settings)
+    car_name: str = ''        # cars.CAR_TITLES; '' = draw nothing
+    mass_kg: float = 0.0      # the FITTED mass: stock + ballast + wings
 
 
 # ======================================================================= #
@@ -1440,7 +1457,7 @@ class Renderer:
             if self.cfg.show_gg:
                 self._draw_gg(aux)
             if self.cfg.hud == 'full':
-                self._draw_minimap(x, y)
+                self._draw_minimap(x, y, aux)
         menu = getattr(aux, 'menu', None)
         if menu is not None and getattr(menu, 'open', False):
             menu.draw(sc)                  # ESC / OPTIONS: controls + reset
@@ -2510,7 +2527,7 @@ class Renderer:
                            max(2, int(3 * u)))
         self._blit('g-g', r.x + 6 * u, r.y + 4 * u, self.f_lbl, C_HUD_DIM)
 
-    def _draw_minimap(self, x, y):
+    def _draw_minimap(self, x, y, aux=None):
         r = self._panel(R_MINIMAP)
         for poly in self._mm_areas:
             pygame.draw.polygon(self.screen, (40, 42, 46), poly)
@@ -2522,6 +2539,15 @@ class Renderer:
         name = getattr(self.track, 'title', '') or self.track.name
         self._blit(name, r.x + 6 * self.ui, r.y + 4 * self.ui, self.f_lbl,
                    C_HUD_DIM)
+        # what you are driving, under the map: the car and the mass it is
+        # carrying right now, because the Ballast setting is invisible
+        # otherwise and 200 kg is 20% of a Corsa
+        cn = getattr(aux, 'car_name', '') or ''
+        if cn:
+            kg = float(getattr(aux, 'mass_kg', 0.0) or 0.0)
+            self._blit(f'{cn}' + (f'  {kg:.0f} kg' if kg > 0.0 else ''),
+                       r.x + 6 * self.ui, r.bottom - 16 * self.ui,
+                       self.f_lbl, C_HUD_DIM)
 
 
 def _fmt_t(t, short=False):

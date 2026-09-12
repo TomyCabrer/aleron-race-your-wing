@@ -36,13 +36,13 @@ from the repo root.
 |---|---|---|
 | `drive/tyre.py` | Magic Formula 6.2 combined slip from `.tir` | `corsa_c` |
 | `drive/powertrain.py` | engine, clutch, gearbox, diff, brakes | `corsa_c`, scipy |
-| `drive/vehicle.py` | EOM, load transfer, roll, aero+wing, integrator | `tyre`, `powertrain`, `corsa_c` |
+| `drive/vehicle.py` | EOM, load transfer, roll, aero+wing, integrator | `tyre`, `powertrain`, `corsa_c`, `cars` |
 | `drive/track.py` | track geometry, projection, surfaces | numpy |
 | `drive/input.py` | keyboard/gamepad → `Controls` | pygame |
 | `drive/render.py` | pygame drawing + HUD | `track`, `qss`, pygame |
 | `drive/telemetry.py` | CSV logging | csv |
 | `drive/plots.py` | matplotlib post-run plots (Agg) | matplotlib, numpy |
-| `drive/garage.py` | 3D garage: `CarBuild` (three wing slots) -> `VehicleConfig` kwargs; designer / airfoil / library pages | `corsa_c`, `crossover`, `input`, `menu`, `garage_ui`, `aero`, `vehicle` (the two aero dataclasses only), pygame |
+| `drive/garage.py` | 3D garage: `CarBuild` (three wing slots) -> `VehicleConfig` kwargs and the fitted wings' mass; designer / airfoil / library pages | `corsa_c`, `cars`, `crossover`, `input`, `menu`, `garage_ui`, `aero`, `vehicle` (the two aero dataclasses only), pygame |
 | `drive/garage_ui.py` | widget kit for the garage pages (params, lists, plots, prompt) | pygame, numpy |
 | `drive/aero/` | wing-design physics: sections, panel method, polars (XFOIL / estimate), vortex lattice, GP-BO, the library | numpy, scipy, the `xfoil` binary if present |
 | `drive/menu.py` | pause / help menu overlay (ESC, OPTIONS); pure UI | pygame only |
@@ -681,6 +681,12 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
 * Tyre-force and wing-force arrows drawn at the **same** px/N. The wing is
   63–227 N against a 9908 N car and must look that small.
 * HUD utilisation must call `qss.fy_max` with `qss.TYRE`.
+* `render.set_car(car)` points the module's `_CAR` at the fitted car and drops
+  the g-g cache (whose curve is built from `_CAR.CdA / Crr / m / P_wheel`).
+  It defaults to `CorsaC()`, so every module self-check and every headless
+  renderer is unchanged; `drive.drive` calls it once per session.
+  `HudData.car_name` / `mass_kg` are drawn under the minimap — the Ballast
+  setting is otherwise invisible, and 200 kg is 20 % of a Corsa.
 * g-g envelope calls `qss.max_ay` — cache, recompute only when `|ΔV| > 1 m/s`.
 * `HudData` carries `x_w, h_w, wing_type, inc_deg` (defaults 0.97 / 0.90 /
   '' / 0): the plan-view panel is drawn at `aux.x_w`, not at a constant, so a
@@ -800,6 +806,7 @@ guarded by `CARSIM_HEADLESS`).
 CLI:
 ```
 python3 -m drive.drive [--track arena|open|skidpad|dragstrip] [--radius 50] [--cw]
+  [--car corsa|mx5|540i] [--ballast 0..300] [--ballast-at nose|seat|floor|boot]
   [--wet none|patch|all] [--wing off|fin|plate] [--wing-x 0.97] [--wing-h 0.90]
   [--dt 0.001] [--fps 60] [--size 1280x800] [--camera car_up|world_up|chase]
   [--headless] [--render off|offscreen|window] [--script NAME] [--duration 60]
@@ -817,15 +824,45 @@ arguments rather than reading `runs/settings.json`). It runs both input paths
 commanded directly at the same 56.25 deg/s hand rate — so an input-layer
 effect can be told from a physics one. See `.handoff/08-steering.md`.
 `--track`, `--wet`, `--camera`, `--gearbox`, `--engine`, `--abs`, `--tc`,
-`--sound`, `--no-steer-limit` default to **None**: an interactive launch fills
-them from `runs/settings.json` (an explicit flag wins and is saved back);
-scripts and `--headless` runs fill them with the fixed defaults (arena, patch,
-car_up, auto, **stock**, ABS off, TC off, sound off, aid on) and never read
-the file.
+`--sound`, `--no-steer-limit`, `--car`, `--ballast`, `--ballast-at` default to
+**None**: an interactive launch fills them from `runs/settings.json` (an
+explicit flag wins and is saved back); scripts and `--headless` runs fill them
+with the fixed defaults (arena, patch, car_up, auto, **stock**, **corsa**,
+**0 kg**, ABS off, TC off, sound off, aid on) and never read the file. An
+*explicit* `--car` / `--ballast` does reach a script, the way `--wing` does —
+the car is the subject of a measurement, not a driver aid, and measuring
+another one with the repo's own rigs is the point of having them. Nothing in
+`validate.py` passes either flag, so every acceptance number is the stock
+Corsa C with no ballast.
 
-**Settings** (`drive.Settings`: `track`, `engine`, `gearbox`, `abs`, `tc`,
-`steer_aid`, `wet`, `camera`, `sound` — `Settings.KEYS`; properties
-`power_scale`, `volume`; `load / save / clamp / apply_cli / to_opts / cycle`).
+**Settings** (`drive.Settings`: `track`, `car`, `ballast`, `ballast_at`,
+`engine`, `gearbox`, `abs`, `tc`, `steer_aid`, `wet`, `camera`, `sound` —
+`Settings.KEYS`; properties `power_scale`, `volume`, `car_base`; methods
+`car_spec(extra=())`, `ballast_text()`, `load / save / clamp / apply_cli /
+to_opts / cycle`).
+
+`Settings.power_scale` is `ENGINE_SCALE[engine] × cars.get(car).engine_scale`
+— `engine_scale = T_max/110` is how another car's torque peak rides the
+existing `power_scale` path (§3) with no change in `powertrain.py`. The
+Corsa's is exactly `1.0`, so `x*1.0 == x` and the stock car is untouched; the
+Engine row and the HUD label read the car's own PS through `engine_ps /
+engine_hud / engine_label`, which reproduce the hard-coded `75 / 110 / 150 HP`
+on the Corsa (asserted in `self_check`).
+
+`Settings.car_spec(extra)` is the `CarSpec` a session is built on: the named
+car, plus the ballast, plus `extra` (the garage's fitted wings, from
+`CarBuild.mass_points(lib)` via `opts.mass_points`). With the stock car, no
+ballast and no wings it returns `cars.CORSA_C` **itself**.
+
+`car`, `ballast` and `ballast_at` return **True** from `Sim.apply_setting`, the
+same as `track` and `wet`: a different `CarSpec` is a different tyre model,
+wheel station set, static load set, derived roll block and gearbox, all of
+which are built in `Vehicle.__init__`, so the session is rebuilt rather than
+live-patched. `_opts_car(opts)` resolves the scripted/headless car and returns
+**None** for the stock Corsa with no ballast, so `_build` constructs `CorsaC()`
+exactly as it always did; `_build` gained `car=None` and `mu_scale=None` (the
+car's own `mu_scale`, an explicit value still winning, which is what the wet
+rigs pass).
 Defaults `ENGINE_DEFAULT = 'sport'` (`ENGINE_SCALE` stock 1.0 / tuned 1.5 /
 sport 2.0) and `SOUND_DEFAULT = 'mid'` (`SOUND_VOLUME` 0 / 0.3 / 0.6 / 1.0).
 The ESC menu has two pages: PAUSED (Resume / Settings / Reset to sector /

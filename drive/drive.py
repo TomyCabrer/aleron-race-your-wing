@@ -57,6 +57,7 @@ from math import atan, atan2, cos, degrees, hypot, radians, sin, sqrt
 
 import numpy as np
 
+import cars
 import qss
 from corsa_c import CorsaC, G, RHO
 
@@ -165,7 +166,45 @@ ENGINE_SCALE = {"stock": 1.0, "tuned": 1.5, "sport": 2.0}
 ENGINE_LABELS = {"stock": "Stock 1.2 16V (75 hp)", "tuned": "Tuned (~110 hp)",
                  "sport": "Sport (~150 hp)"}
 ENGINE_HUD = {"stock": "75 HP", "tuned": "110 HP", "sport": "150 HP"}
+PS_PER_W = 1.0 / 735.5        # metric horsepower, which is what "75 hp" is
+
+
+def engine_ps(mode: str, car=None) -> int:
+    """The Engine setting's power on THIS car, in PS, rounded to 5.
+
+    Reproduces the hard-coded labels above exactly on the Corsa (55 kW ->
+    74.8 -> 75; x1.5 -> 112.2 -> 110; x2 -> 149.6 -> 150), which is asserted
+    in `self_check`. On the 540i "Sport" is 570 PS, and calling that "150 HP"
+    -- which the dicts would -- is the kind of stale readout this whole batch
+    is about.
+    """
+    P = (car if car is not None else CorsaC()).P_max
+    ps = P * PS_PER_W * ENGINE_SCALE.get(mode, 1.0)
+    return int(round(ps / 5.0) * 5)
+
+
+def engine_hud(mode: str, car=None) -> str:
+    return f"{engine_ps(mode, car)} HP"
+
+
+def engine_label(mode: str, car=None) -> str:
+    """The SETTINGS page row. The Corsa keeps its own wording, because
+    "Stock 1.2 16V (75 hp)" says something a number cannot."""
+    if car is None or getattr(car, "P_max", 55e3) == 55e3:
+        return ENGINE_LABELS[mode]
+    stem = {"stock": "Stock", "tuned": "Tuned", "sport": "Sport"}[mode]
+    return f"{stem} ({engine_ps(mode, car)} hp)"
 ENGINE_DEFAULT = "sport"      # the seat's default: a 75 hp 1.2 is slow from it
+# The Car setting: cars.CARS -> the CarSpec the session is built on. 'corsa'
+# is the car every scripted number is measured on and the only one this study
+# calibrated; the other two are contrasting parameter sets (cars.py's own
+# docstring is explicit about what is published and what is `est`).
+CAR_MODES = cars.CAR_ORDER
+CAR_DEFAULT = cars.CAR_DEFAULT
+# The Ballast setting: cars.PointMass -> a new CarSpec. Mass AND station,
+# because mass alone is not a weight feature (cars.py). The cycle is a short
+# ladder; --ballast takes any value in [0, cars.BALLAST_MAX].
+BALLAST_STEPS = cars.BALLAST_KG
 SOUND_MODES = ("off", "low", "mid", "high")
 SOUND_VOLUME = {"off": 0.0, "low": 0.3, "mid": 0.6, "high": 1.0}
 SOUND_LABELS = {"off": "Off", "low": "Low", "mid": "Medium", "high": "High"}
@@ -181,6 +220,9 @@ class Settings:
     acceptance numbers must not depend on what the last driver clicked."""
 
     track: str = "arena"          # trk.TRACK_ORDER
+    car: str = CAR_DEFAULT        # cars.CAR_ORDER -> the CarSpec driven
+    ballast: float = 0.0          # kg of added mass, cars.with_masses
+    ballast_at: str = cars.BALLAST_DEFAULT   # cars.BALLAST_STATIONS
     engine: str = ENGINE_DEFAULT  # ENGINE_MODES -> VehicleConfig.power_scale
     gearbox: str = "auto"         # GEARBOX_MODES
     abs: bool = True              # VehicleConfig.abs_on
@@ -191,12 +233,20 @@ class Settings:
     sound: str = SOUND_DEFAULT    # SOUND_MODES -> audio.CarSound volume
     path: str = field(default=SETTINGS_PATH, repr=False, compare=False)
 
-    KEYS = ("track", "engine", "gearbox", "abs", "tc", "steer_aid", "wet",
-            "camera", "sound")
+    KEYS = ("track", "car", "ballast", "ballast_at", "engine", "gearbox",
+            "abs", "tc", "steer_aid", "wet", "camera", "sound")
 
     def clamp(self) -> "Settings":
         if self.track not in trk.TRACKS:
             self.track = "arena"
+        if self.car not in cars.CARS:
+            self.car = CAR_DEFAULT
+        if self.ballast_at not in cars.BALLAST_LABELS:
+            self.ballast_at = cars.BALLAST_DEFAULT
+        try:
+            self.ballast = min(max(float(self.ballast), 0.0), cars.BALLAST_MAX)
+        except (TypeError, ValueError):
+            self.ballast = 0.0
         if self.engine not in ENGINE_MODES:
             self.engine = ENGINE_DEFAULT
         if self.gearbox not in GEARBOX_MODES:
@@ -214,7 +264,38 @@ class Settings:
 
     @property
     def power_scale(self) -> float:
-        return ENGINE_SCALE.get(self.engine, 1.0)
+        """The Engine setting TIMES the car's own `engine_scale`.
+
+        `engine_scale` = T_max/110 rides the existing `power_scale` path
+        (CONTRACT section 3) so a 440 N.m V8 needs no change in
+        `powertrain.py`; it is the honest approximation `cars.py` labels it,
+        because the 19-breakpoint curve is the Corsa's SHAPE scaled to
+        another car's peak. The Corsa's engine_scale is exactly 1.0, so
+        `x * 1.0 == x` and the stock car's power_scale is untouched."""
+        return ENGINE_SCALE.get(self.engine, 1.0) * cars.get(self.car).engine_scale
+
+    @property
+    def car_base(self):
+        """The fitted car WITHOUT the ballast -- the stations are quoted from
+        its axles, so `ballast_point` needs this one."""
+        return cars.get(self.car)
+
+    def car_spec(self, extra=()):
+        """The `CarSpec` a session is built on: the named car plus the
+        ballast plus anything else handed in (the garage charges the three
+        fitted wings' mass this way). The stock car with no ballast and no
+        wings returns `cars.CORSA_C` itself, unballasted and unperturbed."""
+        base = self.car_base
+        pts = list(extra)
+        if self.ballast > 0.0:
+            pts.append(cars.ballast_point(base, self.ballast, self.ballast_at))
+        return cars.with_masses(base, pts)
+
+    def ballast_text(self) -> str:
+        if self.ballast <= 0.0:
+            return "None"
+        return (f"{self.ballast:.0f} kg  "
+                f"{cars.BALLAST_SHORT[self.ballast_at]}")
 
     @property
     def volume(self) -> float:
@@ -253,6 +334,12 @@ class Settings:
         written back onto opts so one code path builds the session."""
         if getattr(opts, "track", None):
             self.track = opts.track
+        if getattr(opts, "car", None):
+            self.car = opts.car
+        if getattr(opts, "ballast", None) is not None:
+            self.ballast = float(opts.ballast)
+        if getattr(opts, "ballast_at", None):
+            self.ballast_at = opts.ballast_at
         if getattr(opts, "engine", None):
             self.engine = opts.engine
         if getattr(opts, "gearbox", None):
@@ -279,6 +366,8 @@ class Settings:
         opts.track, opts.gearbox, opts.abs = self.track, self.gearbox, self.abs
         opts.steer_limit, opts.wet, opts.camera = self.steer_aid, self.wet, self.camera
         opts.engine, opts.tc, opts.sound = self.engine, self.tc, self.sound
+        opts.car, opts.ballast = self.car, self.ballast
+        opts.ballast_at = self.ballast_at
         opts.auto_gearbox = (self.gearbox == "auto")
         return self
 
@@ -287,6 +376,17 @@ class Settings:
         if key == "track":
             order = trk.TRACK_ORDER
             self.track = order[(order.index(self.track) + 1) % len(order)]
+        elif key == "car":
+            self.car = CAR_MODES[(CAR_MODES.index(self.car) + 1) % len(CAR_MODES)]
+        elif key == "ballast":
+            # snap onto the ladder first: --ballast 137 then ENTER goes to 150,
+            # not to 137+25, so the row always shows a value from the list
+            nxt = next((v for v in BALLAST_STEPS if v > self.ballast + 1e-9),
+                       BALLAST_STEPS[0])
+            self.ballast = nxt
+        elif key == "ballast_at":
+            o = cars.BALLAST_STATIONS
+            self.ballast_at = o[(o.index(self.ballast_at) + 1) % len(o)]
         elif key == "engine":
             self.engine = ENGINE_MODES[(ENGINE_MODES.index(self.engine) + 1)
                                        % len(ENGINE_MODES)]
@@ -317,10 +417,27 @@ SETTINGS_HELP = [
         ("TAB", "next map (while driving)"),
         ("BACKSPACE", "garage (while driving; touchpad on the pad)"),
     ]),
+    ("CAR", [
+        ("Corsa C 1.2", "the study's car: every acceptance number is this one"),
+        ("MX-5 1.8 / 540i", "contrasting parameter sets - lighter/neutral and"),
+        ("", "heavy/powerful. BOTH ARE RWD AND DRIVE THEIR FRONT WHEELS:"),
+        ("", "powertrain.py is FWD-only, so their traction is fiction"),
+        ("", "and their torque curve is the Corsa's shape, scaled"),
+    ]),
+    ("BALLAST", [
+        ("Mass", "0-200 kg, and it moves everything it really moves:"),
+        ("", "axle loads, CG height, CG station (a and b), Izz, Ixx,"),
+        ("", "the sprung mass and so the roll - never just m"),
+        ("Nose / Seat", "ahead of the front axle, low / at the CG: SEAT is"),
+        ("", "the control case and changes mass and nothing else"),
+        ("Floor / Boot", "over the rear axle at 0.30 m, which LOWERS the CG /"),
+        ("", "on the boot floor at 0.65 m, which RAISES it"),
+    ]),
     ("ENGINE", [
         ("Stock", "the 1.2 16V, 75 hp: every scripted number is this car"),
         ("Tuned / Sport", "1.5x / 2x the torque curve, clutch uprated to suit;"),
         ("", "TC keeps the fronts from spinning through 1st"),
+        ("", "on another car it multiplies that car's own engine_scale"),
     ]),
     ("GEARBOX", [
         ("Automatic", "the box shifts and works the clutch"),
@@ -337,8 +454,9 @@ SETTINGS_HELP = [
         ("Dragstrip", "1500 m straight; 1/8 mile, 1/4 mile, km gates"),
     ]),
 ]
-SETTINGS_NOTE = ("Map and surface changes restart the session on the new map with "
-                 "the same car; the rest apply at once. Saved to runs/settings.json.")
+SETTINGS_NOTE = ("Map, surface, car and ballast changes restart the session - a "
+                 "different CarSpec is a different tyre, roll block and gearbox; "
+                 "the rest apply at once. Saved to runs/settings.json.")
 
 
 # ==================================================================== #
@@ -943,7 +1061,11 @@ class Sim:
             mode = ENGINE_DEFAULT
         self.settings.engine = mode
         v = self.veh
-        v.cfg.power_scale = ENGINE_SCALE[mode]
+        # settings.power_scale, not ENGINE_SCALE[mode]: on another car it also
+        # carries that car's own engine_scale (= T_max/110), which is how a
+        # 440 N.m V8 rides the existing power_scale path. Exactly
+        # ENGINE_SCALE[mode] on the Corsa, whose engine_scale is 1.0.
+        v.cfg.power_scale = self.settings.power_scale
         v.pt_p = ptm.PowertrainParams.from_car(v.car, power_scale=v.cfg.power_scale)
 
     def _audio_apply(self) -> None:
@@ -983,7 +1105,13 @@ class Sim:
         s = self.settings
         s.cycle(key)
         restart = False
-        if key == "track" or key == "wet":
+        if key in ("track", "wet", "car", "ballast", "ballast_at"):
+            # A different car, or different ballast, is a different CarSpec:
+            # the tyre model, the wheel stations, the static loads, the
+            # derived roll block and the powertrain params are all built in
+            # Vehicle.__init__, so the session is rebuilt exactly as a new
+            # map is. Live-patching veh.car would leave every one of them
+            # stale, which is the failure mode this feature exists to avoid.
             restart = True
         elif key == "gearbox":
             self.set_gearbox(s.gearbox)
@@ -1072,7 +1200,10 @@ class Sim:
             names = [getattr(w, "name", "") for w in (cfg.dev_left, cfg.dev_right, cfg.top)
                      if w is not None]
             wing = "garage build: " + ", ".join(dict.fromkeys(names))
-        return (f"{self.track.title or self.track.name}   lap {self.lap.lap}   "
+        c = self.veh.car
+        return (f"{self.track.title or self.track.name}   "
+                f"{cars.car_name(self.settings.car)} {c.m:.0f} kg "
+                f"{100 * c.wdist_f:.0f}% front   lap {self.lap.lap}   "
                 f"{wing}   {GEARBOX_HUD.get(self.gearbox, '')}   t {self.t:.1f} s")
 
     def _menu_show_main(self, idx: int = 0) -> None:
@@ -1101,7 +1232,13 @@ class Sim:
     def _settings_items(self) -> list:
         s = self.settings
         rows = [(f"{'Map':<11s}{trk.TRACK_TITLES.get(s.track, s.track)}", "set:track"),
-                (f"{'Engine':<11s}{ENGINE_LABELS[s.engine]}", "set:engine"),
+                (f"{'Car':<11s}{cars.car_name(s.car)}  "
+                 f"{s.car_base.m:.0f} kg", "set:car"),
+                (f"{'Ballast':<11s}{s.ballast_text()}", "set:ballast"),
+                (f"{'Ballast at':<11s}{cars.BALLAST_LABELS[s.ballast_at]}",
+                 "set:ballast_at"),
+                (f"{'Engine':<11s}"
+                 f"{engine_label(s.engine, self.veh.car)}", "set:engine"),
                 (f"{'Gearbox':<11s}{GEARBOX_LABELS[s.gearbox]}", "set:gearbox"),
                 (f"{'ABS':<11s}{'On' if s.abs else 'Off'}", "set:abs"),
                 (f"{'TC':<11s}{'On' if s.tc else 'Off'}", "set:tc"),
@@ -1249,9 +1386,10 @@ class Sim:
             abs_active=bool(v.abs_active[0] or v.abs_active[1]
                             or v.abs_active[2] or v.abs_active[3]),
             tc_active=bool(getattr(v, "tc_active", False)),
-            engine=ENGINE_HUD.get(self.settings.engine, ""),
+            engine=engine_hud(self.settings.engine, v.car),
             eng_load=float(getattr(v, "eng_load", 0.0)),
             track_name=self.track.title or self.track.name,
+            car_name=cars.car_name(self.settings.car), mass_kg=v.car.m,
             F_top=float(getattr(v, "F_top", 0.0)), D_top=float(getattr(v, "D_top", 0.0)),
             top_deploy=float(getattr(v, "top_deploy", 0.0)),
         )
@@ -1431,14 +1569,22 @@ class LapDriver(PathFollower):
 # ==================================================================== #
 def _build(track_name="arena", radius=50.0, cw=False, wing="off",
            x_w=0.97, h_w=0.90, wet="patch", dt=DT_PHYS, telem_path=None,
-           telem_hz=TELEM_HZ, precision="6g", driver=None, mu_scale=1.0,
-           cmdline=None, start_V=0.0, gear=1, tag="", start_s=None):
-    """One place that assembles a headless Sim, so every script agrees."""
+           telem_hz=TELEM_HZ, precision="6g", driver=None, mu_scale=None,
+           cmdline=None, start_V=0.0, gear=1, tag="", start_s=None, car=None):
+    """One place that assembles a headless Sim, so every script agrees.
+
+    `car=None` is `CorsaC()` -- not an equal copy, the same construction
+    every acceptance number was measured on. `mu_scale=None` is the car's
+    own `mu_scale` (1.0 for the Corsa), and an explicit value still wins,
+    which is what the wet rigs pass.
+    """
     tr = trk.make_track(track_name, radius, cw, surfaces=(wet != "none"))
     global_wet = MU_WET_SCALE if wet == "all" else 1.0
 
+    if mu_scale is None:
+        mu_scale = getattr(car, "mu_scale", 1.0) if car is not None else 1.0
     cfg = VehicleConfig(wing=wing, x_w=x_w, h_w=h_w, mu_scale=mu_scale)
-    veh = Vehicle(CorsaC(), cfg)
+    veh = Vehicle(CorsaC() if car is None else car, cfg)
     # Stage OPEN tracks 2.5 m past the line. track.surface_at() rejects a
     # longitudinal overshoot on an open track, so a car parked exactly at s = 0
     # has both rear contact patches 1.52 m behind the strip and they read as
@@ -1470,6 +1616,25 @@ def _build(track_name="arena", radius=50.0, cw=False, wing="off",
                wing=wing, global_wet=global_wet)
 
 
+def _opts_car(opts):
+    """The `CarSpec` a scripted / headless run drives, or **None** for the
+    stock Corsa C with no ballast.
+
+    None, not `cars.CORSA_C`: `_build` then constructs `CorsaC()` exactly as
+    it always did, so the default path is identical rather than merely equal
+    (the telemetry sidecar serialises this object, among other things).
+    """
+    name = getattr(opts, "car", None) or CAR_DEFAULT
+    kg = float(getattr(opts, "ballast", 0.0) or 0.0)
+    if name == CAR_DEFAULT and kg <= 0.0:
+        return None
+    base = cars.get(name)
+    if kg <= 0.0:
+        return base
+    where = getattr(opts, "ballast_at", cars.BALLAST_DEFAULT)
+    return cars.with_masses(base, [cars.ballast_point(base, kg, where)])
+
+
 # ---- accel ---------------------------------------------------------------
 def accel_script(opts) -> dict:
     """WOT from rest. The gearbox shifts itself (powertrain.update_shift)."""
@@ -1477,7 +1642,7 @@ def accel_script(opts) -> dict:
     sim = _build("dragstrip", wing=opts.wing, x_w=opts.wing_x, h_w=opts.wing_h,
                  wet=opts.wet, dt=opts.dt, telem_path=opts.telemetry,
                  telem_hz=opts.telem_hz, precision=opts.telem_precision,
-                 driver=drv, tag="accel")
+                 driver=drv, tag="accel", car=_opts_car(opts))
     trace = []
     n = int(round(opts.duration / sim.dt))
     sim._log(0)
@@ -1551,7 +1716,8 @@ def brake_script(opts) -> dict:
     drv = BrakeDriver(pedal=1.0)
     sim = _build("dragstrip", wing=opts.wing, wet=opts.wet, dt=opts.dt,
                  telem_path=opts.telemetry, telem_hz=opts.telem_hz,
-                 precision=opts.telem_precision, driver=drv, tag="brake")
+                 precision=opts.telem_precision, driver=drv, tag="brake",
+                 car=_opts_car(opts))
     sim.run_headless(opts.duration)
     if sim.telem:
         sim.telem.close()
@@ -1564,13 +1730,13 @@ def brake_script(opts) -> dict:
 # ---- skidpad limit -------------------------------------------------------
 def _skidpad_attempt(V_tgt, radius, wing, x_w, h_w, wet, dt, cw=False,
                      window=8.0, telem_path=None, telem_hz=TELEM_HZ,
-                     precision="6g", mu_scale=1.0):
+                     precision="6g", mu_scale=None, car=None):
     """One 8 s constant-speed window. Returns (held, diagnostics)."""
     drv = PathFollower(V_tgt, wing_on=(wing != "off"))
     sim = _build("skidpad", radius=radius, cw=cw, wing=wing, x_w=x_w, h_w=h_w,
                  wet=wet, dt=dt, telem_path=telem_path, telem_hz=telem_hz,
                  precision=precision, driver=drv, mu_scale=mu_scale,
-                 start_V=V_tgt, gear=3, tag=f"skid{radius:g}")
+                 start_V=V_tgt, gear=3, tag=f"skid{radius:g}", car=car)
     n = int(round(window / dt))
     sim._log(0)
     held = True
@@ -1624,12 +1790,13 @@ def skidpad_limit_script(opts, wing=None, telem_path=None) -> dict:
     """
     wing = opts.wing if wing is None else wing
     R = opts.radius
+    _car = _opts_car(opts)
     lo, hi = 5.0, 1.25 * sqrt(AY_MAX_DRY * R) + 2.0
     ok_lo = False
     diag_lo = {}
     for _ in range(6):
         held, d = _skidpad_attempt(lo, R, wing, opts.wing_x, opts.wing_h,
-                                   opts.wet, opts.dt, opts.cw)
+                                   opts.wet, opts.dt, opts.cw, car=_car)
         if held:
             ok_lo, diag_lo = True, d
             break
@@ -1640,7 +1807,7 @@ def skidpad_limit_script(opts, wing=None, telem_path=None) -> dict:
     for _ in range(12):                       # 12 bisections -> ~5 mm/s
         mid = 0.5 * (lo + hi)
         held, d = _skidpad_attempt(mid, R, wing, opts.wing_x, opts.wing_h,
-                                   opts.wet, opts.dt, opts.cw)
+                                   opts.wet, opts.dt, opts.cw, car=_car)
         if held:
             lo, diag_lo = mid, d
         else:
@@ -1650,7 +1817,7 @@ def skidpad_limit_script(opts, wing=None, telem_path=None) -> dict:
     held, diag = _skidpad_attempt(lo, R, wing, opts.wing_x, opts.wing_h,
                                   opts.wet, opts.dt, opts.cw,
                                   telem_path=tp, telem_hz=opts.telem_hz,
-                                  precision=opts.telem_precision)
+                                  precision=opts.telem_precision, car=_car)
     out = dict(script="skidpad_limit", radius=R, wing=wing, V_limit=lo,
                csv=tp, **diag)
     try:
@@ -1752,7 +1919,7 @@ def wing_ab_script(opts) -> dict:
                                    telem_path=f"{stem}_{tag}{ext}",
                                    telem_hz=opts.telem_hz,
                                    precision=opts.telem_precision,
-                                   mu_scale=mu)
+                                   mu_scale=mu, car=_opts_car(opts))
         matched[tag] = dict(held=held, **d)
 
     kf = 0.5 * RHO * 0.35 * {"off": 0.0, "fin": 0.70, "plate": 1.25}[on_wing]
@@ -1859,7 +2026,8 @@ def ramp_probe_script(opts) -> dict:
     drv = RampProbe()
     sim = _build("dragstrip", wet="none", dt=opts.dt,
                  telem_path=opts.telemetry, telem_hz=opts.telem_hz,
-                 precision=opts.telem_precision, driver=drv, tag="ramp")
+                 precision=opts.telem_precision, driver=drv, tag="ramp",
+                 car=_opts_car(opts))
     sim.run_headless(min(opts.duration, 5.0))
     if sim.telem:
         sim.telem.close()
@@ -1899,7 +2067,8 @@ def lap_script(opts) -> dict:
     sim = _build("arena", wing=opts.wing, x_w=opts.wing_x, h_w=opts.wing_h,
                  wet=opts.wet, dt=opts.dt, telem_path=opts.telemetry,
                  telem_hz=opts.telem_hz, precision=opts.telem_precision,
-                 driver=drv, start_V=25.0, gear=3, tag="lap")
+                 driver=drv, start_V=25.0, gear=3, tag="lap",
+                 car=_opts_car(opts))
     sim.run_headless(opts.duration)
     if sim.telem:
         sim.telem.close()
@@ -2298,7 +2467,8 @@ class _Opts:
                  telemetry=None, telem_hz=TELEM_HZ, telem_precision="6g",
                  margin=0.90, gearbox="auto", auto_gearbox=True, abs=False,
                  steer_limit=True, camera="car_up", engine="stock", tc=False,
-                 sound="off")
+                 sound="off", car=CAR_DEFAULT, ballast=0.0,
+                 ballast_at=cars.BALLAST_DEFAULT)
         d.update(kw)
         self.__dict__.update(d)
 
@@ -2437,24 +2607,61 @@ def _v26_settings_and_menu(tmp, verbose=True):
     s = Settings(path=path)
     s.track, s.gearbox, s.abs, s.wet = "open", "clutch", False, "all"
     s.engine, s.tc, s.sound = "tuned", False, "low"
+    s.car, s.ballast, s.ballast_at = "mx5", 75.0, "boot"
     s.save()
     back = Settings.load(path)
     rt_ok = (back.track, back.gearbox, back.abs, back.wet, back.camera,
-             back.engine, back.tc, back.sound) == (
-        "open", "clutch", False, "all", "car_up", "tuned", False, "low")
+             back.engine, back.tc, back.sound,
+             back.car, back.ballast, back.ballast_at) == (
+        "open", "clutch", False, "all", "car_up", "tuned", False, "low",
+        "mx5", 75.0, "boot")
     bad = Settings(path=path)
     bad.track, bad.gearbox, bad.engine, bad.sound = "moon", "dsg", "v8", "11"
+    bad.car, bad.ballast, bad.ballast_at = "delorean", 1e9, "roof"
     bad.clamp()
-    clamp_ok = (bad.track, bad.gearbox, bad.engine, bad.sound) == (
-        "arena", "auto", ENGINE_DEFAULT, SOUND_DEFAULT)
+    clamp_ok = (bad.track, bad.gearbox, bad.engine, bad.sound, bad.car,
+                bad.ballast, bad.ballast_at) == (
+        "arena", "auto", ENGINE_DEFAULT, SOUND_DEFAULT, CAR_DEFAULT,
+        cars.BALLAST_MAX, cars.BALLAST_DEFAULT)
+    # the car library, through Settings: the default is the study's own car
+    # and it is the SAME OBJECT, ballast really changes the CarSpec, and
+    # power_scale picks up the car's engine_scale
+    d0 = Settings(path="")
+    car_ok = (d0.car_spec() is cars.CORSA_C
+              and d0.power_scale == ENGINE_SCALE[d0.engine]
+              and Settings(path="", car="540i").power_scale
+              == ENGINE_SCALE[ENGINE_DEFAULT] * cars.CARS["540i"].engine_scale)
+    bal = Settings(path="", ballast=200.0, ballast_at="boot").car_spec()
+    car_ok = car_ok and (bal.m == cars.CORSA_C.m + 200.0
+                         and bal.wdist_f < cars.CORSA_C.wdist_f - 0.10
+                         and bal.h_cg > cars.CORSA_C.h_cg
+                         and bal.Izz > 1.4 * cars.CORSA_C.Izz)
+    seat = Settings(path="", ballast=200.0, ballast_at="seat").car_spec()
+    car_ok = car_ok and (seat.wdist_f == cars.CORSA_C.wdist_f
+                         and seat.h_cg == cars.CORSA_C.h_cg
+                         and seat.Izz == cars.CORSA_C.Izz)
+    # the Engine labels must still read exactly as they did on the Corsa
+    car_ok = car_ok and all(engine_hud(m) == ENGINE_HUD[m] for m in ENGINE_MODES)
     o = _Opts(track="skidpad", gearbox=None, abs=None, steer_limit=None,
-              wet=None, camera=None, engine=None, tc=None, sound="off")
+              wet=None, camera=None, engine=None, tc=None, sound="off",
+              car=None, ballast=None, ballast_at=None)
     back.apply_cli(o)
+    # power_scale carries the car's engine_scale now, so it is 1.5 only on
+    # the Corsa; `back` was saved with the MX-5 selected, which is the point
     cli_ok = (back.track == "skidpad" and back.gearbox == "clutch"
               and o.gearbox == "clutch" and o.auto_gearbox is False
               and o.abs is False and o.wet == "all" and o.steer_limit is True
               and o.engine == "tuned" and o.tc is False and o.sound == "off"
-              and back.sound == "off" and back.power_scale == 1.5)
+              and back.sound == "off" and back.car == "mx5"
+              and o.car == "mx5" and o.ballast == 75.0 and o.ballast_at == "boot"
+              and back.power_scale == 1.5 * cars.CARS["mx5"].engine_scale
+              and Settings(path="", engine="tuned").power_scale == 1.5)
+    # an EXPLICIT --car / --ballast still wins over the file
+    o2 = _Opts(track=None, gearbox=None, abs=None, steer_limit=None, wet=None,
+               camera=None, engine=None, tc=None, sound=None,
+               car="540i", ballast=125.0, ballast_at="nose")
+    b2 = Settings.load(path).apply_cli(o2)
+    cli_ok = cli_ok and (b2.car, b2.ballast, b2.ballast_at) == ("540i", 125.0, "nose")
     cyc = Settings(path="")
     seq = []
     for _ in range(len(trk.TRACK_ORDER)):
@@ -2480,19 +2687,33 @@ def _v26_settings_and_menu(tmp, verbose=True):
     ev("nav_down")                                  # -> Settings
     ev("select")
     page_ok = sim._menu_page == "settings" and sim.menu.open
-    ev("nav_down")                                  # -> Engine
+
+    def goto(action: str) -> int:
+        """Put the cursor on the row with this action, wherever it is.
+
+        The page grew Car / Ballast / Ballast at rows, and a test that walks
+        it by counting nav_downs has to be rewritten every time a row is
+        added -- which is how a settings test stops testing settings. Look
+        the row up instead."""
+        tgt = [a for _, a in sim._settings_items()].index(action)
+        while sim.menu.idx < tgt:
+            ev("nav_down")
+        while sim.menu.idx > tgt:
+            ev("nav_up")
+        return tgt
+    i_eng = goto("set:engine")
     ev("select")                                    # sport -> stock (wraps)
     eng_ok = (st.engine == ENGINE_MODES[(ENGINE_MODES.index(ENGINE_DEFAULT) + 1)
                                          % len(ENGINE_MODES)]
               and veh.cfg.power_scale == ENGINE_SCALE[st.engine]
               and abs(veh.pt_p.T_clutch_cap - 200.0 * veh.cfg.power_scale) < 1e-9
-              and sim.menu.idx == 1)
-    ev("nav_down")                                  # -> Gearbox
+              and sim.menu.idx == i_eng)
+    goto("set:gearbox")
     ev("select")                                    # auto -> manual
     c = inp.update(DT_PHYS, 0.0)
     gb_ok = (st.gearbox == "manual" and sim.gearbox == "manual"
              and (c.auto_gearbox, c.auto_clutch) == (False, True)
-             and sim.menu.open and sim._menu_page == "settings" and sim.menu.idx == 2)
+             and sim.menu.open and sim._menu_page == "settings")
     ev("select")                                    # manual -> clutch: neutral
     neut_ok = (st.gearbox == "clutch" and veh.gear == 0 and veh.pt_s.gear == 0)
     for _ in range(300):
@@ -2501,26 +2722,44 @@ def _v26_settings_and_menu(tmp, verbose=True):
     ev("select")                                    # clutch -> auto
     ev("select")                                    # auto -> manual
     gb_ok = gb_ok and neut_ok and st.gearbox == "manual"
-    ev("nav_down")                                  # -> ABS
+    i_abs = goto("set:abs")
     ev("select")                                    # on -> off
-    abs_ok = (st.abs is False and veh.cfg.abs_on is False and sim.menu.idx == 3)
-    ev("nav_down")                                  # -> TC
+    abs_ok = (st.abs is False and veh.cfg.abs_on is False and sim.menu.idx == i_abs)
+    i_tc = goto("set:tc")
     ev("select")                                    # on -> off
-    tc_ok = (st.tc is False and veh.cfg.tc_on is False and sim.menu.idx == 4)
+    tc_ok = (st.tc is False and veh.cfg.tc_on is False and sim.menu.idx == i_tc)
     ev("select")                                    # back on
     tc_ok = tc_ok and st.tc is True and veh.cfg.tc_on is True
-    ev("nav_down")                                  # -> Steering aid
+    goto("set:steer_aid")
     ev("select")
     aid_ok = (st.steer_aid is False and inp.kb.steer_limit is False)
     ev("select")                                    # back on again
-    ev("nav_down"); ev("nav_down")                  # -> Camera
+    goto("set:camera")
     ev("select")
     cam_ok = st.camera == "chase" and sim.renderer.cfg.mode == "chase"
-    ev("nav_down")                                  # -> Sound
+    i_snd = goto("set:sound")
     ev("select")                                    # mid -> high (no window: no CarSound)
     snd_ok = (st.sound == SOUND_MODES[(SOUND_MODES.index(SOUND_DEFAULT) + 1)
                                        % len(SOUND_MODES)]
-              and sim.audio is None and sim.menu.idx == 8)
+              and sim.audio is None and sim.menu.idx == i_snd)
+    # the three new rows: each one demands a session rebuild, because a
+    # different CarSpec is a different tyre model, roll block and gearbox
+    row_ok = True
+    for key, want in (("set:car", CAR_MODES[1]),
+                      ("set:ballast", cars.BALLAST_KG[1]),
+                      ("set:ballast_at", cars.BALLAST_STATIONS[
+                          (cars.BALLAST_STATIONS.index(cars.BALLAST_DEFAULT) + 1)
+                          % len(cars.BALLAST_STATIONS)])):
+        sim.quit, sim.stop_reason = False, ""
+        goto(key)
+        ev("select")
+        got = {"set:car": st.car, "set:ballast": st.ballast,
+               "set:ballast_at": st.ballast_at}[key]
+        row_ok = row_ok and got == want and sim.stop_reason == "restart" and sim.quit
+        sim.quit, sim.stop_reason = False, ""
+        ev("menu"); ev("nav_down"); ev("select")    # the page again
+    st.car, st.ballast, st.ballast_at = CAR_DEFAULT, 0.0, cars.BALLAST_DEFAULT
+    st.save()
     saved = Settings.load(path)
     saved_ok = (saved.gearbox, saved.abs, saved.steer_aid, saved.camera,
                 saved.engine, saved.tc, saved.sound) == (
@@ -2541,21 +2780,22 @@ def _v26_settings_and_menu(tmp, verbose=True):
     gar_ok = sim.stop_reason == "garage" and sim.quit
     sim.quit, sim.stop_reason = False, ""
     ev("menu"); ev("nav_down"); ev("select")        # settings
-    for _ in range(9):
-        ev("nav_down")                              # -> Garage entry
+    tgt = [a for _, a in sim._settings_items()].index("garage")
+    while sim.menu.idx < tgt:
+        ev("nav_down")
     ev("select")
     gar2_ok = sim.stop_reason == "garage" and sim.quit and not sim.menu.open
-    ok = all((rt_ok, clamp_ok, cli_ok, cycle_ok, m_open, page_ok, eng_ok, gb_ok,
-              abs_ok, tc_ok, aid_ok, cam_ok, snd_ok, saved_ok, back_ok, closed_ok,
-              map_ok, tab_ok, gar_ok, gar2_ok))
+    ok = all((rt_ok, clamp_ok, cli_ok, cycle_ok, car_ok, m_open, page_ok,
+              eng_ok, gb_ok, abs_ok, tc_ok, aid_ok, cam_ok, snd_ok, row_ok,
+              saved_ok, back_ok, closed_ok, map_ok, tab_ok, gar_ok, gar2_ok))
     if verbose:
         print(f"  V26 settings    : round-trip {rt_ok}, clamp {clamp_ok}, cli {cli_ok}, "
               f"cycle {cycle_ok}; menu open {m_open}, settings page {page_ok}, "
               f"engine {eng_ok}, gearbox {gb_ok}, abs {abs_ok}, tc {tc_ok}, aid {aid_ok}, "
               f"camera {cam_ok}, sound {snd_ok}, saved {saved_ok}, back {back_ok}, "
               f"closed {closed_ok}, map restart {map_ok}, TAB {tab_ok}, "
-              f"garage {gar_ok}/{gar2_ok}")
-    return ok, dict(round_trip=rt_ok, cli=cli_ok,
+              f"garage {gar_ok}/{gar2_ok}; car/ballast {car_ok}, rows {row_ok}")
+    return ok, dict(round_trip=rt_ok, cli=cli_ok, car=car_ok and row_ok,
                     menu=m_open and page_ok and eng_ok and gb_ok and tc_ok and snd_ok,
                     map_restart=map_ok, garage=gar_ok and gar2_ok)
 
@@ -2809,6 +3049,14 @@ def build_parser():
     # track / wet / camera / gearbox / abs / steer aid default to None: the
     # interactive session fills them from runs/settings.json (an explicit
     # flag wins and is saved); scripts fill them with the fixed defaults.
+    p.add_argument("--car", default=None, choices=CAR_MODES,
+                   help="which car (default corsa: the study's own, and the "
+                        "fixed default for scripts and --headless)")
+    p.add_argument("--ballast", type=float, default=None,
+                   help=f"kg of added mass, 0-{cars.BALLAST_MAX:.0f}")
+    p.add_argument("--ballast-at", dest="ballast_at", default=None,
+                   choices=cars.BALLAST_STATIONS,
+                   help="where the ballast sits (default %s)" % cars.BALLAST_DEFAULT)
     p.add_argument("--track", default=None,
                    choices=sorted(trk.TRACKS.keys()))
     p.add_argument("--radius", type=float, default=50.0, help="skidpad radius, m")
@@ -2927,6 +3175,15 @@ def main(argv=None) -> int:
         opts.abs = bool(opts.abs) if opts.abs is not None else False
         opts.tc = bool(opts.tc) if opts.tc is not None else False
         opts.engine = opts.engine or "stock"
+        # The car is a fixed default too (CONTRACT section 8): every
+        # acceptance number is the stock Corsa C with no ballast. An
+        # EXPLICIT --car / --ballast does reach a script, the way --wing
+        # does -- the car is the subject of the measurement, not a driver
+        # aid, and measuring another one with the repo's own rigs is the
+        # point of having them. Nothing in validate.py passes either flag.
+        opts.car = opts.car or CAR_DEFAULT
+        opts.ballast = 0.0 if opts.ballast is None else float(opts.ballast)
+        opts.ballast_at = opts.ballast_at or cars.BALLAST_DEFAULT
         opts.sound = "off"
         opts.steer_limit = True if opts.steer_limit is None else bool(opts.steer_limit)
 
@@ -2966,7 +3223,8 @@ def main(argv=None) -> int:
                      x_w=opts.wing_x, h_w=opts.wing_h, wet=opts.wet, dt=opts.dt,
                      telem_path=opts.telemetry, telem_hz=opts.telem_hz,
                      precision=opts.telem_precision, driver=drv,
-                     start_V=20.0 if opts.track != "dragstrip" else 0.0, gear=3)
+                     start_V=20.0 if opts.track != "dragstrip" else 0.0, gear=3,
+                     car=_opts_car(opts))
         sim.run_headless(opts.duration)
         if sim.telem:
             sim.telem.close()
@@ -2993,6 +3251,7 @@ def _apply_design(opts, design, lib=None) -> dict:
         opts.wing, opts.wing_x, opts.wing_h = kw["wing"], kw["x_w"], kw["h_w"]
         opts.wing_inc = design.inc_deg
         opts.wing_cfg, opts.hud_cfg = None, None
+        opts.mass_points = ()
         return kw
     lib = lib or grg.library()
     kw = design.cfg_kwargs(lib)
@@ -3000,6 +3259,10 @@ def _apply_design(opts, design, lib=None) -> dict:
     opts.wing_inc = degrees(kw["delta_dev_geom"])
     opts.wing_cfg = kw
     opts.hud_cfg = design.hud_kwargs(lib)
+    # the three fitted wings' MASS, charged to the car at their own stations
+    # (drive/aero/wing.wing_mass -> CarBuild.mass_points). Empty slots give
+    # an empty tuple, so a car with no wings is the car every rig measures.
+    opts.mass_points = design.mass_points(lib)
     return kw
 
 
@@ -3109,10 +3372,17 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
                    delta_dev_geom=radians(getattr(opts, "wing_inc", 0.0)))
     if getattr(opts, "wing_cfg", None):
         aero_kw.update(opts.wing_cfg)      # the garage build's three wings
+    # The car: the Car setting, plus the ballast, plus the mass of the three
+    # wings the garage fitted at their own stations (`drive/aero/wing.
+    # wing_mass` -> `CarBuild.mass_points`). With the stock car, no ballast
+    # and no wings this is `cars.CORSA_C` itself and `car.mu_scale` is 1.0,
+    # so the session is the car every rig measures.
+    car = settings.car_spec(getattr(opts, "mass_points", ()) or ())
     cfg = VehicleConfig(**aero_kw,
                         abs_on=bool(settings.abs), tc_on=bool(settings.tc),
-                        power_scale=settings.power_scale)
-    veh = Vehicle(CorsaC(), cfg)
+                        power_scale=settings.power_scale,
+                        mu_scale=car.mu_scale)
+    veh = Vehicle(car, cfg)
     x, y, psi = trk.start_pose(tr, 0.0)
     veh.reset(x, y, psi, V=0.0, gear=0 if settings.gearbox == "clutch" else 1)
 
@@ -3151,6 +3421,7 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
         try:
             from . import render as rnd
             w, h = (int(v) for v in opts.size.lower().split("x"))
+            rnd.set_car(car)               # the HUD's %mg and the g-g envelope
             cfgv = rnd.ViewConfig(size=(w, h), fps=opts.fps, mode=settings.camera)
             renderer = rnd.Renderer(cfgv, tr,
                                     headless=(opts.render == "offscreen"
