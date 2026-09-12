@@ -696,13 +696,18 @@ def _auto_target(p: PowertrainParams, s: PowertrainState, inp: PtInput,
     """Throttle-scheduled automatic strategy, with the brake-downshift branch.
 
     The two schedules are NOT independent (they were, and they overlapped --
-    see PowertrainParams.n_shift_hyst for the measured hunt). Three rules tie
-    them together:
-      * a downshift must land n_shift_hyst BELOW the target gear's own upshift
-        line, as well as below n_overrev;
+    see PowertrainParams.v_shift_hyst for the measured hunt). Four rules tie
+    them together, all of them keyed on the ROAD speed, which is the currency
+    a shift map is drawn in:
+      * a downshift is refused into a gear the box would already have changed
+        UP out of at this road speed and pedal, within v_shift_hyst -- as well
+        as one that would pass n_overrev;
+      * an upshift REQUIRES the same road-speed agreement, because wheelspin
+        decouples n_e from the car and the line fires against no traction;
       * a box on the brakes never changes up;
       * a throttle-demand downshift picks the target gear in ONE decision
-        instead of walking down at t_shift_lockout + 0.70 s a gear.
+        instead of walking down at t_shift_lockout + 0.70 s a gear; the brake
+        branch still steps down one at a time.
     """
     if s.t_since_shift < p.t_shift_lockout or s.stalled:
         return None
