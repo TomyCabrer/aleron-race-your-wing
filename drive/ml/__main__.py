@@ -14,7 +14,7 @@ import tempfile
 
 import numpy as np
 
-from .baseline import baseline_action
+from .baseline import K70_PLAN, baseline_action
 from .env import DT_EVAL, DT_TRAIN, N_OBS, observe, rollout
 from .policy import LOCK_RAD, RESID_GAIN, Policy
 
@@ -80,6 +80,22 @@ def self_check(verbose: bool = True) -> bool:
          ep.wing_frac > 0.2 and ep.wing_outer_frac > 0.90,
          f"deployed {100 * ep.wing_frac:.0f} % of steps, "
          f"{100 * ep.wing_outer_frac:.0f} % of those on the outer flank")
+
+    # --- the corrected anchor can drive the OPEN map ----------------------
+    #  This is the whole of wave 4 item 1 in one assertion. Through wave 3
+    #  `baseline_action` planned its speed off the 0 / 15 / 35 m curvature
+    #  lookaheads and never `obs[6]`, the 70 m one, so on `open` it held full
+    #  throttle to s = 385 m, braked for 35 m, needed 44.5, and was off the
+    #  road at s = 451.5 m on every single run. `K70_PLAN` closed that, and
+    #  the value is a swept one with a cliff 0.10 either side of it (see
+    #  `baseline.py`), so it is exactly the kind of constant that wants a
+    #  check rather than a comment. 45 s is enough to be 600 m in: the corner
+    #  that used to end the episode is at s ~ 420 m.
+    op = rollout(p0, "open", T=45.0, wing="plate", dt=DT_TRAIN)
+    _rep("the corrected anchor brakes for open's R = 45 m corner",
+         op.ended == "time" and op.s_progress > 600.0,
+         f"{op.s_progress:.0f} m in {op.t:.0f} s, ended '{op.ended}' "
+         f"(K70_PLAN = {K70_PLAN}; at 0.0 it was off the road at 451.5 m)")
 
     # --- the training timestep is the one the docstring claims -----------
     e1 = rollout(p0, "arena", T=20.0, dt=DT_EVAL, tr=tr)
