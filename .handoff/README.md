@@ -6,8 +6,8 @@ which is the rollback point. 31 files, +9807 / −226.
 **The suite is green.** Measured on a quiet machine at the end:
 
 ```
-python3 -m drive.validate            ->  82/82  pass  0 HARD  0 soft  [113.0 s]
-python3 -m drive.validate --modules  -> 100/100 pass  0 HARD  0 soft  [235.3 s]
+python3 -m drive.validate            ->  82/82  pass  0 HARD  0 soft  [113.5 s]
+python3 -m drive.validate --modules  -> 100/100 pass  0 HARD  0 soft  [238.2 s]
 ```
 
 identical to the baseline recorded in `00-baseline.md` before anything was
@@ -15,6 +15,12 @@ touched. Module self-checks: `tyre` pass, `powertrain` **90/90** (was 82),
 `vehicle` **33/33** (was 32), `input` pass, `render` **26/26** (was 19),
 `garage` pass, `aero.wing` **27/27** (was 21), `cars` pass, `ml` **11/11**.
 
+> **All eight wall-clock checks are now load-normalised** (`render.py`'s V22,
+> the two open-map frames, the menu overlay and the chase budget; the garage's
+> three page draws) against a reference workload timed in the same run.
+> Verified at load average 40 and with twelve saturated cores: 100/100 and
+> 27/27. The caveat below is kept for the record.
+>
 > **Caveat on one number.** Two of the agents and I all independently saw
 > `render.py`'s `V22 frame budget` fail while other work was running on the
 > machine. It is a **wall-clock** test (`p99 <= 16 ms` over 600 frames) and it
@@ -49,6 +55,29 @@ touched. Module self-checks: `tyre` pass, `powertrain` **90/90** (was 82),
 
 `salvage/` holds the patch recovered from a worker that was killed mid-flight
 early on; it has been reviewed and applied, and is kept only as provenance.
+
+### Wave 3
+
+| note | item | one line |
+|---|---|---|
+| `06-car-library.md` (engine + brake sections, and the new comparison table at the end) | **1, 2** | per-car engine curves and per-car brakes/steering lock — the library is now three cars, not one with three labels |
+| `11-rwd.md` | **1** | 0–100 corrected again: MX-5 10.42 → **9.31 s** |
+| `09-ml.md` | **3** | the ML claim **validated and narrowed**: 4.9–9.2 % a lap, and it transfers |
+
+## Wave 3 in one paragraph
+
+`engine_scale` used to scale the *Corsa's* torque curve bodily, so the MX-5
+peaked at 4000 rpm and cut at 6200 when a BP-Z3 peaks at 5000 and revs to
+7000. `powertrain.engine_curve(car)` now builds each engine's own curve,
+hitting **both** published points exactly, and `engine_scale` is retired (it
+would double-count) — which also restores reconciliation 9 to meaning what it
+originally said. `brake_coeffs(car)` does the same for the brakes from
+documented disc and drum geometry, and the steering lock is per-car through
+physics, aid and HUD. On the ML side, a policy trained **only on the open map
+is +4.86 % on an arena it has never seen**, which settles the memorisation
+question, and the residual design is measurably safe: across 27
+(policy, cell) pairs the worst regression is −1.39 % and it never puts a car
+off the road that the baseline was keeping on.
 
 ## Wave 2 in one paragraph
 
