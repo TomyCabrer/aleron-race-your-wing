@@ -514,6 +514,38 @@ def _scripted(fn):
     return ScriptedInput(fn)
 
 
+def _ml_input(path: str, tr, opts):
+    """A trained `drive.ml` policy in the driver's seat, or None.
+
+    Deliberately lazy and deliberately forgiving: `drive/ml` is an OPTIONAL
+    sub-package (CONTRACT section 8), so a missing checkpoint or a missing
+    numpy must print why and hand the session back to the keyboard rather
+    than stop it. Nothing imports `drive.ml` unless --ml-drive is given, which
+    is what keeps `drive.ml` additive.
+
+    The policy's `Controls` go through the SAME local `ScriptedInput` the
+    acceptance scripts use, so the physics path is untouched.
+    """
+    try:
+        from .ml.env import observe
+        from .ml.policy import Policy
+        pol = Policy.load(path)
+    except Exception as exc:
+        print(f"--ml-drive {path}: {type(exc).__name__}: {exc}")
+        print("  falling back to the keyboard")
+        return None
+    meta = {k: v for k, v in pol.meta.items() if k != "curve"}
+    print(f"--ml-drive {path}\n  {meta}")
+    if meta.get("track") and meta["track"] != getattr(tr, "name", None):
+        print(f"  NOTE: trained on '{meta['track']}', driving '{tr.name}' -- "
+              f"it has never seen this track")
+
+    def fn(t, veh, track):
+        return pol.controls(observe(veh, track), Controls)
+
+    return ScriptedInput(fn, vehicle=None, track=tr)
+
+
 # ==================================================================== #
 #  LAP AND SECTOR TIMING  (spec eq.17)                                 #
 # ==================================================================== #
@@ -3102,6 +3134,10 @@ def build_parser():
                    help="panel built-in incidence, deg (VehicleConfig.delta_dev_geom)")
     p.add_argument("--build", default=None,
                    help="drive a car saved in the garage library (runs/library/builds/NAME.json)")
+    p.add_argument("--ml-drive", default=None, metavar="CHECKPOINT",
+                   help="put a trained drive.ml policy in the driver's seat "
+                        "(e.g. drive/ml/checkpoints/arena_plate.json); the "
+                        "sub-package is optional and is imported only here")
     p.add_argument("--garage", action="store_true",
                    help="open the 3D editor first; ENTER / cross drives the "
                         "car you built, BACKSPACE / touchpad comes back")
@@ -3426,28 +3462,35 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     # driver at 67% of the angle the car needs at R = 50 and the car could
     # never reach its own grip limit from the seat.
     inp = None
-    try:
-        from . import input as inp_mod
-        kb = inp_mod.KeyboardInput(steer_limit=settings.steer_aid,
-                                   k_us_deg=inp_mod.K_US_DEG_MEASURED)
-        if pad is not None:
-            pad.steer_limit = kb.steer_limit
-            pad.k_us_deg = kb.k_us_deg
-            pad.delta_deg = 0.0
-            pad.seed_edges()               # the button that ended the last
-            pad.set_menu(False)            # session is not a press in this one
-        else:
-            try:
-                if inp_mod.GamepadInput.available():
-                    pad = inp_mod.GamepadInput(0, steer_limit=settings.steer_aid,
-                                               k_us_deg=kb.k_us_deg)
-            except Exception as exc:
-                print(f"gamepad found but not usable ({exc}) - keyboard only")
-                pad = None
-        inp = inp_mod.BlendedInput(kb, pad, announce=not _HELP_PRINTED)
-    except Exception as exc:
-        print(f"drive.input unavailable ({exc}); coasting with a null driver")
-        inp = ScriptedInput(lambda t, v, T: Controls(auto_gearbox=opts.auto_gearbox))
+    if getattr(opts, "ml_drive", None):
+        #  The ML agent in the driver's seat. It is handed the SAME
+        #  ScriptedInput closure the acceptance scripts use, so nothing new
+        #  reaches the physics path and `drive/ml` stays strictly additive:
+        #  no import of it anywhere unless this flag is given.
+        inp = _ml_input(opts.ml_drive, tr, opts)
+    if inp is None:
+        try:
+            from . import input as inp_mod
+            kb = inp_mod.KeyboardInput(steer_limit=settings.steer_aid,
+                                       k_us_deg=inp_mod.K_US_DEG_MEASURED)
+            if pad is not None:
+                pad.steer_limit = kb.steer_limit
+                pad.k_us_deg = kb.k_us_deg
+                pad.delta_deg = 0.0
+                pad.seed_edges()           # the button that ended the last
+                pad.set_menu(False)        # session is not a press in this one
+            else:
+                try:
+                    if inp_mod.GamepadInput.available():
+                        pad = inp_mod.GamepadInput(0, steer_limit=settings.steer_aid,
+                                                   k_us_deg=kb.k_us_deg)
+                except Exception as exc:
+                    print(f"gamepad found but not usable ({exc}) - keyboard only")
+                    pad = None
+            inp = inp_mod.BlendedInput(kb, pad, announce=not _HELP_PRINTED)
+        except Exception as exc:
+            print(f"drive.input unavailable ({exc}); coasting with a null driver")
+            inp = ScriptedInput(lambda t, v, T: Controls(auto_gearbox=opts.auto_gearbox))
 
     renderer = None
     if opts.render != "off":

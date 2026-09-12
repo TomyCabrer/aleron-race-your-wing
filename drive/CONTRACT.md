@@ -814,6 +814,7 @@ python3 -m drive.drive [--track arena|open|skidpad|dragstrip] [--radius 50] [--c
   [--no-steer-limit] [--gearbox auto|manual|clutch] [--manual] [--auto-gearbox]
   [--abs|--no-abs] [--tc|--no-tc] [--engine stock|tuned|sport]
   [--sound off|low|mid|high] [--wing-inc 0.0] [--garage] [--build NAME]
+  [--ml-drive CHECKPOINT]
 ```
 `--script drive_probe` is the one scripted entry that deliberately switches
 the driver aids ON, because it exists to measure them (section 9 item 9 is
@@ -906,6 +907,14 @@ four legacy fields plus `opts.wing_cfg` = `CarBuild.cfg_kwargs(lib)` and
 `opts.hud_cfg` = `CarBuild.hud_kwargs(lib)`). The session builds
 `VehicleConfig(**legacy, **wing_cfg)`, hands `hud_cfg` to `Sim.hud_cfg`
 (merged into `hud_data()`), starts a designed build ARMED (`wing_on = True`)
+`--ml-drive CHECKPOINT` puts a trained `drive.ml` policy in the driver's seat
+instead of the keyboard/pad, through the SAME local `ScriptedInput` closure the
+acceptance scripts use — so no new code reaches the physics path. `drive/ml` is
+an OPTIONAL sub-package: **nothing imports it unless this flag is given**, and
+a missing checkpoint, a missing numpy or a shape mismatch prints why and hands
+the session back to the keyboard rather than stopping it. It is the only hook
+`drive/ml` has, and `drive/ml` never imports `pygame`.
+
 exactly as `--wing` does, and `--build NAME` loads a car saved in the garage
 library (`runs/library/builds/NAME.json`) instead of the last one built.
 
