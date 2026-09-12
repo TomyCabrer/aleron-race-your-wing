@@ -670,11 +670,31 @@ def step_wheel(I_w: float, omega: float, T_drive: float, T_brake: float,
 # ====================================================================== #
 #  SHIFT MACHINE                                                         #
 # ====================================================================== #
-def _gear_legal(p: PowertrainParams, g: int, v_x: float) -> bool:
+def _gear_legal(p: PowertrainParams, g: int, v_x: float,
+                protect: bool = False) -> bool:
+    """Is gear `g` engageable at road speed `v_x`?
+
+    `protect` refuses a gear the ROAD SPEED would overrev, and is passed True
+    only when the automatic box is the one driving. Four taps of `Q` at 30 m/s
+    in 5th used to walk 5>4>3>2>1 and reach 8553 rpm -- 2353 past the cut --
+    because the scheduler's own `n_overrev` guard was never applied to the
+    driver's own edges, and those edges are live in AUTO mode too
+    (`update_shift` reads `inp.shift_up/shift_dn` before it consults
+    `inp.auto_gearbox`). The auto scheduler refuses every one of those shifts;
+    its own gear lever should not be able to smuggle them in behind it.
+
+    It is deliberately NOT applied in `manual` or `clutch`: a real H-pattern
+    car lets the driver miss a downshift and destroy the engine, and that is
+    the raw physics the aids are supposed to be switchable back to
+    (CONTRACT section 3's three driver models, reconciliation 9). In auto the
+    box owns the gearbox; in the other two the driver does, and pays for it.
+    """
     if g < -1 or g > len(p.gear):
         return False
     if g == -1 and v_x > 1.0:
         return False        # refuse reverse above 1 m/s forward
+    if protect and g >= 1 and abs(rpm_at_speed(p, g, v_x)) >= p.n_overrev:
+        return False
     return True
 
 
@@ -797,7 +817,9 @@ def update_shift(p: PowertrainParams, s: PowertrainState, inp: PtInput,
         target = None
         if inp.shift_up or inp.shift_dn:
             want = s.gear + (1 if inp.shift_up else -1)
-            if _gear_legal(p, want, v_x):
+            #  protect only in auto: the box refuses what its own scheduler
+            #  would refuse. Manual and clutch let the driver overrev it.
+            if _gear_legal(p, want, v_x, protect=bool(inp.auto_gearbox)):
                 target = want
         elif inp.auto_gearbox:
             target = _auto_target(p, s, inp, v_x, n_e)
@@ -1116,7 +1138,13 @@ def accel_run(p: PowertrainParams, car: CorsaC, v_targets=(100 / 3.6,),
     """
     r = p.r_roll
     I_wheels = (2.0 * p.I_wf + 2.0 * p.I_wr) / (r * r)
-    n_up = {g: p.n_up_a + (p.n_up_k12 if g <= 2 else p.n_up_k34) for g in range(1, 6)}
+    #  range(1, 6) assumed a 5-speed. The loop below lets `gear` reach
+    #  `len(p.gear)` and indexes `n_up[gear]` BEFORE the top-gear guard, so a
+    #  6-speed car raised KeyError: 6 as soon as a target needed 6th
+    #  (reproduced on the 540i: v_targets=(100/3.6,) fine, (260/3.6,) raised).
+    #  Latent while only the Corsa called this; the car library made it real.
+    n_up = {g: p.n_up_a + (p.n_up_k12 if g <= 2 else p.n_up_k34)
+            for g in range(1, len(p.gear) + 1)}
     v_launch = speed_at_rpm(p, 1, launch_rpm)
     T_launch = wot_torque(p, launch_rpm)
     omega_e = launch_rpm * RPS
