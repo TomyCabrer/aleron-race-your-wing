@@ -128,6 +128,20 @@ class CarSpec:
     tyre_width: float = 0.175
     tyre_aspect: float = 0.65
     tyre_rim_r: float = 0.1778
+    #: Multiplier on the Corsa's WOT torque curve, fed through the EXISTING
+    #: `PowertrainParams.from_car(car, power_scale)` (which scales `nm_bp` as a
+    #: whole and uprates the clutch with it). 1.0 IS the Corsa.
+    #:
+    #: This is an APPROXIMATION and the honest limit of the feature: the
+    #: 19-breakpoint torque curve is a module constant built once at import
+    #: from the Corsa's engine, so a different car gets the Corsa's curve
+    #: SHAPE -- peak torque at 4000 rpm, the same rev limiter -- scaled to its
+    #: own peak. The MX-5 really peaks at 5000 rpm and the 540i at 3600, and
+    #: neither revs like a 1.2 Corsa. Giving each car its own curve means
+    #: touching `powertrain.py`, which is out of this task's scope; see the
+    #: handoff note. `engine_scale` MULTIPLIES the drive's Engine setting, so
+    #: the stock Corsa at Engine=stock is still exactly 1.0.
+    engine_scale: float = 1.0
     #: grip calibration against the Corsa's 175/65R14 touring tyre. 1.0 IS
     #: the Corsa. This is the ONLY way this repo can express a grippier tyre,
     #: and it is a labelled scale factor, never presented as measured data.
@@ -242,6 +256,8 @@ MX5_NB = CarSpec(
     tyre_width=0.195,
     tyre_aspect=0.50,
     tyre_rim_r=0.1905,
+    engine_scale=1.527,     # = 168/110, the Corsa's curve scaled to this car's
+                            # torque peak. Shape is the Corsa's -- approximation.
     mu_scale=1.05,          # est  a 195/50R15 summer performance tyre against
                             # the Corsa's 175/65R14 touring tyre. Tyre-test
                             # literature puts that class gap at 5-12 % in dry
@@ -317,6 +333,9 @@ E39_540I = CarSpec(
     tyre_width=0.235,
     tyre_aspect=0.45,
     tyre_rim_r=0.2159,
+    engine_scale=4.000,     # = 440/110. Same approximation as the MX-5's, and
+                            # cruder here: a 4.4 V8's curve is nothing like a
+                            # 1.2 four's, it just has the right peak.
     mu_scale=1.08,          # est  a 235/45R17 performance tyre. Same
                             # reasoning and the same caveat as the MX-5's.
     drive_layout="rwd",
@@ -458,11 +477,11 @@ def self_check(verbose: bool = True) -> bool:
     # --- 4. the library table --------------------------------------------
     if verbose:
         print(f"\n  {'car':24s} {'m':>6s} {'L':>6s} {'%f':>5s} {'kW':>5s} "
-              f"{'Nm':>5s} {'CdA':>5s} {'mu':>5s} {'drv':>4s} {'gears':>6s}")
+              f"{'Nm':>5s} {'CdA':>5s} {'mu':>5s} {'eng':>5s} {'drv':>4s} {'gears':>6s}")
         for key in CAR_ORDER:
             c2 = CARS[key]
             print(f"  {c2.name[:24]:24s} {c2.m:6.0f} {c2.L:6.3f} {100 * c2.wdist_f:5.0f} "
-                  f"{c2.P_max / 1e3:5.0f} {c2.T_max:5.0f} {c2.CdA:5.2f} {c2.mu_scale:5.2f} "
+                  f"{c2.P_max / 1e3:5.0f} {c2.T_max:5.0f} {c2.CdA:5.2f} {c2.mu_scale:5.2f} {c2.engine_scale:5.2f} "
                   f"{c2.drive_layout:>4s} {len(c2.gear):6d}")
         print("\n  NOTE: powertrain.py is FWD-only (T_drive has RL = RR = 0), so the two"
               "\n  RWD cars drive their front wheels. drive_layout records the intent.")
