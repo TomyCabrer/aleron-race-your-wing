@@ -162,9 +162,21 @@ def plot_curve(path: str, out: str) -> str | None:
     #  (527 m), and drawing that as "the baseline" flatters the result and
     #  wrecks the y scale. theta = 0 is the honest reference.
     T = float(pol.meta.get("T", 70.0))
-    base_r = rollout(Policy(), str(pol.meta.get("track", "arena")),
-                     dt=float(pol.meta.get("dt_train", DT_TRAIN)), T=T,
-                     wing=str(pol.meta.get("wing", "plate"))).reward
+    tracks = list(pol.meta.get("tracks") or [pol.meta.get("track", "arena")])
+    if len(tracks) > 1:
+        #  A multi-track fitness is already reward/baseline-reward per track,
+        #  meaned, so the hand-written driver sits at exactly 1.0 and there is
+        #  nothing to re-measure. Drawing it as metres would be a category
+        #  error -- the two tracks do not have the same metres.
+        base_r, y_lab = 1.0, ("fitness = mean over tracks of "
+                              f"(m advanced in {T:.0f} s / baseline's m)")
+        b_lab = "hand-written baseline, 1.000 by construction"
+    else:
+        base_r = rollout(Policy(), str(tracks[0]),
+                         dt=float(pol.meta.get("dt_train", DT_TRAIN)), T=T,
+                         wing=str(pol.meta.get("wing", "plate"))).reward
+        y_lab = f"reward = m advanced in {T:.0f} s"
+        b_lab = f"hand-written baseline, {base_r:.0f} m"
     fig, ax = plt.subplots(2, 1, figsize=(7.5, 6.0), sharex=True,
                            gridspec_kw=dict(height_ratios=(2, 1)))
     ax[0].plot(it, [c["pop_best"] for c in curve], lw=0.9, color="#9aa0a6",
@@ -173,18 +185,17 @@ def plot_curve(path: str, out: str) -> str | None:
                label="population median")
     ax[0].plot(it, [c["mean"] for c in curve], lw=1.8, color="#4fa3ff",
                label="mean policy (the curve)")
-    ax[0].axhline(base_r, ls="--", lw=1.1, color="#ff8c2b",
-                  label=f"hand-written baseline, {base_r:.0f} m")
+    ax[0].axhline(base_r, ls="--", lw=1.1, color="#ff8c2b", label=b_lab)
     #  clip the y range to the band that matters: the first iterate's crash
     #  would otherwise compress the whole run into the top 10 % of the axis
     fin = [c["mean"] for c in curve] + [base_r]
     lo = min(min(fin), base_r) - 0.02 * abs(base_r)
     ax[0].set_ylim(max(lo, 0.90 * min(base_r, min(fin))),
                    1.02 * max(max(fin), max(c["pop_best"] for c in curve)))
-    ax[0].set_ylabel(f"reward = m advanced in {pol.meta.get('T', 0):.0f} s")
+    ax[0].set_ylabel(y_lab)
     ax[0].legend(fontsize=8, loc="lower right")
     ax[0].grid(alpha=0.25)
-    ax[0].set_title(f"drive.ml ES on {pol.meta.get('track')} / wing "
+    ax[0].set_title(f"drive.ml ES on {'+'.join(tracks)} / wing "
                     f"{pol.meta.get('wing')}  --  {pol.meta.get('iters')} iters "
                     f"x pop {pol.meta.get('pop')}, {pol.meta.get('secs')} s")
     ax[1].plot(it, [100 * c["wing_frac"] for c in curve], lw=1.4,
