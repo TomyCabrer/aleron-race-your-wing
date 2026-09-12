@@ -223,7 +223,11 @@ def car_transfer(paths=None, cars_=TRANSFER_CARS, track: str = "arena",
     Same `__main__`-guard requirement as `transfer`: macOS spawns.
     """
     paths = dict(CAR_CKPTS if paths is None else paths)
-    rows = [None] + [c for c in cars_ if paths.get(c)]
+    #  a missing checkpoint drops its ROW rather than killing the matrix: the
+    #  per-car runs land one at a time and a half-filled matrix is still worth
+    #  reading while the next one trains
+    rows = [None] + [c for c in cars_
+                     if paths.get(c) and os.path.exists(paths[c])]
     jobs = [(paths.get(r) if r else None, c, track, wing, T)
             for r in rows for c in cars_]
     workers = min(os.cpu_count() or 1, len(jobs)) if workers is None else workers
@@ -238,10 +242,10 @@ def car_transfer(paths=None, cars_=TRANSFER_CARS, track: str = "arena",
     if verbose:
         print(f"\n  cross-car matrix, {track} / wing {wing} / "
               f"dt {DT_EVAL * 1e3:.0f} ms / {T:.0f} s")
-        print(f"  best flying lap; '--' is no flying lap, distance in 280 s "
-              f"in brackets")
+        print(f"  best flying lap; '--' is no flying lap, and then the "
+              f"distance covered in {T:.0f} s is in brackets")
         print(f"  {'trained on':12s}" + "".join(f"{c:>26s}" for c in cars_))
-        for r in ["baseline"] + [c for c in cars_ if paths.get(c)]:
+        for r in ["baseline"] + [c for c in rows if c]:
             line = f"  {r:12s}"
             for c in cars_:
                 cell = out[(r, c)]
@@ -257,7 +261,7 @@ def car_transfer(paths=None, cars_=TRANSFER_CARS, track: str = "arena",
         #  may want different aero timing, and this is where that shows
         print(f"\n  flank panel: % of steps deployed / % of those on the OUTER flank")
         print(f"  {'trained on':12s}" + "".join(f"{c:>20s}" for c in cars_))
-        for r in ["baseline"] + [c for c in cars_ if paths.get(c)]:
+        for r in ["baseline"] + [c for c in rows if c]:
             line = f"  {r:12s}"
             for c in cars_:
                 cell = out[(r, c)]
