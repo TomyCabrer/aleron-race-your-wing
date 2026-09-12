@@ -782,11 +782,42 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
   Trefftz CDi -- reproduces `aerobo.vlm.VLM` to 1e-12: CL_alpha
   4.55942959749662, e 0.9742625474419787 on the AR 8 rectangle), `wing`
   (`WingSpec` -> `analyse` -> the laws; critical-section stall; `design_point`
-  with `crossover.gain`), `optimize` (numpy GP, Matern 5/2, EI, Sobol init),
+  with `crossover.gain`; `DESIGN_VARS` is the ONE ordered table of design
+  variables and it is the garage DESIGNER page's row order -- `BOUNDS`,
+  `design_bounds`, `design_x0`, `design_labels` and `apply_design` all read
+  it, so the optimiser's vector cannot drift out of step with the page;
+  `span_fit(role, h)` is the sill/roof packaging fit that BOTH the page's span
+  row and the optimiser's span band must use), `optimize` (numpy GP,
+  Matern 5/2, EI, Sobol init; `labels` ride through into the result and a
+  label list out of step with `bounds` raises),
   `library` (`runs/library/{airfoils,wings,builds,polars}`; 39 seeded
   sections, the published `fin` / `plate` as legacy wings, `flank-e423`,
   `rear-s1223`; XFOIL worker + `poll()`). The Re bank snaps to
   {1e5 ... 3e6}. Estimate vs XFOIL is printed on every read-out.
+* **`WingSpec.mount`** (`wing.MOUNTS = ('pylon', 'endplate', 'none')`) is a
+  real aerodynamic choice, not a label, and it applies to either role:
+  * `'pylon'` -- **the default, and what every library wing was analysed
+    with**. Charges `strut_cd`: two mounts of `standoff` length, wetted-area
+    friction on `S_ref`, times a **1.3 form factor** which is the pylon/wing
+    junction interference allowance (Hoerner, *Fluid-Dynamic Drag* ch.8).
+    Tip plates stay an independent continuous knob.
+  * `'endplate'` -- carried by structural tip plates instead. `strut_cd` is
+    NOT charged, but `WingSpec.plate_h_flown` raises `plate_h` to
+    `MOUNT_PLATE_H` (0.06 m flank / 0.12 m top, `est`: enough flange for two
+    fasteners plus edge distance) and **the lattice then produces the reduced
+    tip loss itself** -- it is not a correlation. The plates' wetted area is
+    charged by the existing `cd_pl` term.
+  * `'none'` -- nothing charged. The idealisation to compare against, and the
+    parity setting for a legacy panel whose published L/D already includes
+    its mounts.
+  `analyse()` returns `mount` and `mass`; `wing_mass(spec, standoff)` is a
+  bottom-up floor (two skins + two plates at `SKIN_KG_M2 = 4.17`, 1.5 mm
+  2024-T3, plus `PYLON_KG_M` when pylon-mounted) and is what the garage
+  charges to the car through `CarBuild.mass_points`. An unknown mount name
+  clamps to `'pylon'`. `plate_h_flown` is what `build_lattice` and
+  `hud_kwargs` both read, so the renderer draws the plates the aero flew.
+  The mount's entire effect reaches the physics inside `CZ` / `CD` via
+  `TopAero.from_aero` -- **`vehicle.py` never learns what a mount is.**
 * Telemetry: fixed 63-column schema (`../specs/harness.txt`), 100 Hz, buffered
   200 rows, `newline=''`, `f'{v:.6g}'` (`repr` under `--telem-precision full`),
   sidecar `.json` with every constant.

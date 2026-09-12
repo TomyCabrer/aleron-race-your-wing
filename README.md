@@ -23,7 +23,11 @@ python3 -m drive.drive --gearbox manual         # or: auto | clutch
 python3 -m drive.drive --engine stock           # the real 75 hp car (default: sport, 2x)
 python3 -m drive.drive --sound off              # or: low | mid | high
 python3 -m drive.drive --wing plate --wet all   # sealed plate, wet
+python3 -m drive.drive --car mx5                # or: corsa | 540i
+python3 -m drive.drive --ballast 200 --ballast-at boot
+python3 -m drive.drive --camera chase           # the 3D view from behind
 python3 -m drive.drive --garage                 # start in the 3D garage
+python3 -m drive.drive --ml-drive drive/ml/checkpoints/arena_plate.json
 ```
 
 | key | | key | |
@@ -57,13 +61,16 @@ saved). Scripted and headless runs never read the file.
 | setting | values | applies |
 |---|---|---|
 | Map | Arena circuit / Open proving ground / Skidpad / Dragstrip (`--track`, `TAB`) | restarts the session on the new map, same car |
+| Car | Opel Corsa C 1.2 / Mazda MX-5 1.8 / BMW 540i (`--car`) | restarts the session: a different car is a different tyre, load set, roll block and gearbox |
+| Ballast | None / 25 / 50 / 75 / 100 / 150 / 200 kg (`--ballast`, 0-300) | restarts the session |
+| Ballast at | Nose (front subframe, low) / Passenger seat (at the CG) / Floorpan over the rear axle (low) / Boot floor, behind the rear axle (high) (`--ballast-at`) | restarts the session |
 | Engine | Stock 1.2 16V (75 hp) / Tuned (~110 hp) / Sport (~150 hp) (`--engine`) | at once |
 | Gearbox | Automatic / Manual (auto clutch) / Manual + clutch pedal (`--gearbox`) | at once |
 | ABS | On / Off (`--abs` / `--no-abs`) | at once |
 | TC | On / Off (`--tc` / `--no-tc`) | at once |
 | Steer aid | On / Off (`--no-steer-limit`) | at once |
 | Surface | Dry everywhere / Dry, wet patches / Wet everywhere (`--wet`) | restarts the session |
-| Camera | Car up / Chase / World up (`--camera`, `C`) | at once |
+| Camera | Car up / **Chase (3D)** / World up (`--camera`, `C`) | at once |
 | Sound | Off / Low / Medium / High (`--sound`) | at once |
 | Garage | opens the 3D panel editor | |
 
@@ -75,6 +82,16 @@ holding the fronts. *Tuned* is 1.5x (~110 hp, 10.2 s). *Stock* is the car every
 scripted and validation number is measured on, and it is one press away; the
 HUD shows `75 HP` / `110 HP` / `150 HP` under the gearbox label. No script
 ever reads the setting.
+
+**Camera.** *Car up* and *World up* are the plan views the telemetry and the
+g-g envelope are read against. *Chase* is a real 3-D view from behind and
+above the car: a perspective camera, a horizon, the tarmac ribbon, kerbs and
+centre dashes receding to a vanishing point, and the car ahead of you with all
+three wings drawn at their actual deployment state - the outer flank panel
+sliding out and lighting up mid-corner, the top wing rising off the deck. The
+mesh is the garage's, so a wing looks the same on the road as it did on the
+ramp. It costs 4.0 ms a frame against the plan views' 2.1-2.4, well inside the
+16.7 ms the 60 fps loop has. The HUD is screen-space and overlays it unchanged.
 
 **TC** is an engine-only traction control on the driven axle, the kind the
 OPC had: it scales the engine load (never a brake, and never the pedal the
@@ -179,13 +196,26 @@ tool (`~/dev/urop-bo-aero`) into the game, numpy only, running live:
   a labelled **estimate** (Hess-Smith panel method for the lift slope and
   zero-lift angle, a friction + form-factor + camber/thickness correlation for
   drag and stall). Every read-out says which one it is looking at.
-* **planform** — span, chord, taper, tip twist, end plates. A horseshoe
+* **planform** — span, chord, taper, tip twist, end plates, and how the wing
+  is **mounted**. A horseshoe
   vortex lattice (cosine edges, interlaced stations, tip plates, and for the
   top wing the track's rigid-wall image: ground effect) flies the section at
   each strip's effective angle, reads the polar for profile drag, and finds
   the stall by the critical-section rule. It reproduces the AeroBO lattice
   to 1e-12. What the 1 kHz physics gets is small: `CL = CL0 + CLα·α` clamped
   at the two stalls, `CD = cd0 + cd1·CL + cd2·CL²`, `S`.
+* **mount** — `pylon`, `endplate` or `none`, and it is a real aerodynamic
+  choice rather than a label. A *pylon* mount stands the wing off on two
+  struts and pays for their wetted area plus a 1.3 form factor for the
+  junction interference (Hoerner ch. 8). An *endplate* mount carries the wing
+  on its tip plates instead: no strut in the flow, but the plates are forced
+  to a structural minimum (0.12 m on the top wing) and the reduced tip loss
+  then falls straight out of the lattice, not out of a correlation. *none* is
+  the mountless idealisation to compare against. Measured on the 1.40 × 0.30 m
+  S1223 top wing at h = 0.45 m: the endplate mount is **lower drag and higher
+  lift and lighter** than two pylons (CLα 4.131 → 4.595, e 1.199 → 1.505,
+  cd0 363 → 340 counts, 4.96 → 3.52 kg) — the pylons' 23 counts buy nothing,
+  the plates' 13 counts buy 11 % of lift slope.
 * **optimiser** — `O` runs a Gaussian-process Bayesian optimiser (Matérn 5/2,
   expected improvement, Sobol start; ~1 s for 32 evaluations) over span,
   chord, taper, twist, plates and incidence, against *corner-speed gain at a
@@ -285,6 +315,109 @@ python3 -m drive.plots all      runs/lap.csv --track arena     # overview, g-g, 
 python3 -m drive.plots overview runs/lap.csv
 python3 -m drive.plots compare  runs/a.csv runs/b.csv --by distance
 ```
+
+## Pick a different car, and change its weight
+
+The sim was hardwired to the Corsa. `cars.py` is now a small library of
+parameter sets, selectable from the CLI (`--car`) and from *Settings*:
+
+| | mass | wheelbase | % front | power | torque | CdA | layout |
+|---|---|---|---|---|---|---|---|
+| Opel Corsa C 1.2 16V (2003) | 1010 kg | 2.491 m | 61 | 55 kW | 110 N·m | 0.66 | FWD |
+| Mazda MX-5 1.8 (NB2, 2001) | 1140 kg | 2.265 m | 52 | 109 kW | 168 N·m | 0.61 | RWD |
+| BMW 540i (E39, 1998) | 1780 kg | 2.830 m | 51 | 210 kW | 440 N·m | 0.66 | RWD |
+
+Published figures carry their source on the line; everything no manufacturer
+releases — axle weights, CG height, inertias, the whole suspension block — is
+marked `est` with a band, exactly as `corsa_c.py` does it. The inertias use the
+Corsa's own dynamic index `Izz/(m·a·b) = 0.80` so the three sets are consistent
+with each other rather than three unrelated guesses, and each car passes
+`corsa_c.self_check`'s two cross-checks (gearing against rpm at Vmax, and the
+top-speed power balance).
+
+The Corsa is the default and is **bit-for-bit** the car every acceptance number
+was measured on: its `CarSpec` is built by reading every field off
+`corsa_c.CorsaC()` rather than retyping it, and the identity is asserted with
+`==` on all 39 fields. Every per-car quantity is scaled as
+`value(car) = value(Corsa) × ratio`, so for the Corsa the ratio is exactly
+`1.0` and the number is unchanged rather than merely close.
+
+**One tyre's worth of data.** `tyre_data/` holds twelve `.tir` files, but only
+five load into `drive/tyre.py` (the rest are FITTYP 6.1 or divide by zero), and
+**all five carry the identical Magic Formula coefficient set** — they differ
+only in geometry. So a car cannot be given genuinely different tyre
+coefficients from what is here, and inventing Pacejka data is not something
+this project does. Following the contract's own rule ("rescale geometry only"),
+every car reads the validated `TNO_car205_60R15.tir` and overrides the geometry
+to its own size; the grip difference between a 2003 touring tyre and a modern
+performance tyre is carried by `mu_scale` (+5 % / +8 %), which is a **labelled
+calibration, never presented as measurement**. Strip it out and the MX-5 is
+worth +0.7 % of peak `a_y` and the 540i **−6.4 %** — pure load sensitivity on
+1780 kg.
+
+**Weight.** *Ballast* adds mass and it moves everything mass really moves: the
+first moments shift `wdist_f` (so `a`, `b` and every static wheel load), the
+CG height, and the parallel-axis theorem shifts `Izz`, `Ixx` and `Iyy`. The
+**station matters and is modelled**, with honest heights — a hatchback's boot
+floor is ~0.65 m, *above* the 0.55 m CG, so a sandbag in the boot **raises** it;
+only floorpan ballast lowers it. 200 kg on the Corsa:
+
+| ballast | % front | h_cg | Izz | peak a_y | roll | 0–100 |
+|---|---|---|---|---|---|---|
+| none | 61.0 | 0.550 | 1200 | **0.8550 g** | 4.55° | 14.80 s |
+| nose | 69.4 | 0.512 | 1470 | 0.8389 g | 5.20° | 17.18 s |
+| floor | 50.9 | 0.509 | 1585 | 0.8468 g | 4.61° | 17.38 s |
+| boot | 49.3 | 0.567 | 1723 | 0.8353 g | 5.31° | 17.42 s |
+
+Every ballast loses grip (load sensitivity). *Floor* is least bad because 41 mm
+of CG drop buys most of it back; *boot* is worst outright but moves the balance
+from 61 % to 49 % front, which is the knob worth playing with on a wing study.
+The three fitted wings are charged too — a designed build is 14.18 kg of wing
+and mount, which lifts the CG 7.7 mm.
+
+## Let it drive itself
+
+`drive/ml/` is an optional sub-package holding an evolution-strategy driving
+agent. Nothing in `drive/` imports it, the 1 kHz physics path gains nothing
+from it, and the sim behaves identically with it absent:
+
+```
+python3 -m drive.ml                             # self-check
+python3 -m drive.ml.train --iters 90 --pop 32   # train, writes a checkpoint
+python3 -m drive.ml.evaluate drive/ml/checkpoints/arena_plate.json --ablation
+python3 -m drive.drive --ml-drive drive/ml/checkpoints/arena_plate.json
+```
+
+The policy is a 14 → 16 → 4 tanh net of 308 parameters, and it is a **residual
+on a hand-written driver** (pure pursuit, a curvature-limited speed target and
+a wing rule), so zero parameters *is* that driver and the search spends its
+budget on the line and the aero rather than on rediscovering that grass is
+slow. It observes only what a driver at the HUD can see: speed, where it is on
+the ribbon, heading error, the curvature 15 / 35 / 70 m ahead, sideslip, yaw
+rate, lateral g, the two axle utilisations, the panel's deploy fraction and
+whether it is on tarmac. Reward is metres of centreline advanced, with going
+off the track **ending the episode** rather than costing points — a soft
+penalty is exactly what a policy learns to pay. There is deliberately no reward
+term for the wing at all: its drag is already in the physics, and whether to
+deploy it has to fall out of lap time or it means nothing.
+
+Training runs at `dt = 2 ms` (33× real time a core; 0.128 m of drift against
+1 ms over 20 s) and **every reported number is re-measured at the contract's
+1 ms**. 2880 rollouts took 23 minutes on twelve cores. On the arena with the
+sealed plate:
+
+| | best lap | v_mean | panel deployed | on the outer flank |
+|---|---|---|---|---|
+| hand-written baseline | 64.565 s | 19.370 m/s | 62 % | 97 % |
+| learned | **58.609 s** | 20.999 m/s | 56 % | 97 % |
+
+**+9.22 % a lap.** The ablation is the more interesting half: the learned
+policy is 0.637 s a lap faster *with* the panel than without it, and deploys it
+**less** than the baseline while going faster — so part of what it learned is
+when not to carry the drag. The baseline cannot lap at all without the device;
+it had come to depend on the front grip its own wing rule was buying. It is
+trained on one track with one aero configuration, so it is a fast lap on a
+memorised circuit, not a general driver.
 
 ## Check it
 
@@ -408,6 +541,9 @@ directly to `ledger.py`'s verdict.
 
 ```
 corsa_c.py      parameter dataclass. The only source for anything it publishes.
+cars.py         the car library: CarSpec (a superset of CorsaC), three cars,
+                added mass as point masses. The Corsa entry is COPIED off
+                corsa_c.CorsaC() field by field, so the default cannot drift.
 crossover.py    closed-form kill-or-continue: lateral vs downforce, R_cap, gain
 ledger.py       lap-time ledger swept over installed CL and installed mass
 qss.py          quasi-steady two-track cornering solver — the reference truth
@@ -423,7 +559,7 @@ drive/
                 surfaces, world-space areas
   input.py      keyboard and gamepad (PS5 layout, hot-plug, rumble), ramps, aid,
                 gearbox modes
-  render.py     pygame top-down view and HUD
+  render.py     pygame plan views, the 3-D chase camera, and the HUD
   audio.py      procedural engine / tyre / wind / grass sound, streamed via pygame.mixer
   garage.py     software-3D editor: place the flank panel, closed-form readout
   menu.py       pause / help / settings menu (ESC, OPTIONS) shared by the drive and the garage
@@ -431,6 +567,8 @@ drive/
   plots.py      overview, g-g, track map, laps, A/B compare
   drive.py      main loop, settings, garage <-> drive session loop, CLI,
                 scripted virtual drivers
+  ml/           optional: an evolution-strategy driving agent (numpy only).
+                Nothing in drive/ imports it; --ml-drive is its only hook.
   validate.py   the acceptance suite
 runs/           telemetry, plots, settings.json, garage_design.json
 ```
