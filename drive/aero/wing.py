@@ -64,6 +64,46 @@ DESIGN_VARS = (
 # packaging bands the designer / optimiser stay inside (m, deg). Keyed role ->
 # variable; the inner dict's order IS the page order, by construction.
 BOUNDS = {role: {v[0]: v[4 + i] for v in DESIGN_VARS} for i, role in enumerate(ROLES)}
+#  How the wing is carried into the body. This is a REAL aerodynamic choice,
+#  not a label: each option changes the lattice the wing is solved on and/or
+#  which terms of the drag build-up are charged.
+#
+#  'pylon'     two pylons standing the wing off the body by `standoff`.
+#              Charges `strut_cd` -- twice their wetted area on S_ref at the
+#              local skin-friction coefficient, times a 1.3 form factor which
+#              is the allowance for the pylon/wing junction interference
+#              (Hoerner, Fluid-Dynamic Drag, ch.8: a faired strut junction is
+#              20-40% above flat-plate friction). Tip plates, if any, stay an
+#              independent choice. THIS IS THE DEFAULT: every wing in the
+#              library was analysed with it, and the whole acceptance suite is
+#              measured on it.
+#  'endplate'  the wing is carried by structural plates at its tips instead:
+#              no pylons in the flow, so `strut_cd` is NOT charged, but the
+#              plates are forced to at least MOUNT_PLATE_H so there is metal
+#              to bolt through. The lift consequence is not a correlation --
+#              the plates are real panels in the lattice, so the reduced tip
+#              loss comes straight out of the VLM (self_check measures
+#              CLa 2.179 -> 2.646 on the flank panel). Their wetted area is
+#              charged by the existing `cd_pl` term, and they are heavier
+#              than two pylons.
+#  'none'      nothing is charged for the mount. Not a buildable car: it is
+#              the idealisation to compare against, and the parity setting for
+#              a legacy panel whose published L/D already includes its mounts.
+MOUNTS = ("pylon", "endplate", "none")
+
+#: Structural minimum tip-plate height for an endplate MOUNT, m. est: the
+#: plate has to carry the whole wing load in bending into two body hardpoints,
+#: so it needs a flange deep enough for two fasteners plus edge distance --
+#: ~3x a 6 mm bolt's edge distance each side on the flank panel, more on the
+#: top wing because its load is 4-5x larger (594 N at 40 m/s, self_check).
+MOUNT_PLATE_H = {"flank": 0.06, "top": 0.12}
+
+#: Areal density of the skin the mass estimate charges, kg/m^2. 1.5 mm 2024-T3
+#: sheet: 2780 kg/m^3 x 0.0015 m = 4.17. Both the wing's two surfaces and the
+#: plates are charged at it; the pylons are charged as solid 6 mm x chord bar.
+SKIN_KG_M2 = 4.17
+PYLON_KG_M = 1.6             # est: 6 mm x 100 mm 2024-T3 bar, 2780 kg/m^3
+
 V_REF = {"flank": 29.0875, "top": 40.0}      # m/s: R = 100 m limit speed / a fast straight
 RE_BANK = (1e5, 1.5e5, 2e5, 3e5, 5e5, 7e5, 1e6, 1.5e6, 2e6, 3e6)
 
@@ -193,6 +233,9 @@ class WingSpec:
     taper: float = 1.0
     twist_deg: float = 0.0
     plate_h: float = 0.0
+    #: how the wing is attached to the body -- see MOUNTS. 'pylon' is the
+    #: default because it is what every wing in the library was analysed with.
+    mount: str = "pylon"
     n_strips: int = 24
     notes: str = ""
     builtin: bool = False
@@ -220,9 +263,19 @@ class WingSpec:
         """Chord at |y|/(b/2) = eta in [0, 1] (linear taper)."""
         return self.chord * (1.0 - (1.0 - self.taper) * np.asarray(eta, float))
 
+    @property
+    def plate_h_flown(self) -> float:
+        """The tip-plate height the LATTICE sees: an endplate mount forces a
+        structural minimum, because that is what the wing hangs from."""
+        if self.mount == "endplate":
+            return max(self.plate_h, MOUNT_PLATE_H.get(self.role, 0.06))
+        return self.plate_h
+
     def clamp(self) -> "WingSpec":
         if self.role not in ROLES:
             self.role = "flank"
+        if self.mount not in MOUNTS:
+            self.mount = "pylon"
         b = BOUNDS[self.role]
         for k in design_vars(self.role, owner="spec"):     # the page's order
             lo, hi = b[k]
@@ -246,6 +299,7 @@ class WingSpec:
                    airfoil=str(d.get("airfoil", "naca2412")), span=float(d.get("span", 0.78)),
                    chord=float(d.get("chord", 0.45)), taper=float(d.get("taper", 1.0)),
                    twist_deg=float(d.get("twist_deg", 0.0)), plate_h=float(d.get("plate_h", 0.0)),
+                   mount=str(d.get("mount", "pylon")),
                    n_strips=int(d.get("n_strips", 24)), notes=str(d.get("notes", "")),
                    builtin=bool(d.get("builtin", False)), legacy=d.get("legacy"),
                    aero=dict(d.get("aero", {}))).clamp()
@@ -269,7 +323,7 @@ def build_lattice(spec: WingSpec, polar: Polar, ride_h: float | None = None) -> 
         return tw * np.abs(np.asarray(y, float)) / (0.5 * b)
 
     image = None
-    plate = spec.plate_h
+    plate = spec.plate_h_flown          # an endplate mount forces its minimum
     if spec.role == "top" and ride_h is not None:
         image = float(ride_h)                  # the track, above, in the mirrored frame
         plate = min(plate, max(ride_h - 0.03 * b - 0.01, 0.0))
@@ -280,10 +334,31 @@ def build_lattice(spec: WingSpec, polar: Polar, ride_h: float | None = None) -> 
 
 def strut_cd(spec: WingSpec, standoff: float, s_ref: float, V: float) -> float:
     """Wetted-area friction of the mounts on S_ref: two struts (flank) or two
-    pylons (top) of `standoff` length; chords 0.04 m / 0.10 m."""
+    pylons (top) of `standoff` length; chords 0.04 m / 0.10 m.
+
+    Zero unless the wing is actually pylon-mounted: an endplate mount puts no
+    strut in the flow (it pays for its plates through `cd_pl` instead), and
+    'none' is the mountless idealisation. See MOUNTS."""
+    if spec.mount != "pylon":
+        return 0.0
     c = 0.04 if spec.role == "flank" else 0.10
     cf = friction_coefficient(reynolds(V, c)) * 1.3      # + form factor
     return 2.0 * 2.0 * max(standoff, 0.0) * c * cf / max(s_ref, 1e-6)
+
+
+def wing_mass(spec: WingSpec, standoff: float = 0.45) -> float:
+    """Bottom-up mass of the wing AND its mount, kg -- an estimate, and the
+    honest reason an endplate is not free.
+
+    Two skins over the planform, two tip plates of `plate_h_flown` x MAC, and
+    either two pylons of `standoff` (pylon mount) or nothing (the plates are
+    already counted, and they ARE the mount). No ribs, no fasteners, no
+    hardpoint reinforcement in the body: this is a floor, not a weight sheet.
+    """
+    skin = 2.0 * spec.S * SKIN_KG_M2
+    plates = 2.0 * spec.plate_h_flown * spec.mac * SKIN_KG_M2
+    pylons = 2.0 * max(standoff, 0.0) * PYLON_KG_M if spec.mount == "pylon" else 0.0
+    return float(skin + plates + pylons)
 
 
 def analyse(spec: WingSpec, polar: Polar, V: float | None = None, ride_h: float | None = None,
@@ -336,6 +411,7 @@ def analyse(spec: WingSpec, polar: Polar, V: float | None = None, ride_h: float 
         e=float(np.nanmedian(np.asarray(es))) if np.isfinite(np.nanmedian(np.asarray(es))) else 0.0,
         cd0=float(cd0), cd1=float(cd1), cd2=float(cd2), cd_fit_err=fit_err,
         cd_strut=float(cd_strut), CDp_min=float(np.min(CDps)),
+        mount=str(spec.mount), mass=float(wing_mass(spec, standoff)),
         y_cp=float(r_mid.y_cp),
         table=dict(alpha=[round(float(v), 3) for v in alphas], CL=[round(float(v), 4) for v in CLs],
                    CD=[round(float(v), 5) for v in CDs], CDi=[round(float(v), 5) for v in CDis],
@@ -514,8 +590,42 @@ def self_check(verbose: bool = True) -> bool:
         rep("plates are shortened to clear the track, never through it", True, "")
     except ValueError as exc:
         rep("plates are shortened to clear the track, never through it", False, str(exc))
+    # -- the rear wing's mount: pylon vs endplate vs none ------------------- #
+    #  'pylon' is the shipped default and must be the number every library
+    #  wing was analysed with, so it is checked against the value computed
+    #  before `mount` existed rather than against its own re-run.
+    m_py = analyse(top.copy(mount="pylon"), pt, ride_h=0.45)
+    m_ep = analyse(top.copy(mount="endplate", plate_h=0.0), pt, ride_h=0.45)
+    m_no = analyse(top.copy(mount="none"), pt, ride_h=0.45)
+    rep("mount: 'pylon' is the default and reproduces the pre-mount analysis",
+        WingSpec().mount == "pylon" and m_py["cd0"] == ge["cd0"] and m_py["CLa"] == ge["CLa"]
+        and m_py["cd_strut"] == ge["cd_strut"],
+        f"cd_strut {m_py['cd_strut'] * 1e4:.1f} counts, identical to the default path")
+    rep("mount: 'none' charges no mount drag (the floor at a given plate height)",
+        m_no["cd_strut"] == 0.0 and m_no["cd0"] < m_py["cd0"],
+        f"cd0 {m_py['cd0'] * 1e4:.0f} ct (pylon) -> {m_no['cd0'] * 1e4:.0f} ct (none), "
+        f"the {(m_py['cd0'] - m_no['cd0']) * 1e4:.0f} ct the two pylons cost")
+    #  an endplate mount is the trade the owner asked for: it buys lift slope
+    #  by cutting tip loss (straight out of the lattice, no correlation) and
+    #  pays in plate wetted area and mass, but not in pylon drag
+    rep("mount: 'endplate' forces its structural plate height",
+        m_ep["plate_h_flown"] == MOUNT_PLATE_H["top"] and m_no["plate_h_flown"] == 0.12,
+        f"plate_h 0.0 -> {m_ep['plate_h_flown']:.2f} m flown (MOUNT_PLATE_H top)")
+    ep_vs_none = analyse(top.copy(mount="none", plate_h=0.0), pt, ride_h=0.45)
+    rep("mount: 'endplate' raises CLa (less tip loss) and e over the bare wing",
+        m_ep["CLa"] > ep_vs_none["CLa"] * 1.02 and m_ep["e"] > ep_vs_none["e"],
+        f"CLa {ep_vs_none['CLa']:.3f} -> {m_ep['CLa']:.3f}, e {ep_vs_none['e']:.3f} -> {m_ep['e']:.3f}")
+    rep("mount: 'endplate' pays for it in profile drag and mass",
+        m_ep["cd0"] > ep_vs_none["cd0"] and m_ep["mass"] > ep_vs_none["mass"],
+        f"cd0 {ep_vs_none['cd0'] * 1e4:.0f} -> {m_ep['cd0'] * 1e4:.0f} ct, "
+        f"mass {ep_vs_none['mass']:.2f} -> {m_ep['mass']:.2f} kg "
+        f"(pylon {m_py['mass']:.2f} kg)")
+    rep("mount: an unknown mount clamps to 'pylon' rather than being flown",
+        WingSpec(mount="swan-neck").clamp().mount == "pylon", "")
+
     back = WingSpec.from_json(spec.copy(aero=a).to_json())
-    rep("spec json round-trip", back.aero["CLa"] == a["CLa"] and back.name == spec.name, "")
+    rep("spec json round-trip", back.aero["CLa"] == a["CLa"] and back.name == spec.name
+        and back.mount == spec.mount, f"mount '{back.mount}' survives")
     import time
     t0 = time.perf_counter()
     for _ in range(5):
