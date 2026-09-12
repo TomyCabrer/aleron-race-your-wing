@@ -111,6 +111,13 @@ def transfer(path: str, tracks=TRANSFER_TRACKS, wings=TRANSFER_WINGS,
     its own but the learned lap time against the baseline in the SAME cell,
     because the baseline is what the residual degrades toward if the network's
     output is useless there.
+
+    CALLERS MUST BE UNDER AN `if __name__ == "__main__"` GUARD, or pass
+    `workers=1`. macOS defaults `multiprocessing` to *spawn*, which re-imports
+    the calling module in every child; an unguarded script that calls this at
+    module level therefore calls it again in each child and wedges instead of
+    failing loudly. Cost me 14 minutes of a starved process doing 8 s of work.
+    `python3 -m drive.ml.evaluate` is guarded, so the CLI is always safe.
     """
     jobs = [(path, tr, wg, T) for tr in tracks for wg in wings]
     workers = min(os.cpu_count() or 1, len(jobs)) if workers is None else workers
