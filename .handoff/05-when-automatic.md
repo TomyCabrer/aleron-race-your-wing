@@ -279,3 +279,123 @@ rest, `t_shift_lockout`/schedules as shipped:
 (The contract's own 5.46 s / 14.80 s are the validate rigs' numbers, measured
 differently; these are this note's own baseline, to be compared only against
 the after-column of the same probe.)
+
+---
+
+# THE FIX
+
+All four defects have one root cause: **the up-schedule and the down-schedule
+were written independently**, and `_auto_target` could only ever return
+`s.gear ± 1`. The patch ties them together with three rules and adds one
+parameter. `drive/powertrain.py` only.
+
+### New: `n_up_schedule(p, g, thr) -> float`
+The upshift threshold out of gear `g`, in rpm; `inf` in top gear and in
+neutral/reverse. Factored out of `_auto_target` because **the downshift guard
+has to evaluate it for the gear it is dropping INTO** — that is the whole
+hysteresis. (This adds one name to the module's public surface; CONTRACT.md
+section 3 needs the line, see "patch to route" below.)
+
+### New: `PowertrainParams.v_shift_hyst = 1.8` (m/s)
+The hysteresis between the two schedules, as a **road-speed gap** — the
+currency a shift map is actually drawn in, and the only one that is uniform
+across the box (300 rpm is 0.64 m/s in 1st and 2.01 m/s in 4th).
+
+### Rule 1 — a downshift must clear the target gear's own upshift line
+```python
+if not braking and abs(v_x) > speed_at_rpm(
+        p, g, n_up_schedule(p, g, thr)) - p.v_shift_hyst:
+    break
+```
+With `v_shift_hyst = 0` this blocks **precisely** the reversal of an upshift
+the box itself just made — the upshift's own road speed *is* where the car is
+the instant after it, identically, at every pedal. The 1.8 m/s gap on top
+covers the pedal trim a speed-holding driver makes, which moves `N_DN` at
+31 rpm per 1% of pedal and was the second, closed-loop hunt mechanism.
+
+The **upshift is deliberately not guarded symmetrically.** At WOT the 1-2
+landing rpm is 882 rpm below the downshift line, so a symmetric guard would
+hold 1st to `4900/0.6045 = 8106` rpm — past the 6200 cut, i.e. it would never
+let go of 1st at all. The asymmetry is correct and is now written down in the
+parameter's comment.
+
+### Rule 2 — a box on the brakes never changes up
+```python
+if s.gear < len(p.gear) and not (braking and n_e < p.n_overrev):
+```
+`braking = inp.brake > 0.3`, the same test that already selects `n_dn_brake`.
+The `n_overrev` escape keeps a trail-braking driver off the limiter.
+
+### Rule 3 — a throttle-demand downshift picks its gear in ONE decision
+`_auto_target` walks down from `s.gear - 1` (the lowest landing rpm) and keeps
+the lowest gear that clears both `n_overrev` and rule 1. **On the brake branch
+it stops at one gear**, because there the downshift is triggered by the road
+speed decaying past `n_dn_brake` and the box should step down as the car slows,
+not jump. On the throttle branch the target gear is the driver's torque demand
+and must arrive in one shift.
+
+### Rule 4 — the neutral branch
+```python
+if s.gear == 0 and (inp.throttle > 0.02 or v_x > 0.5 or inp.brake <= 0.3):
+    if abs(rpm_at_speed(p, 1, v_x)) < p.n_overrev:
+        return 1
+```
+`inp.brake <= 0.3` is the creep (an automatic sits in gear, not in neutral);
+the `n_overrev` test is the guard that was missing — `v_x > 0.5` alone engaged
+1st at ANY road speed.
+
+---
+
+## Why skip-shift, with the number
+Time from the kickdown state to a target speed, WOT, with the skip capped at
+1 gear (the old sequential behaviour) up to 4:
+
+| from | to | cap 1 (old) | cap 2 | cap 3 | cap 4 |
+|---|---|---|---|---|---|
+| 5th @ 16.9 m/s | 25 m/s | 8.176 s `5>4 4>3 3>2` | 7.144 s | **6.378 s** `5>2` | 6.378 s |
+| 5th @ 16.9 m/s | 30 m/s | 12.527 s | 11.495 s | **10.729 s** | 10.729 s |
+| 5th @ 22.0 m/s | 30 m/s | 8.133 s | **7.273 s** `5>3` | 7.273 s | 7.273 s |
+| 4th @ 13.0 m/s | 22 m/s | 6.861 s | **5.965 s** `4>2` | 5.965 s | 5.965 s |
+| 3rd @ 9.0 m/s | 18 m/s | 5.551 s | **4.716 s** `3>1` | 4.716 s | 4.716 s |
+| 5th @ 28.0 m/s | 36 m/s | 11.996 s | **11.180 s** `5>3` | 11.180 s | 11.180 s |
+
+Uncapped wins everywhere, by up to **1.80 s**, and cap 3 == cap 4 because the
+`n_overrev` guard never lets a four-gear skip through anyway. So the skip is
+left uncapped: `n_overrev` and rule 1 are the only limits, which is one fewer
+tunable.
+
+## Why 1.8 m/s, with the sweep
+33-cell speed-holding sweep (11 speeds x 3 grades, 20 s each) and the 81-cell
+fixed-pedal sweep, at both power scales:
+
+| `v_shift_hyst` | flat cells hunting (ps 1.0 / 2.0) | hill cells (1.0 / 2.0) | total shifts / 33 cells (ps 1.0) | fixed-pedal reversals |
+|---|---|---|---|---|
+| shipped (no guard) | 3 / 1 | 9 / 5 | 118 | 3 |
+| 0.0 | 1 / 1 | 10 / 3 | 90 | 0 |
+| 0.6 | 1 / 1 | 8 / 3 | 73 | 0 |
+| 1.2 | 1 / 0 | 6 / 3 | 58 | 0 |
+| **1.8** | **0 / 0** | 6 / 2 | 56 | 0 |
+| 2.4 | 0 / 0 | 5 / 2 | 50 | 0 |
+| 3.6 | 0 / 0 | 3 / 1 | 36 | 0 |
+
+1.8 is the smallest value that clears **every flat-road cell at both power
+scales**. The cost is the effective downshift threshold, which is
+`min(N_DN(thr), the cap)`:
+
+```
+effective N_DN, rpm        pedal:  0.00   0.20   0.50   0.80   1.00
+  raw schedule                     1500   2120   3050   3980   4600
+  hyst 1.8   5->4                  1500   2120   3050   3980   4600   (untouched)
+             4->3                  1500   2120   3046   3905   4478
+             3->2                  1258   1759   2509   3259   3759
+             2->1                   938   1391   2071   2752   3205
+  hyst 3.6   4->3                  1346   1919   2778   3637   4209   <- erodes
+             5->4                  1483   2064   2935   3806   4387      lug
+```
+At 1.8 the two TALL-gear lines — the ones that protect against lugging — are
+untouched below half pedal and at most 122 rpm short at WOT. 3.6 buys three
+more hill cells but starts pulling the 4->3 line in at a closed pedal
+(1500 -> 1346), so 1.8 it is. The residual hill cells are a genuinely
+between-gears condition (the car cannot hold the set speed in the tall gear
+and can in the short one) and curing those needs grade logic, which is out of
+scope — see "not verified / not fixed".

@@ -319,6 +319,44 @@ class PowertrainParams:
     #                             in 4th at 2000 rpm at every apex and the flank-wing
     #                             A/B difference is buried in gearing noise.
     n_overrev: float = 5900.0
+    v_shift_hyst: float = 1.8   # m/s  THE HYSTERESIS BETWEEN THE TWO SCHEDULES,
+    #                             as a ROAD-SPEED gap -- the currency a shift map is
+    #                             actually drawn in, and the only one that is uniform
+    #                             across the box (300 rpm is 0.64 m/s in 1st and
+    #                             2.01 m/s in 4th). The two lines used to be
+    #                             independent, and the ratio steps of this box are
+    #                             big enough that they OVERLAPPED: the rpm the engine
+    #                             lands on after a 1-2 upshift is below the downshift
+    #                             line at EVERY pedal (-49 rpm closed, -882 at WOT),
+    #                             and after 2-3 for pedal >= 0.20. Only n_overrev
+    #                             saved WOT, and only above 93% pedal. Measured: a
+    #                             speed-holding driver oscillated for ever, 13
+    #                             changes in 20 s at 22 km/h on a 0.15 pedal
+    #                             (0.65/s), 12 of 33 cruise cells; at a fixed 0.70
+    #                             pedal the box went 1-2-3-2-3 and threw away 1.4 s
+    #                             of drive. _auto_target now refuses to drop into a
+    #                             gear the box would already have changed UP out of
+    #                             at this road speed and this pedal, plus this gap.
+    #                             0 alone blocks the exact reversal (the upshift's
+    #                             own speed IS where the car is the instant after
+    #                             it); the gap covers the pedal trim a driver makes
+    #                             holding a speed, which moves N_DN at 31 rpm per 1%
+    #                             of pedal and was the second, closed-loop hunt
+    #                             mechanism. A real kickdown is a 20%+ pedal step
+    #                             and still gets through. See the sweep in
+    #                             .handoff/05-when-automatic.md: 1.8 is the
+    #                             smallest value that clears every flat-road cell
+    #                             at both power scales (total shifts over the
+    #                             33-cell 20 s sweep 90 -> 56), and it leaves the
+    #                             4-3 and 5-4 downshift lines untouched below half
+    #                             pedal and 122 rpm short at WOT; 3.6 clears three
+    #                             more HILL cells but starts pulling the 4-3 line
+    #                             in at a closed pedal (1500 -> 1346 rpm), which is
+    #                             the lug protection. The UPSHIFT is deliberately
+    #                             NOT guarded the same way -- at WOT the 1-2
+    #                             landing rpm is 882 below the downshift line, and
+    #                             a symmetric guard would hold 1st to 8100 rpm,
+    #                             i.e. never let go at all.
     n_launch: float = 2400.0    # est  what a normal driver uses; 0.70 s shift + this
     #                             lands 0-100 km/h at the published ~15.5 s
     n_launch_band: float = 400.0  # rpm  the launch assist's proportional band
@@ -640,27 +678,77 @@ def _gear_legal(p: PowertrainParams, g: int, v_x: float) -> bool:
     return True
 
 
+def n_up_schedule(p: PowertrainParams, g: int, thr: float) -> float:
+    """The automatic's upshift threshold OUT OF gear g, rpm.
+
+    Factored out of _auto_target because the downshift guard has to evaluate
+    it for the gear it is about to drop INTO -- that is the whole hysteresis.
+    inf in top gear and in neutral/reverse: nothing changes up out of those.
+    """
+    if g < 1 or g >= len(p.gear):
+        return math.inf
+    k = p.n_up_k12 if g <= 2 else p.n_up_k34
+    return p.n_up_a + k * min(max(thr, 0.0), 1.0)
+
+
 def _auto_target(p: PowertrainParams, s: PowertrainState, inp: PtInput,
                  v_x: float, n_e: float) -> int | None:
-    """Throttle-scheduled automatic strategy, with the brake-downshift branch."""
+    """Throttle-scheduled automatic strategy, with the brake-downshift branch.
+
+    The two schedules are NOT independent (they were, and they overlapped --
+    see PowertrainParams.n_shift_hyst for the measured hunt). Three rules tie
+    them together:
+      * a downshift must land n_shift_hyst BELOW the target gear's own upshift
+        line, as well as below n_overrev;
+      * a box on the brakes never changes up;
+      * a throttle-demand downshift picks the target gear in ONE decision
+        instead of walking down at t_shift_lockout + 0.70 s a gear.
+    """
     if s.t_since_shift < p.t_shift_lockout or s.stalled:
         return None
     if s.gear <= 0:
-        if s.gear == 0 and (inp.throttle > 0.02 or v_x > 0.5):
-            return 1
+        # An automatic sits in gear, not in neutral: 1st goes in as soon as the
+        # car is not being held on the brake, so it creeps on the anti-stall
+        # assist instead of making the driver wait out the whole 0.70 s gear
+        # change. The overrev check is the one that used to be missing here --
+        # `v_x > 0.5` alone engaged 1st at ANY road speed, and 1st at 30 m/s is
+        # 14 800 rpm of input speed through a 200 N.m clutch.
+        if s.gear == 0 and (inp.throttle > 0.02 or v_x > 0.5 or inp.brake <= 0.3):
+            if abs(rpm_at_speed(p, 1, v_x)) < p.n_overrev:
+                return 1
         return None
     thr = min(max(inp.throttle, 0.0), 1.0)
-    if s.gear < len(p.gear):
-        k = p.n_up_k12 if s.gear <= 2 else p.n_up_k34
-        if n_e > p.n_up_a + k * thr:
+    braking = inp.brake > 0.3
+
+    # --- up: never on the brakes, unless the driveline is about to overrev --
+    if s.gear < len(p.gear) and not (braking and n_e < p.n_overrev):
+        if n_e > n_up_schedule(p, s.gear, thr):
             return s.gear + 1
+
+    # --- down --------------------------------------------------------------
     if s.gear > 1:
-        n_dn = p.n_dn_brake if inp.brake > 0.3 else p.n_dn_a + p.n_dn_k * thr
+        n_dn = p.n_dn_brake if braking else p.n_dn_a + p.n_dn_k * thr
         if n_e < n_dn:
-            # overrev guard on the gear we are about to drop into
-            n_after = n_e * p.gear[s.gear - 2] / p.gear[s.gear - 1]
-            if n_after < p.n_overrev:
-                return s.gear - 1
+            # Walk DOWN from the next gear (the one with the lowest landing
+            # rpm) and keep the lowest that clears both guards. On the brake
+            # branch, stop at one: there the downshift is triggered by the road
+            # speed decaying past n_dn_brake, so the box wants to step down as
+            # the car slows, not to jump. On the throttle branch the target
+            # gear is the driver's torque demand and it must arrive in one
+            # shift -- walking took 3 x (0.70 + t_shift_lockout) = 4.5 s from
+            # 5th and overshot into a gear the up-schedule undid at once.
+            best = None
+            for g in range(s.gear - 1, 0, -1):
+                n_after = n_e * p.gear[g - 1] / p.gear[s.gear - 1]
+                if n_after >= p.n_overrev:
+                    break
+                if not braking and abs(v_x) > speed_at_rpm(
+                        p, g, n_up_schedule(p, g, thr)) - p.v_shift_hyst:
+                    break
+                best = g
+                if braking:
+                    break
+            return best
     return None
 
 
