@@ -1583,7 +1583,15 @@ def _build(track_name="arena", radius=50.0, cw=False, wing="off",
 
     if mu_scale is None:
         mu_scale = getattr(car, "mu_scale", 1.0) if car is not None else 1.0
-    cfg = VehicleConfig(wing=wing, x_w=x_w, h_w=h_w, mu_scale=mu_scale)
+    # `power_scale` here is the CAR'S OWN engine (`engine_scale` = T_max/110),
+    # never the driver's Engine setting -- reconciliation 9 keeps that at 1.0
+    # on every scripted path and this does not change it: the Corsa's
+    # engine_scale is exactly 1.0. Without it `--car 540i --script accel`
+    # measured a 1780 kg car with a 110 N.m Corsa engine and reported
+    # 0-100 km/h in 24.3 s.
+    p_scale = getattr(car, "engine_scale", 1.0) if car is not None else 1.0
+    cfg = VehicleConfig(wing=wing, x_w=x_w, h_w=h_w, mu_scale=mu_scale,
+                        power_scale=p_scale)
     veh = Vehicle(CorsaC() if car is None else car, cfg)
     # Stage OPEN tracks 2.5 m past the line. track.surface_at() rejects a
     # longitudinal overshoot on an open track, so a car parked exactly at s = 0

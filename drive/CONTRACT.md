@@ -973,10 +973,16 @@ garage, `ESC` pause menu / settings. PS5 pad map: section 6.
    **14.5–16.0 s** as passing and report the actual number. Never tune the
    torque curve or `eta_drive` to move it — those are pinned by `Vmax`.
 9. **Driver aids never enter a measurement.** ABS (`VehicleConfig.abs_on`),
-   TC (`tc_on`), the Engine setting (`power_scale`), the steering limiter,
+   TC (`tc_on`), the **Engine setting** (`ENGINE_SCALE`), the steering limiter,
    the sound and the settings file are all OFF / 1.0 / bypassed / unread on
    every scripted, headless and rig path; only the interactive session
-   switches them on. The blip, the restart and the launch assist's band are
+   switches them on. `cfg.power_scale` now carries **two** factors — the
+   driver's Engine setting, which is the aid and stays 1.0 above, and the
+   car's own `engine_scale = T_max/110`, which is the car and is **not** an
+   aid. `_build` applies only the second (`getattr(car, "engine_scale", 1.0)`,
+   exactly 1.0 for the Corsa and for `car=None`), because without it
+   `--car 540i --script accel` measured a 1780 kg car with a 110 N·m Corsa
+   engine and reported 0–100 km/h in 24.3 s instead of 8.3. The blip, the restart and the launch assist's band are
    part of the driver model (`auto_clutch`) and are on in the scripts that
    drive with the automatic box, which is what the accel and lap acceptance
    numbers already assumed (a driver who blips and holds the launch rpm);
