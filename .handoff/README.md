@@ -37,17 +37,42 @@ touched. Module self-checks: `tyre` pass, `powertrain` **90/90** (was 82),
 | `07-weight.md` | **7** | adjustable mass as point masses, with ballast station |
 | `09-ml.md` | **9** | the ES driving agent: +9.22 % a lap over a hand-written baseline |
 
+### Wave 2
+
+| note | item | one line |
+|---|---|---|
+| `11-rwd.md` | **1** | real rear-wheel drive; the RWD cars' longitudinal numbers are physics now, not fiction |
+| `12-lapdriver.md` | **2** | `LapDriver` scaled off the car; all three cars lap inside the ribbon |
+| `10-lap-reconclusions.md` | **3** | the lap-based wing conclusions re-run: **the sign flips** |
+| (in `README.md` + `CONTRACT.md`) | **4** | the new flags, settings, the mount, the car library, the ML agent |
+| (in `render.py`) | **5** | V22 load-normalised against a reference workload measured in the same run |
+
 `salvage/` holds the patch recovered from a worker that was killed mid-flight
 early on; it has been reviewed and applied, and is kept only as provenance.
 
+## Wave 2 in one paragraph
+
+The two RWD cars now actually drive their rear wheels, which made their 0-100
+real (540i 7.845 -> 6.8138 s against a real ~6.2 s) and, at first, made their
+laps far worse — they stopped understeering off the track and started spinning
+off it. `LapDriver` now scales its planned grip (from an open-loop ramp steer
+of that car), its gains, its lookahead and its margin off the car itself, and
+all three cars lap the arena inside the ribbon with the Corsa bit-for-bit. With
+the driver able to complete laps, the lap-based wing conclusions were re-run
+for the first time and **the device's lap-time effect changes sign**: it was a
+loss with the flank-latch bug present and is a gain without it. V22 no longer
+cries wolf under load, and the README and CONTRACT now document everything
+both waves added.
+
 ## The three things most worth your attention
 
-1. **`04-wings-audit.md` section 3(b)** — the flank panel could never change
-   flanks after the first corner, and never stowed. It sat on the *inner*
-   (wrong) flank for **36.6 % of cornering time** on a scripted lap, worth
-   −1.94 % instead of +3.82 %, and left 302 N of uncommanded side force on
-   every straight. Fixed (`ceb5e04`). Everything you have previously measured
-   about the device on a *lap* was measured with this bug present.
+1. **`10-lap-reconclusions.md`** — the flank-latch bug (`04-wings-audit.md`
+   §3(b), fixed in `ceb5e04`) did not just add noise to the lap-based device
+   numbers, it **inverted them**. Fitting the fin used to cost 0.240 s a lap
+   and now saves 0.058 s; the plate used to cost 0.157 s and now saves
+   0.159 s. Any "the device does not pay for itself over a lap" conclusion you
+   hold from before that commit is an artefact. The per-corner and open-loop
+   numbers are untouched and remain the figure of merit.
 2. **`08-steering.md`** — the traction control was giving a wheel carrying a
    sixth of the axle load full authority over the engine, so the car
    *decelerated at full throttle* mid-corner (`ax = −0.206 m/s²`). And the
