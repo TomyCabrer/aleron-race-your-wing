@@ -264,15 +264,17 @@ class Settings:
 
     @property
     def power_scale(self) -> float:
-        """The Engine setting TIMES the car's own `engine_scale`.
+        """The Engine setting. Nothing else, again.
 
-        `engine_scale` = T_max/110 rides the existing `power_scale` path
-        (CONTRACT section 3) so a 440 N.m V8 needs no change in
-        `powertrain.py`; it is the honest approximation `cars.py` labels it,
-        because the 19-breakpoint curve is the Corsa's SHAPE scaled to
-        another car's peak. The Corsa's engine_scale is exactly 1.0, so
-        `x * 1.0 == x` and the stock car's power_scale is untouched."""
-        return ENGINE_SCALE.get(self.engine, 1.0) * cars.get(self.car).engine_scale
+        It briefly also carried the car's own `engine_scale` (= T_max/110), a
+        bodily multiplier on the Corsa's torque curve, because that was the
+        only way to give a 440 N.m V8 the right magnitude without touching
+        `powertrain.py`. `powertrain.engine_curve(car)` now builds each
+        engine's own curve, so that multiplier is retired (and would
+        double-count). CONTRACT reconciliation 9 is back to its original
+        meaning: `power_scale` is the driver aid and is 1.0 on every scripted
+        and headless path."""
+        return ENGINE_SCALE.get(self.engine, 1.0)
 
     @property
     def car_base(self):
@@ -437,7 +439,7 @@ SETTINGS_HELP = [
         ("Stock", "the 1.2 16V, 75 hp: every scripted number is this car"),
         ("Tuned / Sport", "1.5x / 2x the torque curve, clutch uprated to suit;"),
         ("", "TC keeps the fronts from spinning through 1st"),
-        ("", "on another car it multiplies that car's own engine_scale"),
+        ("", "the car's own engine curve is separate (powertrain.engine_curve)"),
     ]),
     ("GEARBOX", [
         ("Automatic", "the box shifts and works the clutch"),
@@ -1093,10 +1095,9 @@ class Sim:
             mode = ENGINE_DEFAULT
         self.settings.engine = mode
         v = self.veh
-        # settings.power_scale, not ENGINE_SCALE[mode]: on another car it also
-        # carries that car's own engine_scale (= T_max/110), which is how a
-        # 440 N.m V8 rides the existing power_scale path. Exactly
-        # ENGINE_SCALE[mode] on the Corsa, whose engine_scale is 1.0.
+        # settings.power_scale is now exactly ENGINE_SCALE[mode] again -- the
+        # car's own engine reaches from_car through engine_curve(car), not by
+        # scaling the Corsa's curve through power_scale.
         v.cfg.power_scale = self.settings.power_scale
         v.pt_p = ptm.PowertrainParams.from_car(v.car, power_scale=v.cfg.power_scale)
 
@@ -1792,13 +1793,11 @@ def _build(track_name="arena", radius=50.0, cw=False, wing="off",
 
     if mu_scale is None:
         mu_scale = getattr(car, "mu_scale", 1.0) if car is not None else 1.0
-    # `power_scale` here is the CAR'S OWN engine (`engine_scale` = T_max/110),
-    # never the driver's Engine setting -- reconciliation 9 keeps that at 1.0
-    # on every scripted path and this does not change it: the Corsa's
-    # engine_scale is exactly 1.0. Without it `--car 540i --script accel`
-    # measured a 1780 kg car with a 110 N.m Corsa engine and reported
-    # 0-100 km/h in 24.3 s.
-    p_scale = getattr(car, "engine_scale", 1.0) if car is not None else 1.0
+    # 1.0, always, on every scripted path (reconciliation 9). The car's own
+    # engine now reaches the physics through `powertrain.engine_curve(car)`
+    # rather than by scaling the Corsa's curve through here, so the old
+    # `p_scale = car.engine_scale` is gone -- it would double-count.
+    p_scale = 1.0
     cfg = VehicleConfig(wing=wing, x_w=x_w, h_w=h_w, mu_scale=mu_scale,
                         power_scale=p_scale)
     veh = Vehicle(CorsaC() if car is None else car, cfg)
@@ -2843,12 +2842,13 @@ def _v26_settings_and_menu(tmp, verbose=True):
         cars.BALLAST_MAX, cars.BALLAST_DEFAULT)
     # the car library, through Settings: the default is the study's own car
     # and it is the SAME OBJECT, ballast really changes the CarSpec, and
-    # power_scale picks up the car's engine_scale
+    # power_scale is the Engine setting ALONE on every car (the car's engine
+    # is engine_curve's business now, not power_scale's)
     d0 = Settings(path="")
     car_ok = (d0.car_spec() is cars.CORSA_C
               and d0.power_scale == ENGINE_SCALE[d0.engine]
               and Settings(path="", car="540i").power_scale
-              == ENGINE_SCALE[ENGINE_DEFAULT] * cars.CARS["540i"].engine_scale)
+              == ENGINE_SCALE[ENGINE_DEFAULT])
     bal = Settings(path="", ballast=200.0, ballast_at="boot").car_spec()
     car_ok = car_ok and (bal.m == cars.CORSA_C.m + 200.0
                          and bal.wdist_f < cars.CORSA_C.wdist_f - 0.10
@@ -2889,15 +2889,14 @@ def _v26_settings_and_menu(tmp, verbose=True):
               wet=None, camera=None, engine=None, tc=None, sound="off",
               car=None, ballast=None, ballast_at=None)
     back.apply_cli(o)
-    # power_scale carries the car's engine_scale now, so it is 1.5 only on
-    # the Corsa; `back` was saved with the MX-5 selected, which is the point
+    # power_scale is the Engine setting alone, so 1.5 on every car
     cli_ok = (back.track == "skidpad" and back.gearbox == "clutch"
               and o.gearbox == "clutch" and o.auto_gearbox is False
               and o.abs is False and o.wet == "all" and o.steer_limit is True
               and o.engine == "tuned" and o.tc is False and o.sound == "off"
               and back.sound == "off" and back.car == "mx5"
               and o.car == "mx5" and o.ballast == 75.0 and o.ballast_at == "boot"
-              and back.power_scale == 1.5 * cars.CARS["mx5"].engine_scale
+              and back.power_scale == 1.5
               and Settings(path="", engine="tuned").power_scale == 1.5)
     # an EXPLICIT --car / --ballast still wins over the file
     o2 = _Opts(track=None, gearbox=None, abs=None, steer_limit=None, wet=None,

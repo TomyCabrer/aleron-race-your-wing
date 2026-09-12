@@ -103,6 +103,20 @@ class CarSpec:
     Vmax: float = 47.2
     steer_ratio: float = 16.0
 
+    # --- engine curve anchors --------------------------------------------
+    #: The five numbers `powertrain.engine_curve` needs to place this engine's
+    #: WOT torque curve. `T_max` @ `n_peak_torque` and `P_max` @ `n_peak_power`
+    #: are the PUBLISHED pair and the built curve passes through both exactly;
+    #: everything between them is shape, and the shape family is the Corsa's
+    #: own validated NA curve re-anchored (see `powertrain.engine_curve`).
+    #: `displacement` sets the motoring/overrun torque, which goes as
+    #: FMEP*Vd/(4*pi), so it is a real per-engine quantity and not a guess.
+    n_peak_torque: float = 4000.0   # rpm, published
+    n_peak_power: float = 5600.0    # rpm, published
+    n_idle: float = 850.0           # est band 780-900, warm, no load
+    n_cut: float = 6200.0           # est band 6100-6400 (quoted for the Z12XE)
+    displacement: float = 1.199e-3  # m^3  Z12XE 1199 cc, published
+
     # --- suspension: EVERY VALUE HERE IS AN ESTIMATE -----------------------
     k_wheel_f: float = 17.5e3
     k_wheel_r: float = 11.06e3
@@ -128,19 +142,16 @@ class CarSpec:
     tyre_width: float = 0.175
     tyre_aspect: float = 0.65
     tyre_rim_r: float = 0.1778
-    #: Multiplier on the Corsa's WOT torque curve, fed through the EXISTING
-    #: `PowertrainParams.from_car(car, power_scale)` (which scales `nm_bp` as a
-    #: whole and uprates the clutch with it). 1.0 IS the Corsa.
-    #:
-    #: This is an APPROXIMATION and the honest limit of the feature: the
-    #: 19-breakpoint torque curve is a module constant built once at import
-    #: from the Corsa's engine, so a different car gets the Corsa's curve
-    #: SHAPE -- peak torque at 4000 rpm, the same rev limiter -- scaled to its
-    #: own peak. The MX-5 really peaks at 5000 rpm and the 540i at 3600, and
-    #: neither revs like a 1.2 Corsa. Giving each car its own curve means
-    #: touching `powertrain.py`, which is out of this task's scope; see the
-    #: handoff note. `engine_scale` MULTIPLIES the drive's Engine setting, so
-    #: the stock Corsa at Engine=stock is still exactly 1.0.
+    #: RETIRED, and 1.0 on every car. It used to be `T_max/110`, a bodily
+    #: multiplier on the Corsa's torque curve fed through `power_scale`, and
+    #: it was the honest limit of the car library: it got the magnitude right
+    #: and the SHAPE wrong. `powertrain.engine_curve(car)` now builds each
+    #: engine's own curve from the anchors above, so the multiplier is not
+    #: only unnecessary but would DOUBLE-COUNT. The field survives because
+    #: removing it silently would let an old caller pass `power_scale` twice;
+    #: anything reading it now gets exactly 1.0, which restores
+    #: CONTRACT reconciliation 9's original meaning -- `power_scale` is once
+    #: again purely the driver's Engine setting and nothing else.
     engine_scale: float = 1.0
     #: grip calibration against the Corsa's 175/65R14 touring tyre. 1.0 IS
     #: the Corsa. This is the ONLY way this repo can express a grippier tyre,
@@ -239,6 +250,15 @@ MX5_NB = CarSpec(
     eta_drive=0.88,         # est  RWD manual: propshaft + hypoid, no CV pair
     P_max=109e3,            # W  @ 6500 rpm  published (BP-Z3, 2001-2005)
     T_max=168.0,            # Nm @ 5000 rpm  published
+    #  The 2001-2005 BP-Z3 with VVT (Wikipedia's NB table: 109 kW @ 6500,
+    #  168 N.m @ 5000). NOTE the earlier non-VVT NB1 BP-Z3 is quoted
+    #  elsewhere as 162 N.m @ 4500 / 104 kW @ 6500 -- a different engine
+    #  state, not a contradiction; this car is the NB2.
+    n_peak_torque=5000.0,   # rpm, published
+    n_peak_power=6500.0,    # rpm, published
+    n_idle=800.0,           # est band 750-850
+    n_cut=7000.0,           # est band 6900-7200; the published redline is 7000
+    displacement=1.839e-3,  # m^3  1839 cc, published
     Vmax=54.7,              # m/s  197 km/h published
     steer_ratio=15.0,       # est +/-1.5
 
@@ -256,8 +276,6 @@ MX5_NB = CarSpec(
     tyre_width=0.195,
     tyre_aspect=0.50,
     tyre_rim_r=0.1905,
-    engine_scale=1.527,     # = 168/110, the Corsa's curve scaled to this car's
-                            # torque peak. Shape is the Corsa's -- approximation.
     mu_scale=1.05,          # est  a 195/50R15 summer performance tyre against
                             # the Corsa's 175/65R14 touring tyre. Tyre-test
                             # literature puts that class gap at 5-12 % in dry
@@ -314,8 +332,17 @@ E39_540I = CarSpec(
     gear_rev=3.75,
     finaldrive=2.81,
     eta_drive=0.88,         # est  RWD manual
-    P_max=210e3,            # W  @ 5400 rpm  published (M62TUB44, 286 PS)
+    P_max=210e3,            # W  @ 5400 rpm  published (M62TUB44)
     T_max=440.0,            # Nm @ 3600 rpm  published
+    #  M62TUB44: 4398 cc, 210 kW @ 5400, 440 N.m @ 3600 (Wikipedia, BMW M62).
+    #  The TU added inlet VANOS, which is why the real curve is flatter than
+    #  the M60's -- and the re-anchored Corsa shape happens to fit it almost
+    #  exactly (the power-anchor correction below is 0.990, i.e. 1 %).
+    n_peak_torque=3600.0,   # rpm, published
+    n_peak_power=5400.0,    # rpm, published
+    n_idle=650.0,           # est band 600-700, a big V8 idles low
+    n_cut=6400.0,           # est band 6300-6500; not published for the TU
+    displacement=4.398e-3,  # m^3  4398 cc, published
     Vmax=69.4,              # m/s  250 km/h -- an ELECTRONIC LIMITER, not a
                             # power balance. self_check reports the surplus.
     steer_ratio=17.0,       # est +/-1.5
@@ -333,9 +360,6 @@ E39_540I = CarSpec(
     tyre_width=0.235,
     tyre_aspect=0.45,
     tyre_rim_r=0.2159,
-    engine_scale=4.000,     # = 440/110. Same approximation as the MX-5's, and
-                            # cruder here: a 4.4 V8's curve is nothing like a
-                            # 1.2 four's, it just has the right peak.
     mu_scale=1.08,          # est  a 235/45R17 performance tyre. Same
                             # reasoning and the same caveat as the MX-5's.
     drive_layout="rwd",
@@ -670,8 +694,8 @@ def self_check(verbose: bool = True) -> bool:
             print(f"  {c2.name[:24]:24s} {c2.m:6.0f} {c2.L:6.3f} {100 * c2.wdist_f:5.0f} "
                   f"{c2.P_max / 1e3:5.0f} {c2.T_max:5.0f} {c2.CdA:5.2f} {c2.mu_scale:5.2f} {c2.engine_scale:5.2f} "
                   f"{c2.drive_layout:>4s} {len(c2.gear):6d}")
-        print("\n  NOTE: powertrain.py is FWD-only (T_drive has RL = RR = 0), so the two"
-              "\n  RWD cars drive their front wheels. drive_layout records the intent.")
+        print("\n  NOTE: drive_layout is now BEHAVIOUR -- the two rwd cars drive their"
+              "\n  rear wheels (powertrain.driven). 'awd' is refused, not guessed.")
         print("  ALL PASS" if ok else "  FAILURES ABOVE")
     return ok
 

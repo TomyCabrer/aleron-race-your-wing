@@ -50,6 +50,12 @@ from the repo root.
 | `drive/drive.py` | main loop, CLI, scripted runs | everything |
 | `drive/validate.py` | the whole acceptance suite | everything |
 
+`garage.py`'s SELF-CHECK (and only its self-check) imports
+`render.frame_budget_verdict`, to normalise its three page-draw budgets
+against the machine's current speed rather than reimplementing the
+normaliser. No cycle (`render` never imports `garage`) and nothing on the
+interactive or acceptance path reaches it.
+
 `vehicle.py` NEVER imports `track`, `render`, `input`, `aero` or pygame: the
 designed wings reach it as two frozen dataclasses of numbers (`DevAero`,
 `TopAero`, section 4) that the garage builds. `drive/aero` NEVER imports
@@ -208,6 +214,25 @@ def self_check() -> None
   ~150 under 2400 (5.46 s). Narrower acts as a stiff damper on the engine DOF
   (`1.5·T_cap·√e / band`, 5.7 N·m·s/rad here) and couples into the 11.3 Hz
   driveline mode. The zero-throttle anti-stall band (550..850) is unchanged.
+* **Per-car engine curve.** `engine_curve(car) -> (rpm_bp, nm_bp, orpm_bp,
+  onm_bp)` builds THIS engine's WOT and overrun curves from five anchors on
+  the car (`n_peak_torque`, `n_peak_power`, `n_idle`, `n_cut`,
+  `displacement`) plus its published `T_max` / `P_max`. **A car whose anchors
+  match the Corsa's gets the module constants themselves** — the same tuple
+  objects — so the Z12XE curve is identical to the last digit.
+  The built curve passes through **both** published points exactly: the rpm
+  axis is warped through the knots (0, peak torque, peak power, cut),
+  piecewise linear and monotone, and the torque is scaled to `T_max` then
+  corrected by a factor ramping 1 → c between the peaks so that
+  `T(n_peak_power) == P_max / omega_peak_power`. Overrun scales with
+  displacement (`FMEP*Vd/(4*pi)`). `from_car` also takes the rev cut, idle,
+  `n_overrev`, the whole shift schedule (as a FRACTION of the cut — leaving
+  the Corsa's 6050 upshift on an engine that revs to 7000 short-shifts it 950
+  rpm below its own power peak) and `T_clutch_cap` (held at the Corsa's
+  1.82× ratio to its own peak) from the car.
+  **`CarSpec.engine_scale` is RETIRED and is 1.0 on every car** — it was a
+  bodily multiplier on the Corsa's curve, and with a real per-car curve it
+  would double-count.
 * **The driven axle.** `PowertrainParams.driven` is `'front'` or `'rear'` and
   `from_car` reads it off `CarSpec.drive_layout`. **`'awd'` is REFUSED with a
   `ValueError`**, not silently treated as one of the two: this driveline has
@@ -897,10 +922,11 @@ Corsa C with no ballast.
 `car_spec(extra=())`, `ballast_text()`, `load / save / clamp / apply_cli /
 to_opts / cycle`).
 
-`Settings.power_scale` is `ENGINE_SCALE[engine] × cars.get(car).engine_scale`
-— `engine_scale = T_max/110` is how another car's torque peak rides the
-existing `power_scale` path (§3) with no change in `powertrain.py`. The
-Corsa's is exactly `1.0`, so `x*1.0 == x` and the stock car is untouched; the
+`Settings.power_scale` is `ENGINE_SCALE[engine]` and nothing else. It briefly
+also carried `cars.get(car).engine_scale = T_max/110`, which was how another
+car's torque peak rode the existing `power_scale` path with no change in
+`powertrain.py`; `engine_curve(car)` (§3) now builds each engine's own curve,
+so that multiplier is retired and would double-count. The
 Engine row and the HUD label read the car's own PS through `engine_ps /
 engine_hud / engine_label`, which reproduce the hard-coded `75 / 110 / 150 HP`
 on the Corsa (asserted in `self_check`).
@@ -1040,13 +1066,13 @@ garage, `ESC` pause menu / settings. PS5 pad map: section 6.
    TC (`tc_on`), the **Engine setting** (`ENGINE_SCALE`), the steering limiter,
    the sound and the settings file are all OFF / 1.0 / bypassed / unread on
    every scripted, headless and rig path; only the interactive session
-   switches them on. `cfg.power_scale` now carries **two** factors — the
-   driver's Engine setting, which is the aid and stays 1.0 above, and the
-   car's own `engine_scale = T_max/110`, which is the car and is **not** an
-   aid. `_build` applies only the second (`getattr(car, "engine_scale", 1.0)`,
-   exactly 1.0 for the Corsa and for `car=None`), because without it
-   `--car 540i --script accel` measured a 1780 kg car with a 110 N·m Corsa
-   engine and reported 0–100 km/h in 24.3 s instead of 8.3. The blip, the restart and the launch assist's band are
+   switches them on. `cfg.power_scale` is the driver's Engine setting **and
+   nothing else**, and `_build` sets it to exactly `1.0` on every scripted
+   path. It briefly also carried the car's own `engine_scale = T_max/110`,
+   because otherwise `--car 540i --script accel` measured a 1780 kg car with
+   a 110 N·m Corsa engine and reported 0–100 km/h in 24.3 s; `engine_curve`
+   (§3) makes that unnecessary, and this reconciliation is back to meaning
+   what it originally said. The blip, the restart and the launch assist's band are
    part of the driver model (`auto_clutch`) and are on in the scripts that
    drive with the automatic box, which is what the accel and lap acceptance
    numbers already assumed (a driver who blips and holds the launch rpm);

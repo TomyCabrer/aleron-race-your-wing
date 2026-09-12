@@ -2967,8 +2967,10 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     rnd.draw_frame(st3, None, 0.0, _demo_ctl(), aux3, sk3)
     ms_menu = rnd.frame_ms()
     px = rnd.screen.get_at((rnd.W // 2, rnd.H // 2))[:3]
-    rep('menu overlay', ms_menu < 16.0 and px != C_BG,
-        f'{ms_menu:.1f} ms with the menu open, centre px {px}')
+    _okm, _whym = frame_budget_verdict(ms_menu, ms_menu,
+                                      budget_mean=16.0, budget_p99=16.0)
+    rep('menu overlay', _okm and px != C_BG,
+        f'{_whym}, centre px {px}')
     shot3 = os.path.join(os.path.abspath(screenshot_dir), 'render_menu.png')
     rnd.screenshot(shot3)
     aux3.menu.show(menu_help(None), note=MENU_NO_PAD)

@@ -419,10 +419,35 @@ class PowertrainParams:
         k = float(power_scale)
         if not (k > 0.0):
             raise ValueError(f"power_scale must be positive, got {power_scale!r}")
+        #  THIS ENGINE's curve, not the Corsa's scaled bodily (`engine_curve`).
+        #  For the Corsa these are the module constants themselves, so the
+        #  whole block below reduces to the old `kw = {}` path.
+        rpm_bp, nm_bp, orpm_bp, onm_bp = engine_curve(car)
         kw = {}
+        if rpm_bp is not RPM_BP:
+            #  everything the rev range implies. The shift schedule is placed
+            #  as a FRACTION of the cut: leaving the Corsa's 6050 upshift on an
+            #  engine that revs to 7000 would short-shift it 950 rpm below its
+            #  own power peak.
+            f_cut = float(getattr(car, "n_cut", 6200.0)) / 6200.0
+            kw.update(rpm_bp=rpm_bp, nm_bp=nm_bp,
+                      orpm_bp=orpm_bp, onm_bp=onm_bp,
+                      n_idle=float(getattr(car, "n_idle", 850.0)),
+                      n_cut=float(getattr(car, "n_cut", 6200.0)),
+                      n_restore=float(getattr(car, "n_cut", 6200.0)) - 150.0,
+                      n_overrev=5900.0 * f_cut,
+                      n_up_a=2400.0 * f_cut, n_up_k12=3750.0 * f_cut,
+                      n_up_k34=3650.0 * f_cut, n_dn_a=1500.0 * f_cut,
+                      n_dn_k=3100.0 * f_cut, n_launch=2400.0 * f_cut,
+                      #  the clutch is sized on the engine it is behind: the
+                      #  Corsa's 200 N.m is 1.82x its own peak, so hold that
+                      #  ratio rather than slipping a V8 at half throttle
+                      T_clutch_cap=T_CLUTCH_CAP_STOCK * float(car.T_max) / 110.0)
         if k != 1.0:
-            kw = dict(nm_bp=tuple(float(v) * k for v in NM_BP),
-                      T_clutch_cap=T_CLUTCH_CAP_STOCK * k)
+            base = kw.get("nm_bp", NM_BP)
+            cap = kw.get("T_clutch_cap", T_CLUTCH_CAP_STOCK)
+            kw.update(nm_bp=tuple(float(v) * k for v in base),
+                      T_clutch_cap=cap * k)
         layout = str(getattr(car, "drive_layout", "fwd")).lower()
         if layout in ("fwd", "front"):
             driven = "front"
@@ -535,6 +560,99 @@ def rpm_at_speed(p: PowertrainParams, g: int, v: float) -> float:
     if n_tot == 0.0:
         return 0.0
     return v / p.r_roll * n_tot * RPM
+
+
+
+# ====================================================================== #
+#  PER-CAR ENGINE CURVE                                                   #
+# ====================================================================== #
+#: The Corsa's own anchors. A car whose five engine numbers match these IS the
+#: Z12XE, and `engine_curve` hands back the module constants themselves --
+#: the same tuple objects, so the curve is identical to the last digit rather
+#: than merely close. That is the whole bit-for-bit guarantee.
+_REF_ANCHORS = (4000.0, 5600.0, 110.0, 6200.0, 1.199e-3)
+#: the two Corsa breakpoints the re-anchoring pivots on
+_I_PT = RPM_BP.index(4000.0)
+_I_PP = RPM_BP.index(5600.0)
+
+
+def engine_curve(car) -> tuple:
+    """`(rpm_bp, nm_bp, orpm_bp, onm_bp)` for THIS engine.
+
+    `engine_scale` used to scale the Corsa's curve bodily, which got the
+    magnitude right and the SHAPE wrong: the MX-5 peaked at 4000 rpm and cut
+    at 6200 when a BP-Z3 peaks at 5000 and revs to 7000, and that is why it
+    stayed ~2 s slow to 100 km/h after the driveline was fixed.
+
+    What is PUBLISHED per engine is a pair of points -- `T_max` at
+    `n_peak_torque`, and `P_max` at `n_peak_power` -- plus idle and the
+    redline. The built curve passes through **both** published points exactly.
+    Between and beyond them it is shape, and the shape family is the Corsa's
+    own validated NA curve (see RPM_BP's comment for the constraints it was
+    built under) with two transformations:
+
+    1. **The rpm axis is warped** through the knots (0, peak torque, peak
+       power, cut), piecewise linear and monotone, so each feature of the
+       shape lands at the rpm this engine actually puts it at.
+    2. **The torque is scaled** to `T_max`, then corrected by a factor that
+       ramps 1 -> c between the two peaks and holds c above, where c makes
+       `T(n_peak_power)` equal `P_max / omega_peak_power` exactly.
+
+    `c` is a measured property of the published pair, not a fudge: 1.118 for
+    the BP-Z3 (which really does hold 95 % of peak torque at its power peak --
+    109 kW at 6500 rpm needs 160 of its 168 N.m) and 0.990 for the M62TU,
+    whose VANOS curve the Corsa's shape happens to fit to 1 %.
+
+    The overrun curve scales with DISPLACEMENT, which is not a guess: motoring
+    torque is `FMEP*Vd/(4*pi)` and `Vd` is published for all three engines.
+
+    est, and stated as such: everything between the two published points, the
+    idle and cut speeds where not published, and the assumption that a 4.4 V8
+    and a 1.8 four share a normalised torque-curve shape at all. A real
+    per-engine curve would come from a dyno sheet, which none of these have.
+    """
+    n_pt = float(getattr(car, "n_peak_torque", 4000.0))
+    n_pp = float(getattr(car, "n_peak_power", 5600.0))
+    n_cut = float(getattr(car, "n_cut", 6200.0))
+    T_max = float(car.T_max)
+    Vd = float(getattr(car, "displacement", 1.199e-3))
+    if (n_pt, n_pp, T_max, n_cut, Vd) == _REF_ANCHORS:
+        return RPM_BP, NM_BP, ORPM_BP, ONM_BP      # the same objects
+    if not (0.0 < n_pt < n_pp < n_cut):
+        raise ValueError(f"engine anchors must satisfy 0 < n_peak_torque "
+                         f"({n_pt}) < n_peak_power ({n_pp}) < n_cut ({n_cut})")
+
+    #  the warp: monotone piecewise linear through the four knots, with the
+    #  tail beyond the cut continued at the last segment's slope
+    kx = (0.0, 4000.0, 5600.0, 6200.0, 7000.0)
+    tail = n_cut + (7000.0 - 6200.0) * (n_cut - n_pp) / (6200.0 - 5600.0)
+    ky = (0.0, n_pt, n_pp, n_cut, tail)
+
+    def warp(r: float) -> float:
+        for j in range(len(kx) - 1):
+            if r <= kx[j + 1] or j == len(kx) - 2:
+                f = (r - kx[j]) / (kx[j + 1] - kx[j])
+                return ky[j] + f * (ky[j + 1] - ky[j])
+        return ky[-1]
+
+    #  the power anchor, exactly
+    T_pp_want = float(car.P_max) / (n_pp * RPS)
+    k_t = T_max / 110.0
+    c = T_pp_want / (NM_BP[_I_PP] * k_t)
+
+    def corr(r: float) -> float:
+        if r <= 4000.0:
+            return 1.0
+        if r >= 5600.0:
+            return c
+        return 1.0 + (c - 1.0) * (r - 4000.0) / 1600.0
+
+    rpm_bp = tuple(warp(r) for r in RPM_BP)
+    nm_bp = tuple(v * k_t * corr(r) for r, v in zip(RPM_BP, NM_BP))
+    k_v = Vd / 1.199e-3
+    orpm_bp = tuple(warp(r) for r in ORPM_BP)
+    onm_bp = tuple(v * k_v for v in ONM_BP)
+    return rpm_bp, nm_bp, orpm_bp, onm_bp
 
 
 def kmh_per_1000rpm(p: PowertrainParams, g: int) -> float:

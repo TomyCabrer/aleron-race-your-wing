@@ -2471,6 +2471,29 @@ class Garage:
 # =========================================================================== #
 #  SELF-CHECK                                                                  #
 # =========================================================================== #
+def _budget(ms: float, limit: float, calib=None):
+    """`(passed, detail)` for a wall-clock frame-budget check, normalised by
+    how slow the machine is RIGHT NOW.
+
+    The three page-draw checks below are wall clock and they were false-alarm
+    generators exactly as `render.py`'s V22 was: measured under a training run
+    that had twelve cores busy, the car page came out at 15.39 ms against its
+    14.0 ms budget and the module exited 1, which reads as a rendering
+    regression and is not one. `render.frame_budget_verdict` already solves
+    this by timing a fixed reference workload in the same process and scaling
+    the budget by the slowdown; it is reused rather than reimplemented so the
+    two cannot drift apart.
+
+    `render` is NOT in `garage.py`'s import list in CONTRACT section 1 and this
+    does not change that: the import is inside the SELF-CHECK, there is no
+    cycle (`render` never imports `garage`), and nothing on the interactive or
+    acceptance path reaches it. Noted in section 1.
+    """
+    from .render import frame_budget_verdict
+    return frame_budget_verdict(ms, ms, budget_mean=limit, budget_p99=limit,
+                                calib=calib)
+
+
 def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     """Mesh sanity, closed-form parity with crossover.py, the build's two
     physics paths, every page headless, the optimiser, the library."""
@@ -2575,7 +2598,9 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
         g.deploy_cmd = 1.0 if i >= 4 else 0.0
         g.frame(1.0 / 60.0)
     ms = (time.perf_counter() - t0) * 1e3 / 12.0
-    rep("car page frame budget", ms < 14.0, f"{ms:.2f} ms/frame, {g.view.n_polys} polys drawn (3 wings)")
+    _ok, _why = _budget(ms, 14.0)
+    rep("car page frame budget", _ok,
+        f"{_why}, {g.view.n_polys} polys drawn (3 wings)")
     rep("deploy preview animates", 0.0 < g.deploy <= 1.0, f"deploy {g.deploy:.2f}")
     if screenshot_dir:
         os.makedirs(screenshot_dir, exist_ok=True)
@@ -2606,7 +2631,7 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     g.frame(1.0 / 60.0)
     g.frame(1.0 / 60.0)
     ms = (time.perf_counter() - t0) * 1e3 / 2
-    rep("designer page draws", ms < 60.0, f"{ms:.1f} ms/frame")
+    rep("designer page draws", *_budget(ms, 60.0))
     if screenshot_dir:
         pygame.image.save(g.screen, os.path.join(screenshot_dir, "garage_design.png"))
     dsn = g.designer
@@ -2639,7 +2664,7 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     t0 = time.perf_counter()
     g.frame(1.0 / 60.0)
     ms = (time.perf_counter() - t0) * 1e3
-    rep("airfoil page draws", ms < 80.0, f"{ms:.1f} ms")
+    rep("airfoil page draws", *_budget(ms, 80.0))
     if screenshot_dir:
         pygame.image.save(g.screen, os.path.join(screenshot_dir, "garage_airfoil.png"))
     g.af_page.list.idx = 0
