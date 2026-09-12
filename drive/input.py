@@ -467,14 +467,19 @@ def steer_limit_pair_deg(V: float, beta_deg: float, ay_max: float = AY_MAX_DRY,
     -> a higher limit -> more lock. Measured on the reported bug, full brake
     from 30 m/s with the aid at k_us_deg = 7.82:
 
-        beta       limit (old, symmetric)      yaw rate delivered
-        0 deg          9.30 deg                 0.480 rad/s  (near the peak)
-       20 deg         32.625 deg  (full lock)   0.440 rad/s at 36 deg alpha_f
+        beta       limit (old, symmetric)      settled yaw rate
+        0 deg          9.30 deg                 0.480 rad/s
+       20 deg         32.625 deg  (full lock)   0.440 rad/s at alpha_f -36 deg
 
-    i.e. the aid handed the driver 23 deg of extra lock that BOUGHT NOTHING --
-    the front axle was already 26 deg past the MF peak (10.35 deg) and yaw
-    response falls monotonically beyond it. From the seat that is exactly
-    "I cannot steer while braking": full lock on, car going straight.
+    i.e. the aid handed the driver 23 deg of extra lock that BOUGHT NOTHING.
+    Yaw response peaks at 8-14 deg of lock and falls beyond it, because the MF
+    front-axle peak is at alpha 10.35 deg. Scored the honest way -- total
+    heading change through a 3 s keyboard DOWN+LEFT from 30 m/s, not the
+    instantaneous yaw rate, since 22 deg of lock at alpha_f 32 deg is a
+    pirouette -- the symmetric bonus gave 22.32 deg of lock for 37.98 deg of
+    heading change and this gives 14.08 deg of lock for 41.10 deg. Less lock,
+    more turn. From the seat the old behaviour is exactly "I cannot steer while
+    braking": full lock on, car going straight.
 
     Sign: `beta = atan2(v, |u|)` with `v` the LEFTWARD velocity, so in a left
     turn at the limit beta is NEGATIVE (contract section 9 item 7 states the
@@ -883,6 +888,7 @@ class GamepadInput:
         # so the first update() sets them rather than easing 0.26 s down to them
         self._lim_l = 0.0
         self._lim_r = 0.0
+
         self.delta_deg = 0.0
         self.axis_steer = 0.0           # post-deadzone stick, for the blend rule
         self.throttle = 0.0
