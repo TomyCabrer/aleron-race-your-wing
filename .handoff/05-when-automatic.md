@@ -506,3 +506,119 @@ kappa 1.50; 2x TC 8.42 s kappa 0.31`, both character-for-character identical
 to baseline. The contract's `accel_run` 0-100 (14.5-16.0 s band) is untouched
 by construction: `accel_run` carries its own `n_up` dict and never calls
 `_auto_target`.
+
+---
+
+# DEFECT F — a driver-commanded downshift has no overrev guard (reachable in AUTO)
+
+**Found, measured, NOT fixed.** The scheduler's own `n_overrev` guard is not
+applied to the driver's `Q` / `E` edges, and those edges are live in **auto**
+mode too (`update_shift` reads `inp.shift_up / shift_dn` before it consults
+`inp.auto_gearbox`). `_gear_legal` only refuses an out-of-range gear and
+reverse above 1 m/s forward. Four taps of `Q` at 30 m/s in 5th, auto box,
+through the real `step()`:
+
+```
+  t=0.00s tap -> gear 5,  3557 rpm   (target gear's input speed  4471 rpm)
+  t=0.75s tap -> gear 4,  4403 rpm   (                           5614 rpm)
+  t=1.50s tap -> gear 3,  5520 rpm   (                           8280 rpm)
+  t=2.25s tap -> gear 2,  7545 rpm   (                          13022 rpm)
+  t=3.00s tap -> gear 1,  8551 rpm
+  PEAK ENGINE SPEED 8553 rpm   (n_cut 6200, n_overrev 5900)
+```
+
+**8553 rpm — 2353 past the cut.** The 6200/6050 latch cuts the fuel but the
+driveline keeps spinning the engine, which is exactly the case the latch's own
+comment names ("the DRIVELINE spinning the engine past the cut on a missed
+downshift"). The auto scheduler would refuse every one of these.
+
+I have **not applied this**, on purpose: it changes what a *driver-commanded*
+shift does in all three driver models, and CONTRACT.md section 3 pins the
+three driver models as a table. It is a one-line change in a file I own, so it
+is the owner's call, not mine. The exact patch, in `drive/powertrain.py`:
+
+```python
+# OLD
+def _gear_legal(p: PowertrainParams, g: int, v_x: float) -> bool:
+    if g < -1 or g > len(p.gear):
+        return False
+    if g == -1 and v_x > 1.0:
+        return False        # refuse reverse above 1 m/s forward
+    return True
+
+# NEW
+def _gear_legal(p: PowertrainParams, g: int, v_x: float) -> bool:
+    if g < -1 or g > len(p.gear):
+        return False
+    if g == -1 and v_x > 1.0:
+        return False        # refuse reverse above 1 m/s forward
+    if g >= 1 and abs(rpm_at_speed(p, g, v_x)) >= p.n_overrev:
+        return False        # the road speed would overrev it: four taps of Q
+        #                     at 30 m/s in 5th reached 8553 rpm, 2353 past the
+        #                     cut, which is the case the 6200/6050 latch's own
+        #                     comment names (the driveline spinning the engine
+        #                     past the cut on a missed downshift). The auto
+        #                     scheduler already refuses this; the driver's own
+        #                     edges did not, in every mode including auto.
+    return True
+```
+
+Checked against the suite before deciding not to apply it: the only
+driver-commanded downshift in any rig is 3rd -> 2nd at 15 m/s (validate G3 and
+`self_check._downshift`), whose target input speed is 4274 rpm, so the guard
+would not bite. It should be safe; I am simply not the one to widen the driver
+model.
+
+---
+
+# NOT FIXED / NOT VERIFIED
+
+1. **Hunting on a grade at mid speed is not cured** and I chose not to chase
+   it. 6 of 33 cells at `power_scale` 1.0 and 2 of 33 at 2.0 still oscillate,
+   all of them on a 3-6% grade: 10 m/s (0.21 pedal, 3 settled shifts, was 5),
+   14 m/s (0.18 pedal, 4, unchanged), 18 m/s, 24 m/s (0.59 pedal, 5,
+   unchanged), 28 m/s, 32 m/s. Instrumented, these are **genuinely
+   between-gears**: at 14 m/s on 3% the box changes up at 0.091 pedal and the
+   driver then needs 0.180 to hold the speed in the taller gear, so both
+   decisions are individually right and the car cannot hold the set speed in
+   4th but can in 3rd. Real automatics hunt there too; curing it needs grade
+   detection or a shift-point memory, which is a new mechanism and a new piece
+   of state, not a hysteresis constant. `v_shift_hyst = 3.6` clears three more
+   of them but starts pulling the 4->3 lug-protection line in at a closed
+   pedal (1500 -> 1346 rpm), which I judged the worse trade. Flagged for the
+   owner as a product decision.
+2. **Nothing interactive was exercised.** No pygame session, no pad, no
+   Settings round-trip beyond what `validate` already covers. The
+   `ENGINE_DEFAULT='sport'` path was tested by passing `power_scale=2.0`
+   directly, not through the settings page.
+3. **The automatic wing-side selection was not audited** — deliberately, it is
+   `.handoff/04-wings-audit.md` section 3(b) and the `vehicle.py` owner's fix.
+   If "When automatic" turns out to have meant the wing, this note answers the
+   wrong question and the gearbox findings stand on their own.
+4. **`n_up_schedule` is a new name on `powertrain.py`'s public surface** and
+   CONTRACT.md section 3's API block does not list it. I cannot edit
+   CONTRACT.md. The line to add, after `def wot_power(p, n_e) -> float`:
+   ```
+   def n_up_schedule(p, g, thr) -> float    # the auto upshift line out of gear g
+   ```
+   and section 3's shift-machine bullet wants a sentence about
+   `v_shift_hyst` — suggested wording:
+   > **Shift-map hysteresis.** The two schedules are not independent:
+   > `_auto_target` refuses a downshift into a gear the box would already
+   > have changed UP out of at this road speed and pedal, within
+   > `v_shift_hyst = 1.8 m/s`, and requires the same road-speed agreement
+   > before an upshift (wheelspin decouples `n_e` from the car: at
+   > `power_scale` 2.0 on mu 0.30 the box used to reach 4th at 6.3 m/s).
+   > A box on the brakes never changes up. A throttle-demand downshift picks
+   > its gear in one decision; the brake branch still steps down one at a
+   > time. The upshift is deliberately NOT guarded against the downshift line
+   > the way the downshift is guarded against the upshift line — at WOT that
+   > would hold 1st past the cut.
+5. **`drive/render.py`'s self-check went 26/26 -> 25/26 during this session**
+   and it is **not mine** — I never touched `render.py` and the powertrain
+   change cannot reach it. Between my baseline and now, the concurrent owner
+   of `vehicle.py` landed `cd92b54 vehicle+contract: the roll/transfer/panel
+   blocks follow the fitted car` and `ceb5e04 vehicle: the flank panel's side
+   latch deadlocked after the first corner`, and has `drive/drive.py`
+   uncommitted. Reported upward rather than touched; see the final report for
+   which of render's 26 checks it is.
