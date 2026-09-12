@@ -42,11 +42,13 @@ from dataclasses import dataclass, field, fields, asdict
 from corsa_c import CorsaC, RHO, G
 
 # --- what the powertrain can actually drive ------------------------------
-#: `powertrain.step` returns `T_drive` with RL = RR = 0 -- the driveline is
-#: FRONT-WHEEL DRIVE and nothing else is implemented (CONTRACT section 3).
-#: `drive_layout` is therefore DATA, not behaviour: a 'rwd' car drives its
-#: front wheels until somebody implements the rear split. Flagged in the
-#: handoff note; the field exists so that work has somewhere to land.
+#: `drive_layout` is BEHAVIOUR: `PowertrainParams.from_car` reads it and
+#: `powertrain.step` sends the torque to that pair, so a 'rwd' car really
+#: drives its rear wheels and really gains traction under acceleration where a
+#: 'fwd' car loses it. **'awd' is REFUSED with a ValueError**, not quietly
+#: treated as one of the other two: this driveline has one clutch, one gearbox
+#: and one open diff, and a centre differential with a torque split is physics
+#: it does not have.
 LAYOUTS = ("fwd", "rwd", "awd")
 
 TYRE_DIR = "tyre_data"
@@ -261,8 +263,10 @@ MX5_NB = CarSpec(
     r_roll=0.2794,          # m  0.288 OD radius x 0.97
 
     Cd=0.36,                # published (Wikipedia, NB: "a drag coefficient of Cd=0.36")
-    A=1.70,                 # est +/-0.05  0.81 x 1.680 width x 1.235 height
-    CdA=0.612,              # = Cd * A; NOT independently validated against Vmax
+    A=1.68,                 # est +/-0.05  = 0.81 x 1.680 width x 1.235 height
+    CdA=0.605,              # = Cd * A. NOT validated against Vmax, and it
+                            # CANNOT be -- see the note below on why 208 km/h
+                            # is a gearing limit, not an aerodynamic one.
     Crr=0.012,              # est  same rolling class as the Corsa
 
     # Mazda 5-speed (the mainstream NB 1.8 box; a 6-speed existed on some
@@ -282,14 +286,37 @@ MX5_NB = CarSpec(
     n_idle=800.0,           # est band 750-850
     n_cut=7000.0,           # est band 6900-7200; the published redline is 7000
     displacement=1.839e-3,  # m^3  1839 cc, published
-    Vmax=54.7,              # m/s  197 km/h published
+    Vmax=57.8,              # m/s  208 km/h published (auto-data.net, NB2 1.8
+                            # 146 hp, 5-speed; the 6-speed car is quoted 214).
+                            # This is a GEARING limit, not a drag limit: 5th x
+                            # 4.30 gives 30.1 km/h per 1000 rpm, so 208 km/h is
+                            # 6910 rpm against a 7000 rpm cut. See self_check.
     steer_ratio=15.0,       # est +/-1.5
 
-    # --- suspension: EVERY VALUE HERE IS AN ESTIMATE ---------------------
-    k_wheel_f=22.0e3, k_wheel_r=18.0e3, k_tyre=210e3,
+    # --- suspension: DERIVED from published spring rates and ARB diameters
+    #  Springs (NB2 Sport, OEM): 168 lb/in front, 130 lb/in rear = 29.4 /
+    #  22.8 N/mm. Widely reproduced; the base NB is 118/162 lb/in, a different
+    #  and softer-front car -- this entry is the Sport, as its 195/50R15 on
+    #  6Jx15 says. MOTION RATIO 0.80 both ends is `est` (+/-0.05): the
+    #  double-wishbone spring sits fairly outboard on the lower arm. Wheel
+    #  rate = k_spring * MR^2.
+    k_wheel_f=18.8e3,       # = 29.4 N/mm * 0.80^2
+    k_wheel_r=14.6e3,       # = 22.8 N/mm * 0.80^2
+    k_tyre=210e3,
     h_rc_f=0.050,           # est  double wishbone, low roll centre
     h_rc_r=0.080,           # est  double wishbone (NOT a twist beam)
-    Kphi_f=340.0, Kphi_r=260.0, Kphi_tot=700.0,
+    #  Kphi_f/Kphi_r are springs only, 0.5*k_wheel*t^2 (the same relation that
+    #  reproduces the Corsa's 311/195 from its own wheel rates and tracks).
+    Kphi_f=329.0, Kphi_r=263.7,
+    #  Kphi_tot adds the OEM anti-roll bars: 22 mm front, 12 mm rear
+    #  (documented for the NB; the 24/16 pair sold as an upgrade is
+    #  aftermarket). The bar's torsional contribution goes as d^4*t^2 and the
+    #  remaining geometry (arm length, bar length) is NOT published, so the
+    #  constant is CALIBRATED ON THE CORSA -- the one car here with a stated
+    #  ARB-inclusive Kphi_tot (640 against 506.5 springs-only, i.e. 133.5 from
+    #  a 20 mm front bar) -- and applied to these diameters. est, and the only
+    #  unsourced step in the chain.
+    Kphi_tot=801.9,         # 329.0 + 263.7 springs + 191.7 + 17.6 bars
     rollsteer_r=0.0,        # a double-wishbone rear does not roll-steer like
                             # the Corsa's twist beam; 0.0 is the honest default
     rollcamber_r=0.6,       # est
@@ -353,10 +380,12 @@ E39_540I = CarSpec(
 
     Cd=0.30,                # est/published: BMW quoted 0.27 for the slipperiest
                             # E39; 0.30 is the figure used for the 540i
-    A=2.20,                 # est +/-0.08  0.81 x 1.800 width x 1.435 height
-    CdA=0.66,               # = Cd * A. Identical to the Corsa's 0.66 -- a real
-                            # coincidence, not a copy: a much bigger car that
-                            # is much slicker lands on the same CdA.
+    A=2.09,                 # est +/-0.08  = 0.81 x 1.800 width x 1.435 height
+    CdA=0.627,              # = Cd * A. NOT validated against Vmax and CANNOT
+                            # be: the 540i's 250 km/h is an electronic
+                            # limiter. Its 6th gear reaches 322.8 km/h at the
+                            # rev cut, so nothing about its top speed is
+                            # aerodynamic.
     Crr=0.011,              # est  slightly better than the Corsa's 0.012
 
     # Getrag 420G 6-speed (shared with the E39 M5), ratios published;
@@ -380,11 +409,23 @@ E39_540I = CarSpec(
                             # power balance. self_check reports the surplus.
     steer_ratio=17.0,       # est +/-1.5
 
-    # --- suspension: EVERY VALUE HERE IS AN ESTIMATE ---------------------
-    k_wheel_f=30.0e3, k_wheel_r=26.0e3, k_tyre=230e3,
-    h_rc_f=0.060,           # est  double wishbone / strut
+    # --- suspension: DERIVED from published spring rates and ARB diameters
+    #  Springs (540i M-Sport): 167 lb/in front, 197 lb/in rear = 29.2 /
+    #  34.5 N/mm (the rear is progressive, so its rate is the working-range
+    #  value). MOTION RATIO `est`: 0.98 front (strut, spring on the damper
+    #  axis) and 0.65 rear (+/-0.07; the E39's multilink spring is well
+    #  inboard). The rear MR is the weakest number in this entry and it is
+    #  what makes the roll gradient below look soft -- see self_check.
+    k_wheel_f=28.1e3,       # = 29.2 N/mm * 0.98^2
+    k_wheel_r=14.6e3,       # = 34.5 N/mm * 0.65^2
+    k_tyre=230e3,
+    h_rc_f=0.060,           # est  strut
     h_rc_r=0.110,           # est  multilink
-    Kphi_f=620.0, Kphi_r=430.0, Kphi_tot=1250.0,
+    Kphi_f=560.4, Kphi_r=296.2,          # springs only, 0.5*k_wheel*t^2
+    #  + anti-roll bars: 26 mm front, 14 mm rear (documented for the pre-2003
+    #  540i Sport; the base car's rear bar is 13 mm and the 2003 Sport's 15).
+    #  Same Corsa-calibrated d^4*t^2 constant as the MX-5 above.
+    Kphi_tot=1320.1,        # 560.4 + 296.2 springs + 427.0 + 36.6 bars
     rollsteer_r=0.0,        # multilink, deliberately toe-stable in roll
     rollcamber_r=0.5,       # est
 
@@ -623,16 +664,34 @@ def self_check(verbose: bool = True) -> bool:
         F = 0.5 * RHO * car.CdA * car.Vmax ** 2 + car.Crr * car.m * G
         kW_need = car.Vmax * F / 1e3
         kW_have = car.P_wheel / 1e3
-        # a top gear that cannot reach Vmax below the limiter, or a Vmax the
-        # engine cannot push, is a broken parameter set. The 540i is allowed
-        # a surplus because its 250 km/h is an electronic limit.
-        limited = key == "540i"
+        # WHAT LIMITS THIS CAR'S TOP SPEED, which decides whether the
+        # top-speed power balance can validate `CdA` at all:
+        #   'drag'    P_available == P_required at Vmax, and Vmax is below the
+        #             rev cut in top. Only then is CdA VALIDATED by Vmax.
+        #   'gearing' Vmax is at (or within 2 % of) the rev cut in top gear:
+        #             the engine runs out of revs before the air stops it.
+        #   'limiter' an electronic speed limiter, below both.
+        n_cut = float(getattr(car, "n_cut", 6200.0))
+        v_at_cut = kmh_per_1000 * n_cut / 1000.0
+        v_pub = car.Vmax * 3.6
+        surplus = kW_have / max(kW_need, 1e-9)
+        if key == "540i":
+            mech = "limiter"
+        elif v_pub > 0.98 * v_at_cut:
+            mech = "gearing"
+        else:
+            mech = "drag"
         gear_ok = 1500.0 < rpm_at_vmax < 7200.0
-        pwr_ok = (kW_have >= kW_need * 0.98) if not limited else (kW_have > kW_need)
+        # drag-limited cars must balance; the other two must have a SURPLUS
+        # (if they did not, the quoted Vmax would be unreachable)
+        pwr_ok = (0.98 <= surplus <= 1.06) if mech == "drag" else (surplus > 1.0)
         rep(f"{key:6s} gearing + power balance", gear_ok and pwr_ok,
             f"{kmh_per_1000:5.1f} km/h/1000rpm in top, {rpm_at_vmax:5.0f} rpm at Vmax; "
-            f"{kW_need:5.1f} kW needed vs {kW_have:5.1f} kW available"
-            + ("  (limiter-set Vmax, surplus expected)" if limited else ""))
+            f"{kW_need:5.1f} kW needed vs {kW_have:5.1f} kW available "
+            f"(x{surplus:.2f}); top speed is {mech.upper()}-limited "
+            f"({v_pub:.0f} vs {v_at_cut:.0f} km/h at the cut)"
+            + ("  -> CdA IS validated" if mech == "drag"
+               else "  -> CdA CANNOT be validated by Vmax"))
 
     # --- 3. the tyre each car names really loads and evaluates sanely -----
     if verbose:
