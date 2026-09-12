@@ -424,9 +424,10 @@ class VehicleConfig:
 #
 #  where `hat` is the cheap bottom-up estimate of that quantity.  The ABSOLUTE
 #  LEVEL stays the Corsa's calibrated number and only the CHANGE between cars
-#  is derived.  That is the honest statement of what is known: there is one
-#  car in this study with a calibrated suspension and three with estimated
-#  ones, and the two new cars' whole suspension block is `est` anyway.
+#  is derived.  That is the honest statement of what is known: exactly one
+#  car in this study has a calibrated suspension and the other two have an
+#  entirely `est` suspension block, so scaling the calibration is strictly
+#  more defensible than rebuilding it from estimates.
 #
 #  It also makes the default bit-for-bit by construction rather than by luck:
 #  when `car`'s fields equal `CORSA_C`'s, `hat(car)` and `hat(Corsa)` are the
