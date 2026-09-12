@@ -399,3 +399,54 @@ more hill cells but starts pulling the 4->3 line in at a closed pedal
 between-gears condition (the car cannot hold the set speed in the tall gear
 and can in the short one) and curing those needs grade logic, which is out of
 scope — see "not verified / not fixed".
+
+---
+
+## 6. DEFECT E — wheelspin makes the auto box upshift at a walking pace
+
+Found while doing item 5 (behaviour in a corner / with the aids), on the FULL
+vehicle (`drive/vehicle.py`), headless, WOT from 0.5 m/s in 1st, auto box.
+Evidence: `runs/auto_spin_upshift.csv`.
+
+The normal 1->2 upshift at WOT is at **13.05 m/s** (`N_UP(1) = 6150` rpm).
+At `power_scale 2.0` (the interactive default, `ENGINE_DEFAULT='sport'`) with
+TC off on a low-grip surface:
+
+```
+mu_scale  TC   shift events (t, gear, engine rpm, ROAD speed u, kappa)
+  1.00   off   3.500s 1>2  5685 rpm  u=12.75 m/s          <- correct
+  0.45   off   1.695s 1>2  5685 rpm  u= 3.61 m/s  k=-0.05 <- WRONG
+  0.30   off   1.965s 1>2  5685 rpm  u= 3.26 m/s  k=+0.10
+                3.464s 2>3  5688 rpm  u= 4.70 m/s  k=-0.15
+                4.963s 3>4  5674 rpm  u= 6.30 m/s  k=+0.68
+  0.45   on    6.025s 1>2  5685 rpm  u=12.68 m/s          <- correct
+```
+
+**On mu 0.30 the box walks to 4th gear at 6.30 m/s — 23 km/h, one sixth of
+the road speed 4th normally sees.** The car is then undriveable. On mu 0.45 it
+is in 2nd at 13 km/h.
+
+**Cause.** The upshift is scheduled on `n_e`, the ENGINE speed, which under
+wheelspin is decoupled from the road. The scheduler has no idea the car is not
+moving: the wheels reach 6150 rpm of engine speed against nothing, the line
+fires, and it changes up. The downshift branch then cannot recover it, because
+`n_e` after the upshift is still high (the wheels are still spinning).
+
+The sim's own surfaces put the car here routinely: `T` wet, the open map's wet
+square 0.632 and grass 0.55, and the arena's WET_T3. TC ON hides it (the spin
+never reaches the line), but `VehicleConfig.tc_on` defaults **False** and it is
+a user-toggled setting in the interactive session. `power_scale 1.0` does not
+reach it at these grips — it is specifically the owner's 2x engine.
+
+Independently PASSED in the same sweep (`runs/auto_corner_tc.csv`), 15 m/s in
+3rd, WOT, 4 s, steer 0 / 3 / 6 / 9 / 14 deg both ways, `power_scale` 1.0 and
+2.0, TC off and on:
+
+* the number of shifts is **identical at every steer angle and with TC on or
+  off** (one WOT kickdown 3>2 at 0.399 s in every cell) while `tc_gain` drops
+  to 0.457 and `kappa_max` reaches 1.077. A TC-reduced load, a cornering
+  engine-speed change and a wheel-slip event do **not** make the box shift.
+  The only steer dependence is that the straight-line cases reach the 6150 rpm
+  upshift inside the 4 s window and the cornering ones do not, which is right.
+* So the gearbox's side of the reported "no acceleration while steering" is
+  clean; the mechanism was `_tc`'s authority, which `vehicle.py` has fixed.
