@@ -99,6 +99,31 @@ def self_check(verbose: bool = True) -> bool:
              np.array_equal(back.theta, pr.theta) and back.meta["note"] == "round-trip"
              and back.residual == pr.residual, f"{Policy.N_PARAM} parameters")
 
+    # --- the multi-track fitness ------------------------------------------
+    #  `--track arena,open` is the only thing in the trainer that can change
+    #  what a SINGLE-track run scores, and a single-track run is what every
+    #  committed checkpoint was made with. So assert both halves: that one
+    #  track still returns `ep.reward` to the last bit, and that several
+    #  return exactly the mean of reward/normaliser.
+    from . import train as _tr
+    _rep("the track list parses", _tr._tracks("arena") == ["arena"]
+         and _tr._tracks("arena,open") == ["arena", "open"]
+         and _tr._tracks("arena+skidpad") == ["arena", "skidpad"],
+         "'arena' -> 1, 'arena,open' -> 2, 'arena+skidpad' -> 2")
+    th = pr.theta
+    _tr._init_worker(dict(track="arena", tracks=["arena"], norm=[1.0],
+                          wing="plate", dt=DT_TRAIN, T=6.0))
+    one = _tr._score(th)[0]
+    ref = rollout(pr, "arena", dt=DT_TRAIN, T=6.0, wing="plate").reward
+    _tr._init_worker(dict(track="arena", tracks=["arena", "skidpad"],
+                          norm=[100.0, 200.0], wing="plate", dt=DT_TRAIN, T=6.0))
+    two = _tr._score(th)[0]
+    r_sk = rollout(pr, "skidpad", dt=DT_TRAIN, T=6.0, wing="plate").reward
+    want = 0.5 * (ref / 100.0 + r_sk / 200.0)
+    _rep("one track scores exactly ep.reward, several the normalised mean",
+         one == ref and two == want,
+         f"1 track {one:.9f} == {ref:.9f}; 2 tracks {two:.9f} == {want:.9f}")
+
     # --- additive: nothing in drive/ imports drive.ml --------------------
     import subprocess
     import sys
