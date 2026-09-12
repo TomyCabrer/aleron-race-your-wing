@@ -284,6 +284,29 @@ with the wheel centred; new: sides {-1, 0, +1}, swap at 2.799 s, 0.0%,
 F_dev -157 N at 3.00 s). `steady_state_corner(100)` with the plate is
 unchanged at V = 30.415546 m/s, gain +3.8198%.
 
+## Validation
+
+```
+python3 -m drive.validate              ->  82/82 pass   0 HARD   0 soft   [110.5 s]
+python3 -m drive.validate --modules    -> 100/100 pass  0 HARD   0 soft   [230.9 s]
+python3 -m drive.input                 ->  ALL CHECKS PASS
+python3 -m drive.vehicle               ->  32/32 PASS
+```
+
+Both suite figures match `.handoff/00-baseline.md` exactly. A line-by-line
+diff of the whole `--modules` transcript against the recorded baseline shows
+**three** differences and not one of them is a physics number:
+
+| line | baseline | now | why |
+|---|---|---|---|
+| real-time factor, headless | 12.49x | 12.34x | wall clock, two suites sharing the CPU |
+| renderer draws the three wings | 7104 px | 7222 px | another task's `render.py` work |
+| `python3 -m drive.render` | 19/19 | 26/26 | same |
+
+Every measured figure — every corner speed, every `util_f`, every stopping
+distance, every wing gain — is bit-identical. That is the proof the aids stay
+off on every rig path and that the latch fix below moves nothing.
+
 ## Why nothing was added to validate.py
 
 The task allowed cheap deterministic groups there. Deliberately not taken: the
