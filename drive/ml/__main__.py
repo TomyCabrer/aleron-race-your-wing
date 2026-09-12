@@ -117,18 +117,28 @@ def self_check(verbose: bool = True) -> bool:
          f"corsa == default to 0.0e+00 (L = {WHEELBASE:.3f} m); "
          f"mx5 steer differs by {a_mx5[0] - a_corsa[0]:+.5f} of lock "
          f"(L = {cars.get('mx5').L:.3f} m)")
-    #  the skidpad is the ONE cell the Corsa-tuned anchor drives on all three
-    #  cars: it spins the MX-5 and the 540i on the arena at 485 / 488 m and
-    #  cannot brake the 540i for open's R = 45 m corner. That is a measured
-    #  wave-4 finding, not a bug, so the check asserts only what holds.
-    per_car = {k: rollout(p0, "skidpad", T=25.0, wing="plate",
+    #  The arena, not the skidpad. Through wave 4a the Corsa-tuned anchor
+    #  SPUN the MX-5 at 485.0 m and the 540i at 487.9 m -- both inside
+    #  WET_T3 (s 455..585, mu 0.632), which this driver's speed plan cannot
+    #  see -- and the skidpad was the only cell all three could be checked on.
+    #  `driver_trim`'s margin fade closed that, so the check can now assert
+    #  the thing that actually matters: one hand-written driver, three very
+    #  different cars, a lap each, nobody off the road.
+    per_car = {k: rollout(p0, "arena", T=80.0, wing="plate",
                           car=cars.get(k)) for k in ("corsa", "mx5", "540i")}
+    _rep("the anchor laps the arena in every car in the library",
+         all(e.ended == "time" and e.laps >= 1 for e in per_car.values()),
+         ", ".join(f"{k} {e.s_progress:.0f} m/{e.laps}L '{e.ended}'"
+                   for k, e in per_car.items()))
+    #  and it is genuinely a different car underneath, not the Corsa wearing
+    #  three names: the library's grip calibration has to reach the physics
+    #  (`env.rollout` passes `car.mu_scale`, which it did not until wave 4b)
+    mus = {k: cars.get(k).mu_scale for k in ("corsa", "mx5", "540i")}
     vs = [e.v_mean for e in per_car.values()]
-    _rep("a rollout drives every car in the library",
-         all(e.ended == "time" for e in per_car.values())
-         and len(set(round(v, 6) for v in vs)) == 3,
-         "skidpad, 25 s: " + ", ".join(
-             f"{k} {e.v_mean:.3f} m/s" for k, e in per_car.items()))
+    _rep("each car drives as itself, with its own grip",
+         len(set(round(v, 6) for v in vs)) == 3 and mus["mx5"] != 1.0,
+         "v_mean " + ", ".join(f"{k} {e.v_mean:.3f}" for k, e in per_car.items())
+         + "; mu_scale " + ", ".join(f"{k} {v:.2f}" for k, v in mus.items()))
 
     # --- the training timestep is the one the docstring claims -----------
     e1 = rollout(p0, "arena", T=20.0, dt=DT_EVAL, tr=tr)

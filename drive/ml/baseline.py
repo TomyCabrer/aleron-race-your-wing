@@ -109,46 +109,78 @@ K70_PLAN = 0.45
 
 # --- driving a car these gains were never swept on ---------------------------
 #  Everything above is a 1010 kg front-driven hatch's driver: pure pursuit, a
-#  curvature speed plan, and a wing rule, with NO traction awareness anywhere
-#  in it. Point it at a car that can break its driven axle and it simply
-#  spins -- measured, arena, plate, dt 1 ms: the MX-5 at 485.0 m and the 540i
-#  at 487.9 m, both within 3 m of the same corner, on every run.
+#  curvature speed plan, and a wing rule. Point it at a car that can break its
+#  driven axle and it spins -- measured, arena, plate, dt 1 ms: the MX-5 at
+#  485.0 m and the 540i at 487.9 m, both on every run.
 #
-#  This is not a new problem and it is not solved here from first principles.
-#  The scripted `LapDriver` hit exactly this when real RWD landed in wave 2
-#  (.handoff/12-lapdriver.md, "RESOLVED -- the final driver"), three fixes
-#  were tried in order, and the measured verdicts are worth repeating because
-#  two of them are traps:
+#  **The cause is not the driven axle. It is WET_T3.** Instrumented, both cars
+#  lose it between s = 470 and 515 m with beta climbing past 1 rad, and
+#  `make_arena`'s surface list puts `WET_T3` at **s = 455..585 m, full width,
+#  mu_scale = 0.632**. They are entering a 130 m wet patch at ~22 m/s on a
+#  speed plan plotted for dry tarmac. The Corsa survives it because 55 kW
+#  cannot get there fast enough to care.
 #
-#    1. throttle capped by the driven axle's MEASURED `util_r` -- a step too
-#       late every time. `util_r` only rises once the rear is already
-#       sliding, by which point a 210 kW car has gone. Left the 540i 1371 m
-#       off the track.
-#    2. the same cap FEEDFORWARD on the corner the driver can see. Shipped.
-#    3. a counter-steer term `delta += k*beta`, swept k over 0 .. 4 on the
-#       540i: never completed a lap, and made `max |n|` WORSE at the margin
-#       that works (2.74 m at k = 0, 3.25 at k = 1, 4.46 at k = 2). DELETED.
-#       The car was not losing the lap to a slide it could have caught; it
-#       was entering the corner too fast.
+#  That is the difference from the scripted `LapDriver`, which solved the same
+#  symptom in wave 2 (.handoff/12-lapdriver.md, "RESOLVED"): its
+#  `speed_profile` is **surface-aware per centreline sample** -- its own
+#  docstring says making the envelope surface-aware "is not optional on
+#  CIRCUIT_ARENA: WET_T3 puts mu_scale 0.632 through the fastest grip-limited"
+#  corner -- so it plans around the patch. THIS driver cannot: `env.observe`'s
+#  14 entries carry no surface term at all, and adding one would change N_OBS
+#  and invalidate every committed checkpoint. So it has to pay for the
+#  blindness with a blanket margin instead, and that is what `MARGIN_FADE`
+#  below is: not a traction-control constant, a **grip-ignorance** constant.
 #
-#  So what is ported here is (2) plus the entry-speed half of the fix, and
-#  BOTH are gated on `power_grip_ratio > POWER_GRIP_MODULATE`, a physical
-#  property of the car measured at 1.00 / 1.71 / 2.16. The Corsa is inert by
-#  physics rather than by a flag: `driver_trim(corsa)` returns exactly
-#  `AY_PLAN` and `modulate = False`, so `theta = 0` on the Corsa is bit-for-bit
-#  what it was and every item-1 number above stands without a retrain.
+#  TRIED AND DELETED, in the order they were tried:
+#
+#    1. throttle capped by the driven axle's MEASURED `util_r`. Not even
+#       attempted here -- wave 2 measured it as a step too late every time
+#       (`util_r` only rises once the rear is already sliding) and left the
+#       540i 1371 m off the track.
+#    2. the same cap FEEDFORWARD on the corner the driver can see
+#       (`q = V^2|k0|/ay_plan`, `room = sqrt(1 - q^2)`, floored at 0.15). This
+#       is what LapDriver ships, it was implemented here, and on this driver
+#       it **earns nothing and costs a little**: at the shipped margin, arena
+#       mx5 66.602 s with the cap against **66.339 s without**, 540i 74.073
+#       against **74.022**, skidpad identical to the millisecond, and it
+#       rescued no cell either way. DELETED. The reason it is redundant is
+#       structural: LapDriver FLOORS the throttle and needs something to take
+#       it away, while `pedal = K_V * (v_tgt - u)` is already a proportional
+#       controller on speed -- it is a soft throttle by construction, and
+#       capping a soft throttle is capping something that is already short.
+#    3. a counter-steer term `delta += k*beta`. Also not attempted: wave 2
+#       swept k over 0..4 on the 540i, never completed a lap, and made
+#       `max |n|` WORSE (2.74 m at k = 0, 3.25 at k = 1, 4.46 at k = 2).
+#
+#  What survives is the entry speed, and only the entry speed.
 
-#: The driver never shuts the throttle completely -- below this it is
-#: coasting, and a coasting car on a corner exit is its own kind of unstable.
-THR_FLOOR = 0.15
-#: Power per unit grip, normalised to the Corsa, above which the driver stops
-#: flooring it out of a corner and starts planning a lower entry speed.
+#: Power per unit grip, normalised to the Corsa, above which this driver plans
+#: to less grip than it would on the car its gains were swept on. Measured
+#: 1.0000 / 1.7936 / 2.3170, so the Corsa is inert BY PHYSICS and not by a
+#: flag: 1.0 is not greater than 1.25 and its margin is exactly 1.0.
 POWER_GRIP_MODULATE = 1.25
-#: How fast the planned grip fades as the car gets further outside the
-#: calibration these gains were swept on: `1 - MARGIN_FADE*(pg - 1)`, floored.
-#: Exactly 1.0 at pg = 1 (the Corsa); 0.836 for the MX-5, 0.796 for the 540i,
-#: and 0.80 is what an independent sweep found the 540i needs.
-MARGIN_FADE = 0.10
+#: How fast the planned grip fades with `power_grip_ratio`:
+#: `margin = clip(1 - MARGIN_FADE*(pg - 1), MARGIN_MIN, 1)`.
+#:
+#: **0.40, not the 0.10 wave 2 shipped**, and the difference is the surface
+#: blindness above -- LapDriver plans around WET_T3 per sample and this driver
+#: cannot see it, so it has to be slower everywhere instead. Swept on the
+#: arena, baseline theta = 0, dt 1 ms, 280 s, both RWD cars:
+#:
+#:      fade   mx5 (pg 1.79)                540i (pg 2.32)
+#:      0.10   margin 0.921   SPIN  490 m   margin 0.868  off  515 m
+#:      0.20   margin 0.841   off   528 m   margin 0.737  off  546 m
+#:      0.30   margin 0.762   off   549 m   margin 0.605  LAPS 68.636 s
+#:      0.40   margin 0.683   LAPS 66.602   margin 0.473  LAPS 74.837 s
+#:      0.55   margin 0.564   LAPS 71.306   margin 0.276  LAPS 88.753 s
+#:
+#: 0.40 is the first value at which BOTH cars lap, and past it both get
+#: monotonically slower, so it is the edge of the usable band rather than the
+#: middle of one -- there is no margin on the low side and that is stated as a
+#: limit, not hidden. `MARGIN_MIN` then floors the 540i at 0.55 instead of the
+#: 0.473 the law would give, which is inside the range the sweep shows lapping
+#: (0.473 and 0.605 both lap) and costs it 0.8 s a lap against 0.473.
+MARGIN_FADE = 0.40
 MARGIN_MIN = 0.55
 
 
@@ -161,14 +193,14 @@ def _ay_peak(car, mu_scale: float = 1.0, roll_dist_f: float = 0.74) -> float:
     promises is importable with the physics absent. Ten lines of bisection is
     a cheaper price than that promise.
 
-    Known bias, from the wave-2 measurement: it is good to 0.3 % on the Corsa
-    and the MX-5 and **4.1 % HIGH on the 540i** (8.8534 against 8.5046 from an
+    Known bias, from the wave-2 measurement: good to 0.3 % on the Corsa and
+    the MX-5 and **4.1 % HIGH on the 540i** (8.8534 against 8.5046 from an
     open-loop ramp steer), because it omits the scrub-drag and yaw-balance
     terms `qss.max_ay` carries. That matters where the number is used as an
-    absolute limit; here it is only ever used as a RATIO between two cars and
-    then multiplied by a margin that takes 20 % off the 540i, so a 4 % error
-    the optimistic way is absorbed several times over. `drive.drive` needs the
-    ramp steer because it plans to this number directly; this does not.
+    absolute limit; here it is only ever a RATIO between two cars, multiplied
+    by a margin that takes 45 % off the 540i, so 4 % the optimistic way is
+    absorbed many times over. `drive.drive` needs the ramp steer because it
+    plans to this number directly; this does not.
     """
     W = car.m * G
     Fz_f, Fz_r = W * car.wdist_f, W * (1.0 - car.wdist_f)
@@ -195,23 +227,24 @@ def power_grip_ratio(car, mu_scale: float = 1.0) -> float:
 def driver_trim(car, mu_scale: float = 1.0) -> dict:
     """The per-car calibration of this one hand-written driver.
 
-    Four numbers, and they are the ONLY things the anchor takes from the car.
-    `K_PSI`, `K_N`, `K_V` and `KAPPA_ARM` are the same on every car on
-    purpose: what the residual sits on has to be one driver evaluated on three
-    machines, or a cross-car comparison is comparing three different drivers.
+    Three numbers, and they are the ONLY things the anchor takes from the car:
+    its steering lock, its wheelbase, and the grip it plans to. `K_PSI`,
+    `K_N`, `K_V` and `KAPPA_ARM` are the same on every car on purpose -- what
+    the residual sits on has to be ONE driver evaluated on three machines, or
+    a cross-car comparison is comparing three different drivers.
 
     Every field is exactly its Corsa value for the Corsa, so `theta = 0` there
-    is unchanged: `car_lock_rad` is 32.625 deg, `L` is 2.491 m, the two
-    ratios are a number divided by itself, and `modulate` is False because
-    1.0 is not greater than 1.25.
+    is unchanged and every wave-4 item-1 number stands without a retrain:
+    `car_lock_rad` is 32.625 deg, `L` is 2.491 m, both ratios are a number
+    divided by itself, and `pg = 1.0` is not greater than 1.25.
     """
     pg = power_grip_ratio(car, mu_scale)
-    margin = min(max(1.0 - MARGIN_FADE * (pg - 1.0), MARGIN_MIN), 1.0)
+    margin = (min(max(1.0 - MARGIN_FADE * (pg - 1.0), MARGIN_MIN), 1.0)
+              if pg > POWER_GRIP_MODULATE else 1.0)
     ay_ratio = _ay_peak(car, mu_scale) / _AY_REF
     from ..vehicle import car_lock_rad          # lazy: keeps import-time pure
     return dict(lock_rad=float(car_lock_rad(car)), wheelbase=float(car.L),
                 ay_plan=AY_PLAN * ay_ratio * margin,
-                modulate=bool(pg > POWER_GRIP_MODULATE),
                 power_grip=pg, margin_scale=margin, ay_ratio=ay_ratio)
 
 
@@ -223,18 +256,17 @@ KAPPA_ARM = 1.0 / 220.0
 
 
 def baseline_action(obs, lock_rad: float, wheelbase: float = WHEELBASE,
-                   ay_plan: float = AY_PLAN,
-                   modulate: bool = False) -> np.ndarray:
+                   ay_plan: float = AY_PLAN) -> np.ndarray:
     """(N_OBS,) -> (steer, pedal, wing) each in [-1, 1], the policy's own units.
 
     `steer` is a FRACTION of lock, not radians, so it composes with the
     network's tanh output directly. `lock_rad` and `wheelbase` are passed in
     rather than imported from `policy`, which imports THIS module for the
     residual: two arguments instead of an import cycle or a duplicated
-    constant. `ay_plan` and `modulate` come from `driver_trim` and are the
-    traction half of the same idea -- see the block comment above them. All
-    four are exactly the Corsa's values for the Corsa, so `theta = 0` there is
-    bit-for-bit what it was. `K_PSI`, `K_N`, `K_V` and `KAPPA_ARM` are
+    constant. `ay_plan` comes from `driver_trim` and is the grip this car's
+    driver plans to -- see the block comment above it. All three are exactly
+    the Corsa's values for the Corsa, so `theta = 0` there is bit-for-bit
+    what it was. `K_PSI`, `K_N`, `K_V` and `KAPPA_ARM` are
     deliberately the same numbers on every car, so that the anchor the
     residual sits on is ONE hand-written driver evaluated on three machines
     and not three different drivers.
@@ -261,19 +293,6 @@ def baseline_action(obs, lock_rad: float, wheelbase: float = WHEELBASE,
     v_tgt = (math.sqrt(ay_plan / k_plan) if k_plan > 1e-6 else V_MAX_PLAN)
     v_tgt = min(max(v_tgt, V_MIN_PLAN), V_MAX_PLAN)
     pedal = K_V * (v_tgt - u)
-
-    # -- traction: how much throttle the corner the driver can SEE will take.
-    #    The friction ellipse, feedforward on the path rather than on a
-    #    measured slip: the corner being driven demands a_y = V^2*|k0|, so a
-    #    car spending `q` of its grip sideways has sqrt(1 - q^2) left to drive
-    #    with. Feedforward is the whole point -- the util_r version of this
-    #    reads the slide a step after it starts and left the 540i 1371 m off
-    #    the track. Only reached when `modulate` is set, which is never on the
-    #    Corsa, so this is not in the path any item-1 number was measured on.
-    if modulate and pedal > 0.0:
-        q = (u * u * abs(k0)) / max(ay_plan, 1e-6)
-        room = math.sqrt(max(0.0, 1.0 - min(q, 1.0) ** 2))
-        pedal = min(pedal, max(room, THR_FLOOR))
 
     # -- the wing: arm it for the corner ahead, and keep it armed while the
     #    front axle is actually working (the device buys front grip)
