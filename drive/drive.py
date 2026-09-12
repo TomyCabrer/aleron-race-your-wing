@@ -2642,6 +2642,31 @@ def _v26_settings_and_menu(tmp, verbose=True):
                          and seat.Izz == cars.CORSA_C.Izz)
     # the Engine labels must still read exactly as they did on the Corsa
     car_ok = car_ok and all(engine_hud(m) == ENGINE_HUD[m] for m in ENGINE_MODES)
+    # ... and the whole session build, for every car, the way
+    # _interactive_session does it: the CarSpec -> the tyre model, the
+    # derived roll block, the powertrain. This is the one place that proves
+    # a non-Corsa car reaches the physics intact, since the session loop
+    # itself needs a window.
+    from .tyre import CORSA_TYRE
+    for name in CAR_MODES:
+        for kg in (0.0, 150.0):
+            sset = Settings(path="", car=name, ballast=kg, ballast_at="boot")
+            cs = sset.car_spec()
+            cv = Vehicle(cs, VehicleConfig(mu_scale=cs.mu_scale,
+                                           power_scale=sset.power_scale))
+            stock = cars.CARS[name]
+            car_ok = car_ok and (
+                cv.tyre.R0 == stock.tyre_R0 and cv.tyre_ref_ok
+                and (cv.tyre is CORSA_TYRE) == (name == CAR_DEFAULT)
+                and len(cv.pt_p.gear) == len(stock.gear)
+                and cv.der.I_roll > 0.0 and cv._det_roll > 0.0
+                and abs(cv.der.lltd_geo_f + cv.der.lltd_roll_f
+                        - cv.cfg.roll_dist_f) < 1e-15
+                and abs(sum(cv.Fz) - cs.m * G) < 1e-6
+                and (cs is stock) == (kg == 0.0))
+            cv.step(Controls(throttle=0.5, auto_gearbox=True), (1.0,) * 4,
+                    (1.0,) * 4, DT_PHYS)
+            car_ok = car_ok and all(f > 0.0 for f in cv.Fz)
     o = _Opts(track="skidpad", gearbox=None, abs=None, steer_limit=None,
               wet=None, camera=None, engine=None, tc=None, sound="off",
               car=None, ballast=None, ballast_at=None)
@@ -3449,7 +3474,13 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     if not _HELP_PRINTED:
         print(KEYS_HELP)
         _HELP_PRINTED = True
-    print(f"session: {tr.title or tr.name} | engine {ENGINE_LABELS[settings.engine]} | "
+    print(f"session: {tr.title or tr.name} | "
+          f"car {cars.car_name(settings.car)} {car.m:.0f} kg "
+          f"{100 * car.wdist_f:.0f}% front h_cg {car.h_cg:.3f} m"
+          + (f" (ballast {settings.ballast_text()})" if settings.ballast > 0 else "")
+          + (f" (+{car.m - settings.car_base.m:.1f} kg of wing)"
+             if settings.ballast <= 0 and car is not settings.car_base else "")
+          + f" | engine {engine_label(settings.engine, car)} | "
           f"gearbox {GEARBOX_LABELS[settings.gearbox]} | "
           f"ABS {'on' if settings.abs else 'off'} | TC {'on' if settings.tc else 'off'} | "
           f"steering aid {'on' if settings.steer_aid else 'off'} | "
