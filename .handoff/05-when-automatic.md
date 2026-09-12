@@ -28,11 +28,17 @@ wasted: the defects below are real and reproducible either way.
 | 2 | hunting / hysteresis | **DEFECT A** — the hysteresis is NEGATIVE in 1st and 2nd; up to **0.65 shifts/s for ever** in a held-speed cruise |
 | 3 | kickdown | **DEFECT C** — engagement itself is on spec (0.400 s), but the box walks down ONE gear per 1.5 s and then overshoots and upshifts back |
 | 4 | creep and launch | 0-50 / 0-100 PASS; **DEFECT D** — no creep at all at zero pedal (neutral for ever), and the neutral->1st branch has no overrev guard |
-| 5 | cornering / aids | `tc_scale` separation is **intact**; but see **DEFECT B** — lifting and braking makes the box change UP |
-| 6 | other | **DEFECT B** — the upshift schedule is not brake-aware: 4->5 at 3034 rpm on corner entry |
+| 5 | cornering / aids | **PASS** on the question asked — the shift count is identical at every steer angle and with TC on or off, at both power scales, while `tc_gain` falls to 0.457 and `kappa_max` hits 1.077. The `tc_scale`/pedal separation is intact. But the sweep turned up **DEFECT E** |
+| 6 | other | **DEFECT B** — the upshift schedule is not brake-aware: `4>5@3034` rpm on corner entry. **DEFECT E** — wheelspin makes it upshift at a walking pace: FOURTH GEAR at 6.3 m/s on mu 0.30 at `power_scale` 2.0. **DEFECT F** — a driver-commanded downshift has no overrev guard and is live in auto: 8553 rpm from four taps of `Q` |
 
-Baseline before any edit (this machine, commit `2e3ef24`):
-`python3 -m drive.validate --modules` -> **100/100 pass, 0 HARD, 0 soft [231.0 s]**.
+All six are reproducible headless. **A, B, C, D, E are fixed** (one commit
+each for the scheduler and the regressions); **F is measured, its patch is
+written out verbatim, and it is deliberately NOT applied** — it widens the
+driver model in all three modes and CONTRACT.md pins that table.
+
+Baseline before any edit (this machine, commit `6b6ff06`):
+`python3 -m drive.validate --modules` -> **100/100 pass, 0 HARD, 0 soft [231.0 s]**;
+`python3 -m drive.powertrain` -> 82/82 checks.
 
 ---
 
