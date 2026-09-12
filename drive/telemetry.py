@@ -101,10 +101,14 @@ COLUMN_UNITS = {
     'util_r': '-  ditto rear',
     'limited_by': 'str  FRONT | REAR | POWER',
     'wing_deploy': '0..1  smoothstepped deploy fraction, 0.45 s actuator',
-    # SIGN CONVENTION: drive/CONTRACT.md section 4 says +1 = LEFT, -1 = RIGHT.
-    # specs/harness.txt's VehicleState comment says the opposite. The CONTRACT
-    # wins (its own rule: where a spec disagrees with it, it wins).
-    'wing_side': '-  +1 = panel on the LEFT, -1 = RIGHT, 0 = stowed (CONTRACT s4)',
+    # SIGN CONVENTION: wing_side is the TURN sign, not a flank index. Measured
+    # from vehicle.py (wing_side = sgn_dev = sign of the steering command):
+    # steady_state_corner(R=100, side=+1) is a LEFT turn and gives sgn_dev = +1
+    # with cfg.dev_RIGHT selected. CONTRACT section 4's old parenthetical
+    # ("-1 right, 0 none, +1 left") read as a flank index and was wrong; it and
+    # this comment were corrected together.
+    'wing_side': '-  the TURN sign (sgn_dev): +1 = left turn (RIGHT panel out), '
+                 '-1 = right turn (LEFT panel out), 0 = never armed',
     'F_wing': 'N  device side force, signed +ve LEFT (inward in a left turn)',
     'D_wing': 'N  device drag, F_wing/3.2, always >= 0',
     's': 'm  arclength along the track centreline',

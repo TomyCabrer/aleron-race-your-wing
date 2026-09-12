@@ -386,7 +386,11 @@ HUD and telemetry depend on the exact names):
 x y psi u v r ax ay phi p beta          floats  (ax, ay body-frame at the CG)
 Fz Fx Fy alpha kappa delta_wheel omega  (4,) numpy float arrays, FL FR RL RR
 rpm gear engaged stalled on_limiter
-F_wing D_wing wing_deploy wing_side     (wing_side: -1 right, 0 none, +1 left)
+F_wing D_wing wing_deploy wing_side     (wing_side is the TURN sign = sgn_dev:
+                                         +1 left turn, so the RIGHT panel is
+                                         deployed; -1 right turn, so the LEFT
+                                         panel is deployed; 0 never armed.
+                                         It is NOT the flank index.)
 util_f util_r limited_by                ('FRONT' | 'REAR' | 'POWER')
 wheel_lift                              (4,) bool
 abs_active                              (4,) bool  (ABS gain < 1 on that wheel)
