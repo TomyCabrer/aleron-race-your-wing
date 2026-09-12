@@ -115,15 +115,17 @@ def _cell(arg) -> tuple:
     the pickle boundary. 280 s at 1 ms is ~17 s of wall clock per rollout, so
     a 9-cell grid is 18 rollouts and fits in two passes of a 12-core pool.
     """
-    path, track, wing, T = arg
-    base = lap_time(Policy(), track, wing=wing, dt=DT_EVAL, T=T)
-    learn = lap_time(Policy.load(path), track, wing=wing, dt=DT_EVAL, T=T)
+    path, track, wing, T, car = arg
+    cr = _car_of(car)
+    base = lap_time(Policy(), track, wing=wing, dt=DT_EVAL, T=T, car=cr)
+    learn = lap_time(Policy.load(path), track, wing=wing, dt=DT_EVAL, T=T,
+                     car=cr)
     return (track, wing, base, learn)
 
 
 def transfer(path: str, tracks=TRANSFER_TRACKS, wings=TRANSFER_WINGS,
              T: float = 280.0, workers: int | None = None,
-             verbose: bool = True) -> dict:
+             verbose: bool = True, car=None) -> dict:
     """Does the gain transfer? Baseline vs learned on every (track, wing) cell.
 
     The policy in `drive/ml/checkpoints/arena_plate.json` was trained on ONE
@@ -141,7 +143,7 @@ def transfer(path: str, tracks=TRANSFER_TRACKS, wings=TRANSFER_WINGS,
     failing loudly. Cost me 14 minutes of a starved process doing 8 s of work.
     `python3 -m drive.ml.evaluate` is guarded, so the CLI is always safe.
     """
-    jobs = [(path, tr, wg, T) for tr in tracks for wg in wings]
+    jobs = [(path, tr, wg, T, car) for tr in tracks for wg in wings]
     workers = min(os.cpu_count() or 1, len(jobs)) if workers is None else workers
     if workers > 1:
         with mp.Pool(workers) as pool:
@@ -154,7 +156,8 @@ def transfer(path: str, tracks=TRANSFER_TRACKS, wings=TRANSFER_WINGS,
         meta = Policy.load(path).meta
         trained = (str(meta.get("track", "?")), str(meta.get("wing", "?")))
         print(f"\n  transfer grid, dt {DT_EVAL * 1e3:.0f} ms, {T:.0f} s, "
-              f"trained on {trained[0]} / {trained[1]}")
+              f"car {car or 'corsa'}, trained on {trained[0]} / {trained[1]}"
+              f"{' / ' + str(meta['car']) if meta.get('car') else ''}")
         print(f"  {'track':9s} {'wing':6s} {'base lap':>9s} {'learn lap':>9s} "
               f"{'delta':>9s} {'%':>7s} {'base m':>8s} {'learn m':>8s} "
               f"{'b.laps':>6s} {'l.laps':>6s}  base/learn ended")
@@ -476,7 +479,7 @@ def main(argv=None) -> int:
     if not a.only_transfer:
         compare(a.checkpoint, track, wing, a.duration, car=a.car)
     if a.transfer or a.only_transfer:
-        transfer(a.checkpoint, T=a.duration)
+        transfer(a.checkpoint, T=a.duration, car=a.car)
     if a.ablation:
         aero_ablation(a.checkpoint, track, a.duration)
     if a.plot:
