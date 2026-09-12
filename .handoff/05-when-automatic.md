@@ -450,3 +450,59 @@ Independently PASSED in the same sweep (`runs/auto_corner_tc.csv`), 15 m/s in
   upshift inside the 4 s window and the cornering ones do not, which is right.
 * So the gearbox's side of the reported "no acceleration while steering" is
   clean; the mechanism was `_tc`'s authority, which `vehicle.py` has fixed.
+
+---
+
+# BEFORE / AFTER
+
+All measured through the real `powertrain.step()`; the wheelspin rows are the
+full `drive/vehicle.py`. Evidence on disk under `runs/` (gitignored, so the
+numbers are here).
+
+| what | before | after |
+|---|---|---|
+| **A. hunting, flat road, held speed** (shifts in the settled 2nd half of a 20 s window, 6 m/s, 0.05 pedal) | 4, for ever | **0** |
+| **A. hunting, 6% grade, 6 m/s** | 7 | **0** |
+| **A. hunting, flat road, 10 speeds x 20 s** | 1 cell hunting | **0 cells** |
+| **A. up-then-down reversals** over 404 (gear, pedal) points | 171 (1->2 at 94 of 101 pedals, 2->3 at 77 of 101 from pedal 0.17) | **0** |
+| **A. total shifts**, 33-cell speed-hold sweep, ps 1.0 | 118 | **56** |
+| **A. fixed-pedal 12 s cruise**, 81 cells, reversal cells | 3 (`1>2 2>3 3>2 2>3` at 0.70 pedal) | **0** (all 5 multi-shift cells are monotone `1>2>3>4`) |
+| **B. corner entry**, 22 m/s in 4th, brake 0.6 | `4>5@3034` then `5>4 4>3 3>2`, still in **2nd** at 6 s | **`4>3 3>2 2>1`**, in **1st** at 4.27 s, 0 upshifts |
+| **B. corner entry**, 18 m/s in 4th | `4>5@2473` then 3 downshifts | `4>3 3>2 2>1` |
+| **B. corner entry**, 14 m/s in 3rd | `3>4@2470` then 3 downshifts | `3>2 2>1` |
+| **C. kickdown** 5th @ 16.9 m/s, pedal 0.05->1.00 | 4th at 0.400 s, then 3rd at 1.90, then 2nd at 3.40, then **back to 3rd at 5.74** | **2nd at 0.400 s**, one shift |
+| **C. kickdown** 5th @ 22.0 m/s | 4th at 0.400 s, 3rd at 1.90 s | **3rd at 0.400 s**, one shift |
+| **C. kickdown**, time 5th @ 16.9 -> 30 m/s | 12.527 s | **10.729 s** (-1.80 s) |
+| **C. kickdown**, time 3rd @ 9.0 -> 18 m/s | 5.551 s | **4.716 s** (-0.84 s) |
+| **D. creep** from rest, 0.00 pedal, 12 s | 0.00 km/h, 0.0 m, **neutral for ever** | **5.4 km/h, 14.5 m, 1st, 705 rpm**, never stalls |
+| **D. neutral -> 1st at 30 m/s** (1st = 14 139 rpm of input speed) | **gear 1** | **refused** |
+| **E. wheelspin upshift**, ps 2.0, TC off, mu 0.45 | `1>2` at 1.695 s, road speed **3.61 m/s** | `1>2` at 6.986 s, **12.68 m/s** |
+| **E. wheelspin upshift**, ps 2.0, TC off, mu 0.30 | `1>2`@3.26 m/s, `2>3`@4.70, **`3>4`@6.30 m/s** | one `1>2` at **11.29 m/s** |
+| | | |
+| **unchanged — WOT accel** 0-50 / 0-100 (rig) | 5.213 / 14.342 s | **5.213 / 14.342 s**, same shift trace |
+| **unchanged — WOT accel** ps 2.0 | 2.853 / 7.231 s | **2.853 / 7.231 s** |
+| **unchanged — WOT 1->2 / 2->3 road speed**, mu 1.0 | 12.75 / 21.25 m/s | **12.75 / 21.25 m/s**, bit for bit |
+| **unchanged — shift count vs steer**, 15 m/s in 3rd, WOT, steer 0..14 deg both ways, ps 1.0 and 2.0, TC on and off | 1 shift in every cell | **1 shift in every cell** |
+| **unchanged — coast-down**, lift at 30 / 20 / 14 m/s | `4>5`, `3>4 4>5`, `3>4` | same |
+
+The only *behaviour* change outside the six defects is the closed-pedal
+`2>1` on a coast-down: it now waits for 3.29 m/s (12 km/h) instead of firing
+at 18 km/h, because that is the hysteresis band doing its job. That is more
+natural, and braking to a stop still cascades to 1st (the brake branch skips
+the guard).
+
+## Validation
+
+| | before (commit `2e3ef24`) | after |
+|---|---|---|
+| `python3 -m drive.validate --quick` | 75/75, 0 HARD, 0 soft | 75/75, 0 HARD, 0 soft [61.7 s] |
+| `python3 -m drive.validate --modules` | 100/100, 0 HARD, 0 soft [231.0 s] | (recorded in the final report) |
+| `python3 -m drive.powertrain` self-check | 82/82 | **90/90** (8 new, every one of which fails on the shipped scheduler) |
+
+No acceptance number moved: `gearbox modes` still reads `auto 20.0 m/s gear 2;
+manual 0-100 14.41 s; clutch stall 0.03 s, fire 0.26 s, launch 11.5 m/s`, and
+`Engine setting + TC` still reads `stock 14.93 s kappa 0.08 TC 0.0 s; 2x raw
+kappa 1.50; 2x TC 8.42 s kappa 0.31`, both character-for-character identical
+to baseline. The contract's `accel_run` 0-100 (14.5-16.0 s band) is untouched
+by construction: `accel_run` carries its own `n_up` dict and never calls
+`_auto_target`.
