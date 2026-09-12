@@ -122,6 +122,38 @@ S_DEV = 0.35             # m^2 published (ledger.S_DEV) -- ONE panel
 X_W = 0.97               # m   published (crossover.MOUNTS['front axle'])
 H_W = 0.90               # m   published (qss default h_w)
 
+# --- chase camera: the 3-D view from behind (mode 'chase', see DEVIATION 8)
+# All est.  The numbers are chosen so the 1.646 m wide car is ~230 px on a
+# 1280 px screen (18% of the width, the racing-game convention) and the
+# nearest visible tarmac lands on the bottom edge of the frame rather than
+# under the eye, where a ground polygon straddling the near plane folds
+# inside out across the screen.
+CHASE_DIST = 6.4         # m   eye behind the CG at zoom 1
+CHASE_HEIGHT = 2.15      # m   eye above the road
+CHASE_DIST_V = 0.035     # s   extra standoff per m/s: the view opens up with
+                         #     speed, which is the only free sense-of-speed cue
+CHASE_DIST_MIN = 3.8     # m   zoom-in stop: closer than this and the tailgate
+CHASE_DIST_MAX = 16.0    # m   fills the frame; further and the car is 90 px
+CHASE_TARGET_X = 11.0    # m   look-at point ahead of the CG ...
+CHASE_TARGET_Z = 0.85    # m   ... at roughly bonnet height
+CHASE_FOV = 46.0         # deg vertical field of view
+CHASE_Z_NEAR = 0.35      # m   camera-space depth floor (garage.py uses 0.05 at
+                         #     a 7 m subject; the ground here reaches the eye)
+CHASE_GROUND_NEAR = 4.5  # m   ground samples nearer than this are dropped: the
+                         #     bottom-of-frame ray hits the road 4.3 m from the
+                         #     eye, so nothing visible is lost and no ribbon
+                         #     vertex can land at a 1-pixel depth
+CHASE_VIEW_R = 220.0     # m   forward cull radius; 220 m is 8 s at 28 m/s
+CHASE_CULL_LEAD = 70.0   # m   the cull disc is centred ahead of the car
+CHASE_PPM_REF_D = 45.0   # m   line widths are the px/m at THIS ground distance
+                         #     (a perspective view has no single px/m; 45 m
+                         #     gives a 2.5 px edge line, as the 2-D view does)
+CHASE_CLAMP_PX = 4096    # px  projected coordinates are clamped to this band
+                         #     so a grazing vertex cannot overflow int32
+CHASE_NEAR_MARGIN = 0.30 # -   frustum side planes widened by this fraction of
+                         #     the half-screen, so clipping never bites inside
+                         #     the visible rectangle
+
 # --- HUD ---------------------------------------------------------------
 RPM_IDLE = 850.0         # est   Z12XE idle
 RPM_SHIFT_LIGHT = 5900.0 # est
@@ -173,6 +205,18 @@ C_GG_DOT = (255, 255, 255)
 C_PURPLE = (176, 78, 224)
 C_GREEN = (78, 194, 106)
 C_YELLOW = (217, 206, 85)
+
+# --- the 3-D chase view's own palette (the same hues garage.py shades) ----
+C_CAR_DARK = (160, 146, 56)   # nose / tail caps
+C_GLASS3 = (62, 74, 92)       # the plan view's C_GLASS is a dark olive that
+                              # reads as shadow when seen from behind
+C_UNDER = (30, 32, 36)        # floor
+C_ARCH = (30, 32, 36)         # wheel arches
+C_RIM = (168, 170, 176)
+C_SKY = (46, 54, 66)          # above the horizon
+C_HORIZON = (68, 75, 86)      # the horizon line itself
+LIGHT_DIR3 = np.array([0.45, 0.55, 0.70])
+LIGHT_DIR3 = LIGHT_DIR3 / np.linalg.norm(LIGHT_DIR3)
 
 GRID_M = 20.0            # m  20 m ground grid; without it a top-down car at
                          #    constant heading looks stationary
@@ -364,7 +408,8 @@ class ViewConfig:
 
     size: tuple = (1280, 800)
     fps: int = 60
-    mode: str = 'car_up'            # 'car_up' | 'world_up' | 'chase'
+    mode: str = 'car_up'            # 'car_up' | 'world_up' | plan views;
+                                    # 'chase' is the 3-D view from behind
     ppm_hi: float = PPM_HI
     ppm_lo: float = PPM_LO
     v_zoom: float = V_ZOOM
@@ -510,6 +555,551 @@ def _lerp_col(c0, c1, t):
 
 
 # ======================================================================= #
+#  THE CHASE PROJECTOR -- see DEVIATION 8                                 #
+# ======================================================================= #
+class Chase3D:
+    """Perspective projection for the 'chase' view: the car from behind, in 3-D.
+
+    The eye / basis / pinhole maths is lifted from `drive/garage.py`'s `Orbit`
+    -- the same projector that draws the CAR page's three wing meshes -- and
+    deliberately NOT imported from it.  garage.py imports `vehicle` and
+    `input`; a render -> garage import would invert the dependency and put
+    physics on render.py's import path, which the contract forbids.  Copying
+    ~30 lines is the cheaper of the two mistakes, and the two copies are
+    pinned together by a self-check that projects a known point.
+
+    What is ADDED here is the clipping garage.py does not need.  Its subject
+    is 7 m away and wholly in front of the eye, so dropping any polygon whose
+    minimum depth is <= 0.05 m is enough.  Here the ground reaches the eye:
+    the open map's drivable Area is a 522 x 362 m rounded rectangle that wraps
+    around the camera, and a single vertex behind the eye folds that polygon
+    inside out across the whole screen.  So world geometry that can straddle
+    the camera is Sutherland-Hodgman clipped in CAMERA space against the near
+    plane and the four sides before it is projected.
+
+    Frame: the same ISO frame as everything else -- x forward, y LEFT, z up.
+    r = f x z_hat therefore points to the driver's RIGHT, which is screen +x,
+    and u = r x f is up.  One basis, and the world +y -> screen -x flip falls
+    out of it instead of being applied by hand.
+    """
+
+    def __init__(self, W: int, H: int, fov_deg: float = CHASE_FOV):
+        self.W, self.H = int(W), int(H)
+        self.fov_deg = float(fov_deg)
+        self.fl = 0.5 * self.H / math.tan(0.5 * math.radians(self.fov_deg))
+        # frustum planes in camera space (px, py, pz): inside is a*px + b*py
+        # + c*pz + d > 0.  The sides are the screen rectangle widened by
+        # CHASE_NEAR_MARGIN so clipping never introduces an edge a viewer can
+        # see; only the near plane is tight.
+        mw = 0.5 * self.W * (1.0 + CHASE_NEAR_MARGIN)
+        mh = 0.5 * self.H * (1.0 + CHASE_NEAR_MARGIN)
+        self._planes = np.array([
+            (0.0, 0.0, 1.0, -CHASE_Z_NEAR),        # near
+            (-self.fl, 0.0, mw, 0.0),              # right edge  (sx <= ...)
+            (self.fl, 0.0, mw, 0.0),               # left edge
+            (0.0, -self.fl, mh, 0.0),              # top edge
+            (0.0, self.fl, mh, 0.0),               # bottom edge
+        ])
+        self.eye = np.array([0.0, 0.0, CHASE_HEIGHT])
+        self._r = np.array([0.0, -1.0, 0.0])
+        self._u = np.array([0.0, 0.0, 1.0])
+        self._f = np.array([1.0, 0.0, 0.0])
+        self.horizon_y = 0.5 * self.H
+        self.view_r = CHASE_VIEW_R
+        self.ppm_ref = self.fl / CHASE_PPM_REF_D
+        self.dist = CHASE_DIST
+
+    # ------------------------------------------------------------------ #
+    def set_pose(self, x: float, y: float, psi: float, V: float = 0.0,
+                 zoom: float = 1.0) -> None:
+        """Place the eye behind (x, y) along psi and rebuild the basis.
+
+        psi is the LAGGED camera heading, not the body heading: at
+        tau_heading * 2.5 = 0.30 s the eye swings into a slide a beat late,
+        which is what makes a chase view readable rather than nauseating.
+        """
+        d = CHASE_DIST / max(float(zoom), 0.35) + CHASE_DIST_V * max(V, 0.0)
+        d = min(max(d, CHASE_DIST_MIN), CHASE_DIST_MAX)
+        self.dist = d
+        c, s = math.cos(psi), math.sin(psi)
+        # the eye rises a little as it pulls back, so the car never climbs
+        # out of the bottom of the frame at the wide end of the zoom
+        h = CHASE_HEIGHT + 0.12 * (d - CHASE_DIST)
+        self.eye = np.array([x - d * c, y - d * s, h])
+        tgt = np.array([x + CHASE_TARGET_X * c, y + CHASE_TARGET_X * s,
+                        CHASE_TARGET_Z])
+        f = tgt - self.eye
+        f /= np.linalg.norm(f)
+        r = np.cross(f, np.array([0.0, 0.0, 1.0]))
+        r /= np.linalg.norm(r)
+        self._f, self._r, self._u = f, r, np.cross(r, f)
+        # the horizon is where the ground direction straight ahead goes at
+        # infinity: pz -> inf kills the translation and leaves the direction
+        g = np.array([c, s, 0.0])
+        self.horizon_y = 0.5 * self.H - self.fl * float(g @ self._u) / max(
+            float(g @ self._f), 1e-6)
+        self.ppm_ref = self.fl / CHASE_PPM_REF_D
+
+    # ------------------------------------------------------------------ #
+    def camera(self, P) -> np.ndarray:
+        """(...,3) world -> (...,3) camera space (right, up, forward)."""
+        d = np.asarray(P, dtype=np.float64) - self.eye
+        return np.stack([d @ self._r, d @ self._u, d @ self._f], axis=-1)
+
+    def project_cam(self, Q) -> np.ndarray:
+        """(...,3) camera space -> (...,2) screen px, clamped and depth-floored.
+
+        The floor and the clamp are a backstop, not the clipping: anything
+        that can actually straddle the eye goes through `clip_poly` /
+        `clip_segments` first.  What they buy is that a stray vertex can never
+        overflow int32 or make pygame rasterise a million-pixel span.
+        """
+        Q = np.asarray(Q, dtype=np.float64)
+        pz = np.maximum(Q[..., 2], CHASE_Z_NEAR)
+        sx = 0.5 * self.W + self.fl * Q[..., 0] / pz
+        sy = 0.5 * self.H - self.fl * Q[..., 1] / pz
+        np.clip(sx, -CHASE_CLAMP_PX, self.W + CHASE_CLAMP_PX, out=sx)
+        np.clip(sy, -CHASE_CLAMP_PX, self.H + CHASE_CLAMP_PX, out=sy)
+        return np.stack([sx, sy], axis=-1)
+
+    def project(self, P):
+        """(n,3) world -> (n,2) screen px, (n,) depth.  garage.Orbit.project."""
+        Q = self.camera(P)
+        return self.project_cam(Q), Q[..., 2]
+
+    def ground(self, P2) -> np.ndarray:
+        """(n,2) or (2,) world ground points (z = 0) -> screen px.
+
+        This is what `Renderer.world_to_screen` becomes in chase mode, so
+        every existing ground layer -- ribbon, kerbs, dashes, marks, skid --
+        projects into perspective without being rewritten.
+        """
+        P = np.asarray(P2, dtype=np.float64)
+        single = (P.ndim == 1)
+        if single:
+            P = P.reshape(1, 2)
+        d0, d1 = P[:, 0] - self.eye[0], P[:, 1] - self.eye[1]
+        dz = -self.eye[2]
+        Q = np.stack([d0 * self._r[0] + d1 * self._r[1] + dz * self._r[2],
+                      d0 * self._u[0] + d1 * self._u[1] + dz * self._u[2],
+                      d0 * self._f[0] + d1 * self._f[1] + dz * self._f[2]],
+                     axis=-1)
+        S = self.project_cam(Q)
+        return S[0] if single else S
+
+    def ground_depth(self, P2) -> np.ndarray:
+        """(n,2) world ground points -> camera-space depth.  The forward cull."""
+        P = np.asarray(P2, dtype=np.float64)
+        return ((P[:, 0] - self.eye[0]) * self._f[0]
+                + (P[:, 1] - self.eye[1]) * self._f[1]
+                - self.eye[2] * self._f[2])
+
+    def px_at(self, depth: float) -> float:
+        """px per metre of lateral extent at this camera depth."""
+        return self.fl / max(float(depth), CHASE_Z_NEAR)
+
+    # ------------------------------------------------------------------ #
+    def clip_poly(self, P3) -> np.ndarray:
+        """Sutherland-Hodgman against the 5 planes, vectorised per plane.
+
+        The per-plane pass is the whole trick: the output interleaves each
+        kept vertex with the crossing point that follows it, so one boolean
+        take over a (2n,3) stack replaces the textbook vertex loop.  ~40
+        vertices x 5 planes is then five numpy calls, not 200 Python steps.
+        Exact for the convex Areas this is used on.
+        """
+        Q = self.camera(P3)
+        for a, b, c, d in self._planes:
+            n = len(Q)
+            if n < 3:
+                return Q[:0]
+            dist = a * Q[:, 0] + b * Q[:, 1] + c * Q[:, 2] + d
+            ins = dist > 0.0
+            if ins.all():
+                continue
+            if not ins.any():
+                return Q[:0]
+            nxt = np.roll(np.arange(n), -1)
+            dn = dist[nxt]
+            cross = ins != ins[nxt]
+            den = dist - dn
+            t = np.where(cross, dist / np.where(np.abs(den) > 1e-12, den, 1e-12),
+                         0.0)
+            I = Q + t[:, None] * (Q[nxt] - Q)
+            stack = np.empty((2 * n, 3))
+            stack[0::2], stack[1::2] = Q, I
+            keep = np.empty(2 * n, dtype=bool)
+            keep[0::2], keep[1::2] = ins, cross
+            Q = stack[keep]
+        return Q
+
+    def poly_px(self, P3):
+        """World polygon -> clipped integer screen points, or [] if off-frame."""
+        Q = self.clip_poly(P3)
+        if len(Q) < 3:
+            return []
+        return self.project_cam(Q).astype(np.int32).tolist()
+
+    def clip_segments(self, A3, B3):
+        """(n,3),(n,3) world -> (n,2),(n,2) screen and an (n,) alive mask.
+
+        Each segment is trimmed to the frustum instead of dropped, so a grid
+        line that runs off the near plane still draws the part in front of the
+        eye.  Both endpoint updates use the SAME crossing point, computed from
+        the pre-update arrays -- writing QA first and then deriving QB from it
+        is the classic way to bend every clipped line.
+        """
+        QA, QB = self.camera(A3), self.camera(B3)
+        live = np.ones(len(QA), dtype=bool)
+        for a, b, c, d in self._planes:
+            da = a * QA[:, 0] + b * QA[:, 1] + c * QA[:, 2] + d
+            db = a * QB[:, 0] + b * QB[:, 1] + c * QB[:, 2] + d
+            live &= ~((da <= 0.0) & (db <= 0.0))
+            den = da - db
+            t = da / np.where(np.abs(den) > 1e-12, den, 1e-12)
+            X = QA + np.clip(t, 0.0, 1.0)[:, None] * (QB - QA)
+            mA = (da <= 0.0) & (db > 0.0)
+            mB = (db <= 0.0) & (da > 0.0)
+            QA = np.where(mA[:, None], X, QA)
+            QB = np.where(mB[:, None], X, QB)
+        return (self.project_cam(QA).astype(np.int32),
+                self.project_cam(QB).astype(np.int32), live)
+
+
+# ======================================================================= #
+#  THE 3-D CAR MESH -- lifted from drive/garage.py, see DEVIATION 8       #
+# ======================================================================= #
+# Cross-sections down the car, VERBATIM from garage.py's STATIONS so the two
+# views draw the same shell: (x, z_floor, z_belt, z_top, half_w, half_w_roof).
+CAR_H = 1.440            # m  published height
+WHEEL_R = 0.5 * WHEEL_LEN            # 0.2915 m, 175/65R14
+WHEEL_Y_DRAW = 0.745     # m  hub pushed 30 mm out so the face clears the sill
+STATIONS3 = (
+    (CAR_X_FRONT, 0.22, 0.60, 0.66, 0.70, 0.52),   # bumper face
+    (1.55, 0.17, 0.70, 0.76, 0.79, 0.62),
+    (1.10, 0.15, 0.78, 0.83, CAR_HALF_W, 0.68),
+    (0.60, 0.15, 0.85, 0.90, CAR_HALF_W, 0.70),    # scuttle
+    (-0.05, 0.15, 0.88, 1.38, CAR_HALF_W, 0.64),   # A-pillar top
+    (-0.80, 0.15, 0.90, CAR_H, CAR_HALF_W, 0.64),  # roof
+    (-1.45, 0.15, 0.92, 1.40, CAR_HALF_W, 0.62),   # C-pillar
+    (-1.80, 0.18, 0.95, 1.16, 0.80, 0.58),         # tailgate glass base
+    (CAR_X_REAR, 0.28, 0.75, 0.86, 0.70, 0.50),    # rear bumper face
+)
+N_RING3 = 10
+X_WINDSCREEN = (0.60, -0.05)      # roof band between these = glass
+X_REAR_GLASS = (-1.45, -1.80)
+X_SIDE_GLASS = (-0.05, -1.45)     # belt->roof band between these = glass
+WHEEL_NGON = 11          # 11-gon, not garage.py's 14: from 7 m the tyre is
+                         # 80 px across and the flats are invisible, and the
+                         # four wheels are a third of the whole poly count
+SEC_N = 7                # section resample: a 0.45 m chord at 7 m is 60 px
+TOP_STOW_GAP = 0.06      # m  the top wing's clearance over the deck, stowed
+TOP_RISE = 0.38          # m  est: how far it lifts to its slot on deploy
+
+
+def _orient3(verts, inside):
+    """Wind the polygon so its normal points AWAY from `inside`."""
+    v = np.asarray(verts, dtype=np.float64)
+    n = np.cross(v[1] - v[0], v[2] - v[0])
+    if np.dot(n, v.mean(axis=0) - np.asarray(inside)) < 0.0:
+        v = v[::-1].copy()
+    return v
+
+
+def _ring3(st):
+    x, zb, zbelt, ztop, w, wr = st
+    return np.array([
+        (x, -0.92 * w, zb), (x, -w, zb + 0.28), (x, -w, zbelt), (x, -wr, ztop),
+        (x, 0.0, ztop + 0.02),
+        (x, wr, ztop), (x, w, zbelt), (x, w, zb + 0.28), (x, 0.92 * w, zb),
+        (x, 0.0, zb - 0.02),
+    ])
+
+
+def _between3(x0, x1, lo_hi):
+    lo, hi = max(lo_hi), min(lo_hi)
+    return (x0 <= lo + 1e-9 and x1 >= hi - 1e-9)
+
+
+def _box3(x0, x1, y0, y1, z0, z1, col):
+    v = np.array([(x, y, z) for x in (x0, x1) for y in (y0, y1) for z in (z0, z1)])
+    centre = v.mean(axis=0)
+    faces = ((0, 1, 3, 2), (4, 5, 7, 6), (0, 1, 5, 4),
+             (2, 3, 7, 6), (0, 2, 6, 4), (1, 3, 7, 5))
+    return [(_orient3(v[list(f)], centre), col) for f in faces]
+
+
+def deck_z3(x: float) -> float:
+    """The car's top surface height at station x, from STATIONS3."""
+    xs = [s[0] for s in STATIONS3][::-1]
+    zs = [s[3] for s in STATIONS3][::-1]
+    return float(np.interp(x, xs, zs))
+
+
+def _section_loop3(n: int = SEC_N, m: float = 0.04, t: float = 0.12):
+    """A NACA-4 section as a (2n-1, 2) closed loop, x in [0,1], cached.
+
+    garage.py lofts the slot's ACTUAL library section (`_section_loop` ->
+    `drive.aero.airfoil`).  HudData carries only the wing NAMES, not their
+    coordinates, and pulling drive.aero in for a shape that is 3 px thick at
+    chase distance would buy nothing for a new package dependency -- so this
+    is the textbook 4-digit camber + thickness pair written out in place.
+    """
+    key = (n, round(m, 4), round(t, 4))
+    loop = _SECTION_CACHE3.get(key)
+    if loop is None:
+        beta = np.linspace(0.0, math.pi, n)
+        xs = 0.5 * (1.0 - np.cos(beta))            # cosine spacing to the nose
+        yt = 5.0 * t * (0.2969 * np.sqrt(xs) - 0.1260 * xs - 0.3516 * xs ** 2
+                        + 0.2843 * xs ** 3 - 0.1015 * xs ** 4)
+        p = 0.4
+        yc = np.where(xs < p, m / p ** 2 * (2 * p * xs - xs ** 2),
+                      m / (1 - p) ** 2 * ((1 - 2 * p) + 2 * p * xs - xs ** 2))
+        up = np.column_stack([xs, yc + yt])
+        lo = np.column_stack([xs, yc - yt])[::-1]
+        loop = np.vstack([up, lo[1:]])             # (2n-1, 2), closed
+        _SECTION_CACHE3[key] = loop
+    return loop
+
+
+_SECTION_CACHE3: dict = {}
+
+
+def _loft3(rings, col):
+    """Quads between consecutive rings plus the two caps.
+
+    garage.py's `_loft`: the winding is decided ONCE per band from the quad at
+    the thickest point, because the ring order is consistent along a loft.
+    Orienting every quad against a centroid costs ~20x more and buys nothing.
+    """
+    polys = []
+    for i in range(len(rings) - 1):
+        a, b = rings[i], rings[i + 1]
+        centre = 0.5 * (a.mean(axis=0) + b.mean(axis=0))
+        j0 = len(a) // 4
+        probe = np.array([a[j0], a[j0 + 1], b[j0 + 1], b[j0]])
+        flip = np.dot(np.cross(probe[1] - probe[0], probe[2] - probe[0]),
+                      probe.mean(axis=0) - centre) < 0.0
+        for j in range(len(a) - 1):
+            quad = np.array([a[j], a[j + 1], b[j + 1], b[j]])
+            polys.append((quad[::-1].copy() if flip else quad, col))
+    if rings:
+        inside = 0.5 * (rings[0].mean(axis=0) + rings[-1].mean(axis=0))
+        polys.append((_orient3(rings[0][:-1], inside), col))
+        polys.append((_orient3(rings[-1][:-1], inside), col))
+    return polys
+
+
+def car_mesh3():
+    """(verts (n,3), colour) polygons of the body and wheels, in BODY frame.
+
+    garage.py's `build_car_mesh`, with the wheels coarsened to WHEEL_NGON and
+    the CG/dimension annotations dropped.  Built once per process: the body is
+    rigid, so a frame only rotates the cached vertex block by psi.
+    """
+    polys = []
+    inside = np.array([-0.15, 0.0, 0.70])
+    rings = [_ring3(s) for s in STATIONS3]
+    for i in range(len(rings) - 1):
+        a, b = rings[i], rings[i + 1]
+        x0, x1 = STATIONS3[i][0], STATIONS3[i + 1][0]
+        for j in range(N_RING3):
+            k = (j + 1) % N_RING3
+            quad = np.array([a[j], a[k], b[k], b[j]])
+            if j in (3, 4):                 # roof band
+                col = (C_GLASS3 if _between3(x0, x1, X_WINDSCREEN)
+                       or _between3(x0, x1, X_REAR_GLASS) else C_CAR)
+            elif j in (2, 5):               # belt -> roof edge: side glass
+                col = C_GLASS3 if _between3(x0, x1, X_SIDE_GLASS) else C_CAR
+            elif j in (8, 9):               # floor
+                col = C_UNDER
+            else:
+                col = C_CAR
+            polys.append((_orient3(quad, inside), col))
+    polys.append((_orient3(rings[0], inside), C_CAR_DARK))       # nose
+    polys.append((_orient3(rings[-1], inside), C_CAR_DARK))      # tail
+
+    for wx, wy in WHEEL_XY:                 # arches: dark discs on the flank
+        side = 1.0 if wy > 0 else -1.0
+        yq = side * (CAR_HALF_W + 0.004)
+        arch = [(wx + 0.34 * math.cos(a), yq, WHEEL_R + 0.34 * math.sin(a))
+                for a in np.linspace(0.0, math.pi, 9)]
+        arch += [(wx - 0.34, yq, 0.16), (wx + 0.34, yq, 0.16)]
+        polys.append((_orient3(arch, inside), C_ARCH))
+
+    for wx, wy in WHEEL_XY:                 # wheels: n-gon cylinders, axis y
+        side = 1.0 if wy > 0 else -1.0
+        yc = side * WHEEL_Y_DRAW
+        centre = np.array([wx, yc, WHEEL_R])
+        ts = np.linspace(0.0, 2 * math.pi, WHEEL_NGON + 1)[:-1]
+        outer = np.array([(wx + WHEEL_R * math.cos(t), yc + side * 0.5 * WHEEL_W,
+                           WHEEL_R + WHEEL_R * math.sin(t)) for t in ts])
+        inner = outer.copy()
+        inner[:, 1] = yc - side * 0.5 * WHEEL_W
+        for j in range(WHEEL_NGON):
+            k = (j + 1) % WHEEL_NGON
+            polys.append((_orient3(np.array([outer[j], outer[k], inner[k],
+                                             inner[j]]), centre), C_WHEEL))
+        polys.append((_orient3(outer, centre), C_WHEEL))
+        rim = outer.copy()
+        rim[:, 0] = wx + 0.62 * (rim[:, 0] - wx)
+        rim[:, 2] = WHEEL_R + 0.62 * (rim[:, 2] - WHEEL_R)
+        rim[:, 1] += side * 0.004
+        polys.append((_orient3(rim, centre), C_RIM))
+    return polys
+
+
+def wing_mesh3(aux):
+    """The three wings at THIS deployment state, in body frame.
+
+    garage.py's `wing_polys`, one function instead of three calls, reading the
+    state off HudData: `dev_left / dev_right` (present), `x_w_left / x_w_right`
+    (station), `dev_chord / dev_span / dev_plate`, `h_w` (height), `inc_deg`,
+    and `wing_side` / `wing_deploy` for WHICH flank is out -- the deployed
+    panel is the one on the OUTER flank of the turn, exactly as the 2-D
+    `_draw_wing` picks it.  The top wing takes `top_on / top_deploy / top_x /
+    top_span / top_chord / top_plate`; it lies on the deck stowed and rises
+    TOP_RISE to its slot deployed, inverted (suction side down).
+    """
+    polys = []
+    dep = float(aux.wing_deploy)
+    f = dep * dep * (3.0 - 2.0 * dep)          # the 2-D view's smoothstep
+    side_dep = int(aux.wing_side)
+    legacy = bool(getattr(aux, 'wing_type', '')) and aux.wing_type != 'off'
+    chord = float(getattr(aux, 'dev_chord', DEV_CHORD) or DEV_CHORD)
+    span = float(getattr(aux, 'dev_span', DEV_SPAN) or DEV_SPAN)
+    plate = float(getattr(aux, 'dev_plate', 0.0) or 0.0)
+    h_w = float(getattr(aux, 'h_w', H_W) or H_W)
+    inc = math.radians(float(getattr(aux, 'inc_deg', 0.0) or 0.0))
+    loop = _section_loop3()
+    for side in (+1.0, -1.0):                  # +1 = the LEFT flank (y > 0)
+        present = (aux.dev_left if side > 0 else aux.dev_right) or legacy
+        if not present:
+            continue
+        xw = float(aux.x_w_left if side > 0 else aux.x_w_right)
+        if legacy and not (aux.dev_left or aux.dev_right):
+            xw = float(getattr(aux, 'x_w', X_W))
+        active = (side_dep != 0 and side == -side_dep and dep > 0.0)
+        out = DEV_OUT0 + DEV_OUT1 * (f if active else 0.0)
+        yc = side * (CAR_HALF_W + out)
+        col = C_WING_ON if (active and dep > 0.05) else C_WING_OFF
+        rings = []
+        for i in range(5):                     # 5 stations, vertical span
+            eta = -1.0 + 2.0 * i / 4.0         # -1 bottom .. +1 top
+            z = h_w + eta * 0.5 * span
+            th = side * inc
+            ct, stt = math.cos(th), math.sin(th)
+            pts = []
+            for xa, ya in loop:
+                dx = (0.5 - xa) * chord
+                dy = -side * ya * chord       # suction side towards the car
+                pts.append((xw + dx * ct - dy * stt, yc + dx * stt + dy * ct, z))
+            rings.append(np.array(pts))
+        polys += _loft3(rings, col)
+        for dz in (-0.28 * span, 0.28 * span):     # struts to the sill
+            z = h_w + dz
+            polys += _box3(xw - 0.015, xw + 0.015,
+                           min(side * CAR_HALF_W, yc), max(side * CAR_HALF_W, yc),
+                           z - 0.012, z + 0.012, C_WING_OFF)
+        if plate > 0.0:
+            for sgn in (-1.0, 1.0):
+                z = h_w + sgn * 0.5 * span
+                polys += _box3(xw - 0.6 * chord, xw + 0.6 * chord,
+                               yc - 0.5 * plate, yc + 0.5 * plate,
+                               z - 0.006, z + 0.006, C_WING_ON)
+
+    if getattr(aux, 'top_on', False):
+        xt = float(aux.top_x)
+        b2 = 0.5 * float(aux.top_span)
+        ct_ = float(aux.top_chord)
+        dpt = float(aux.top_deploy)
+        z_stow = deck_z3(xt) + TOP_STOW_GAP
+        zc = z_stow + TOP_RISE * dpt
+        ang = inc * dpt if inc else math.radians(6.0) * dpt
+        col = C_WING_ON if dpt > 0.05 else C_WING_OFF
+        rings = []
+        for i in range(5):
+            eta = -1.0 + 2.0 * i / 4.0
+            yq = eta * b2
+            ca, sa = math.cos(ang), math.sin(ang)
+            pts = [(xt + (0.5 - xa) * ct_ * ca + (-ya * ct_) * sa, yq,
+                    zc - (0.5 - xa) * ct_ * sa + (-ya * ct_) * ca)
+                   for xa, ya in loop]            # inverted: suction side down
+            rings.append(np.array(pts))
+        polys += _loft3(rings, col)
+        if float(aux.top_plate) > 0.0:
+            for sgn in (-1.0, 1.0):
+                yq = sgn * (b2 + 0.008)
+                polys += _box3(xt - 0.65 * ct_, xt + 0.65 * ct_,
+                               yq - 0.006, yq + 0.006,
+                               zc - float(aux.top_plate) * dpt - 0.02,
+                               zc + 0.03, C_WING_ON)
+        for sgn in (-1.0, 1.0):                   # pylons down to the deck
+            yq = sgn * 0.28 * 2.0 * b2
+            polys += _box3(xt - 0.15 * ct_, xt - 0.15 * ct_ + 0.06,
+                           yq - 0.012, yq + 0.012,
+                           deck_z3(xt), max(zc - 0.02 * ct_, deck_z3(xt) + 0.01),
+                           C_WING_OFF)
+    return polys
+
+
+class Mesh:
+    """A polygon soup flattened for one-shot projection.
+
+    garage.py's `Batch`: all vertices in one (N,3) block with per-polygon
+    start / count / outward normal / centroid, so a frame is one matmul, one
+    dot product for the backface test and one argsort -- never a Python loop
+    over vertices.  The body soup is built once; the wings are rebuilt only
+    when the deployment state changes.
+    """
+
+    def __init__(self, polys):
+        self.starts = np.zeros(len(polys), dtype=np.int64)
+        self.counts = np.zeros(len(polys), dtype=np.int64)
+        self.colours = np.array([p[1] for p in polys], dtype=np.float64) \
+            if polys else np.zeros((0, 3))
+        vs, n = [], 0
+        for i, (v, _c) in enumerate(polys):
+            self.starts[i], self.counts[i] = n, len(v)
+            vs.append(v)
+            n += len(v)
+        self.verts = np.concatenate(vs) if vs else np.zeros((0, 3))
+        if polys:
+            v0, v1, v2 = (self.verts[self.starts], self.verts[self.starts + 1],
+                          self.verts[self.starts + 2])
+            nrm = np.cross(v1 - v0, v2 - v0)
+            ln = np.linalg.norm(nrm, axis=1)
+            self.normals = nrm / np.where(ln > 1e-12, ln, 1.0)[:, None]
+            self.centroids = (np.add.reduceat(self.verts, self.starts, axis=0)
+                              / self.counts[:, None])
+        else:
+            self.normals = np.zeros((0, 3))
+            self.centroids = np.zeros((0, 3))
+
+    @staticmethod
+    def join(a: 'Mesh', b: 'Mesh') -> 'Mesh':
+        out = Mesh.__new__(Mesh)
+        off = len(a.verts)
+        out.starts = np.concatenate([a.starts, b.starts + off])
+        out.counts = np.concatenate([a.counts, b.counts])
+        out.colours = np.vstack([a.colours, b.colours])
+        out.verts = np.concatenate([a.verts, b.verts])
+        out.normals = np.concatenate([a.normals, b.normals])
+        out.centroids = np.concatenate([a.centroids, b.centroids])
+        return out
+
+
+_CAR_MESH3 = None
+
+
+def car_mesh_cached() -> Mesh:
+    global _CAR_MESH3
+    if _CAR_MESH3 is None:
+        _CAR_MESH3 = Mesh(car_mesh3())
+    return _CAR_MESH3
+
+
+# ======================================================================= #
 #  RENDERER                                                               #
 # ======================================================================= #
 class Renderer:
@@ -555,6 +1145,16 @@ class Renderer:
         self._anchor = np.array([W * 0.5, H * cfg.car_screen_frac])
         self._cam_init = False
         self._t_render = 0.0
+
+        # --- the 3-D chase camera (mode 'chase').  The projector is built
+        #     unconditionally -- it is ~1 us of numpy -- and armed by
+        #     update_camera, because drive.Sim toggles cfg.mode in place. ---
+        self._chase = Chase3D(W, H)
+        self._chase.set_pose(0.0, 0.0, 0.0)     # defined before the first pose
+        self._cam3 = self._chase if cfg.mode == 'chase' else None
+        self._car3 = None                 # the body soup, built on first use
+        self._wing3 = None                # the wing soup, rebuilt on change
+        self._wing3_key = None
 
         # --- fonts and the text cache -------------------------------------
         self.f_lbl = self._font(int(round(14 * self.ui)))
@@ -638,7 +1238,16 @@ class Renderer:
         S = ((P - cam) @ Rm.T) * [ppm, -ppm] + anchor, with the y flip because
         world +y (LEFT) is screen -y.  Measured 0.12 ms for 5000 points, i.e.
         the transform is never the cost -- rasterisation is.
+
+        In chase mode this becomes the perspective projection of the same
+        point taken as a GROUND point (z = 0).  Routing the one transform
+        every layer already calls is what lets the ribbon, kerbs, dashes,
+        marks and skid go 3-D without a line of new drawing code; the layers
+        that can straddle the eye (the Areas, the grid) go through
+        Chase3D's clipper instead.
         """
+        if self._cam3 is not None:
+            return self._cam3.ground(P)
         P = np.asarray(P, dtype=np.float64)
         single = (P.ndim == 1)
         if single:
@@ -670,6 +1279,9 @@ class Renderer:
         V = _speed(st)
         dt = max(float(dt_frame), 0.0)
         self._t_render += dt
+        # drive.Sim flips cfg.mode in place (C / the Camera setting), so the
+        # projector is armed here rather than in __init__.
+        self._cam3 = self._chase if cfg.mode == 'chase' else None
 
         tau_h = cfg.tau_heading * (2.5 if cfg.mode == 'chase' else 1.0)
         if not self._cam_init or dt <= 0.0:
@@ -703,6 +1315,19 @@ class Renderer:
             [self.W * 0.5,
              self.H * (0.5 if cfg.mode == 'world_up' else cfg.car_screen_frac)])
         self._set_rot(self.psi_cam)
+
+        if self._cam3 is not None:
+            # The eye rides behind the LAGGED heading (tau_heading * 2.5 =
+            # 0.30 s), so it swings into a slide a beat late.
+            self._cam3.set_pose(x, y, self.psi_cam, V, self.zoom_manual)
+            # self.ppm keeps its meaning for LINE WIDTHS only -- a perspective
+            # view has no single px/m, so it is pinned to the px/m at
+            # CHASE_PPM_REF_D and the widths come out like the 2-D view's.
+            self.ppm = self._cam3.ppm_ref
+            # ... and the cull disc is centred ahead of the car, because only
+            # what is in front of the eye can be on screen at all.
+            self.cam = np.array([x + CHASE_CULL_LEAD * math.cos(self.psi_cam),
+                                 y + CHASE_CULL_LEAD * math.sin(self.psi_cam)])
 
     def set_zoom(self, k: float) -> None:
         self.zoom_manual = min(max(float(k), 0.35), 3.0)
@@ -770,7 +1395,10 @@ class Renderer:
             y = yp + (y - yp) * alpha
             psi = pp + _wrap_pi(psi - pp) * alpha
 
-        sc.fill(C_BG)
+        if self._cam3 is not None:
+            self._draw_sky3()          # sky / ground / horizon, then as usual
+        else:
+            sc.fill(C_BG)
         self._draw_grid()
         self._draw_areas()
         runs, s_car, windows = self._visible_indices(x, y)
@@ -783,10 +1411,19 @@ class Renderer:
         self._draw_features()
         if self.cfg.show_skid and skid is not None:
             self._draw_skid(skid)
-        self._draw_car(x, y, psi, aux)
-        if self.cfg.show_vectors:
-            self._draw_vectors(x, y, psi, aux)
-        self._draw_wing(x, y, psi, aux)
+        if self._cam3 is not None:
+            # One 3-D pass owns the car: the body, the wheels and all three
+            # wings are one painter's-sorted soup, so a deployed panel is
+            # occluded by the flank it is behind instead of being painted over
+            # it by a fixed layer order.
+            self._draw_car3d(x, y, psi, aux)
+            if self.cfg.show_vectors:
+                self._draw_arrows3(x, y, psi, aux)
+        else:
+            self._draw_car(x, y, psi, aux)
+            if self.cfg.show_vectors:
+                self._draw_vectors(x, y, psi, aux)
+            self._draw_wing(x, y, psi, aux)
         if self.cfg.hud != 'off':
             self._draw_hud(aux, ctl)
             if self.cfg.show_gg:
@@ -814,6 +1451,13 @@ class Renderer:
     #  WORLD LAYERS                                                       #
     # ------------------------------------------------------------------ #
     def _view_radius(self) -> float:
+        """The cull radius about self.cam.
+
+        In chase mode self.ppm is a line-width scale, not a view scale, so the
+        radius is the camera's own forward reach instead of a screen diagonal.
+        """
+        if self._cam3 is not None:
+            return self._cam3.view_r
         return 0.5 * math.hypot(self.W, self.H) / self.ppm
 
     def _draw_grid(self):
@@ -839,8 +1483,21 @@ class Renderer:
             vb = np.column_stack([xs, np.full(nx, y1)])
             ha = np.column_stack([np.full(ny, x0), ys])
             hb = np.column_stack([np.full(ny, x1), ys])
-            A = self._px(np.vstack([va, ha]))
-            B = self._px(np.vstack([vb, hb]))
+            WA = np.vstack([va, ha])
+            WB = np.vstack([vb, hb])
+            if self._cam3 is not None:
+                # Every grid line here runs from behind the eye to 220 m
+                # ahead, so it must be TRIMMED to the frustum, not dropped:
+                # projecting an endpoint behind the camera draws the line
+                # mirrored through the vanishing point.
+                z = np.zeros((len(WA), 1))
+                A, B, live = self._cam3.clip_segments(
+                    np.hstack([WA, z]), np.hstack([WB, z]))
+                for k in np.flatnonzero(live):
+                    pygame.draw.line(self.screen, C_GRID, A[k], B[k], 1)
+                return
+            A = self._px(WA)
+            B = self._px(WB)
             for a, b in zip(A, B):
                 pygame.draw.line(self.screen, C_GRID, a, b, 1)
 
@@ -869,11 +1526,15 @@ class Renderer:
         are therefore culled by DISTANCE from the camera and split into
         contiguous runs (wrapping at the seam), each with its own window so
         the kerbs, dashes and marks follow the ribbon everywhere it is seen.
+        Chase (3-D): the same distance cull on EVERY track, plus a forward
+        half-space cull -- only tarmac in front of the eye can be on screen,
+        and a sample nearer than CHASE_GROUND_NEAR would put a ribbon vertex
+        at a one-pixel depth where the polygon shears across the frame.
         """
         tr = self.track
         s_car = trk.project(tr, x, y)[0]
         ds = self._ds
-        if not self._areas:
+        if not self._areas and self._cam3 is None:
             s0, s1 = self._window(s_car)
             i_c = int(round(s_car / ds))
             i0 = int(round(s0 / ds))
@@ -894,12 +1555,14 @@ class Renderer:
         xy = tr.xy[:n]
         d2 = (xy[:, 0] - self.cam[0]) ** 2 + (xy[:, 1] - self.cam[1]) ** 2
         vis = d2 < r * r
+        if self._cam3 is not None:
+            vis &= self._cam3.ground_depth(xy) > CHASE_GROUND_NEAR
         if not vis.any():
             return [], s_car, []
         pad = 3
         if vis.all():
             starts, lengths = [0], [n]
-        else:
+        elif tr.closed:
             k0 = int(np.flatnonzero(~vis)[0])           # rotate to start on a gap
             vr = np.roll(vis, -k0)
             d = np.diff(vr.astype(np.int8))
@@ -907,12 +1570,26 @@ class Renderer:
             en = np.flatnonzero(d == -1)
             starts = [int((a + k0) % n) for a in st]
             lengths = [int(b - a + 1) for a, b in zip(st, en)]
+        else:
+            # An open track (the dragstrip) must NOT be rolled: wrapping joins
+            # its two ends and draws a ribbon across the paddock.
+            d = np.diff(np.concatenate([[0], vis.astype(np.int8), [0]]))
+            starts = [int(a) for a in np.flatnonzero(d == 1)]
+            lengths = [int(b - a) for a, b in zip(np.flatnonzero(d == 1),
+                                                  np.flatnonzero(d == -1))]
         runs, windows = [], []
         for a, ln in zip(starts, lengths):
             a0 = a - pad
             cnt = ln + 2 * pad
             idx = np.arange(a0, a0 + cnt, 2)
-            idx = np.append(idx, a0 + cnt - 1) % n
+            idx = np.append(idx, a0 + cnt - 1)
+            if tr.closed:
+                idx = idx % n
+            else:
+                idx = np.clip(idx, 0, self._N - 1)
+                idx = idx[np.concatenate([[True], np.diff(idx) != 0])]
+            if len(idx) < 2:
+                continue
             runs.append(idx)
             s0 = a0 * ds
             windows.append((s0, s0 + cnt * ds))
@@ -928,7 +1605,14 @@ class Renderer:
         for area, poly, bb in self._areas:
             if bb[2] < cx - r or bb[0] > cx + r or bb[3] < cy - r or bb[1] > cy + r:
                 continue
-            pts = self._px(poly)
+            if self._cam3 is not None:
+                # The drivable rrect is 522 x 362 m and WRAPS AROUND the eye;
+                # one vertex behind the camera folds the fill inside out over
+                # the whole screen, so it is clipped, not point-projected.
+                pts = self._cam3.poly_px(
+                    np.column_stack([poly, np.zeros(len(poly))]))
+            else:
+                pts = self._px(poly)
             if len(pts) >= 3:
                 pygame.draw.polygon(self.screen, tuple(area.colour), pts)
                 if area.drivable and area.kind == 'rrect':
@@ -939,6 +1623,9 @@ class Renderer:
         """Open map decorations: painted circles / lines / boxes and cones.
         The physics never reads any of these."""
         if not self._features:
+            return
+        if self._cam3 is not None:
+            self._draw_features3()
             return
         r = self._view_radius() * 1.1
         cx, cy = self.cam[0], self.cam[1]
@@ -977,6 +1664,66 @@ class Renderer:
                     continue
                 p = self._px(np.array([(x0, y0), (x1, y0), (x1, y1), (x0, y1)]))
                 pygame.draw.polygon(sc, col, p)
+
+    def _draw_features3(self):
+        """The same decorations under the chase projection.
+
+        Two of the four kinds cannot survive a point transform here: a painted
+        R = 50 m circle is NOT a screen circle in perspective (it is an
+        ellipse, and part of it can pass behind the eye), and a 300 m
+        drag-lane line runs off the near plane.  Both become clipped 3-D
+        segments.  The cones stay screen circles -- a 0.22 m marker is 6 px
+        and only its depth matters."""
+        r = self._view_radius() * 1.1
+        cx, cy = self.cam[0], self.cam[1]
+        r2 = r * r
+        sc = self.screen
+        c3 = self._cam3
+        for f in self._features:
+            kind = f[0]
+            if kind == 'circle':
+                _k, fx, fy, rad, col, w = f
+                if (fx - cx) ** 2 + (fy - cy) ** 2 > (r + rad) ** 2:
+                    continue
+                t = np.linspace(0.0, 2 * math.pi, 49)
+                ring = np.column_stack([fx + rad * np.cos(t),
+                                        fy + rad * np.sin(t), np.zeros(49)])
+                A, B, live = c3.clip_segments(ring[:-1], ring[1:])
+                wpx = max(1, int(round(w * self.ppm)))
+                for k in np.flatnonzero(live):
+                    pygame.draw.line(sc, col, A[k], B[k], wpx)
+            elif kind == 'cone':
+                _k, fx, fy = f
+                if (fx - cx) ** 2 + (fy - cy) ** 2 > r2:
+                    continue
+                d = float(c3.ground_depth(np.array([[fx, fy]]))[0])
+                if d <= CHASE_GROUND_NEAR:
+                    continue
+                c = c3.ground(np.array([fx, fy]))
+                rad = max(2, int(round(0.22 * c3.px_at(d))))
+                pygame.draw.circle(sc, C_WING_ON, (int(c[0]), int(c[1])), rad)
+                if rad >= 4:
+                    pygame.draw.circle(sc, (40, 30, 20),
+                                       (int(c[0]), int(c[1])), rad, 1)
+            elif kind == 'line':
+                _k, x0, y0, x1, y1, col, w = f
+                mx, my = 0.5 * (x0 + x1), 0.5 * (y0 + y1)
+                half = 0.5 * math.hypot(x1 - x0, y1 - y0)
+                if (mx - cx) ** 2 + (my - cy) ** 2 > (r + half) ** 2:
+                    continue
+                A, B, live = c3.clip_segments(np.array([[x0, y0, 0.0]]),
+                                              np.array([[x1, y1, 0.0]]))
+                if live[0]:
+                    pygame.draw.line(sc, col, A[0], B[0],
+                                     max(1, int(round(w * self.ppm))))
+            elif kind == 'box':
+                _k, x0, y0, x1, y1, col = f
+                if (0.5 * (x0 + x1) - cx) ** 2 + (0.5 * (y0 + y1) - cy) ** 2 > r2:
+                    continue
+                pts = c3.poly_px(np.array([(x0, y0, 0.0), (x1, y0, 0.0),
+                                           (x1, y1, 0.0), (x0, y1, 0.0)]))
+                if len(pts) >= 3:
+                    pygame.draw.polygon(sc, col, pts)
 
     def _draw_ribbon(self, runs):
         """THE ribbon: ONE concave polygon per run.  0.58 ms measured; 20.41 ms
@@ -1123,6 +1870,16 @@ class Renderer:
         for k, (x0, y0, x1, y1, _a) in enumerate(segs):
             arr[2 * k] = (x0, y0)
             arr[2 * k + 1] = (x1, y1)
+        if self._cam3 is not None:
+            # The cull disc is centred ahead of the car, so it keeps marks
+            # BEHIND the eye as well; those project mirrored through the
+            # vanishing point. A 0.18 m mark is not worth clipping -- drop it.
+            d = self._cam3.ground_depth(arr).reshape(-1, 2).min(axis=1)
+            keep = np.flatnonzero(d > CHASE_GROUND_NEAR)
+            if not len(keep):
+                return
+            segs = [segs[k] for k in keep]
+            arr = arr.reshape(-1, 2, 2)[keep].reshape(-1, 2)
         P = self._px(arr)
         w = max(1, int(round(SKID_WIDTH * self.ppm)))
         sc = self.screen
@@ -1316,6 +2073,185 @@ class Renderer:
                 n_px = self._force_px(-float(aux.D_top))
                 w = (fwd * n_px) @ self._Rm.T
                 self._arrow(base, (w[0], -w[1]), C_WING_ON)
+
+    # ------------------------------------------------------------------ #
+    #  THE CAR IN 3-D (mode 'chase')                                      #
+    # ------------------------------------------------------------------ #
+    def _draw_sky3(self):
+        """Ground below the horizon, sky above it, and the line itself.
+
+        The horizon is what makes the view read as three-dimensional at all:
+        without it the receding grid simply fades into a flat background and
+        the mode looks like a zoomed plan view with a funny car on it.
+        """
+        c3 = self._cam3
+        self.screen.fill(C_BG)
+        yh = int(round(min(max(c3.horizon_y, -2.0), self.H + 2.0)))
+        if yh > 0:
+            self.screen.fill(C_SKY, (0, 0, self.W, min(yh, self.H)))
+            if 0 <= yh < self.H:
+                pygame.draw.line(self.screen, C_HORIZON, (0, yh),
+                                 (self.W, yh), 1)
+
+    def _mesh3(self, aux):
+        """The body + wings soup for this frame, cached on the wing state.
+
+        The body is rigid, so it is built once per process and only rotated.
+        The wings are a function of the deployment state alone -- quantised to
+        1% of travel -- so the soup is rebuilt on the ~18 frames of a deploy
+        ramp and reused on every frame either side of it.
+        """
+        if self._car3 is None:
+            self._car3 = car_mesh_cached()
+        key = (bool(aux.dev_left), bool(aux.dev_right),
+               round(float(aux.x_w_left), 3), round(float(aux.x_w_right), 3),
+               round(float(getattr(aux, 'dev_chord', DEV_CHORD)), 3),
+               round(float(getattr(aux, 'dev_span', DEV_SPAN)), 3),
+               round(float(getattr(aux, 'dev_plate', 0.0)), 3),
+               round(float(getattr(aux, 'h_w', H_W)), 3),
+               round(float(getattr(aux, 'inc_deg', 0.0)), 2),
+               str(getattr(aux, 'wing_type', '')),
+               int(aux.wing_side), round(float(aux.wing_deploy), 2),
+               bool(getattr(aux, 'top_on', False)),
+               round(float(getattr(aux, 'top_deploy', 0.0)), 2),
+               round(float(getattr(aux, 'top_x', 0.0)), 3),
+               round(float(getattr(aux, 'top_span', 0.0)), 3),
+               round(float(getattr(aux, 'top_chord', 0.0)), 3),
+               round(float(getattr(aux, 'top_plate', 0.0)), 3))
+        if key != self._wing3_key:
+            self._wing3_key = key
+            polys = wing_mesh3(aux)
+            self._wing3 = (Mesh.join(self._car3, Mesh(polys)) if polys
+                           else self._car3)
+        return self._wing3
+
+    def _draw_car3d(self, x, y, psi, aux):
+        """Body, wheels and the three wings, painter's-sorted and culled.
+
+        garage.py's `GarageView.draw_scene`, re-expressed on the chase camera:
+        rotate the cached soup by psi, backface-cull on the eye direction,
+        drop anything whose nearest vertex is behind the near plane, sort by
+        mean depth, then one `draw.polygon` per survivor with a lambert +
+        narrow-specular shade.  The shading matters more here than it looks:
+        it is the only thing that separates a deployed ORANGE panel from the
+        body when both are edge-on.
+        """
+        c3 = self._cam3
+        m = self._mesh3(aux)
+        c, s = math.cos(psi), math.sin(psi)
+        R = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+        P = np.array([x, y, 0.0])
+
+        # a flat contact shadow, so the car sits ON the road instead of over it
+        foot = np.array([
+            (CAR_X_FRONT - 0.05, 0.62, 0.004), (CAR_X_FRONT - 0.35, 0.90, 0.004),
+            (CAR_X_REAR + 0.30, 0.90, 0.004), (CAR_X_REAR, 0.66, 0.004),
+            (CAR_X_REAR, -0.66, 0.004), (CAR_X_REAR + 0.30, -0.90, 0.004),
+            (CAR_X_FRONT - 0.35, -0.90, 0.004), (CAR_X_FRONT - 0.05, -0.62, 0.004)])
+        pts = c3.poly_px(foot @ R.T + P)
+        if len(pts) >= 3:
+            pygame.draw.polygon(self.screen, C_SKID, pts)
+
+        verts = m.verts @ R.T + P
+        nrm = m.normals @ R.T
+        cen = m.centroids @ R.T + P
+        view = c3.eye - cen
+        vlen = np.linalg.norm(view, axis=1, keepdims=True)
+        vdir = view / np.where(vlen > 1e-9, vlen, 1e-9)
+        facing = np.einsum('ij,ij->i', nrm, vdir) > 0.0
+        scr, depth = c3.project(verts)
+        d_min = np.minimum.reduceat(depth, m.starts)
+        d_mean = np.add.reduceat(depth, m.starts) / m.counts
+        idx = np.nonzero(facing & (d_min > 2.0 * CHASE_Z_NEAR))[0]
+        order = idx[np.argsort(-d_mean[idx], kind='stable')]
+        lam = np.clip(np.abs(nrm @ LIGHT_DIR3), 0.0, None)
+        half = (LIGHT_DIR3[None, :] + vdir) * 0.5
+        spec = np.clip(np.abs(np.einsum('ij,ij->i', nrm, half)), 0.0, None) ** 8
+        gain = 0.42 + 0.50 * lam
+        cols = np.clip(m.colours * gain[:, None] + 60.0 * spec[:, None],
+                       0.0, 255.0).astype(np.int32)
+        scr_i = scr.astype(np.int32)
+        sc = self.screen
+        starts, counts = m.starts, m.counts
+        for i in order:
+            s0, c0 = starts[i], counts[i]
+            pts = scr_i[s0:s0 + c0].tolist()
+            if len(pts) >= 3:
+                pygame.draw.polygon(sc, tuple(cols[i]), pts)
+
+    def _screen_dir(self, base3, dir3):
+        """(base px, unit screen vector) for a world direction at a world point.
+
+        The force arrows keep FORCE_PX_PER_N -- the same px/N as the tyre
+        arrows, which is the whole point of the study's honesty requirement --
+        so the LENGTH stays in pixels and only the direction is projected.
+        Returns None when the base is behind the near plane.
+        """
+        d3 = np.asarray(dir3, dtype=np.float64)
+        S, dz = self._cam3.project(np.array([base3, base3 + 0.25 * d3]))
+        if dz[0] <= CHASE_Z_NEAR or dz[1] <= CHASE_Z_NEAR:
+            return None
+        v = S[1] - S[0]
+        L = math.hypot(v[0], v[1])
+        if L < 1e-6:
+            return None
+        return S[0], (v[0] / L, v[1] / L)
+
+    def _draw_arrows3(self, x, y, psi, aux):
+        """Tyre and wing force arrows in the chase view, at the SAME px/N.
+
+        `_force_px` is called here exactly as the plan view calls it, so a
+        127 N panel is still 3 px against a 3000 N tyre's 75 px.  The one
+        thing that changes is where the pixels point.
+        """
+        cp = self._body_to_world(x, y, psi, np.array(WHEEL_XY))
+        for i in range(4):
+            dw = float(aux.delta_wheel[i]) if i < 2 else 0.0
+            th = psi + dw
+            base = np.array([cp[i][0], cp[i][1], 0.04])
+            for F, dv, col in (
+                    (float(aux.Fy[i]), (-math.sin(th), math.cos(th), 0.0), C_FY),
+                    (float(aux.Fx[i]), (math.cos(th), math.sin(th), 0.0), C_FX)):
+                n_px = self._force_px(F)
+                if abs(n_px) < 0.5:
+                    continue
+                got = self._screen_dir(base, dv)
+                if got is None:
+                    continue
+                p0, u = got
+                self._arrow(p0, (u[0] * n_px, u[1] * n_px), col)
+
+        dep = float(aux.wing_deploy)
+        side_dep = int(aux.wing_side)
+        if side_dep != 0 and dep > 0.05:
+            f = dep * dep * (3.0 - 2.0 * dep)
+            side = -side_dep                      # the OUTER flank of the turn
+            xw = float(aux.x_w_left if side > 0 else aux.x_w_right)
+            legacy = (bool(getattr(aux, 'wing_type', ''))
+                      and aux.wing_type != 'off')
+            if legacy and not (aux.dev_left or aux.dev_right):
+                xw = float(getattr(aux, 'x_w', X_W))
+            out = DEV_OUT0 + DEV_OUT1 * f
+            b = np.array([xw, side * (CAR_HALF_W + out),
+                          float(getattr(aux, 'h_w', H_W))])
+            base = np.array([x + b[0] * math.cos(psi) - b[1] * math.sin(psi),
+                             y + b[0] * math.sin(psi) + b[1] * math.cos(psi),
+                             b[2]])
+            n_px = self._force_px(float(aux.F_wing))
+            got = self._screen_dir(base, (-math.sin(psi), math.cos(psi), 0.0))
+            if got is not None and abs(n_px) >= 0.5:
+                self._arrow(got[0], (got[1][0] * n_px, got[1][1] * n_px),
+                            C_WING_ON)
+        if (getattr(aux, 'top_on', False) and float(aux.top_deploy) > 0.05
+                and float(aux.D_top) > 0.0):
+            xt = float(aux.top_x)
+            zc = deck_z3(xt) + TOP_STOW_GAP + TOP_RISE * float(aux.top_deploy)
+            base = np.array([x + xt * math.cos(psi), y + xt * math.sin(psi), zc])
+            n_px = self._force_px(-float(aux.D_top))
+            got = self._screen_dir(base, (math.cos(psi), math.sin(psi), 0.0))
+            if got is not None and abs(n_px) >= 0.5:
+                self._arrow(got[0], (got[1][0] * n_px, got[1][1] * n_px),
+                            C_WING_ON)
 
     # ------------------------------------------------------------------ #
     #  HUD                                                                #
