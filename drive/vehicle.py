@@ -853,7 +853,23 @@ class Vehicle:
         else:
             has = bool(cfg.wing != "off" or cfg.CL0)
             x_w, h_w = cfg.x_w, cfg.h_w
-        armed = has and ctl.wing_on and st.dev_side != 0
+        # `want == st.dev_side`, not `st.dev_side != 0`. The side latch above
+        # will only move while `st.dep_raw <= DEV_DEP_LOCKOUT` ("no side change
+        # while the panel is out"), so arming on the LATCH alone deadlocks it:
+        # the first corner sets dev_side, dep_raw ramps to 1.0 and stays there
+        # because dev_side is still non-zero, and the lockout gate can never be
+        # satisfied again. The panel then never changes flanks and never stows.
+        # Arming on the CURRENT steering sign instead means centring the wheel
+        # (or turning the other way) commands the retraction the latch is
+        # waiting for. Measured on a 90 s scripted arena lap with --wing plate
+        # (audit, .handoff/04-wings-audit.md section 3b): time on the INNER
+        # (wrong) flank while cornering 36.6% -> 0.1%, a chicane now swaps
+        # flank at t = 3.299 s, and mean D_dev over the lap 34.28 -> 20.99 N
+        # (-39%) because the drag the device exists to save on the straights is
+        # actually saved. It moves no acceptance number: a steady-state rig
+        # holds one steer sign, so `want` equals `dev_side` throughout and
+        # `armed` is identical.
+        armed = has and ctl.wing_on and want != 0 and want == st.dev_side
         cmd = 1.0 if armed else 0.0
         if cmd > st.dep_raw:
             st.dep_raw = min(cmd, st.dep_raw + dt / cfg.t_ext)
