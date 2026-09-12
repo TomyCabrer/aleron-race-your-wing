@@ -345,6 +345,150 @@ E39_540I = CarSpec(
 
 
 # ======================================================================= #
+#  ADDED MASS -- ballast, passengers, and the wings the garage fitted      #
+# ======================================================================= #
+#  A mass slider that scales `m` and leaves the rest of the parameter set
+#  alone is not a weight feature, it is a bug with a UI. 200 kg of lead in
+#  the boot of a Corsa C moves the front weight fraction from 61 % to 49 %,
+#  raises the CG by 17 mm and adds 44 % to `Izz`; a mass slider that only
+#  touched `m` would report a car that corners harder because every tyre is
+#  better loaded and nothing else changed.
+#
+#  So added mass is modelled as POINT MASSES at a station and a height, and
+#  `with_masses` returns a new `CarSpec` in which everything a point mass
+#  really moves has moved: `m`, `m_s`, `wdist_f` (hence `a` and `b`), `h_cg`,
+#  and `Izz / Ixx / Iyy` through the parallel-axis theorem. Nothing else is
+#  touched: the springs (`Kphi_*`, `k_wheel_*`), the roll centres, the
+#  wheelbase, the track, the tyres, the gearing and `CdA` are all properties
+#  of the car and not of what is in it -- which is exactly why a ballasted
+#  car rolls MORE (same springs, more sprung mass, longer roll arm) and
+#  accelerates less (same engine, more mass). `Vmax` and `P_max` are left as
+#  the STOCK car's data: they are published figures for the car, not
+#  predictions, and `drive/vehicle.py` never reads `Vmax`.
+#
+#  The parallel-axis term `m_b*d^2` is the honest model and it is cheap: a
+#  point mass is a floor on a real object's inertia, never an overestimate.
+
+#: kg/m^2 and kg/m are in `drive/aero/wing.py`; a fitted wing's mass comes
+#: from `wing_mass(spec)` and is charged at its own slot station -- see
+#: `drive/garage.py:CarBuild.mass_points`.
+
+
+@dataclass(frozen=True)
+class PointMass:
+    """One lump of added mass, in the car's own frame.
+
+    `x` is a STATION measured from the car's STOCK CG, positive FORWARD (the
+    same sign convention as `VehicleConfig.x_w` and `wheel_positions`), so
+    the front axle is at `+car.a` and the rear axle at `-car.b`. `h` is
+    height above the ROAD, the same datum as `h_cg` and `h_w`. Lateral
+    offset is not modelled: ballast goes on the centreline, and a wing on
+    each flank is symmetric, so the only y-offset that could exist cancels.
+    """
+
+    m: float = 0.0
+    x: float = 0.0
+    h: float = 0.0
+    label: str = ""
+
+
+# --- where a driver can actually put ballast ---------------------------- #
+#  Four stations that between them span both axes of the trade: `nose` vs
+#  `boot` is the longitudinal one, `floor` vs `boot` is the height one at
+#  nearly the same station, and `seat` is the control case that changes the
+#  mass and nothing else. Heights are estimates and are the honest ones: a
+#  hatchback's BOOT FLOOR is ~0.65 m above the road, well ABOVE the 0.55 m
+#  CG, so a sandbag in the boot RAISES the CG. Only ballast bolted to the
+#  floorpan (~0.30 m, which is what a race car does) lowers it.
+BALLAST_STATIONS = ("nose", "seat", "floor", "boot")     # fore -> aft
+BALLAST_DEFAULT = "floor"
+BALLAST_LABELS = {
+    "nose": "Nose (front subframe, low)",
+    "seat": "Passenger seat (at the CG)",
+    "floor": "Floorpan over the rear axle (low)",
+    "boot": "Boot floor, behind the rear axle (high)",
+}
+BALLAST_SHORT = {"nose": "NOSE", "seat": "SEAT", "floor": "FLOOR", "boot": "BOOT"}
+#: the Settings page cycles these; the CLI takes any value in [0, BALLAST_MAX]
+BALLAST_KG = (0.0, 25.0, 50.0, 75.0, 100.0, 150.0, 200.0)
+BALLAST_MAX = 300.0
+#: heights, m above the road. est. `seat` is special-cased to h_cg so that
+#: station is EXACTLY neutral in CG height -- the owner's own test case.
+_BALLAST_H = {"nose": 0.32, "floor": 0.30, "boot": 0.65}
+_BALLAST_OVERHANG = {"nose": 0.30, "boot": 0.25}   # m beyond the axle
+
+
+def ballast_point(car: CarSpec, kg: float, where: str = BALLAST_DEFAULT) -> PointMass:
+    """`kg` of ballast at one of `BALLAST_STATIONS`, as a `PointMass`.
+
+    The stations are quoted relative to the AXLES, not as absolute numbers,
+    so they mean the same thing on a 2.265 m MX-5 and a 2.830 m 540i.
+    """
+    kg = max(float(kg), 0.0)
+    where = where if where in BALLAST_LABELS else BALLAST_DEFAULT
+    if where == "nose":
+        x, h = car.a + _BALLAST_OVERHANG["nose"], _BALLAST_H["nose"]
+    elif where == "boot":
+        x, h = -(car.b + _BALLAST_OVERHANG["boot"]), _BALLAST_H["boot"]
+    elif where == "floor":
+        x, h = -car.b, _BALLAST_H["floor"]
+    else:                                   # 'seat': at the CG, at CG height
+        x, h = 0.0, car.h_cg
+    return PointMass(kg, x, h, f"ballast {kg:.0f} kg {BALLAST_SHORT[where]}")
+
+
+#: `wdist_f` band the result is held inside. 200 kg over the nose of a Corsa
+#: is 0.694 and 200 kg in its boot is 0.493, both inside; the clamp only
+#: exists so that a silly CLI number cannot hand the EOM a car whose CG is
+#: outside its own wheelbase.
+WDIST_BAND = (0.20, 0.80)
+
+
+def with_masses(car: CarSpec, masses=()) -> CarSpec:
+    """`car` carrying `masses`, as a new `CarSpec`. Bit-for-bit identity when
+    there is nothing to carry.
+
+    Returns the SAME OBJECT when the added mass is zero -- not an equal copy,
+    the same object. That is what keeps the stock car bit-for-bit: every
+    derived quantity in `drive/vehicle.py` is scaled by a ratio against
+    `CORSA_C`, and a ratio is exactly 1.0 only if the two floats are
+    identical. `self_check` asserts the identity.
+    """
+    pts = [p for p in masses if p is not None and p.m > 0.0]
+    mb = sum(p.m for p in pts)
+    if not pts or mb <= 0.0:
+        return car
+
+    m0 = car.m
+    m1 = m0 + mb
+    # the CG moves by the first moment of the added mass about the stock CG
+    dx = sum(p.m * p.x for p in pts) / m1                    # + = FORWARD
+    dh = sum(p.m * (p.h - car.h_cg) for p in pts) / m1       # + = UP
+    h1 = car.h_cg + dh
+
+    # `b` is the CG-to-REAR-axle distance and `wdist_f == b/L`, so a CG that
+    # moves forward by dx lengthens b and loads the front axle. L (the
+    # wheelbase) is a property of the car and does not move.
+    wd1 = (car.b + dx) / car.L
+    lo, hi = WDIST_BAND
+    wd1 = lo if wd1 < lo else (hi if wd1 > hi else wd1)
+
+    # parallel axis about the NEW CG: the body's own inertia moves with it,
+    # and each lump contributes m*d^2 about the axis in question. Yaw sees
+    # the longitudinal arm, roll the vertical one, pitch both.
+    Izz1 = car.Izz + m0 * dx * dx + sum(p.m * (p.x - dx) ** 2 for p in pts)
+    Ixx1 = car.Ixx + m0 * dh * dh + sum(p.m * (p.h - h1) ** 2 for p in pts)
+    Iyy1 = (car.Iyy + m0 * (dx * dx + dh * dh)
+            + sum(p.m * ((p.x - dx) ** 2 + (p.h - h1) ** 2) for p in pts))
+
+    return car.copy(m=m1, wdist_f=wd1, h_cg=h1,
+                    Izz=Izz1, Ixx=Ixx1, Iyy=Iyy1,
+                    # ballast and wings ride on the springs: all of it is
+                    # SPRUNG. The unsprung masses are the hubs, and nothing
+                    # a driver adds bolts to those.
+                    m_s=car.m_s + mb)
+
+# ======================================================================= #
 #  the registry -- the house pattern, as track.py does it for TRACKS       #
 # ======================================================================= #
 CARS = {
@@ -473,6 +617,49 @@ def self_check(verbose: bool = True) -> bool:
             and base.evaluate(4000.0, 0.05, 0.10) == same.evaluate(4000.0, 0.05, 0.10),
             "car145_70R13 gives identical Fx/Fy/Mz to TNO_car205_60R15 -- "
             "which is why mu_scale, not a different file, carries grip")
+
+    # --- 4. added mass: the identity, then that everything really moved ---
+    if verbose:
+        print("\n  added mass (ballast / fitted wings)")
+    z = with_masses(CORSA_C, ())
+    rep("zero added mass is the SAME OBJECT", z is CORSA_C,
+        "with_masses(car, ()) is car -- what keeps the default bit-for-bit")
+    z2 = with_masses(CORSA_C, [PointMass(0.0, 1.0, 1.0, "nothing")])
+    rep("a zero-kg point mass is the same object", z2 is CORSA_C,
+        "a wing that weighs nothing cannot perturb the default")
+
+    #  the SEAT station is the control case: at the CG, at CG height, so it
+    #  may move the mass and NOTHING else. If this ever fails, the first
+    #  moments are wrong.
+    seat = with_masses(CORSA_C, [ballast_point(CORSA_C, 200.0, "seat")])
+    rep("200 kg at the SEAT station moves mass only",
+        seat.m == CORSA_C.m + 200.0 and seat.m_s == CORSA_C.m_s + 200.0
+        and seat.wdist_f == CORSA_C.wdist_f and seat.h_cg == CORSA_C.h_cg
+        and seat.Izz == CORSA_C.Izz and seat.Ixx == CORSA_C.Ixx,
+        f"m {seat.m:.0f} kg  wdist_f {seat.wdist_f:.4f}  h_cg {seat.h_cg:.4f}  "
+        f"Izz {seat.Izz:.1f} -- all but mass exactly unchanged")
+
+    #  and the four stations must move the three things they are there to
+    #  move, in the right DIRECTION. This is the whole point of the feature.
+    if verbose:
+        print(f"    {'station':7s} {'m':>6s} {'wdist_f':>8s} {'h_cg':>7s} "
+              f"{'Izz':>7s} {'Ixx':>6s} {'a':>6s} {'b':>6s}")
+    signs = {"nose": (+1, -1), "seat": (0, 0), "floor": (-1, -1), "boot": (-1, +1)}
+    for w in BALLAST_STATIONS:
+        b = with_masses(CORSA_C, [ballast_point(CORSA_C, 200.0, w)])
+        if verbose:
+            print(f"    {BALLAST_SHORT[w]:7s} {b.m:6.0f} {b.wdist_f:8.4f} "
+                  f"{b.h_cg:7.4f} {b.Izz:7.1f} {b.Ixx:6.1f} {b.a:6.3f} {b.b:6.3f}")
+        s_wd, s_h = signs[w]
+        d_wd = b.wdist_f - CORSA_C.wdist_f
+        d_h = b.h_cg - CORSA_C.h_cg
+        ok_wd = (d_wd == 0.0) if s_wd == 0 else (d_wd * s_wd > 1e-3)
+        ok_h = (d_h == 0.0) if s_h == 0 else (d_h * s_h > 1e-4)
+        rep(f"{BALLAST_SHORT[w]:5s} 200 kg: balance, CG height, Izz, wheelbase",
+            ok_wd and ok_h and b.Izz >= CORSA_C.Izz
+            and abs(b.a + b.b - CORSA_C.L) < 1e-12 and b.m_s == CORSA_C.m_s + 200.0,
+            f"d wdist_f {d_wd:+.4f}  d h_cg {d_h * 1e3:+.1f} mm  "
+            f"Izz {100 * (b.Izz / CORSA_C.Izz - 1):+.1f} %  a+b == L")
 
     # --- 4. the library table --------------------------------------------
     if verbose:
