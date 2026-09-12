@@ -413,6 +413,44 @@ the restart rule, reconciliation 9), `.handoff/07-weight.md`.
 `powertrain.py`, `qss.py`, `crossover.py`, `ledger.py`, `corsa_c.py`,
 `validate.py`, `input.py`, `drive/aero/*` and `specs/*`: **not touched.**
 
-`python3 -m drive.validate` **82/82**; `--modules` **100/100**, 0 HARD,
-0 soft. `python3 cars.py` ALL PASS. `python3 -m drive.vehicle` 33/33.
-`python3 -m drive.drive --self-check` ALL PASS.
+`python3 -m drive.validate` **82/82**, 0 HARD, 0 soft [152.9 s].
+`python3 -m drive.validate --modules` **100/100**, 0 HARD, 0 soft [235.2 s],
+against the pristine baseline's 100/100 [230.0 s] measured before any edit.
+`python3 cars.py` ALL PASS. `python3 -m drive.vehicle` 33/33 (was 32/32;
+T21 is new). `python3 -m drive.drive --self-check` ALL PASS.
+`python3 -m drive.tyre` / `--modules garage` / `render` all pass.
+
+One intermediate `--modules` run reported 99/100 with `render.py`'s
+`V22 frame budget` as the HARD failure. It is a **wall-clock** check
+(`p99 <= 16.0 ms`) and it is load-flaky: 7 consecutive identical runs gave
+FAIL/FAIL/ok/FAIL/ok/ok/FAIL with p99 11.19-22.45 ms, at load average 20.7
+with 19 concurrent `python3` processes from the other agents. The same
+attribution is independently recorded in `.handoff/05-when-automatic.md`.
+It is not reachable from this work: the one drawing call added here
+(`_draw_minimap`'s car/mass line) is guarded on `aux.car_name`, which the
+render self-check never sets, so it draws nothing in V22.
+
+## The patch `powertrain.py` needs (owned elsewhere; NOT applied)
+
+`accel_run` builds its upshift table for five gears only:
+
+```python
+# drive/powertrain.py:1119
+n_up = {g: p.n_up_a + (p.n_up_k12 if g <= 2 else p.n_up_k34) for g in range(1, 6)}
+```
+
+while the loop below lets `gear` reach `len(p.gear)`, and `n_up[gear]` is
+evaluated BEFORE the `gear < len(p.gear)` guard. On the 6-speed 540i:
+
+```
+accel_run(p540, car540, v_targets=(100/3.6,))  ->  ok   (never leaves 3rd)
+accel_run(p540, car540, v_targets=(260/3.6,))  ->  KeyError: 6
+```
+
+Latent today -- only `powertrain.self_check` and `validate.py` call it, both
+with the 5-speed Corsa. Fix:
+
+```python
+n_up = {g: p.n_up_a + (p.n_up_k12 if g <= 2 else p.n_up_k34)
+        for g in range(1, len(p.gear) + 1)}
+```
