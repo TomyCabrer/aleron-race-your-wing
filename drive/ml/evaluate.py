@@ -23,7 +23,7 @@ import os
 
 import numpy as np
 
-from .env import lap_time, rollout, DT_EVAL, DT_TRAIN, _kappa_at
+from .env import lap_time, rollout, DT_EVAL, DT_TRAIN
 from .policy import Policy
 
 #: The transfer grid: every track a lap time means something on, and every
@@ -259,7 +259,8 @@ def car_transfer(paths=None, cars_=TRANSFER_CARS, track: str = "arena",
             print(line)
         #  the wing statistics are the whole point of the item: different cars
         #  may want different aero timing, and this is where that shows
-        print(f"\n  flank panel: % of steps deployed / % of those on the OUTER flank")
+        print("\n  flank panel: % of steps deployed / % of those on the "
+              "OUTER flank")
         print(f"  {'trained on':12s}" + "".join(f"{c:>20s}" for c in cars_))
         for r in ["baseline"] + [c for c in rows if c]:
             line = f"  {r:12s}"
