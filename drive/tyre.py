@@ -420,6 +420,57 @@ class TyreModel:
 CORSA_TYRE = TyreModel(_TIR_PATH)
 
 
+# ------------------------------------------------------------------- cache --
+#  A car with a different tyre SIZE needs its own TyreModel (R0 is the only
+#  geometric term the equations actually read -- `width`, `aspect` and
+#  `rim_radius` are carried for provenance and are not in any equation), and
+#  building one inside the physics loop is forbidden. So: one small cache
+#  keyed on the three things that can differ, pre-seeded with the singleton
+#  under the Corsa's own key, so `tyre_for(the Corsa)` returns the SAME
+#  OBJECT `CORSA_TYRE` and the default is bit-for-bit.
+#
+#  This is not a grip cache. There is exactly one Magic Formula coefficient
+#  set in `tyre_data/` (all five loadable .tir files are identical except
+#  for geometry -- see `cars.py`'s module docstring), so every entry here
+#  returns the same mu(Fz) and the same Fx/Fy; only Mz and the rolling
+#  moment differ, through R0. Grip differences between cars are carried by
+#  `VehicleConfig.mu_scale`, which is a labelled calibration.
+_TYRE_CACHE = {(_TIR_PATH, 0.2915, 0.175): CORSA_TYRE}
+
+
+def tyre_for(tir_path=None, R0=0.2915, width=0.175):
+    """The TyreModel for one tyre size, built at most once per size.
+
+    `tyre_for()` with no arguments, and `tyre_for` on any of the Corsa's own
+    numbers, IS `CORSA_TYRE` -- identity, not equality. Call it at
+    construction time; never from `step()`.
+    """
+    key = (os.path.abspath(str(tir_path)) if tir_path else _TIR_PATH,
+           float(R0), float(width))
+    t = _TYRE_CACHE.get(key)
+    if t is None:
+        t = TyreModel(key[0], R0=key[1], width=key[2])
+        _TYRE_CACHE[key] = t
+    return t
+
+
+def mu_curve_matches(tyre, ref=None, loads=(100.0, 1000.0, 2477.0, 4000.0, 8000.0)):
+    """True when `tyre` has the SAME mu(Fz) curve as `ref` (the Corsa) to the
+    last bit, both lateral and longitudinal.
+
+    `qss.TYRE`-shaped readouts (`qss.TYRE = mu_ref/Fz_ref/s`) are the
+    Corsa's, and `drive/vehicle.py` is required by CONTRACT section 4 to
+    compute `util_f/util_r` from them. That is only legitimate for another
+    car if the other car's tyre has the same mu(Fz) -- which in this repo it
+    does, because there is one coefficient set and mu(Fz) has no geometry in
+    it. This is the assertion that says so, so that the day somebody adds a
+    genuinely different .tir the readout stops being silently wrong.
+    """
+    ref = CORSA_TYRE if ref is None else ref
+    return all(tyre.mu_y(fz) == ref.mu_y(fz) and tyre.mu_x(fz) == ref.mu_x(fz)
+               for fz in loads)
+
+
 # =========================================================== validation ======
 def _peak_over(fn, lo, hi, coarse):
     """max of fn over [lo, hi]: coarse scan then golden-section refine.

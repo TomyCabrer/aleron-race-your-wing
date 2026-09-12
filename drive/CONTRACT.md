@@ -87,8 +87,25 @@ class TyreModel:
     def mu_x(self, Fz, mu_scale=1.0) -> float
     def peak_fy(self, Fz, mu_scale=1.0) -> float                     # analytic mu_y*Fz
 CORSA_TYRE: TyreModel      # module-level singleton, parsed ONCE at import
+def tyre_for(tir_path=None, R0=0.2915, width=0.175) -> TyreModel   # cached per size
+def mu_curve_matches(tyre, ref=None, loads=(...)) -> bool
 def self_check() -> None   # python3 -m drive.tyre
 ```
+
+* **`tyre_for` is how a different car gets a different tyre size.** It is a
+  cache keyed on `(abspath, R0, width)` pre-seeded with `CORSA_TYRE` under the
+  Corsa's own key, so `tyre_for()` and `tyre_for(the Corsa's three numbers)`
+  return the SAME OBJECT and the default stays bit-for-bit. Call it at
+  construction time; never from `step()`. `R0` is the only geometric term any
+  equation reads — `width`, `aspect` and `rim_radius` are provenance.
+* `mu_curve_matches(tyre)` is the assertion that licenses §4's rule that
+  `util_f/util_r` come from `qss.fy_max` with `qss.TYRE`: those are the
+  *Corsa's* `mu_ref/Fz_ref/s`, and referencing another car to them is only
+  legitimate because there is **one coefficient set** in `tyre_data/` (all
+  five loadable `.tir` files are identical except for geometry) and `mu(Fz)`
+  contains no geometry. `Vehicle.__init__` asserts it per car. The day
+  somebody adds a genuinely different `.tir`, that assertion fires and a
+  `TYRE`-shaped dict must be derived from the new tyre instead.
 
 * `evaluate` must be pure and allocation-light. Unpack coefficients into
   `__slots__` attributes; no dict lookups in the hot path. Target < 3 µs/call.
