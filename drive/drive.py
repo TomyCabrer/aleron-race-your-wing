@@ -1966,7 +1966,7 @@ def _probe_row(t, veh, ctl, kb):
     """One sample. The column set IS the bug report: load, gain, slip, yaw."""
     return dict(
         t=t, V=hypot(veh.u, veh.v), u=veh.u, ax=veh.ax, ay=veh.ay, r=veh.r,
-        beta_deg=degrees(veh.beta),
+        x=veh.x, y=veh.y, psi=veh.psi, beta_deg=degrees(veh.beta),
         throttle=ctl.throttle, brake=ctl.brake,
         delta_cmd_deg=degrees(ctl.delta),
         delta_wheel_deg=degrees(veh.delta_wheel[0]),
@@ -2085,20 +2085,91 @@ def _probe_steer_while_braking(opts, abs_on, V0, gear, angles):
 
 
 def _probe_limit_table():
-    """Symptom (a): what the aid actually allows, and how fast it gets there."""
-    from .input import (steer_limit_deg, _return_rate_deg, K_US_DEG_MEASURED,
-                        DELTA_LOCK_DEG as LOCK)
+    """Symptom (a): what the aid actually allows, and how fast it gets there.
+
+    `lim_b20` is the symmetric `steer_limit_deg`, i.e. what the OLD clamp
+    allowed in EITHER direction at 20 deg of body slip. `into_b20` / `out_b20`
+    are the directional pair the clamp now uses: the bonus all goes to the
+    counter-steer side and lock into the slide stays at the floor.
+    """
+    from .input import (steer_limit_deg, steer_limit_pair_deg, _return_rate_deg,
+                        K_US_DEG_MEASURED)
     rows = []
     for V in (5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0):
         d0 = steer_limit_deg(V, 0.0, k_us_deg=K_US_DEG_MEASURED)
+        # beta < 0 is a left-turn slide: the catch is RIGHT lock, so the RIGHT
+        # member of the pair is the counter-steer side and the LEFT one is lock
+        # into the slide.
+        into20, out20 = steer_limit_pair_deg(V, -20.0,
+                                             k_us_deg=K_US_DEG_MEASURED)
         rows.append(dict(
             V=V, lim_b0=d0,
             lim_b10=steer_limit_deg(V, 10.0, k_us_deg=K_US_DEG_MEASURED),
             lim_b20=steer_limit_deg(V, 20.0, k_us_deg=K_US_DEG_MEASURED),
+            into_b20=into20, out_b20=out20,
             t_to_lim=d0 / W_DRIVE_DEG_PROBE,
             w_return=_return_rate_deg(V),
             t_to_centre=d0 / _return_rate_deg(V)))
     return rows
+
+
+def _probe_keyboard_brake_steer(opts, power_scale):
+    """Symptoms (a) + (c) through the REAL aid: DOWN + LEFT held from 30 m/s.
+
+    The raw-path sweep above says where yaw response peaks; this says where the
+    aid actually parks the driver, which is the half he can feel. `delta_max`
+    is the most lock the clamp ever handed over, and THE ANSWER IS `dpsi`, the
+    total heading change over the 3 s -- not the instantaneous yaw rate. A car
+    dragging 22 deg of lock at alpha_f = 32 deg has a high BODY yaw rate
+    because it is pirouetting, and scoring `r` alone calls that good steering.
+    Measured through this very case, aid on:
+
+        symmetric beta bonus   delta_max 22.32   dpsi 37.98 deg   lateral 13.67 m
+        directional bonus      delta_max 14.08   dpsi 41.10 deg   lateral 13.77 m
+
+    i.e. 8.2 deg LESS lock buys 3.1 deg MORE heading change. That is the whole
+    of symptom (a): the old aid let the driver spend lock on slip angle.
+    """
+    keys = lambda t: dict(down=(t >= 0.5), left=(t >= 0.5))
+    out = []
+    for aid in (True, False):
+        rows = _probe_run(3.0, keys=keys, power_scale=power_scale, tc=True,
+                          abs_on=True, steer_limit=aid, start_V=30.0, gear=5,
+                          dt=opts.dt, log_hz=100.0)
+        r_abs = [abs(r["r"]) for r in rows]
+        p0, pn = rows[0], rows[-1]
+        dx, dy = pn["x"] - p0["x"], pn["y"] - p0["y"]
+        cs, sn = cos(p0["psi"]), sin(p0["psi"])
+        out.append(dict(
+            steer_aid=aid,
+            delta_max=max(abs(r["delta_cmd_deg"]) for r in rows),
+            delta_end=abs(rows[-1]["delta_cmd_deg"]),
+            lim_end=rows[-1]["delta_lim_deg"],
+            # what the car actually did with the lock it was given
+            dpsi=degrees(pn["psi"] - p0["psi"]),
+            lateral=abs(-dx * sn + dy * cs), longitudinal=dx * cs + dy * sn,
+            r_peak=max(r_abs), r_end=abs(rows[-1]["r"]),
+            alpha_f_max=max(abs(r["alpha_fl_deg"]) for r in rows),
+            beta_max=max(abs(r["beta_deg"]) for r in rows),
+            V_end=rows[-1]["V"]))
+    return out
+
+
+def _probe_keyboard_accel_steer(opts, power_scale):
+    """Symptom (b) through the REAL keyboard: UP alone vs UP + RIGHT held."""
+    out = []
+    for label, held in (("up", dict(up=True)),
+                        ("up+right", dict(up=True, right=True))):
+        rows = _probe_run(3.0, keys=(lambda t, h=held: dict(h)),
+                          power_scale=power_scale, tc=True, abs_on=True,
+                          steer_limit=True, start_V=20.0, gear=4, dt=opts.dt,
+                          log_hz=100.0)
+        out.append(dict(keys=label, ax=_mean(rows, "ax", 2.0),
+                        V_end=rows[-1]["V"],
+                        tc_gain=_mean(rows, "tc_gain", 2.0),
+                        eng_load=_mean(rows, "eng_load", 2.0),
+                        delta=rows[-1]["delta_cmd_deg"], r=rows[-1]["r"]))
+    return out
 
 
 def _probe_keyboard_combos(opts):
@@ -2149,6 +2220,8 @@ def drive_probe_script(opts) -> dict:
 
     limits = _probe_limit_table()
     combos = _probe_keyboard_combos(opts)
+    kb_brake = _probe_keyboard_brake_steer(opts, power_scale)
+    kb_accel = _probe_keyboard_accel_steer(opts, power_scale)
 
     # the headline numbers: the three symptoms as one float each
     def acc(tc, d):
@@ -2174,9 +2247,20 @@ def drive_probe_script(opts) -> dict:
         c_r_locked_wheels=max(r["r"] for r in brake if not r["abs_on"]),
         # (a) steering feel
         a_lim_30_beta0=lim30["lim_b0"], a_lim_30_beta20=lim30["lim_b20"],
+        a_lim_30_into_b20=lim30["into_b20"], a_lim_30_out_b20=lim30["out_b20"],
         a_t_to_lim_30=lim30["t_to_lim"], a_t_to_centre_30=lim30["t_to_centre"],
+        # the aid as the driver meets it: DOWN+LEFT from 30 m/s
+        c_kb_delta_max=kb_brake[0]["delta_max"],
+        c_kb_dpsi=kb_brake[0]["dpsi"], c_kb_lateral=kb_brake[0]["lateral"],
+        c_kb_alpha_f_max=kb_brake[0]["alpha_f_max"],
+        c_kb_delta_max_no_aid=kb_brake[1]["delta_max"],
+        c_kb_dpsi_no_aid=kb_brake[1]["dpsi"],
+        # ... and UP vs UP+RIGHT at 20 m/s
+        b_kb_ax_straight=kb_accel[0]["ax"], b_kb_ax_steering=kb_accel[1]["ax"],
+        b_kb_tc_gain_steering=kb_accel[1]["tc_gain"],
         accel_matrix=accel, brake_matrix=brake, limit_table=limits,
-        key_combos=combos, csv=None)
+        key_combos=combos, kb_brake_steer=kb_brake, kb_accel_steer=kb_accel,
+        csv=None)
     if opts.telemetry:
         # the matrix belongs beside the other runs, in the same JSON style
         base, _ = os.path.splitext(os.fspath(opts.telemetry))

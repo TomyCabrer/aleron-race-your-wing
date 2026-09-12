@@ -441,12 +441,59 @@ def steer_limit_deg(V: float, beta_deg: float, ay_max: float = AY_MAX_DRY,
     The `beta_gain*|beta_deg|` term is what makes a slide catchable, and the
     outer min() is why it can never ask for more than mechanical lock.
 
+    NOTE this function is the SYMMETRIC form and it stays that way: the
+    contract pins the signature and V16/V17 are quoted from it. What the input
+    layer actually clamps against is `steer_limit_pair_deg` below, which spends
+    the beta bonus on the counter-steer side only. See that docstring for why.
+
     Pure; unit-tested against the whole delta_lim(V) table in self_check().
     """
     a_ref = STEER_MARGIN * ay_max
     delta_ss = math.degrees(L * a_ref / max(V, V_STEER_FLOOR) ** 2) + k_us_deg * (a_ref / G)
     delta_lim = min(lock_deg, delta_ss)
     return min(lock_deg, delta_lim + beta_gain * abs(beta_deg))
+
+
+def steer_limit_pair_deg(V: float, beta_deg: float, ay_max: float = AY_MAX_DRY,
+                         L: float = L_WB, k_us_deg: float = K_US_DEG,
+                         lock_deg: float = DELTA_LOCK_DEG,
+                         beta_gain: float = BETA_LOCK_GAIN) -> tuple[float, float]:
+    """(limit on LEFT lock, limit on RIGHT lock), both positive magnitudes, deg.
+
+    Same floor as `steer_limit_deg`; the difference is WHERE the beta bonus
+    goes. The bonus exists to make a slide catchable (contract section 6), and
+    catching a slide means COUNTER-steer. Spending it on both sides makes the
+    aid a positive feedback loop instead: more lock -> more slide -> more |beta|
+    -> a higher limit -> more lock. Measured on the reported bug, full brake
+    from 30 m/s with the aid at k_us_deg = 7.82:
+
+        beta       limit (old, symmetric)      yaw rate delivered
+        0 deg          9.30 deg                 0.480 rad/s  (near the peak)
+       20 deg         32.625 deg  (full lock)   0.440 rad/s at 36 deg alpha_f
+
+    i.e. the aid handed the driver 23 deg of extra lock that BOUGHT NOTHING --
+    the front axle was already 26 deg past the MF peak (10.35 deg) and yaw
+    response falls monotonically beyond it. From the seat that is exactly
+    "I cannot steer while braking": full lock on, car going straight.
+
+    Sign: `beta = atan2(v, |u|)` with `v` the LEFTWARD velocity, so in a left
+    turn at the limit beta is NEGATIVE (contract section 9 item 7 states the
+    same thing) and the catch is RIGHT lock. Counter-steer therefore has the
+    SAME sign as beta, and the bonus goes to the `sign(beta_deg)` side. The
+    magnitude of the catch is untouched: a 12 deg slide still opens 19.12 deg
+    of opposite lock at 30 m/s, which is the V17 number.
+
+    Pure.
+    """
+    a_ref = STEER_MARGIN * ay_max
+    delta_ss = math.degrees(L * a_ref / max(V, V_STEER_FLOOR) ** 2) + k_us_deg * (a_ref / G)
+    floor = min(lock_deg, delta_ss)
+    bonus = min(lock_deg, floor + beta_gain * abs(beta_deg))
+    if beta_deg > 0.0:
+        return bonus, floor            # slide to be caught with LEFT lock
+    if beta_deg < 0.0:
+        return floor, bonus            # ... with RIGHT lock
+    return floor, floor
 
 
 def _return_rate_deg(V: float) -> float:
@@ -544,6 +591,11 @@ class KeyboardInput:
         # Diagnostics for the HUD / telemetry.
         self.delta_lim_deg = DELTA_LOCK_DEG
         self.n_events = 0
+        # The eased soft-lock bounds, one per direction (see update()). They
+        # start wide open so the first step cannot clamp a car that is already
+        # turned, and they only ever fall at the self-centring rate.
+        self._lim_l = DELTA_LOCK_DEG
+        self._lim_r = DELTA_LOCK_DEG
 
     # -- key state ---------------------------------------------------------
 
@@ -682,11 +734,29 @@ class KeyboardInput:
         self.delta_deg = d
 
         # --- limiter (eq.5). steer_limit=False bypasses the aid entirely ---
+        # Two changes against the original symmetric hard clamp, both from the
+        # reported bug (.handoff/08-steering.md):
+        #   * the bound is a PAIR and the beta bonus goes to the counter-steer
+        #     side only -- see steer_limit_pair_deg;
+        #   * the bound is eased DOWN at the self-centring rate instead of
+        #     snapping. Opening up is instant (a wider limit is never a
+        #     surprise), closing is not: with a directional bonus the bound on
+        #     one side can fall by 20+ deg the instant beta changes sign, and a
+        #     hard clamp would then teleport the road wheel. Easing it is also
+        #     what the wheel physically does - the self-aligning torque pulls
+        #     it back at exactly this rate.
         if self.steer_limit:
-            self.delta_lim_deg = steer_limit_deg(V, beta_deg, k_us_deg=self.k_us_deg)
+            lim_l, lim_r = steer_limit_pair_deg(V, beta_deg,
+                                                k_us_deg=self.k_us_deg)
         else:
-            self.delta_lim_deg = DELTA_LOCK_DEG
-        self.delta_deg = _clamp(self.delta_deg, -self.delta_lim_deg, self.delta_lim_deg)
+            lim_l = lim_r = DELTA_LOCK_DEG
+        ease = w_ret * dt
+        self._lim_l = lim_l if lim_l >= self._lim_l else max(lim_l, self._lim_l - ease)
+        self._lim_r = lim_r if lim_r >= self._lim_r else max(lim_r, self._lim_r - ease)
+        self.delta_deg = _clamp(self.delta_deg, -self._lim_r, self._lim_l)
+        # The HUD reads ONE number: report the bound that is actually binding
+        # the direction the wheel is turned (at centre they are equal anyway).
+        self.delta_lim_deg = self._lim_r if self.delta_deg < 0.0 else self._lim_l
 
         gear_req, self._pending_gear = self._pending_gear, 0
         starter = bool(h.get("starter")) or self._pending_starter
@@ -711,6 +781,8 @@ class KeyboardInput:
         self.throttle = self.brake = self.clutch = self.handbrake = 0.0
         self._pending_gear = 0
         self._pending_starter = False
+        self._lim_l = self._lim_r = DELTA_LOCK_DEG
+        self.delta_lim_deg = DELTA_LOCK_DEG
 
 
 # ---------------------------------------------------------------------------
@@ -800,8 +872,12 @@ class GamepadInput:
         self._rumble_t = 0.0
         self._rumble_last = (0.0, 0.0)
         self._rest_checked = False
+        self._trig_rest = {"throttle": -1.0, "brake": -1.0}
         self._check_rest()
 
+        # the eased directional soft-lock bounds, as on the keyboard
+        self._lim_l = DELTA_LOCK_DEG
+        self._lim_r = DELTA_LOCK_DEG
         self.delta_deg = 0.0
         self.axis_steer = 0.0           # post-deadzone stick, for the blend rule
         self.throttle = 0.0
@@ -876,6 +952,20 @@ class GamepadInput:
         except Exception:
             return False
 
+    def _trigger(self, key: str) -> float:
+        """One trigger axis as 0..1, normalised from its LATCHED rest value.
+
+        `_trig_rest[key]` is -1.0 for a well-behaved driver, which makes this
+        the historical (a + 1) / 2 exactly. It is set to 0.0 only when the
+        pad's FIRST report showed that axis sitting at 0 rather than -1, which
+        is the other convention some macOS drivers use; anything else in
+        between keeps -1.0 and `_check_rest` has already printed the warning.
+        """
+        rest = self._trig_rest.get(key, -1.0)
+        a = self._axis(self.map[key])
+        return _clamp(_deadzone((a - rest) / (1.0 - rest), PAD_DEADZONE_TRIG),
+                      0.0, 1.0)
+
     def _check_rest(self) -> None:
         """One-line warning if a trigger axis does not rest at -1: the sign
         that the OS gave SDL a different axis order than the layout assumes.
@@ -893,17 +983,28 @@ class GamepadInput:
             self._rest_checked = False      # nothing reported yet; try again
             return
         self._rest_checked = True
+        warn = None
         for key in ("throttle", "brake"):
             i = self.map.get(key, -1)
             if i is None or i < 0:
                 continue
             v = self._axis(i)
-            if abs(v + 1.0) > 0.25 and abs(v) < 0.25:
-                print(f"gamepad: {key} axis {i} rests at {v:+.2f}, expected -1.0 "
-                      f"- the {self.layout} layout may not match this driver; "
-                      f"run `python3 -m drive.drive --pad-calib` and write "
-                      f"~/.carsim_pad.json")
-                return
+            # LATCH FIRST, warn afterwards: the old spelling returned on the
+            # first oddity, so the second trigger was never looked at.
+            if abs(v + 1.0) <= 0.25:
+                self._trig_rest[key] = -1.0      # SDL / DualSense: rest -1
+            elif abs(v) <= 0.25:
+                self._trig_rest[key] = 0.0       # the other convention: rest 0
+                print(f"gamepad: {key} axis {i} rests at {v:+.2f}, not -1.0 - "
+                      f"reading it as a 0..+1 trigger")
+            elif warn is None:
+                warn = (key, i, v)               # mid-travel: really wrong
+        if warn is not None:
+            key, i, v = warn
+            print(f"gamepad: {key} axis {i} rests at {v:+.2f}, expected -1.0 "
+                  f"- the {self.layout} layout may not match this driver; "
+                  f"run `python3 -m drive.drive --pad-calib` and write "
+                  f"~/.carsim_pad.json")
 
     # -- named access (the garage editor and the calib printout use these) --
     def pressed(self, name: str) -> bool:
@@ -1020,28 +1121,53 @@ class GamepadInput:
         self.axis_steer = s
         g = math.copysign(abs(s) ** PAD_EXPO, s)        # expo: fine near centre
 
+        # The same directional soft lock the keyboard uses (see
+        # steer_limit_pair_deg and KeyboardInput.update): the beta bonus is
+        # spent on the counter-steer side only. On a pad this matters twice
+        # over, because the stick is PROPORTIONAL to the bound -- with the old
+        # symmetric bonus the stick's gain grew as the car slid, so the same
+        # stick position meant a different road-wheel angle from one moment to
+        # the next. Now full stick into the slide means the floor and full
+        # stick out of it means the catch.
         if self.steer_limit:
-            self.delta_lim_deg = steer_limit_deg(V, beta_deg, k_us_deg=self.k_us_deg)
+            lim_l, lim_r = steer_limit_pair_deg(V, beta_deg,
+                                                k_us_deg=self.k_us_deg)
         else:
-            self.delta_lim_deg = DELTA_LOCK_DEG
+            lim_l = lim_r = DELTA_LOCK_DEG
+        ease = _return_rate_deg(V) * dt
+        self._lim_l = lim_l if lim_l >= self._lim_l else max(lim_l, self._lim_l - ease)
+        self._lim_r = lim_r if lim_r >= self._lim_r else max(lim_r, self._lim_r - ease)
+        self.delta_lim_deg = self._lim_r if g > 0.0 else self._lim_l
         # SDL axis0 is -1 at full LEFT stick, +1 at full RIGHT, while the
         # contract's delta is +ve LEFT. The sign flip lives here, once.
-        target = -self.delta_lim_deg * g
+        target = -(self._lim_r if g > 0.0 else self._lim_l) * g
         dmax = PAD_RATE_DEG * dt
         self.delta_deg += _clamp(target - self.delta_deg, -dmax, dmax)
-        self.delta_deg = _clamp(self.delta_deg, -self.delta_lim_deg, self.delta_lim_deg)
+        self.delta_deg = _clamp(self.delta_deg, -self._lim_r, self._lim_l)
 
-        # Triggers rest at -1 and travel to +1, hence the (a+1)/2.
-        if self.map["throttle"] >= 0:
-            self.throttle = _clamp(_deadzone((self._axis(self.map["throttle"]) + 1.0) * 0.5,
-                                             PAD_DEADZONE_TRIG), 0.0, 1.0)
+        # Triggers rest at -1 and travel to +1, hence the (a+1)/2 that
+        # `_trigger` generalises. TWO traps live here and both are now closed:
+        #   * before the pad's first HID report EVERY axis reads exactly 0.0,
+        #     and (0+1)/2 is HALF TRAVEL -- the old code handed the car 47%
+        #     throttle and 47% brake simultaneously on hot-plug, for however
+        #     many frames it took the pad to report. `_rest_checked` already
+        #     detects that state for its warning; now it also gates the pedals.
+        #   * a driver that rests its triggers at 0.0 and travels to +1.0 (the
+        #     other convention in the wild) read as 50-100% instead of 0-100%.
+        #     `_trig_rest` latches whichever rest the hardware actually showed
+        #     on its first report and normalises from there, so both
+        #     conventions give 0 at rest and 1 at the stop.
+        if not self._rest_checked:
+            self.throttle = self.brake = 0.0
         else:
-            self.throttle = 1.0 if self._button(7) else 0.0     # no trigger axes
-        if self.map["brake"] >= 0:
-            self.brake = _clamp(_deadzone((self._axis(self.map["brake"]) + 1.0) * 0.5,
-                                          PAD_DEADZONE_TRIG), 0.0, 1.0)
-        else:
-            self.brake = 1.0 if self._button(6) else 0.0
+            if self.map["throttle"] >= 0:
+                self.throttle = self._trigger("throttle")
+            else:
+                self.throttle = 1.0 if self._button(7) else 0.0  # no trigger axes
+            if self.map["brake"] >= 0:
+                self.brake = self._trigger("brake")
+            else:
+                self.brake = 1.0 if self._button(6) else 0.0
 
         btns = self.map["buttons"]
         self.clutch = 1.0 if any(self._button(b) for b, c in btns.items() if c == "clutch") else 0.0
@@ -1426,10 +1552,41 @@ def self_check(verbose: bool = True) -> bool:
           abs(math.degrees(tr[-1].delta)), 32.625, 1e-9, "deg")
     check_eq("steer_limit=False reports lock as the limit",
              round(kb.delta_lim_deg, 6), 32.625)
+    # V17 through the CLAMP, and the sign pairing matters now that the bonus is
+    # directional. beta = atan2(v, |u|) with v leftward, so beta < 0 is a car
+    # whose velocity has swung to the RIGHT of its nose -- a left-turn slide --
+    # and the catch is RIGHT lock. That is the pairing the aid must serve, and
+    # it still gets the full V17 19.12 deg. The old spelling of this check held
+    # beta = +12 with RIGHT lock, which is lock INTO the slide; it passed only
+    # because the bonus used to be symmetric, and that symmetry is the bug
+    # (.handoff/08-steering.md, symptom c).
     kb = KeyboardInput(steer_limit=True)
-    tr = _hold(kb, 1.0, V=30.0, beta_deg=12.0, right=True)
-    check("V17 a 12 deg slide gives 19.12 deg of usable lock",
+    tr = _hold(kb, 1.0, V=30.0, beta_deg=-12.0, right=True)
+    check("V17 a 12 deg slide gives 19.12 deg of COUNTER lock",
           abs(math.degrees(tr[-1].delta)), 19.117, 0.05, "deg")
+    kb = KeyboardInput(steer_limit=True)
+    tr = _hold(kb, 1.0, V=30.0, beta_deg=-12.0, left=True)
+    check("V17 the same slide does NOT open lock into the slide",
+          abs(math.degrees(tr[-1].delta)), 4.717, 0.05, "deg")
+    check_eq("steer_limit_pair_deg is symmetric at beta = 0",
+             steer_limit_pair_deg(30.0, 0.0),
+             (steer_limit_deg(30.0, 0.0), steer_limit_deg(30.0, 0.0)))
+    check("steer_limit_pair_deg counter side == steer_limit_deg",
+          steer_limit_pair_deg(30.0, -12.0)[1], steer_limit_deg(30.0, 12.0),
+          1e-12, "deg")
+    # the bound eases DOWN rather than snapping: wind on 19.12 deg of catch,
+    # then let beta collapse to zero and watch the wheel unwind at the return
+    # rate instead of teleporting to the 4.717 deg floor.
+    d_caught = kb.delta_deg
+    kb2 = KeyboardInput(steer_limit=True)
+    _hold(kb2, 1.0, V=30.0, beta_deg=-12.0, right=True)
+    tr = _hold(kb2, 0.001, V=30.0, beta_deg=0.0, right=True)
+    check("the soft lock eases down, it does not snap (one step)",
+          abs(math.degrees(tr[-1].delta)), 19.117 - _return_rate_deg(30.0) * DT,
+          0.02, "deg")
+    tr = _hold(kb2, 0.20, V=30.0, beta_deg=0.0, right=True)
+    check("... and reaches the floor in 19.12-4.72 / 90 s",
+          abs(math.degrees(tr[-1].delta)), 4.717, 0.05, "deg")
 
     if verbose:
         print("\n-- edge triggering (E/Q/F/P from the event queue only) --")
@@ -1697,14 +1854,54 @@ def self_check(verbose: bool = True) -> bool:
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         p0 = GamepadInput(joystick=ps0, steer_limit=False, user_config=False)
-        p0.update(DT, 0.0)
+        c0 = p0.update(DT, 0.0)
     check_eq("rest check deferred while every axis reads 0.0 (no report yet)",
              ("rests at" in buf.getvalue(), p0._rest_checked), (False, False))
+    # (a + 1) / 2 of an unreported axis is HALF TRAVEL: without the gate the
+    # pad handed the car 47% throttle AND 47% brake on hot-plug.
+    check_eq("no HID report yet -> both pedals exactly 0",
+             (c0.throttle, c0.brake), (0.0, 0.0))
     ps0.ax[4] = ps0.ax[5] = -1.0           # the DualSense's first report (measured)
     with contextlib.redirect_stdout(buf):
-        p0.update(DT, 0.0)
+        c0 = p0.update(DT, 0.0)
     check_eq("first report with triggers at -1: checked, no warning",
              ("rests at" in buf.getvalue(), p0._rest_checked), (False, True))
+    check_eq("triggers resting at -1 -> pedals 0, rest latched at -1",
+             (c0.throttle, c0.brake, p0._trig_rest["throttle"]), (0.0, 0.0, -1.0))
+    ps0.ax[5] = 1.0
+    check("R2 at the stop -> full throttle", p0.update(DT, 0.0).throttle,
+          1.0, 1e-12)
+    # the other convention in the wild: rest at 0.0, travel to +1.0. The old
+    # (a+1)/2 read that as 50-100% of pedal; the latched rest makes it 0-100%.
+    ps2 = _StubPS()
+    ps2.ax = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    ps2.ax[0] = 0.5                        # something non-zero so the rest check runs
+    with contextlib.redirect_stdout(io.StringIO()):
+        p2 = GamepadInput(joystick=ps2, steer_limit=False, user_config=False)
+        c2 = p2.update(DT, 0.0)
+    check_eq("a 0-resting trigger reads 0 at rest, not 0.47",
+             (round(c2.throttle, 12), round(c2.brake, 12)), (0.0, 0.0))
+    ps2.ax[5] = 1.0
+    check("... and 1.0 at the stop", p2.update(DT, 0.0).throttle, 1.0, 1e-12)
+    # the directional soft lock reaches the pad too: full stick INTO a slide
+    # gets the floor, full stick OUT of it gets the catch.
+    ps3 = _StubPS()
+    ps3.ax = [0.0, 0.0, 0.0, 0.0, -1.0, -1.0]
+    with contextlib.redirect_stdout(io.StringIO()):
+        p3 = GamepadInput(joystick=ps3, steer_limit=True,
+                          k_us_deg=K_US_DEG_MEASURED, user_config=False)
+    ps3.ax[0] = 1.0                        # full RIGHT stick = the catch (beta < 0)
+    for _ in range(600):
+        cp = p3.update(DT, 30.0, -12.0, 3000.0, 5)
+    lim_out = steer_limit_pair_deg(30.0, -12.0, k_us_deg=K_US_DEG_MEASURED)[1]
+    check("pad: full stick OUT of the slide reaches the catch limit",
+          abs(math.degrees(cp.delta)), lim_out, 0.05, "deg")
+    ps3.ax[0] = -1.0                       # full LEFT stick = into the slide
+    for _ in range(2000):
+        cp = p3.update(DT, 30.0, -12.0, 3000.0, 5)
+    lim_into = steer_limit_pair_deg(30.0, -12.0, k_us_deg=K_US_DEG_MEASURED)[0]
+    check("pad: full stick INTO the slide is held at the floor",
+          abs(math.degrees(cp.delta)), lim_into, 0.05, "deg")
     ps1 = _StubPS()
     ps1.ax = [0.0, 0.0, 0.0, 0.0, 0.0, 0.3]    # a mis-ordered driver: axis 5 mid-travel
     buf = io.StringIO()

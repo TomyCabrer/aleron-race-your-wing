@@ -145,7 +145,10 @@ ABS_V_MIN = 2.0             # m/s  below this the wheel is allowed to lock
 # ---- TC (VehicleConfig.tc_on): an engine-only traction control on the driven
 #      axle, the OPC's kind: it scales the ENGINE LOAD (PtInput.tc_scale),
 #      never a brake and never the pedal the shift scheduler reads. It reads
-#      the same transient slip state kx as the ABS. The drive peak of the
+#      the same transient slip state kx as the ABS, and its CUT DEPTH is
+#      limited by the load share of the wheel that is slipping (see _tc: a
+#      full-authority cut for the unloaded inside front is what made the car
+#      decelerate mid-corner at full throttle). The drive peak of the
 #      MF6.2 tyre is at kappa ~ +0.12..0.15: the load is full below
 #      TC_SLIP_RESTORE and falls linearly to TC_GAIN_MIN at TC_SLIP_CUT, so
 #      the wheel is held on the far side of the peak instead of being kicked
@@ -979,7 +982,7 @@ class Vehicle:
             pi_ = self._pt_in
             pi_.throttle = ctl.throttle
             if cfg.tc_on:
-                pi_.tc_scale = self._tc(ctl.throttle, dt)
+                pi_.tc_scale = self._tc(ctl.throttle, Fz, dt)
             else:
                 pi_.tc_scale = 1.0
                 self.tc_gain, self.tc_active = 1.0, False
@@ -1158,7 +1161,7 @@ class Vehicle:
             out[i] = hyd * g + park
         return (out[0], out[1], out[2], out[3])
 
-    def _tc(self, throttle: float, dt: float) -> float:
+    def _tc(self, throttle: float, Fz, dt: float) -> float:
         """Engine-only traction control: returns a gain on the ENGINE LOAD
         (PtInput.tc_scale), driven by the transient slip state of the driven
         (front) axle: a proportional target (1 below TC_SLIP_RESTORE,
@@ -1168,6 +1171,59 @@ class Vehicle:
         assist still works while the clutch slips because the engine, making
         less torque, drops under its target and the clutch opens to match.
         Pure in (state, dt): the determinism check covers it.
+
+        THE CUT DEPTH IS LIMITED BY THE LOAD SHARE OF THE SLIPPING WHEEL.
+        This was the reported "no acceleration while steering"
+        (.handoff/08-steering.md, symptom b). The sensor is still
+        max(kx[FL], kx[FR]) -- a genuinely spinning wheel must be seen -- but
+        the old code gave that reading FULL authority, all the way down to
+        TC_GAIN_MIN. On a FWD car with an open diff the INSIDE front unloads in
+        a corner and spins up against nothing, so full authority meant a 75%
+        engine cut for a wheel carrying a sixth of the axle. Measured at
+        power_scale 2.0, 15 m/s, 6 deg of steer, TC off:
+
+            Fz_FL  991 N  (17% of the axle)   kx_FL  0.508   <- max() reads this
+            Fz_FR 4846 N  (83%)               kx_FR  0.012
+
+        and at 14 deg the gain sat at 0.256 (eng_load 0.256) with the pedal on
+        the floor, so the car DECELERATED: ax = -0.206 m/s^2.
+
+        The floor is now `1 - 2*share`, `share` being that wheel's fraction of
+        the axle load. The 2 is the open diff: the two wheels carry EQUAL
+        torque, so the axle's tractive force is twice the force of the wheel
+        with less grip, i.e. a wheel of load share `s` can still put down `2s`
+        of the axle's capacity. Cutting below `1 - 2s` therefore throws away
+        torque the axle could still have used. Straight ahead `share = 0.5`,
+        the floor is 0 and TC_GAIN_MIN's full authority is back -- which is why
+        every launch number is unchanged (kappa_max 1.500 without TC -> 0.312
+        with, 0-100 km/h 8.32 s; the old law measured 0.312 / 8.32 s).
+        A wheel with no load at all buys no cut, which is right: a lifted wheel
+        spinning costs the car nothing.
+
+        Measured mean ax (m/s^2) at 15 m/s in gear 3, full throttle, vs steer:
+
+            law                         3 deg   6 deg   9 deg  14 deg
+            old: max(), full authority  2.555   0.691   0.467  -0.206
+            this: max(), load-limited   2.576   0.762   0.584  +0.207
+            (tried) Fz-weighted sensor  2.680   0.789   0.298  +0.199
+            (tried) min() sensor        2.601   0.739   0.298  +0.199
+            TC off                      2.601   0.739   0.298  +0.199
+
+        The load-weighted SENSOR was tried first and rejected: it reads 0.03 at
+        9 deg, so the aid stops existing mid-corner and gives back the 0.29 the
+        engine cut was actually buying there. min() is TC off in a corner and
+        also loses a third of the launch protection (kappa_max 0.534).
+
+        The loads are the SAME `Fz` list the tyre forces were evaluated with
+        this step (step 2 of the ordering), not a lagged copy: `_tc` is called
+        after normal_loads() and before the powertrain, so no new algebraic
+        loop is introduced.
+
+        What this deliberately does NOT do is brake the spinning inside wheel
+        (an EDL / brake-vectoring channel). That would genuinely recover the
+        lost tractive effort across the open diff, and it is real hardware on
+        cars of this era, but it is new physics on the brake path rather than a
+        sensor fix, and the aid must stay engine-only per CONTRACT section 4.
         """
         st = self.state
         g = self.tc_gain
@@ -1175,10 +1231,16 @@ class Vehicle:
             g = 1.0
             self.tc_active = False
         else:
-            kx = st.kx[0] if st.kx[0] > st.kx[1] else st.kx[1]
+            i = 0 if st.kx[0] > st.kx[1] else 1
+            kx = st.kx[i]
+            zf = Fz[0] + Fz[1]
+            share = (Fz[i] / zf) if zf > 1.0 else 0.5   # both fronts airborne
+            g_min = 1.0 - 2.0 * share
+            if g_min < TC_GAIN_MIN:
+                g_min = TC_GAIN_MIN
             tgt = 1.0 - (kx - TC_SLIP_RESTORE) / (TC_SLIP_CUT - TC_SLIP_RESTORE)
-            if tgt < TC_GAIN_MIN:
-                tgt = TC_GAIN_MIN
+            if tgt < g_min:
+                tgt = g_min
             elif tgt > 1.0:
                 tgt = 1.0
             if tgt < g:

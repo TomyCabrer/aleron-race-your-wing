@@ -416,7 +416,18 @@ on the engine load; the pedal itself is untouched — see section 3). Reads
 `max(kx[FL], kx[FR])`: the target gain is 1 below `TC_SLIP_RESTORE = 0.12`,
 falling linearly to `TC_GAIN_MIN = 0.15` at `TC_SLIP_CUT = 0.20`; the gain
 slews to it at `1/0.03` per s down and `1/0.12` per s up; gain 1 and inactive
-below `TC_V_MIN = 1 m/s` or with the pedal up. Pure in (state, dt). Measured
+below `TC_V_MIN = 1 m/s` or with the pedal up.
+**The cut depth is limited to `1 - 2*share`**, `share` being that wheel's
+fraction of the front-axle vertical load, floored at `TC_GAIN_MIN`. The 2 is
+the open diff: both driven wheels carry equal torque, so the axle's tractive
+force is twice the force of the wheel with less grip and a wheel of load
+share `s` can still deliver `2s` of the axle's capacity. Straight ahead
+`share = 0.5`, the floor is 0 and the full `TC_GAIN_MIN` authority is back,
+so every launch number below is unchanged. This is not cosmetic: with full
+authority everywhere the unloaded INSIDE front of this FWD car (991 N against
+4846 N, `kx` 0.508 against 0.012 at 6 deg of steer) held the gain at 0.256
+mid-corner and the car DECELERATED at full throttle, `ax = -0.206 m/s²`
+(`.handoff/08-steering.md`, symptom b). Pure in (state, dt). Measured
 on the 2× Engine setting, WOT from rest on the open map: front slip ratio
 1.50 (limiter-bouncing through all of 1st) without it, 0.31 with it, 0–100
 km/h 8.42 s; it never acts on the stock car at WOT on dry tarmac (a
@@ -493,6 +504,7 @@ class BlendedInput(InputSource)
 class ScriptedInput(InputSource): def __init__(self, fn(t, veh, track) -> Controls)
 def steer_limit_deg(V, beta_deg, ay_max=8.4608, L=2.491, k_us_deg=3.2,
                     lock_deg=32.625, beta_gain=1.2) -> float
+def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
 ```
 * Ramp the **road-wheel angle** at a hand rate (`900 deg/s` at the wheel ÷ 16.0
   = `56.25 deg/s` at the road wheel), never a normalised axis.
@@ -501,6 +513,37 @@ def steer_limit_deg(V, beta_deg, ay_max=8.4608, L=2.491, k_us_deg=3.2,
 * Speed limiter `delta_lim(V)` opened up by `+1.2*|beta_deg|` so slides can be
   caught. `steer_limit=False` bypasses the whole aid — every validation script
   uses that path.
+* **The `beta` bonus is DIRECTIONAL and the clamp is a PAIR.**
+  `steer_limit_deg` keeps the symmetric form (the signature is pinned here and
+  V16/V17 are quoted from it, and it is still what `validate.py` checks), but
+  what `KeyboardInput` and `GamepadInput` clamp against is
+  `steer_limit_pair_deg(V, beta_deg) -> (limit on LEFT lock, limit on RIGHT
+  lock)`, which spends the whole bonus on the **counter-steer** side and
+  leaves lock *into* the slide at the floor. Counter-steer has the SAME sign
+  as `beta` (`beta = atan2(v, |u|)` with `v` leftward, so a left-turn slide is
+  `beta < 0` and the catch is right lock — the same statement as section 9
+  item 7). Symmetric, the term was positive feedback: more lock → more slide →
+  bigger `|beta|` → a higher limit → more lock, and at `|beta| = 20 deg` the
+  aid handed over full mechanical lock at any speed. Measured, keyboard,
+  DOWN+LEFT held from 30 m/s: symmetric `delta_max 22.32 deg` for `dpsi 37.98
+  deg` of heading change; directional `delta_max 14.08 deg` for `dpsi 41.10
+  deg` — 8.2 deg less lock, 3.1 deg more turn (`.handoff/08-steering.md`).
+  The magnitude of the catch is untouched: a 12 deg slide still opens 19.12 deg
+  of opposite lock at 30 m/s.
+* **The clamp eases down, it does not snap.** Each of the two bounds is a
+  state: it rises to the commanded value instantly (a wider limit is never a
+  surprise) and falls at `_return_rate_deg(V)`, which is the rate the wheel's
+  own self-aligning torque would unwind it at. Without this, a directional
+  bound collapsing 20+ deg the instant `beta` changes sign would teleport the
+  road wheel. `KeyboardInput.delta_lim_deg` reports whichever bound is binding
+  the direction the wheel is actually turned.
+* **Trigger rest.** A pad trigger is normalised from the rest value its FIRST
+  HID report showed, `-1.0` or `0.0` (`GamepadInput._trig_rest`), so both
+  driver conventions give 0 at rest and 1 at the stop; with `-1.0` that is the
+  historical `(a+1)/2` exactly. Before that first report every axis reads
+  `0.0`, which `(a+1)/2` turns into HALF TRAVEL — the pedals are held at 0
+  until `_rest_checked` is true, or a hot-plug hands the car 47% throttle and
+  47% brake at once.
 * Pedal ramps: throttle 3.5/6.0 s⁻¹, brake 5.0/8.0, clutch 8.0/3.0,
   handbrake 8.0/10.0. Integrated at `DT_PHYS`, key state sampled at 60 Hz.
 * Shift and wing keys are **edge-triggered** from the event queue only.
@@ -681,6 +724,14 @@ python3 -m drive.drive [--track arena|open|skidpad|dragstrip] [--radius 50] [--c
   [--abs|--no-abs] [--tc|--no-tc] [--engine stock|tuned|sport]
   [--sound off|low|mid|high] [--wing-inc 0.0] [--garage] [--build NAME]
 ```
+`--script drive_probe` is the one scripted entry that deliberately switches
+the driver aids ON, because it exists to measure them (section 9 item 9 is
+about MEASUREMENTS, and this is not one: `validate.py` never calls it, every
+figure it prints is labelled driveability, and it takes the aid state as
+arguments rather than reading `runs/settings.json`). It runs both input paths
+— `KeyboardInput` fed a synthetic key state through `set_keys()`, and `delta`
+commanded directly at the same 56.25 deg/s hand rate — so an input-layer
+effect can be told from a physics one. See `.handoff/08-steering.md`.
 `--track`, `--wet`, `--camera`, `--gearbox`, `--engine`, `--abs`, `--tc`,
 `--sound`, `--no-steer-limit` default to **None**: an interactive launch fills
 them from `runs/settings.json` (an explicit flag wins and is saved back);
