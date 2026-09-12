@@ -276,6 +276,58 @@ already contain `F_dev`, or the `h_w` sensitivity is doubled.
 "fix" it from the roll centres (that gives 0.51 and breaks everything
 downstream in `qss`/`crossover`/`ledger`).
 
+**Per-car scaling of the calibrated blocks** (`CarDerived`, `car_derived(car,
+cfg)`). Six numbers used to be Corsa C module/config constants and now follow
+the fitted car: `h_ra`, `I_roll`, `Cphi`, the four `lltd_*` shares and
+`Y_DEV`. The rule is
+
+```
+value(car) = value(Corsa) * ( hat(car) / hat(Corsa) )
+```
+
+`hat` being the cheap bottom-up estimate of that quantity (roll centres
+interpolated at the CG station; `Ixx - m_us*(t/2)^2 + m_s*h_r^2`;
+`sqrt(Kphi*I_roll)` at a fixed `zeta_roll`; the instantaneous geometric +
+unsprung shares; half the mean track). The **absolute level stays the Corsa's
+calibration and only the change between cars is derived** — which is the
+honest statement, because the two other cars' whole suspension block is `est`.
+It is also bit-for-bit by construction, not by luck: when `car`'s fields equal
+`cars.CORSA_C`'s, `hat(car)` and `hat(Corsa)` are the same float, the ratio is
+exactly `1.0`, and `x*1.0 == x`. `vehicle._check_reference()` raises at import
+if that ever stops being true (a bare `assert` would vanish under `-O`), and
+`validate()`'s **T21** prints it.
+
+`roll_dist_f` is **NOT** scaled — it stays `0.74` on every car, for the reason
+above plus two more: `Kphi_f/Kphi_r` is `est` on all three cars, so a per-car
+LLTD would be a guess dressed as a measurement; and the bottom-up route
+provably gives 0.51 for the one car that has data. What does follow the car is
+the split of that same 0.74/0.26 between the instantaneous and the elastic
+path (the roll centres are per-car), and `lltd_geo_* + lltd_roll_*` is held at
+`roll_dist_f` **to the last bit** by writing the roll share as a difference
+from the reference pair.
+
+`Vehicle.__init__` also builds `self.tyre = tyre.tyre_for(car.tyre_file,
+car.tyre_R0, car.tyre_width)` (§2) — `CORSA_TYRE` itself for the Corsa and for
+a plain `CorsaC`, which has no `tyre_*` fields — and sets
+`self.tyre_ref_ok = tyre.mu_curve_matches(self.tyre)`, the assertion that
+licenses the `qss.TYRE` rule below for a non-Corsa car. `_tyre_eval` takes the
+tyre as a trailing argument defaulting to the singleton.
+
+**Added mass** (`cars.PointMass`, `cars.with_masses(car, pts)`,
+`cars.ballast_point(car, kg, where)`). Ballast and the garage's fitted wings
+reach the physics as a **new `CarSpec`**, never as a patched `m`: the first
+moments move `wdist_f` (hence `a`, `b` and every static wheel load) and
+`h_cg`, and the parallel-axis theorem moves `Izz / Ixx / Iyy`; `m_s` carries
+all of it (nothing a driver adds bolts to an unsprung hub). Springs, roll
+centres, wheelbase, track, tyres, gearing and `CdA` are properties of the car
+and are untouched, so a ballasted car rolls more and accelerates less on its
+own. `with_masses` returns **the same object** at zero added mass, which is
+what makes the ratio above exactly 1.0. Stations are quoted from the axles
+(`nose` = `a + 0.30`, `seat` = the CG at `h_cg`, `floor` = `-b` at 0.30 m,
+`boot` = `-(b + 0.25)` at 0.65 m) so they mean the same thing on every
+wheelbase; `seat` is the control case and moves the mass and provably nothing
+else.
+
 **Roll** (visual + roll-camber only; the TOTAL transfer above is already a
 ground-plane statement and must not be rebuilt from spring forces):
 `I_roll = 342.8`, `Kphi = 36669 N.m/rad`, `Cphi = 2482 N.m/(rad/s)` (ζ=0.35),
@@ -364,6 +416,8 @@ class Vehicle:
     state: VehicleState
     tel: dict            # the diagnostics dict, rebuilt every step
     def __init__(self, car=CorsaC(), cfg=VehicleConfig()): ...
+        # `car` is a corsa_c.CorsaC or a cars.CarSpec (a field-for-field
+        # superset of it, optionally already carrying added mass)
     def reset(self, x=0.0, y=0.0, psi=0.0, V=0.0, gear=1) -> None: ...
     def step(self, ctl: Controls, mu: Sequence[float], crr: Sequence[float],
              dt: float) -> None: ...

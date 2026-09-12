@@ -58,8 +58,9 @@ from math import atan, atan2, cos, sin, sqrt, exp, tan, fabs, pi, radians, degre
 
 import numpy as np
 
+from cars import CORSA_C
 from corsa_c import CorsaC, RHO, G
-from drive.tyre import CORSA_TYRE
+from drive.tyre import CORSA_TYRE, mu_curve_matches, tyre_for
 from drive import powertrain as ptm
 import qss
 
@@ -288,6 +289,11 @@ class VehicleConfig:
                                     # with ABS as standard. See _abs().
 
     # ---- load transfer ------------------------------------------------
+    #  The six numbers in this block and the next are the CORSA C's, and with
+    #  more than one car in `cars.py` they are also the REFERENCE LEVEL that
+    #  `car_derived()` scales to whichever car is fitted.  `roll_dist_f` is
+    #  the one that is NOT scaled -- it stays 0.74 on every car; see the
+    #  block comment above `CarDerived`.
     roll_dist_f: float = 0.74       # CALIBRATION CONSTANT, not a suspension
                                     # property. A proper elastic+geometric+
                                     # unsprung buildup from the published roll
@@ -299,6 +305,10 @@ class VehicleConfig:
     lltd_roll_f: float = 0.639      # m_us 56/62, wheel CG height 0.283:
     lltd_geo_r: float = 0.221       # the instantaneous (geometric+unsprung)
     lltd_roll_r: float = 0.039      # share is 0.322, split 0.315/0.685 f/r.
+                                    # `car_derived` scales the two geo shares
+                                    # by the car's own roll centres and moves
+                                    # the roll shares by the same amount, so
+                                    # geo+roll stays roll_dist_f to the bit.
     tau_LT: float = 0.02            # s  small numerical smoother only
     tau_roll: float = 0.09          # s  0.9/omega_n of the 1.65 Hz roll mode
     tau_pitch: float = 0.12         # s  0.9/omega of the 1.34 Hz pitch mode
@@ -395,6 +405,160 @@ class VehicleConfig:
 
     def has_designed(self) -> bool:
         return self.dev_left is not None or self.dev_right is not None or self.top is not None
+
+
+# ==================================================================== #
+#  PER-CAR SCALING OF THE CALIBRATED BLOCKS                            #
+# ==================================================================== #
+#  Six numbers in the roll and load-transfer blocks used to be Corsa C
+#  constants: `h_ra`, `I_roll`, `Cphi`, the four `lltd_*` shares (which carry
+#  `roll_dist_f`), and `Y_DEV`.  With more than one car in `cars.py` they have
+#  to follow the car -- but two of them are CALIBRATIONS, not derived
+#  quantities, and CONTRACT section 4 is explicit that "fixing" `roll_dist_f`
+#  from the roll centres gives 0.51 and breaks everything downstream in
+#  qss/crossover/ledger.  A bottom-up rebuild is therefore not available.
+#
+#  What IS available, and is what this block does:
+#
+#      value(car) = value(Corsa) * ( hat(car) / hat(Corsa) )
+#
+#  where `hat` is the cheap bottom-up estimate of that quantity.  The ABSOLUTE
+#  LEVEL stays the Corsa's calibrated number and only the CHANGE between cars
+#  is derived.  That is the honest statement of what is known: there is one
+#  car in this study with a calibrated suspension and three with estimated
+#  ones, and the two new cars' whole suspension block is `est` anyway.
+#
+#  It also makes the default bit-for-bit by construction rather than by luck:
+#  when `car`'s fields equal `CORSA_C`'s, `hat(car)` and `hat(Corsa)` are the
+#  SAME float, the ratio is exactly 1.0, and `value * 1.0 == value` exactly.
+#  That is why `cars.with_masses` returns the same object at zero added mass,
+#  and it is asserted at import by `_check_reference()` below -- with `==`.
+#
+#  `roll_dist_f` ITSELF IS NOT SCALED.  It stays 0.74 on every car.  Reasons,
+#  in order: (a) the contract forbids deriving it and the bottom-up route
+#  provably gives 0.51 for the one car that HAS data; (b) `Kphi_f/Kphi_r`,
+#  the only thing that would drive a per-car answer, is `est` on all three
+#  cars, so a car-specific LLTD would be a guess dressed as a measurement;
+#  (c) qss/crossover/ledger are pinned to 0.74 and the utilisation readout is
+#  compared against them.  What DOES follow the car is the split of that same
+#  0.74/0.26 between the INSTANTANEOUS (geometric + unsprung) path and the
+#  ELASTIC one, because that follows from the roll-centre heights, which are
+#  per-car -- and it is a transient statement only: `lltd_geo + lltd_roll` is
+#  held at `roll_dist_f` to the last bit.  The MX-5's and the 540i's roll
+#  centres are far lower than the Corsa's 0.300 m twist beam, and their
+#  instantaneous share comes out 0.183/0.186 against the Corsa's 0.315.
+
+
+@dataclass(frozen=True)
+class CarDerived:
+    """The six calibrated blocks, scaled to one car.  Built once, in
+    `Vehicle.__init__`; never inside `step()`."""
+
+    h_ra: float             # m      roll axis height at the CG station
+    I_roll: float           # kg m^2 about the roll axis
+    Cphi: float             # N.m/(rad/s)
+    lltd_geo_f: float       # -      instantaneous front share of the demand
+    lltd_geo_r: float
+    lltd_roll_f: float      # -      elastic (roll-lagged) front share
+    lltd_roll_r: float
+    y_dev: float            # m      half-track the flank panel sits at
+
+
+def _h_ra_hat(c) -> float:
+    """Roll axis height at the CG station: the roll centres interpolated
+    along the wheelbase.  0.16275 m on the Corsa, against the 0.160 that
+    `qss.roll_angle` hard-codes -- the 2 % agreement `VehicleConfig.h_ra`
+    already cites as its cross-check.  `a/L == 1 - wdist_f`."""
+    return c.h_rc_f + (c.h_rc_r - c.h_rc_f) * (1.0 - c.wdist_f)
+
+
+def _I_roll_hat(c, h_ra: float) -> float:
+    """`VehicleConfig.I_roll`'s own stated derivation, evaluated on the car:
+    Ixx less the unsprung masses at their half-tracks, plus the sprung mass
+    on its roll arm.  340.91 on the Corsa against the calibrated 342.8."""
+    return (c.Ixx - (c.m_us_f + c.m_us_r) * (0.5 * c.t) ** 2
+            + c.m_s * (c.h_cg - h_ra) ** 2)
+
+
+def _lltd_hat(c) -> tuple:
+    """The INSTANTANEOUS (geometric + unsprung) front and rear shares of the
+    total transfer demand, per axle.
+
+    Geometric transfer goes through the links at the roll centre, unsprung
+    transfer at the wheel's own CG height (= the rolling radius), and both
+    arrive the instant `a_y` does -- there is no spring in the path, which is
+    why `step()` feeds them the unlagged demand.  The sprung mass on each
+    axle is the static axle mass less that axle's unsprung mass, so the two
+    sum to `m_s` exactly.  Corsa: 0.1042 / 0.2108, sum 0.3150, against the
+    0.322 `VehicleConfig` cites.  Everything is referenced to the same
+    `m*h_cg/t_bar` the demand itself is."""
+    m_s_f = c.m * c.wdist_f - c.m_us_f
+    m_s_r = c.m * (1.0 - c.wdist_f) - c.m_us_r
+    den = c.m * c.h_cg
+    return ((m_s_f * c.h_rc_f + c.m_us_f * c.r_roll) / den,
+            (m_s_r * c.h_rc_r + c.m_us_r * c.r_roll) / den)
+
+
+def car_derived(car, cfg: VehicleConfig) -> CarDerived:
+    """`cfg`'s calibrated roll / transfer / panel numbers, scaled to `car`.
+
+    Returns `cfg`'s own values, bit-for-bit, whenever `car`'s fields equal
+    `cars.CORSA_C`'s -- see the block comment.  `cfg` is the reference: an
+    explicitly overridden `I_roll` is scaled too, which is what a rig that
+    sweeps it wants.
+    """
+    ref = CORSA_C
+    h_ra = cfg.h_ra * (_h_ra_hat(car) / _h_ra_hat(ref))
+    I_roll = cfg.I_roll * (_I_roll_hat(car, h_ra)
+                           / _I_roll_hat(ref, cfg.h_ra))
+    # Cphi = 2*zeta*sqrt(Kphi*I_roll) with zeta the same 0.35 est on every
+    # car (corsa_c.dampers is MISSING and so is every other car's), so the
+    # ratio is just sqrt(Kphi*I_roll) -- the damping follows the stiffness
+    # and the inertia, and zeta stays where the DAMPER BLOCK put it.
+    Cphi = cfg.Cphi * sqrt((car.Kphi_tot * I_roll)
+                           / (ref.Kphi_tot * cfg.I_roll))
+    gf, gr = _lltd_hat(car)
+    rf, rr = _lltd_hat(ref)
+    geo_f = cfg.lltd_geo_f * (gf / rf)
+    geo_r = cfg.lltd_geo_r * (gr / rr)
+    # `geo + roll` is the steady-state front share and MUST stay exactly
+    # `roll_dist_f`: written as a difference from the reference pair it does,
+    # whatever the two references are, and at ratio 1.0 the correction is
+    # exactly 0.0 and each share is exactly `cfg`'s own.
+    return CarDerived(h_ra=h_ra, I_roll=I_roll, Cphi=Cphi,
+                      lltd_geo_f=geo_f, lltd_geo_r=geo_r,
+                      lltd_roll_f=cfg.lltd_roll_f + (cfg.lltd_geo_f - geo_f),
+                      lltd_roll_r=cfg.lltd_roll_r + (cfg.lltd_geo_r - geo_r),
+                      y_dev=Y_DEV * (car.t / ref.t))
+
+
+def _check_reference() -> CarDerived:
+    """The bit-for-bit assertion, run at import and with `==`, not `isclose`.
+
+    The whole car-library feature rests on this: the stock Corsa C must come
+    out of `car_derived` holding the exact floats the module used to
+    hard-code, or every acceptance number in `validate()` moves.  A plain
+    `assert` would vanish under `python3 -O`, so this raises.
+    """
+    cfg = VehicleConfig()
+    d = car_derived(CORSA_C, cfg)
+    want = (cfg.h_ra, cfg.I_roll, cfg.Cphi, cfg.lltd_geo_f, cfg.lltd_geo_r,
+            cfg.lltd_roll_f, cfg.lltd_roll_r, Y_DEV)
+    got = (d.h_ra, d.I_roll, d.Cphi, d.lltd_geo_f, d.lltd_geo_r,
+           d.lltd_roll_f, d.lltd_roll_r, d.y_dev)
+    if got != want:
+        bad = [f"{n}: {g!r} != {w!r}" for n, g, w in zip(
+            ("h_ra", "I_roll", "Cphi", "lltd_geo_f", "lltd_geo_r",
+             "lltd_roll_f", "lltd_roll_r", "y_dev"), got, want) if g != w]
+        raise RuntimeError("car_derived(CORSA_C) is not the hard-coded Corsa: "
+                           + "; ".join(bad))
+    # and the steady-state front share is untouched, to the last bit
+    if (d.lltd_geo_f + d.lltd_roll_f) != cfg.roll_dist_f:
+        raise RuntimeError("car_derived: the Corsa's roll_dist_f moved")
+    return d
+
+
+CORSA_DERIVED = _check_reference()
 
 
 @dataclass(frozen=True)
@@ -561,8 +725,13 @@ def wheel_step_implicit(omega: float, I_eff: float, T_drive: float,
     return num / (1.0 + dt * kv * R_e * R_e / I_eff)
 
 
-def _tyre_eval(Fz: float, kappa: float, alpha: float, mu_scale: float):
-    """CORSA_TYRE.evaluate, canonicalised on sign(alpha) -- see DEVIATION 1.
+def _tyre_eval(Fz: float, kappa: float, alpha: float, mu_scale: float,
+               tyre=CORSA_TYRE):
+    """`tyre`.evaluate, canonicalised on sign(alpha) -- see DEVIATION 1.
+
+    `tyre` defaults to the module singleton so the rigs below read exactly as
+    they did; `Vehicle` passes its own car's `self.tyre`, which IS the
+    singleton whenever the car is the Corsa.
 
     Mirroring in alpha (and NOT in kappa) is exactly the symmetry a left/right
     symmetric car needs: Fy(-a) = -Fy(a), Fx(-a) = Fx(a), Mz(-a) = -Mz(a).
@@ -571,9 +740,9 @@ def _tyre_eval(Fz: float, kappa: float, alpha: float, mu_scale: float):
     is forced to one branch.
     """
     if TYRE_MIRROR and alpha < 0.0:
-        Fx, Fy, Mz = CORSA_TYRE.evaluate(Fz, kappa, -alpha, 0.0, mu_scale)
+        Fx, Fy, Mz = tyre.evaluate(Fz, kappa, -alpha, 0.0, mu_scale)
         return Fx, -Fy, -Mz
-    return CORSA_TYRE.evaluate(Fz, kappa, alpha, 0.0, mu_scale)
+    return tyre.evaluate(Fz, kappa, alpha, 0.0, mu_scale)
 
 
 def set_tyre_mirror(v: bool) -> bool:
@@ -614,8 +783,22 @@ class Vehicle:
         c = self.car
         self.pos = wheel_positions(c)
         self.t_bar = c.t                      # 1.42450 m, the MEAN track
-        self.h_r = c.h_cg - self.cfg.h_ra     # 0.390 m
+        # the roll / transfer / panel calibrations, scaled to THIS car; the
+        # Corsa gets cfg's own floats back, bit-for-bit (see car_derived)
+        self.der = car_derived(c, self.cfg)
+        self.h_r = c.h_cg - self.der.h_ra     # 0.390 m
         self.Kphi = c.Kphi_tot * 180.0 / pi   # 640 N.m/deg -> 36669 N.m/rad
+        # the car's own tyre SIZE.  tyre_for() is CORSA_TYRE for the Corsa --
+        # identity, not equality -- and `CorsaC` (which has no tyre_* fields)
+        # falls through to the same defaults.  Built here, never in step().
+        self.tyre = tyre_for(getattr(c, "tyre_file", None),
+                             getattr(c, "tyre_R0", 0.2915),
+                             getattr(c, "tyre_width", 0.175))
+        # CONTRACT section 4 requires util_f/util_r to come from qss.fy_max
+        # with qss.TYRE, which is the CORSA's mu(Fz).  That is only right for
+        # another car while every tyre here shares one coefficient set; this
+        # is the check that says so rather than assuming it (tyre.py).
+        self.tyre_ref_ok = mu_curve_matches(self.tyre)
         self.Fz_f_static = c.m * G * c.wdist_f / 2.0     # 3022.0 N
         self.Fz_r_static = c.m * G * (1.0 - c.wdist_f) / 2.0   # 1932.1 N
         # a top wing's downforce splits between the axles by its station:
@@ -624,7 +807,7 @@ class Vehicle:
         # in the load-transfer demand (h_t - h_cg arm)
         top = self.cfg.top                # NOT `cfg`: Vehicle() with cfg=None
         self._top_share_f = ((top.x_t + c.b) / c.L) if top is not None else 0.0
-        self._det_roll = (c.m * self.cfg.I_roll
+        self._det_roll = (c.m * self.der.I_roll
                           - (c.m_s * self.h_r) ** 2)     # 225207.5, well cond.
 
         self.pt_p = ptm.PowertrainParams.from_car(c, power_scale=self.cfg.power_scale)
@@ -889,7 +1072,7 @@ class Vehicle:
             CL = panel.cl(panel.inc if cfg.qss_parity else alpha_dev)
             F_dev = sgn * dep * q * panel.S * CL
             D_dev = dep * q * panel.S * panel.cd(CL)
-            Mz_dev = F_dev * panel.x_w - sgn * Y_DEV * D_dev
+            Mz_dev = F_dev * panel.x_w - sgn * self.der.y_dev * D_dev
             return dict(base, F_dev=F_dev, D_dev=D_dev, Mz_dev=Mz_dev, CL_dev=CL,
                         alpha_dev=alpha_dev)
 
@@ -904,7 +1087,7 @@ class Vehicle:
         D_dev = dep * q * S_DEV * CL / LD_DEV
         # DEVIATION 2: the panel sits on the OUTER flank at y = -sgn*0.72, and
         # its drag (-x) therefore yaws the car OUT of the corner.
-        Mz_dev = F_dev * cfg.x_w - sgn * Y_DEV * D_dev
+        Mz_dev = F_dev * cfg.x_w - sgn * self.der.y_dev * D_dev
         return dict(base, F_dev=F_dev, D_dev=D_dev, Mz_dev=Mz_dev, CL_dev=CL,
                     alpha_dev=alpha_dev)
 
@@ -965,10 +1148,10 @@ class Vehicle:
             if self._free_roll:
                 st.omega[i] = vx / R_e
             Vsx[i] = st.omega[i] * R_e - vx
-            kk, ka = CORSA_TYRE.stiffnesses(Fz[i])
+            kk, ka = self.tyre.stiffnesses(Fz[i])
             Kxk[i] = kk
             Kya[i] = ka
-            sk, sa = CORSA_TYRE.relax_lengths(Fz[i])
+            sk, sa = self.tyre.relax_lengths(Fz[i])
             sg_k[i] = sk
             sg_a[i] = sa
 
@@ -1075,12 +1258,12 @@ class Vehicle:
                + aer["Mz_dev"] + aer["Mz_body"])
 
         # ---- coupled lateral + roll (solve the 2x2, do not decouple) ----
-        Mx_ext = (-self.Kphi * st.phi - cfg.Cphi * st.p
-                  - aer["F_dev"] * (aer["h_w"] - cfg.h_ra))
+        Mx_ext = (-self.Kphi * st.phi - self.der.Cphi * st.p
+                  - aer["F_dev"] * (aer["h_w"] - self.der.h_ra))
         if cfg.roll_jacking:
             Mx_ext += c.m_s * G * self.h_r * sin(st.phi)
         msh = c.m_s * self.h_r
-        a_y = (cfg.I_roll * SFy + msh * Mx_ext) / self._det_roll
+        a_y = (self.der.I_roll * SFy + msh * Mx_ext) / self._det_roll
         pdot = (msh * SFy + c.m * Mx_ext) / self._det_roll
 
         a_x = SFx / c.m
@@ -1110,9 +1293,11 @@ class Vehicle:
         # forces' h_cg arm is (both 0.0 without a top wing)
         demand_x = (SFx_t * c.h_cg + aer["D_top"] * aer["dz_top"]) / c.L
         st.lt_lpf += dt * (demand - st.lt_lpf) / cfg.tau_roll
-        st.dFz_f += dt * (cfg.lltd_geo_f * demand + cfg.lltd_roll_f * st.lt_lpf
+        st.dFz_f += dt * (self.der.lltd_geo_f * demand
+                          + self.der.lltd_roll_f * st.lt_lpf
                           - st.dFz_f) / cfg.tau_LT
-        st.dFz_r += dt * (cfg.lltd_geo_r * demand + cfg.lltd_roll_r * st.lt_lpf
+        st.dFz_r += dt * (self.der.lltd_geo_r * demand
+                          + self.der.lltd_roll_r * st.lt_lpf
                           - st.dFz_r) / cfg.tau_LT
         st.dFz_x += dt * (demand_x - st.dFz_x) / cfg.tau_pitch
 
@@ -1305,7 +1490,7 @@ class Vehicle:
                 # relaxing so the corner is correct the instant it lands.
                 continue
             mus = mu[i] * cfg.mu_scale
-            fx, fy, mz = _tyre_eval(fz, st.kx[i], atan(st.ky[i]), mus)
+            fx, fy, mz = _tyre_eval(fz, st.kx[i], atan(st.ky[i]), mus, self.tyre)
             Fx_t[i], Fy_t[i], Mz_t[i] = fx, fy, mz
 
             vxa = fabs(Vx[i])
@@ -1318,8 +1503,8 @@ class Vehicle:
                 fy = fy - k_vy * Vy[i]
 
             # ellipse cap: the damper must not manufacture grip
-            mux = CORSA_TYRE.mu_x(fz, mus) * fz
-            muy = CORSA_TYRE.mu_y(fz, mus) * fz
+            mux = self.tyre.mu_x(fz, mus) * fz
+            muy = self.tyre.mu_y(fz, mus) * fz
             if mux > 0.0 and muy > 0.0:
                 ex = fx / mux
                 ey = fy / muy
@@ -1400,7 +1585,7 @@ class Vehicle:
         Yf_full = (c.b * (SFy - aer["F_dev"] - aer["Fy_body"])
                    - aer["F_dev"] * aer["x_w"]
                    - M_arm - aer["Mz_body"]
-                   + aer["sgn_dev"] * Y_DEV * aer["D_dev"] + SMz) / c.L
+                   + aer["sgn_dev"] * self.der.y_dev * aer["D_dev"] + SMz) / c.L
         V = aer["V"]
         coriolis = -c.m * st.v * st.r
         induced = Yf * sin(delta[0] if cfg.force_cos_delta else 0.0)
@@ -1655,7 +1840,8 @@ def roll_step_response(ay_g: float = 0.5, cfg: VehicleConfig | None = None,
     """
     car = car if car is not None else CorsaC()
     cfg = cfg if cfg is not None else VehicleConfig()
-    h_r = car.h_cg - cfg.h_ra
+    der = car_derived(car, cfg)        # the Corsa gets cfg's own floats back
+    h_r = car.h_cg - der.h_ra
     Kphi = car.Kphi_tot * 180.0 / pi
     a_y = ay_g * G
     phi = p = 0.0
@@ -1664,10 +1850,10 @@ def roll_step_response(ay_g: float = 0.5, cfg: VehicleConfig | None = None,
     t_peak = 0.0
     trace = []
     for k in range(n):
-        Mx = car.m_s * h_r * a_y - Kphi * phi - cfg.Cphi * p
+        Mx = car.m_s * h_r * a_y - Kphi * phi - der.Cphi * p
         if cfg.roll_jacking:
             Mx += car.m_s * G * h_r * sin(phi)
-        p += dt * Mx / cfg.I_roll
+        p += dt * Mx / der.I_roll
         phi += dt * p
         trace.append(phi)
         if phi > peak:
@@ -1675,8 +1861,8 @@ def roll_step_response(ay_g: float = 0.5, cfg: VehicleConfig | None = None,
     ss = car.m_s * h_r * a_y / Kphi
     if cfg.roll_jacking:
         ss = car.m_s * h_r * a_y / (Kphi - car.m_s * G * h_r)
-    wn = sqrt(Kphi / cfg.I_roll)
-    zeta = cfg.Cphi / (2.0 * sqrt(Kphi * cfg.I_roll))
+    wn = sqrt(Kphi / der.I_roll)
+    zeta = der.Cphi / (2.0 * sqrt(Kphi * der.I_roll))
     return dict(phi_ss=ss, phi_peak=peak, overshoot=peak / ss - 1.0,
                 t_peak=t_peak, wn=wn, f_n=wn / (2 * pi), zeta=zeta,
                 wd=wn * sqrt(1.0 - zeta * zeta),
@@ -1916,6 +2102,46 @@ def validate(verbose: bool = True) -> bool:
         f"f_n {rr['f_n']:.3f} Hz  zeta {rr['zeta']:.3f}",
         "overshoot 25-37%, t_peak 0.29-0.36 s",
         0.25 <= rr["overshoot"] <= 0.37 and 0.29 <= rr["t_peak"] <= 0.36)
+
+    # ---------------- T21 the car library ----------------------------
+    #  The invariant the whole of task 6 rests on, asserted with == rather
+    #  than measured: the stock Corsa C must come out of the per-car scaling
+    #  holding the exact floats this module used to hard-code.  It is checked
+    #  at import too (`_check_reference` raises), but a suite that does not
+    #  print it is a suite that will not notice the day it stops being true.
+    import cars as _cars
+    d0 = car_derived(_cars.CORSA_C, par)
+    dcc = car_derived(car, par)                     # corsa_c.CorsaC() itself
+    z0 = _cars.with_masses(_cars.CORSA_C, ())
+    want = (par.h_ra, par.I_roll, par.Cphi, par.lltd_geo_f, par.lltd_geo_r,
+            par.lltd_roll_f, par.lltd_roll_r, Y_DEV)
+    got = (d0.h_ra, d0.I_roll, d0.Cphi, d0.lltd_geo_f, d0.lltd_geo_r,
+           d0.lltd_roll_f, d0.lltd_roll_r, d0.y_dev)
+    v_ref = Vehicle(_cars.CORSA_C, VehicleConfig())
+    chk("T21 stock Corsa C is bit-for-bit under the car library",
+        "car_derived == VehicleConfig on all 8, tyre is CORSA_TYRE, "
+        "geo+roll == roll_dist_f",
+        "exact equality (==), not isclose",
+        got == want and dcc == d0 and z0 is _cars.CORSA_C
+        and (d0.lltd_geo_f + d0.lltd_roll_f) == par.roll_dist_f
+        and (d0.lltd_geo_r + d0.lltd_roll_r) == (1.0 - par.roll_dist_f)
+        and v_ref.tyre is CORSA_TYRE and v_ref.tyre_ref_ok,
+        "value(car) = value(Corsa)*(hat(car)/hat(Corsa)); at hat(car) == "
+        "hat(Corsa) the ratio is exactly 1.0 and x*1.0 == x, so this is exact "
+        "by construction and not by rounding. CorsaC() and cars.CORSA_C give "
+        "the same CarDerived, and with_masses(car, ()) is car.")
+    if verbose:
+        print(f"        {'car':7s} {'m':>5s} {'%f':>5s} {'h_cg':>5s} {'h_ra':>6s} "
+              f"{'I_roll':>7s} {'Cphi':>6s} {'geo_f':>6s} {'roll_f':>6s} "
+              f"{'LLTD_f':>6s} {'R0':>6s} {'mu':>5s}")
+        for _k in _cars.CAR_ORDER:
+            _c = _cars.CARS[_k]
+            _d = car_derived(_c, par)
+            print(f"        {_k:7s} {_c.m:5.0f} {100*_c.wdist_f:5.1f} "
+                  f"{_c.h_cg:5.2f} {_d.h_ra:6.4f} {_d.I_roll:7.1f} "
+                  f"{_d.Cphi:6.0f} {_d.lltd_geo_f:6.4f} {_d.lltd_roll_f:6.4f} "
+                  f"{_d.lltd_geo_f + _d.lltd_roll_f:6.3f} {_c.tyre_R0:6.4f} "
+                  f"{_c.mu_scale:5.2f}")
 
     # ---------------- T8 Coriolis ------------------------------------
     if verbose:
