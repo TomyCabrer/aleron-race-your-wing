@@ -628,3 +628,19 @@ model.
    latch deadlocked after the first corner`, and has `drive/drive.py`
    uncommitted. Reported upward rather than touched; see the final report for
    which of render's 26 checks it is.
+
+---
+
+# EVIDENCE ON DISK (`runs/` is gitignored — these numbers are the record)
+
+| file | what |
+|---|---|
+| `runs/auto_hold_speed.csv` | 66 cells (2 power scales x 11 set speeds x 3 grades), 20 s each, PI speed-holding driver. Both schedulers side by side. Aggregate: **settled shifts 63 -> 25**, and all 25 survivors are on a 3-6% grade |
+| `runs/auto_cruise_sweep.csv` | 162 cells (2 power scales x 9 pedals x 9 speeds), 12 s at a fixed pedal, both schedulers. Aggregate: **downshift reversals 5 -> 0** |
+| `runs/auto_corner_tc.csv` | 28 cells, FULL vehicle: 15 m/s in 3rd, WOT, 4 s, steer 0/3/6/9/14 deg both ways, power_scale 1.0 and 2.0, TC off and on. Shift count, mean `ax`, `tc_gain` min, `kappa_max` |
+| `runs/auto_spin_upshift.csv` | 12 cells, FULL vehicle: WOT from rest on mu 1.0 / 0.45 / 0.30, TC off and on, both power scales. The road speed at every upshift |
+
+The harness is **kept in the module**: `self_check._auto_hold(v_set, grade)`
+is the speed-holding driver, and the seven other automatic checks are unit
+tests on `_auto_target`. The sweep drivers themselves are throwaway and live
+in the scratchpad.
