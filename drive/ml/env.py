@@ -16,9 +16,8 @@ import numpy as np
 from corsa_c import CorsaC, G
 from .. import track as trk
 from ..vehicle import Vehicle, VehicleConfig, Controls
-from .policy import (Policy, N_OBS,  # noqa: F401  (re-exported for __main__)
-                     LOCK_RAD as POLICY_LOCK_RAD,
-                     WHEELBASE as POLICY_WHEELBASE)
+from .baseline import driver_trim
+from .policy import Policy, N_OBS   # noqa: F401  (re-exported for __main__)
 
 #: Training and evaluation timesteps. See the package docstring for the
 #: measured drift that chose them: 2 ms costs 0.128 m over 20 s and buys 2x,
@@ -117,18 +116,32 @@ def rollout(policy: Policy, track: str = "arena", *, dt: float = DT_TRAIN,
     """
     tr = trk.make_track(track) if tr is None else tr
     car = CorsaC() if car is None else car
-    kw = dict(wing=wing)
+    #  THE CAR'S OWN GRIP CALIBRATION. `cars.CarSpec.mu_scale` is how the
+    #  library carries the difference between a 2003 touring tyre and a modern
+    #  performance one (there is exactly one Pacejka coefficient set in this
+    #  repo -- `cars.py`'s header explains why), and `Vehicle` reads it from
+    #  the CONFIG, not from the car: `vehicle.py` line 1526 is
+    #  `mu[i] * cfg.mu_scale`. `drive.drive` passes it (drive.py:3630) and
+    #  this did not, so until wave 4 every MX-5 and 540i rollout in this
+    #  package was driven on the Corsa's tyres -- mu 1.00 where the library
+    #  says 1.05 and 1.08. An explicit `cfg_kwargs['mu_scale']` still wins, so
+    #  the wet sweeps keep working. The Corsa's is 1.0, so nothing measured on
+    #  it moves by a bit.
+    kw = dict(wing=wing, mu_scale=float(getattr(car, "mu_scale", 1.0)))
     kw.update(cfg_kwargs or {})
     veh = Vehicle(car, VehicleConfig(**kw))
     x0, y0, psi0 = trk.start_pose(tr)
     veh.reset(x0, y0, psi0, V0, gear=2)
 
     ep = Episode()
-    lock_rad = float(getattr(veh, "lock_rad", POLICY_LOCK_RAD))
-    #  the anchor's pure-pursuit feedforward is the bicycle angle L*kappa, so
-    #  it wants THIS car's wheelbase: 2.491 / 2.265 / 2.830 m over the three
-    #  cars in the library. Exactly POLICY_WHEELBASE on the Corsa.
-    wheelbase = float(getattr(veh.car, "L", POLICY_WHEELBASE))
+    #  the hand-written anchor's per-car calibration, computed ONCE: its lock,
+    #  its wheelbase, the grip it plans to, and whether it modulates the
+    #  throttle out of a corner. Every field is exactly the Corsa's value on
+    #  the Corsa (`baseline.driver_trim`), so no committed Corsa number moves.
+    trim = driver_trim(veh.car, float(veh.cfg.mu_scale))
+    lock_rad = float(getattr(veh, "lock_rad", trim["lock_rad"]))
+    wheelbase = trim["wheelbase"]
+    ay_plan, modulate = trim["ay_plan"], trim["modulate"]
     obs = np.empty(N_OBS)
     mu = [1.0, 1.0, 1.0, 1.0]
     crr = [1.0, 1.0, 1.0, 1.0]
@@ -147,7 +160,8 @@ def rollout(policy: Policy, track: str = "arena", *, dt: float = DT_TRAIN,
         #  Corsa's values on the Corsa, so every committed checkpoint's
         #  measured numbers are unmoved by either change.
         ctl = policy.controls(obs, Controls, lock_rad=lock_rad,
-                              wheelbase=wheelbase)
+                              wheelbase=wheelbase, ay_plan=ay_plan,
+                              modulate=modulate)
         m, c, _on = trk.surface_at(tr, veh.x, veh.y)
         mu[0] = mu[1] = mu[2] = mu[3] = m
         crr[0] = crr[1] = crr[2] = crr[3] = c

@@ -19,7 +19,7 @@ import os
 
 import numpy as np
 
-from .baseline import WHEELBASE, baseline_action
+from .baseline import AY_PLAN, WHEELBASE, baseline_action
 
 #: The observation, in order. Every entry is a read-only quantity the contract
 #: already publishes (CONTRACT section 4's attribute list) or a pure function
@@ -122,27 +122,31 @@ class Policy:
         return np.tanh(self.W2 @ h + self.b2)
 
     def action(self, obs, lock_rad: float = LOCK_RAD,
-               wheelbase: float = WHEELBASE) -> np.ndarray:
+               wheelbase: float = WHEELBASE, ay_plan: float = AY_PLAN,
+               modulate: bool = False) -> np.ndarray:
         """(steer, pedal, wing) in [-1, 1]: the baseline plus this net's trim.
 
         Clipped, so the composed action can never ask for more than full lock
         or more than a full pedal however large the network's output grows.
 
-        `lock_rad` and `wheelbase` go to the ANCHOR only -- the network reads
-        neither. That is deliberate: the 308 parameters are a trim in the
+        The four per-car arguments go to the ANCHOR only -- the network reads
+        none of them. That is deliberate: the 308 parameters are a trim in the
         car's own actuator units (a fraction of ITS lock, a fraction of ITS
         pedal), so a checkpoint means the same thing on any car, and the
         cross-car matrix in `evaluate.car_transfer` is comparing the same
-        policy rather than the same numbers meaning different angles.
+        policy rather than the same numbers meaning different angles. They
+        come from `baseline.driver_trim(car)`, which `env.rollout` calls once
+        per rollout; all four are exactly the Corsa's values for the Corsa.
         """
         net = self.act(obs)
         if not self.residual:
             return net[:3]
-        base = baseline_action(obs, lock_rad, wheelbase)
+        base = baseline_action(obs, lock_rad, wheelbase, ay_plan, modulate)
         return np.clip(base + RESID_GAIN * net[:3], -1.0, 1.0)
 
     def controls(self, obs, Controls, lock_rad: float = LOCK_RAD,
-                 wheelbase: float = WHEELBASE):
+                 wheelbase: float = WHEELBASE, ay_plan: float = AY_PLAN,
+                 modulate: bool = False):
         """The action decoded into a `vehicle.Controls`.
 
         `Controls` is passed in rather than imported so this module has no
@@ -150,7 +154,7 @@ class Policy:
         importable with `drive.vehicle` absent, which is what keeps the
         self-check cheap and the package honestly additive.
         """
-        a = self.action(obs, lock_rad, wheelbase)
+        a = self.action(obs, lock_rad, wheelbase, ay_plan, modulate)
         pedal = float(a[1])
         return Controls(
             delta=float(a[0]) * lock_rad,
