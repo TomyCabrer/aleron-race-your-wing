@@ -487,7 +487,8 @@ OFF, `qss_parity=False` unless stated.
 * `runs/wingaudit_top_station.json` — the eight-station top-wing sweep
 * `runs/wingaudit_coastdown.json` — coast-down drag isolation
 * `runs/wingaudit_lap_plate.csv`, `runs/wingaudit_lap_off.csv` — the 90 s arena laps behind the 36.6 % number
-* `runs/wingaudit_lap_plate_patch.csv`, `runs/wingaudit_lap_plate_shipped.csv` — the patch A/B comparison
+* `runs/wingaudit_lap_plate_shipped.csv` — the same lap re-run through the monkey-patch harness, shipped code (byte-identical to `wingaudit_lap_plate.csv`)
+* `runs/wingaudit_lap_plate_patch.csv` — the same lap under **patch B** (patch A's run overwrote to the same name and was not kept; its number, 2.9 %, is in the table above)
 
 ## Worth keeping as a repo script?
 **Yes, one thing**: a `validate.py` W-group check that the flank panel actually
