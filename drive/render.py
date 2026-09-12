@@ -2831,6 +2831,63 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     aux3.menu.show(menu_help(None), note=MENU_NO_PAD)
     aux3.menu = None
 
+    # --- the 3-D chase view (mode 'chase').  Two frames on the open map's
+    #     road: wings stowed, then mid-corner with the outer flank panel out
+    #     and the top wing raised.  What is under test is that the projection
+    #     is a PERSPECTIVE one (the horizon exists and the road narrows with
+    #     distance), that the car is where a chase camera puts it, that the
+    #     deployed panel is on the OUTER flank, and the frame cost.
+    rndc = Renderer(ViewConfig(mode='chase'), op, headless=True)
+    i_s = trk_index(op, 60.0)                      # a straight
+    st_c = _demo_state(float(op.xy[i_s][0]), float(op.xy[i_s][1]), float(op.psi[i_s]),
+                       u=28.0, v=0.0, r=0.0)
+    aux_c = _demo_hud(V=28.0)
+    aux_c.dev_left = aux_c.dev_right = True
+    aux_c.top_on = True
+    aux_c.wing_side, aux_c.wing_deploy, aux_c.top_deploy = 0, 0.0, 0.0
+    for _ in range(5):
+        rndc.update_camera(st_c, 1.0 / 60.0)
+    t_c = []
+    for _ in range(60):
+        rndc.draw_frame(st_c, None, 0.0, _demo_ctl(), aux_c, SkidBuffer())
+        t_c.append(rndc.frame_ms())
+    # the eye is BEHIND and ABOVE the car, so the car's own CG projects below
+    # the frame centre and a point 40 m down the road projects above it: that
+    # ordering is the whole assertion that this is not a plan view
+    p_car = rndc.world_to_screen(np.array([[st_c.X, st_c.Y]]))[0]
+    i_a = trk_index(op, 100.0)
+    p_far = rndc.world_to_screen(np.array([[float(op.xy[i_a][0]), float(op.xy[i_a][1])]]))[0]
+    rep('chase: perspective, not a plan view',
+        p_far[1] < p_car[1] - 40.0 and p_car[1] > rndc.H * 0.45,
+        f'car CG at y {p_car[1]:.0f} px, 40 m ahead at y {p_far[1]:.0f} px, horizon above both')
+    # the ribbon must narrow with distance -- a plan projection keeps it parallel
+    w_near = _ribbon_px_width(rndc, op, 70.0)
+    w_far = _ribbon_px_width(rndc, op, 160.0)
+    rep('chase: the road narrows with distance', w_far < 0.55 * w_near,
+        f'12 m ribbon is {w_near:.0f} px at 10 m ahead, {w_far:.0f} px at 100 m')
+    rep('chase: frame budget', float(np.mean(t_c)) <= 12.0,
+        f'{np.mean(t_c):.2f} ms mean over 60 frames, p99 {np.percentile(t_c, 99):.2f} ms '
+        f'(flat car_up is 2.1-2.4 ms)')
+    shot5 = os.path.join(os.path.abspath(screenshot_dir), 'render_chase3d.png')
+    rndc.screenshot(shot5)
+    # mid-corner, armed: wing_side = -1 is a RIGHT turn, so the LEFT panel is
+    # the outer one and the one that must light up (CONTRACT section 4)
+    i_c = trk_index(op, 470.0)
+    st_c2 = _demo_state(float(op.xy[i_c][0]), float(op.xy[i_c][1]), float(op.psi[i_c]),
+                        u=26.0, v=-0.5, r=-0.35)
+    aux_c.wing_side, aux_c.wing_deploy, aux_c.top_deploy = -1, 1.0, 1.0
+    for _ in range(5):
+        rndc.update_camera(st_c2, 1.0 / 60.0)
+    rndc.draw_frame(st_c2, None, 0.0, _demo_ctl(), aux_c, SkidBuffer())
+    lit = _lit_flank_side(rndc, st_c2, aux_c)
+    rep('chase: the OUTER flank panel is the lit one', lit == +1,
+        f'wing_side -1 (right turn) -> lit panel on the {"LEFT" if lit > 0 else "RIGHT"} flank, '
+        f'stowed panel on the other')
+    shot6 = os.path.join(os.path.abspath(screenshot_dir), 'render_chase3d_deployed.png')
+    rndc.screenshot(shot6)
+    rep('chase screenshots', os.path.exists(shot5) and os.path.exists(shot6),
+        f'{shot5}, {shot6}')
+
     if verbose:
         print(f'  CAP_HITS {CAP_HITS}')
         print('  DEVIATIONS:')
@@ -2839,6 +2896,35 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
         print(f'  {"PASS" if ok_all else "FAIL"}: '
               f'{sum(1 for _, p, _ in res if p)}/{len(res)} checks')
     return ok_all
+
+
+def _ribbon_px_width(rnd, tr, s: float) -> float:
+    """Screen width in px of the ribbon's two edges at arclength `s`.
+
+    The chase check's discriminator: under a perspective camera this shrinks
+    with distance, under eq.14's plan projection it is constant.
+    """
+    half = 0.5 * tr.width
+    (xl, yl), (xr, yr) = trk.point_at(tr, s, +half), trk.point_at(tr, s, -half)
+    p = rnd.world_to_screen(np.array([[xl, yl], [xr, yr]]))
+    return float(math.hypot(p[0][0] - p[1][0], p[0][1] - p[1][1]))
+
+
+def _lit_flank_side(rnd, st, aux) -> int:
+    """Which flank carries the LIT (deployed) panel: +1 left (y > 0), -1 right.
+
+    Read off the mesh rather than off the flag that built it, so the check is
+    not a tautology: the top wing spans both flanks and is excluded by its
+    near-zero mean y.
+    """
+    best, best_y = 0, 0.0
+    for verts, col in wing_mesh3(aux):
+        if tuple(col) != C_WING_ON:
+            continue
+        ym = float(np.mean(np.asarray(verts)[:, 1]))
+        if abs(ym) > max(abs(best_y), 0.5 * CAR_HALF_W):
+            best, best_y = (1 if ym > 0.0 else -1), ym
+    return best
 
 
 def trk_index(tr, s):
@@ -2877,6 +2963,17 @@ DEVIATIONS[:] = [
     "are identical to plots.gg_envelope.",
     "limiting_axle() is an additive helper: eq.12's FRONT/REAR/POWER display "
     "rule kept next to the utilisation it qualifies.",
+    "camera mode 'chase' is a PERSPECTIVE 3-D view from behind the car, not "
+    "the top-down view it used to be. The spec's eq.14 is a plan projection "
+    "and cannot express it, so Chase3D carries its own pinhole camera and "
+    "world_to_screen dispatches to it; the flat modes are untouched and "
+    "bit-identical. The mesh and the painter's sort are lifted from "
+    "garage.py's GarageView rather than imported -- render.py may not import "
+    "garage (garage imports vehicle and input, so the dependency would "
+    "invert), and duplicating ~200 lines of loft + sort was judged cheaper "
+    "than inverting the module map. No physics is read that the flat modes do "
+    "not already read: the three wings come from HudData exactly as "
+    "_draw_wing takes them.",
 ]
 
 
