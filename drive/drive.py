@@ -1910,6 +1910,282 @@ def lap_script(opts) -> dict:
                 max_n=drv.max_n, csv=opts.telemetry)
 
 
+# ---- driveability probe --------------------------------------------------
+# THE ONE SCRIPTED PATH THAT DELIBERATELY SWITCHES THE DRIVER AIDS ON.
+#
+# CONTRACT section 9 item 9 says the aids never enter a measurement, and that
+# still holds: nothing below is an acceptance number, validate.py does not call
+# any of it, and every figure it prints is labelled as a DRIVEABILITY figure.
+# But an aid that cannot be measured cannot be tuned either, and the owner's
+# bug report ("no acceleration while steering, no steering while braking") is a
+# statement about the aids at HIS settings -- ENGINE sport (power_scale 2.0),
+# ABS on, TC on, steer aid on -- so the probe has to be able to reproduce that
+# car. It therefore takes the aid state as arguments and runs BOTH input paths:
+#
+#   'kb'  -> input.KeyboardInput driven by a synthetic key state through
+#            set_keys(), steer_limit as the settings file has it. This is the
+#            human path: the ramps, the limiter and the fine modifier all run.
+#   'raw' -> the local ScriptedInput with delta commanded directly. No aid in
+#            the input layer at all, so a difference between the two rows is an
+#            input-layer effect and a difference within one row is physics.
+#
+# Everything here is pure in (state, dt) like the rest of the scripts: the key
+# pattern is a function of t only and no wall clock is read.
+
+class _KeyPattern:
+    """A synthetic keyboard, driven through KeyboardInput exactly as a human is.
+
+    `pattern(t) -> dict(up=, down=, left=, right=, fine=, ...)`. The object is
+    NOT a driver function: Sim would hand it (t, veh, track) and KeyboardInput
+    wants set_keys() + update(dt, V, beta, rpm, gear), so the probe loops by
+    hand instead of going through Sim. That is deliberate -- Sim's job is the
+    accumulator, and the probe needs the input layer, not the loop.
+    """
+
+    def __init__(self, fn):
+        self.fn = fn
+
+    def __call__(self, t):
+        return self.fn(t)
+
+
+def _probe_vehicle(power_scale=1.0, tc=False, abs_on=False, wet="none",
+                   start_V=0.0, gear=1, track_name="open"):
+    """A bare Vehicle staged on a track, with the aid flags the probe asks for."""
+    tr = trk.make_track(track_name, 50.0, False, surfaces=(wet != "none"))
+    cfg = VehicleConfig(power_scale=power_scale, tc_on=tc, abs_on=abs_on)
+    veh = Vehicle(CorsaC(), cfg)
+    start_s = 0.0 if tr.closed else 2.5
+    x, y = trk.point_at(tr, start_s, 0.0)
+    _, _, _, psi0, _ = trk.project(tr, x, y)
+    veh.reset(x, y, psi0, V=start_V, gear=gear)
+    return veh, tr
+
+
+def _probe_row(t, veh, ctl, kb):
+    """One sample. The column set IS the bug report: load, gain, slip, yaw."""
+    return dict(
+        t=t, V=hypot(veh.u, veh.v), u=veh.u, ax=veh.ax, ay=veh.ay, r=veh.r,
+        beta_deg=degrees(veh.beta),
+        throttle=ctl.throttle, brake=ctl.brake,
+        delta_cmd_deg=degrees(ctl.delta),
+        delta_wheel_deg=degrees(veh.delta_wheel[0]),
+        delta_lim_deg=(kb.delta_lim_deg if kb is not None else DELTA_LOCK_DEG),
+        eng_load=veh.eng_load, tc_gain=veh.tc_gain, tc_active=veh.tc_active,
+        kappa_fl=float(veh.kappa[0]), kappa_fr=float(veh.kappa[1]),
+        alpha_fl_deg=degrees(veh.alpha[0]), alpha_fr_deg=degrees(veh.alpha[1]),
+        Fz_fl=float(veh.Fz[0]), Fz_fr=float(veh.Fz[1]),
+        Fy_f=float(veh.Fy[0] + veh.Fy[1]), Fx_f=float(veh.Fx[0] + veh.Fx[1]),
+        util_f=veh.util_f, util_r=veh.util_r,
+        abs_n=int(veh.abs_active[0]) + int(veh.abs_active[1]),
+        gear=veh.gear, rpm=veh.rpm)
+
+
+def _probe_run(T, *, keys=None, delta_fn=None, power_scale=1.0, tc=False,
+               abs_on=False, steer_limit=True, start_V=0.0, gear=1,
+               dt=DT_PHYS, log_hz=50.0, wet="none"):
+    """Run one probe case and return its sample list.
+
+    Exactly one of `keys` (the KeyboardInput path) or `delta_fn` (the raw path,
+    `delta_fn(t, veh) -> Controls`) is given.
+    """
+    veh, _tr = _probe_vehicle(power_scale, tc, abs_on, wet=wet,
+                              start_V=start_V, gear=gear)
+    kb = None
+    if keys is not None:
+        from .input import KeyboardInput, K_US_DEG_MEASURED
+        kb = KeyboardInput(steer_limit=steer_limit, k_us_deg=K_US_DEG_MEASURED)
+    n = int(round(T / dt))
+    stride = max(1, int(round(1.0 / (log_hz * dt))))
+    rows = []
+    for i in range(n):
+        t = i * dt
+        if kb is not None:
+            kb.set_keys(**keys(t))
+            V = hypot(veh.u, veh.v)
+            beta_deg = degrees(atan2(veh.v, max(abs(veh.u), 0.5)))
+            ctl = kb.update(dt, V, beta_deg, veh.rpm, veh.gear)
+        else:
+            ctl = delta_fn(t, veh)
+        veh.step(ctl, (1.0, 1.0, 1.0, 1.0), (1.0, 1.0, 1.0, 1.0), dt)
+        if i % stride == 0:
+            rows.append(_probe_row(t, veh, ctl, kb))
+    return rows
+
+
+def _mean(rows, key, t0=None, t1=None):
+    sel = [r for r in rows
+           if (t0 is None or r["t"] >= t0) and (t1 is None or r["t"] < t1)]
+    return sum(r[key] for r in sel) / len(sel) if sel else float("nan")
+
+
+def _step_delta(dmax_deg, throttle=0.0, brake=0.0, clutch=0.0, t_step=1.0):
+    """The raw path's twin of holding an arrow key: the SAME 56.25 deg/s ramp."""
+    def fn(t, veh):
+        d = min(dmax_deg, W_DRIVE_DEG_PROBE * max(0.0, t - t_step))
+        return Controls(delta=radians(d), throttle=throttle, brake=brake,
+                        clutch=clutch, auto_gearbox=True)
+    return fn
+
+
+W_DRIVE_DEG_PROBE = 900.0 / 16.0        # 56.25; the input layer's hand rate
+
+
+def _probe_accel_while_steering(opts, tc, power_scale, V0, gear, angles):
+    """Symptom (b): does the car still accelerate with the wheel turned?
+
+    Full throttle throughout, a step steer wound on at the keyboard's own rate,
+    and the answer is `mean ax` once the corner has settled. The TC columns are
+    the diagnosis: on a FWD car the INSIDE front unloads and spins, so a TC
+    that reads max(kx_FL, kx_FR) cuts the engine for a wheel that is light, not
+    for a car that is out of traction.
+    """
+    out = []
+    for dmax in angles:
+        rows = _probe_run(5.0, delta_fn=_step_delta(dmax, throttle=1.0),
+                          power_scale=power_scale, tc=tc, abs_on=False,
+                          start_V=V0, gear=gear, dt=opts.dt)
+        out.append(dict(
+            delta_deg=dmax, tc=tc,
+            mean_ax=_mean(rows, "ax", 3.0), V_end=rows[-1]["V"],
+            ay=_mean(rows, "ay", 3.0),
+            eng_load=_mean(rows, "eng_load", 3.0),
+            tc_gain=_mean(rows, "tc_gain", 3.0),
+            kappa_fl=_mean(rows, "kappa_fl", 3.0),
+            kappa_fr=_mean(rows, "kappa_fr", 3.0),
+            Fz_fl=_mean(rows, "Fz_fl", 3.0), Fz_fr=_mean(rows, "Fz_fr", 3.0),
+            util_f=_mean(rows, "util_f", 3.0)))
+    return out
+
+
+def _probe_steer_while_braking(opts, abs_on, V0, gear, angles):
+    """Symptom (c): does the car still turn with the brake buried?
+
+    The number that matters is the SETTLED yaw rate against the commanded
+    angle. A car whose yaw rate PEAKS partway through the available lock and
+    then falls is a car whose front axle is past the tyre peak: adding lock
+    subtracts turning, which is exactly what "I can't steer while braking"
+    feels like from the driver's seat.
+    """
+    out = []
+    for dmax in angles:
+        rows = _probe_run(2.5, delta_fn=_step_delta(dmax, brake=1.0, clutch=1.0),
+                          power_scale=1.0, tc=False, abs_on=abs_on,
+                          start_V=V0, gear=gear, dt=opts.dt)
+        out.append(dict(
+            delta_deg=dmax, abs_on=abs_on,
+            r=_mean(rows, "r", 1.5, 2.0), ay=_mean(rows, "ay", 1.5, 2.0),
+            alpha_f=_mean(rows, "alpha_fl_deg", 1.5, 2.0),
+            beta=_mean(rows, "beta_deg", 1.5, 2.0),
+            Fy_f=_mean(rows, "Fy_f", 1.5, 2.0),
+            delta_wheel=_mean(rows, "delta_wheel_deg", 1.5, 2.0),
+            V_end=rows[-1]["V"],
+            abs_n=max(r["abs_n"] for r in rows)))
+    return out
+
+
+def _probe_limit_table():
+    """Symptom (a): what the aid actually allows, and how fast it gets there."""
+    from .input import (steer_limit_deg, _return_rate_deg, K_US_DEG_MEASURED,
+                        DELTA_LOCK_DEG as LOCK)
+    rows = []
+    for V in (5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0):
+        d0 = steer_limit_deg(V, 0.0, k_us_deg=K_US_DEG_MEASURED)
+        rows.append(dict(
+            V=V, lim_b0=d0,
+            lim_b10=steer_limit_deg(V, 10.0, k_us_deg=K_US_DEG_MEASURED),
+            lim_b20=steer_limit_deg(V, 20.0, k_us_deg=K_US_DEG_MEASURED),
+            t_to_lim=d0 / W_DRIVE_DEG_PROBE,
+            w_return=_return_rate_deg(V),
+            t_to_centre=d0 / _return_rate_deg(V)))
+    return rows
+
+
+def _probe_keyboard_combos(opts):
+    """Does the input layer lose one of two simultaneous presses?
+
+    up+right, down+right and the LSHIFT fine modifier, each held for 1.5 s
+    through the real KeyboardInput. If both axes move, the layer is innocent.
+    """
+    out = []
+    combos = (("up+right", dict(up=True, right=True)),
+              ("down+right", dict(down=True, right=True)),
+              ("up+left+fine", dict(up=True, left=True, fine=True)),
+              ("up only", dict(up=True)),
+              ("right only", dict(right=True)))
+    for label, held in combos:
+        rows = _probe_run(1.5, keys=(lambda t, h=held: dict(h)),
+                          power_scale=2.0, tc=True, abs_on=True,
+                          steer_limit=True, start_V=20.0, gear=4, dt=opts.dt)
+        last = rows[-1]
+        out.append(dict(combo=label, throttle=last["throttle"],
+                        brake=last["brake"],
+                        delta_cmd=last["delta_cmd_deg"],
+                        delta_lim=last["delta_lim_deg"],
+                        ax=last["ax"], r=last["r"]))
+    return out
+
+
+def drive_probe_script(opts) -> dict:
+    """DRIVEABILITY PROBE -- not a measurement. See the block comment above.
+
+    Reproduces the owner's three symptoms as numbers at HIS settings
+    (`runs/settings.json`: engine sport, ABS on, TC on, steer aid on) and, for
+    each, the same case with the aid switched off so the raw physics is visible
+    next to it. Writes the whole matrix to the run's JSON sidecar so a before /
+    after diff is a file diff.
+    """
+    power_scale = ENGINE_SCALE[opts.engine] if opts.engine in ENGINE_SCALE else 1.0
+    angles_a = (3.0, 6.0, 9.0, 14.0)
+    angles_b = (2.0, 4.0, 6.0, 8.0, 10.0, 14.0, 20.0, 32.0)
+
+    accel = []
+    for tc in (True, False):
+        accel += _probe_accel_while_steering(opts, tc, power_scale, 15.0, 3,
+                                             angles_a)
+    brake = []
+    for ab in (True, False):
+        brake += _probe_steer_while_braking(opts, ab, 30.0, 5, angles_b)
+
+    limits = _probe_limit_table()
+    combos = _probe_keyboard_combos(opts)
+
+    # the headline numbers: the three symptoms as one float each
+    def acc(tc, d):
+        return next(r for r in accel if r["tc"] is tc and r["delta_deg"] == d)
+    r_peak = max(r["r"] for r in brake if r["abs_on"])
+    r_lock = next(r["r"] for r in brake if r["abs_on"] and r["delta_deg"] == 32.0)
+    lim30 = next(r for r in limits if r["V"] == 30.0)
+
+    res = dict(
+        script="drive_probe", engine=opts.engine, power_scale=power_scale,
+        # (b) no acceleration while steering
+        b_ax_tc_on_6deg=acc(True, 6.0)["mean_ax"],
+        b_ax_tc_off_6deg=acc(False, 6.0)["mean_ax"],
+        b_ax_tc_on_14deg=acc(True, 14.0)["mean_ax"],
+        b_ax_tc_off_14deg=acc(False, 14.0)["mean_ax"],
+        b_tc_gain_6deg=acc(True, 6.0)["tc_gain"],
+        b_tc_gain_14deg=acc(True, 14.0)["tc_gain"],
+        b_kappa_inside_6deg=acc(False, 6.0)["kappa_fl"],
+        b_kappa_outside_6deg=acc(False, 6.0)["kappa_fr"],
+        # (c) no steering while braking
+        c_r_peak=r_peak, c_r_at_full_lock=r_lock,
+        c_r_ratio=(r_lock / r_peak if r_peak else float("nan")),
+        c_r_locked_wheels=max(r["r"] for r in brake if not r["abs_on"]),
+        # (a) steering feel
+        a_lim_30_beta0=lim30["lim_b0"], a_lim_30_beta20=lim30["lim_b20"],
+        a_t_to_lim_30=lim30["t_to_lim"], a_t_to_centre_30=lim30["t_to_centre"],
+        accel_matrix=accel, brake_matrix=brake, limit_table=limits,
+        key_combos=combos, csv=None)
+    if opts.telemetry:
+        # the matrix belongs beside the other runs, in the same JSON style
+        base, _ = os.path.splitext(os.fspath(opts.telemetry))
+        with open(base + ".json", "w") as fh:
+            json.dump(res, fh, indent=2, default=str)
+        res["csv"] = base + ".json"
+    return res
+
+
 SCRIPTS = {
     "skidpad_limit": skidpad_limit_script,
     "accel": accel_script,
@@ -1917,6 +2193,7 @@ SCRIPTS = {
     "wing_ab": wing_ab_script,
     "ramp_probe": ramp_probe_script,
     "lap": lap_script,                 # extra: the closed-circuit driver
+    "drive_probe": drive_probe_script, # DRIVEABILITY, aids ON; not a measurement
 }
 
 
