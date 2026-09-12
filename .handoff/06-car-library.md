@@ -376,12 +376,30 @@ WOT from rest, dry, TC off:
   note above.
 * `CdA` for both is `Cd × A` with an estimated `A` and has never been
   validated against a top speed (the 540i's 250 km/h is a limiter).
+* **The brakes are the Corsa's on every car**, and cannot be otherwise:
+  `corsa_c.brakes` is `MISSING`, `CarSpec` has no brake fields, and
+  `powertrain.brake_torques` holds `KBF = 1.6187e-4`, `KBR = 5.4154e-5`
+  N·m/Pa as module constants. In practice it does not bite for these three,
+  because the pedal still locks all four wheels on the heaviest of them
+  (`kappa_min` −0.989 on the 540i), and a locked-wheel stop measures `mu`
+  and mass, not brake torque. 100 → 0 km/h, full pedal, ABS **off**, dry:
+  corsa **49.86 m** (against the contract's 49.74 locked — unchanged),
+  mx5 55.35 m, 540i 63.997 m, peak decel 1.087 / 1.162 / 0.831 g. The gap
+  would open on a car whose brakes could NOT lock its wheels, and there is
+  no way to express that here.
 * `LOCK_RAD = radians(32.625)` (= 522° / 16.0) and `DEV_DEADBAND` are still
   the Corsa's steering lock. `steer_ratio` is in `CarSpec` (15.0 / 17.0) but
   the hand-wheel lock is not, so the wing's arming deadband is the Corsa's on
   every car. It is 5 % of lock and moves nothing measured; flagged, not fixed.
 * `cfg.h_aero` (0.55, "= h_cg") is **dead code** — it appears nowhere but its
   own definition. Left alone. If it is ever wired up it must follow `h_cg`.
+* `drive/plots.py` and `drive/validate.py` both hold their own `CorsaC()`, so
+  post-run plots and the acceptance suite are always referenced to the study's
+  car. Correct for `validate.py`; for `plots.py` it means a plot of a 540i
+  trace draws the Corsa's g-g envelope. Neither file is in this task's
+  ownership. The telemetry **sidecar** is right: it serialises `veh.car`,
+  which is the full ballasted `CarSpec` (53 fields plus the four derived), so
+  the trace is self-describing and a fixed `plots.py` has the data it needs.
 
 ## Files touched, and the contract
 
