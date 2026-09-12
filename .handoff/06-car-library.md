@@ -159,9 +159,10 @@ Nothing imports `cars.py` yet — it is inert and cannot move the suite. To make
 * `CdA` for the two new cars is `Cd × A` with an estimated `A`; unlike the
   Corsa's 0.66 it has **not** been validated against the published top speed.
   The 540i's 250 km/h is a limiter, so it cannot be.
-* Both new cars are RWD and will drive their front wheels until someone
-  implements the rear split. `drive_layout` records the intent; this is the
-  most visible honesty gap in the feature.
+* ~~Both new cars are RWD and will drive their front wheels~~ — **implemented**,
+  see `.handoff/11-rwd.md`. `'awd'` is still refused with a `ValueError`
+  rather than guessed at, since a centre diff is physics this driveline does
+  not have.
 
 ---
 
@@ -342,36 +343,54 @@ tyre load sensitivity on 1780 kg. All three are still front-limited. The
 headline +5 % / +8 % is `mu_scale` and nothing else, exactly as `cars.py`
 labels it.
 
-WOT from rest, dry, TC off:
+WOT from rest, dry, TC off. **These numbers were re-measured after real
+rear-wheel drive landed (`.handoff/11-rwd.md`) and the stale FWD column is
+kept beside them, because it is what the first version of this note quoted:**
 
-| car | 0–100 km/h | max front `kappa` | with TC |
+| car | 0–100 km/h, RWD implemented | as shipped FWD (stale) | real car |
 |---|---|---|---|
-| corsa | **14.80 s** | 0.076 | 14.80 s, 0.076 |
-| mx5 | 10.90 s | **0.906** | 10.74 s, 0.257 |
-| 540i | 8.36 s | **1.500** (the clamp) | 7.82 s, 0.375 |
+| corsa (FWD) | **14.8024 s** | 14.80 s | ~15.5 s quoted, 14.4 s Opel's own |
+| mx5 (RWD) | **10.4167 s** | 10.90 s | ~8.5 s |
+| 540i (RWD) | **6.8138 s** | 7.845 s | ~6.2 s |
 
-### Which of these are nonsense, plainly
+The 540i is now within 10 % of its real figure. The Corsa is unchanged to
+four decimals, as it must be — it was always FWD.
 
-* **Every longitudinal number for the MX-5 and the 540i is fiction.**
-  `powertrain.step` returns `T_drive` with `RL = RR = 0`: both cars are RWD
-  and the sim drives their **front** wheels. A 51–52 % front axle fed 168 or
-  440 N·m spins up — `kappa` 0.906 and 1.500, the latter sitting on
-  `KX_LIM`. The tell is that switching TC **on** makes both cars FASTER
-  (10.74 and 7.82 s): a launch that gains time from a traction-control cut
-  was never traction-limited in reality. Real figures are ~8.5 s (NB2 1.8)
-  and ~6.2 s (E39 540i manual).
+### Which of these are still nonsense, plainly
+
+* **The longitudinal numbers are now real physics, not fiction.** This bullet
+  used to say the opposite and it was right at the time: `powertrain.step`
+  returned `T_drive` with `RL = RR = 0`, so both RWD cars drove their front
+  wheels and spun them (`kappa` 0.906 and 1.500, the latter on `KX_LIM`).
+  The tell was that switching TC **on** made both *faster*. That is fixed:
+  `PowertrainParams.driven` follows `CarSpec.drive_layout`, and the rearward
+  load transfer under acceleration now **loads** the driven axle on these two
+  instead of unloading it (+765 N on the MX-5, +2058 N on the 540i, against
+  −504 N on the Corsa). What remains off is the **engine**, below, not the
+  driveline.
 * **The torque curve is the Corsa's shape, scaled.** 19 breakpoints built
   once at import, peak at 4000 rpm, a 6200 rpm cut. The MX-5's BP-Z3 peaks at
   5000 and revs to 7000; the M62TU peaks at 3600 and is nothing like a 1.2
   four. `cars.py` labels `engine_scale` an approximation and it is.
-* **Closed-loop lap times do not transfer.** `--script lap` on the arena:
-  corsa 60.836 s (`max_n` 3.21 m), mx5 65.527 s (`max_n` **16.27 m**), 540i
-  73.526 s (`max_n` **42.30 m**). `LapDriver`'s speed profile is calibrated
-  to the Corsa's grip and margin 0.90; on the other two the driver leaves the
-  track (the arena ribbon is nowhere near 42 m wide). Those two lap times are
-  **driver error, not car performance** — which is precisely why CONTRACT §4
-  says quantitative limits come from open-loop ramp steer. The Corsa's own
-  60.836 s is unchanged from the baseline.
+* ~~**Closed-loop lap times do not transfer.**~~ **FIXED** — see
+  `.handoff/12-lapdriver.md`. `LapDriver` now scales its planned grip (from an
+  open-loop ramp steer of that car, cached), its path gains (by wheelbase),
+  its lookahead and its **margin** (faded by how far the car's power-to-grip
+  ratio is outside the Corsa's) off the car itself. `--script lap`, arena,
+  200 s, ribbon half-width 6.0 m:
+
+  | car | lap, now | `max_n`, now | lap, stale | `max_n`, stale |
+  |---|---|---|---|---|
+  | corsa | 60.8355 s | 3.2148 m | 60.836 s | 3.21 m |
+  | mx5 | **60.2900 s** | **2.2577 m** | 65.527 s | 16.27 m |
+  | 540i | **60.4886 s** | **2.6745 m** | 73.526 s | 42.30 m |
+
+  All three are now inside the ribbon and the Corsa is bit-for-bit. They are
+  still not *competitive* lap times — the driver is deliberately conservative
+  on the two unfamiliar cars (margin 0.836 and 0.796 against the Corsa's
+  0.900) — so use them to compare a change to one car against itself, not to
+  rank the three cars against each other. CONTRACT §4's rule still holds:
+  quantitative limits come from open-loop ramp steer.
 * The MX-5's and 540i's roll gradients are too soft — see the `Kphi_tot`
   note above.
 * `CdA` for both is `Cd × A` with an estimated `A` and has never been
