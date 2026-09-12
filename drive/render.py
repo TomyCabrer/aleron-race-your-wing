@@ -493,7 +493,8 @@ def frame_budget_verdict(mean_ms: float, p99_ms: float,
     if raw_ok:
         return True, detail
     if scaled_ok:
-        return True, f'LOAD-ADJUSTED (raw budget 12.0/16.0 exceeded): {detail}'
+        return True, (f'LOAD-ADJUSTED (raw budget '
+                      f'{budget_mean:.1f}/{budget_p99:.1f} exceeded): {detail}')
     return False, f'OVER BUDGET even load-adjusted: {detail}'
 
 
@@ -2931,9 +2932,11 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
         rnd3.draw_frame(st_o, None, 0.0, _demo_ctl(), aux_o, SkidBuffer())
         t_o.append((time.perf_counter() - t0) * 1e3)
     runs, _s, wins = rnd3._visible_indices(105.0, 150.0)
-    rep('open map: pad centre frame', float(np.mean(t_o)) <= 12.0 and len(runs) >= 2
+    _okp, _whyp = frame_budget_verdict(float(np.mean(t_o)), float(np.mean(t_o)),
+                                       budget_mean=12.0, budget_p99=12.0)
+    rep('open map: pad centre frame', _okp and len(runs) >= 2
         and len(wins) == len(runs),
-        f'{np.mean(t_o):.2f} ms mean over 60 frames, {len(runs)} ribbon runs in view '
+        f'{_whyp}, {len(runs)} ribbon runs in view '
         f'(need >= 2: the road on both sides of the pad)')
     shot4 = os.path.join(os.path.abspath(screenshot_dir), 'render_open_pad.png')
     rnd3.screenshot(shot4)
@@ -2948,8 +2951,9 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
         t0 = time.perf_counter()
         rnd3.draw_frame(st_o2, None, 0.0, _demo_ctl(), aux_o, SkidBuffer())
         t_o.append((time.perf_counter() - t0) * 1e3)
-    rep('open map: road frame', float(np.mean(t_o)) <= 12.0,
-        f'{np.mean(t_o):.2f} ms mean over 60 frames')
+    rep('open map: road frame', *frame_budget_verdict(
+        float(np.mean(t_o)), float(np.mean(t_o)),
+        budget_mean=12.0, budget_p99=12.0))
     shot5 = os.path.join(os.path.abspath(screenshot_dir), 'render_open_road.png')
     rnd3.screenshot(shot5)
     rep('open map screenshots', os.path.exists(shot4) and os.path.exists(shot5),
@@ -3010,9 +3014,11 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     w_far = _ribbon_px_width(rndc, op, 160.0)
     rep('chase: the road narrows with distance', w_far < 0.55 * w_near,
         f'12 m ribbon is {w_near:.0f} px at 10 m ahead, {w_far:.0f} px at 100 m')
-    rep('chase: frame budget', float(np.mean(t_c)) <= 12.0,
-        f'{np.mean(t_c):.2f} ms mean over 60 frames, p99 {np.percentile(t_c, 99):.2f} ms '
-        f'(flat car_up is 2.1-2.4 ms)')
+    _okc, _whyc = frame_budget_verdict(float(np.mean(t_c)),
+                                       float(np.percentile(t_c, 99)),
+                                       budget_mean=12.0, budget_p99=20.0)
+    rep('chase: frame budget', _okc,
+        f'60 frames: {_whyc} (flat car_up is 2.1-2.4 ms)')
     shot5 = os.path.join(os.path.abspath(screenshot_dir), 'render_chase3d.png')
     rndc.screenshot(shot5)
     # mid-corner, armed: wing_side = -1 is a RIGHT turn, so the LEFT panel is

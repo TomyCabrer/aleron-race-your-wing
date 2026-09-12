@@ -16,7 +16,8 @@ import numpy as np
 from corsa_c import CorsaC, G
 from .. import track as trk
 from ..vehicle import Vehicle, VehicleConfig, Controls
-from .policy import Policy, N_OBS  # noqa: F401  (re-exported for drive.ml.__main__)
+from .policy import (Policy, N_OBS,  # noqa: F401  (re-exported for __main__)
+                     LOCK_RAD as POLICY_LOCK_RAD)
 
 #: Training and evaluation timesteps. See the package docstring for the
 #: measured drift that chose them: 2 ms costs 0.128 m over 20 s and buys 2x,
@@ -122,6 +123,7 @@ def rollout(policy: Policy, track: str = "arena", *, dt: float = DT_TRAIN,
     veh.reset(x0, y0, psi0, V0, gear=2)
 
     ep = Episode()
+    lock_rad = float(getattr(veh, "lock_rad", POLICY_LOCK_RAD))
     obs = np.empty(N_OBS)
     mu = [1.0, 1.0, 1.0, 1.0]
     crr = [1.0, 1.0, 1.0, 1.0]
@@ -135,7 +137,10 @@ def rollout(policy: Policy, track: str = "arena", *, dt: float = DT_TRAIN,
     for k in range(n_steps):
         t = k * dt                       # contract section 0: never accumulated
         observe(veh, tr, obs)
-        ctl = policy.controls(obs, Controls)
+        #  this car's own lock, not the Corsa's (policy.LOCK_RAD is only the
+        #  default). Exactly LOCK_RAD on the Corsa, so every committed
+        #  checkpoint's numbers are unmoved.
+        ctl = policy.controls(obs, Controls, lock_rad=lock_rad)
         m, c, _on = trk.surface_at(tr, veh.x, veh.y)
         mu[0] = mu[1] = mu[2] = mu[3] = m
         crr[0] = crr[1] = crr[2] = crr[3] = c

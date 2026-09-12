@@ -53,8 +53,17 @@ N_ACT = len(ACT_NAMES)
 
 N_HID = 16
 
-#: road-wheel lock, rad. `input.DELTA_LOCK_DEG = 32.625`; the policy's steer
+#: The CORSA's road-wheel lock, rad, and the DEFAULT only. The policy's steer
 #: output is tanh, so +-1 is full lock and it can never command more.
+#:
+#: It used to be the only lock this module knew, which was fine while the sim
+#: had one car and silently wrong the moment it had three: `vehicle.py` takes
+#: the lock from the car (`car_lock_rad`) and `input.py` from `lock_deg`, so a
+#: policy driving an MX-5 would have been commanding 32.625 deg of a 31.2 deg
+#: rack. `action` and `controls` take a `lock_rad` argument and `env.rollout`
+#: passes `veh.lock_rad`; the default keeps every existing call and every
+#: committed checkpoint's measured numbers identical, because for the Corsa
+#: `car_lock_rad(car) == LOCK_RAD` exactly.
 LOCK_RAD = math.radians(32.625)
 
 #: The wing is armed when the `wing` output clears this. A threshold, not a
@@ -112,7 +121,7 @@ class Policy:
         h = np.tanh(self.W1 @ obs + self.b1)
         return np.tanh(self.W2 @ h + self.b2)
 
-    def action(self, obs) -> np.ndarray:
+    def action(self, obs, lock_rad: float = LOCK_RAD) -> np.ndarray:
         """(steer, pedal, wing) in [-1, 1]: the baseline plus this net's trim.
 
         Clipped, so the composed action can never ask for more than full lock
@@ -121,10 +130,10 @@ class Policy:
         net = self.act(obs)
         if not self.residual:
             return net[:3]
-        base = baseline_action(obs, LOCK_RAD)
+        base = baseline_action(obs, lock_rad)
         return np.clip(base + RESID_GAIN * net[:3], -1.0, 1.0)
 
-    def controls(self, obs, Controls):
+    def controls(self, obs, Controls, lock_rad: float = LOCK_RAD):
         """The action decoded into a `vehicle.Controls`.
 
         `Controls` is passed in rather than imported so this module has no
@@ -132,10 +141,10 @@ class Policy:
         importable with `drive.vehicle` absent, which is what keeps the
         self-check cheap and the package honestly additive.
         """
-        a = self.action(obs)
+        a = self.action(obs, lock_rad)
         pedal = float(a[1])
         return Controls(
-            delta=float(a[0]) * LOCK_RAD,
+            delta=float(a[0]) * lock_rad,
             throttle=max(pedal, 0.0),
             brake=max(-pedal, 0.0),
             wing_on=bool(a[2] > WING_ON_THRESH),
