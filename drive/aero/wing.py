@@ -19,6 +19,11 @@ Roles
              the SIDE force the study is about (span = vertical extent)
     'top'    a rear/roof wing making downforce: solved in AeroBO's mirrored
              frame (lift = downforce, wall above, plates towards it)
+
+`DESIGN_VARS` is the one ordered list of what a designer (human or the GP)
+may move, in the order the garage's DESIGNER page shows the rows. BOUNDS,
+`design_bounds`, `design_x0`, `design_labels` and `apply_design` all read it,
+so the optimiser's design vector is the page's row order by construction.
 """
 
 from __future__ import annotations
@@ -33,13 +38,32 @@ from .vlm import Lattice, TWO_PI
 
 ROLES = ("flank", "top")
 
-# packaging bands the designer / optimiser stay inside (m, deg)
-BOUNDS = {
-    "flank": dict(span=(0.35, 1.05), chord=(0.20, 0.70), taper=(0.35, 1.0),
-                  twist_deg=(-6.0, 6.0), plate_h=(0.0, 0.16), inc_deg=(-6.0, 14.0)),
-    "top": dict(span=(0.70, 1.64), chord=(0.12, 0.50), taper=(0.35, 1.0),
-                twist_deg=(-6.0, 6.0), plate_h=(0.0, 0.30), inc_deg=(-2.0, 16.0)),
-}
+#: The design variables, in the ONE order the garage's DESIGNER page lists
+#: them (CONTRACT section 7: "section, span, chord, taper, twist, end plates,
+#: the slot's mount"). Everything ordered downstream is read off this table --
+#: the packaging bands, the optimiser's bounds, its start vector, its labels
+#: and its decode -- so the five cannot drift apart the way five hand-written
+#: lists can, and a reordered page row moves the vector with it.
+#:
+#: The page's first row, the section, is a discrete library choice and so is
+#: not a vector coordinate: the optimiser designs the planform for whatever
+#: section the page is showing. `owner` says where the number lives: 'spec' is
+#: a WingSpec field, 'slot' is the mount angle, which belongs to the CarBuild
+#: slot and not to the wing (one library wing can be bolted on at any angle).
+#: Bands are (lo, hi) in m / deg, per role.
+DESIGN_VARS = (
+    #  attr          owner   label           unit   flank band      top band
+    ("span",        "spec", "span",         "m",   (0.35, 1.05),  (0.70, 1.64)),
+    ("chord",       "spec", "root chord",   "m",   (0.20, 0.70),  (0.12, 0.50)),
+    ("taper",       "spec", "taper",        "",    (0.35, 1.0),   (0.35, 1.0)),
+    ("twist_deg",   "spec", "tip twist",    "deg", (-6.0, 6.0),   (-6.0, 6.0)),
+    ("plate_h",     "spec", "end plates",   "m",   (0.0, 0.16),   (0.0, 0.30)),
+    ("inc_deg",     "slot", "incidence",    "deg", (-6.0, 14.0),  (-2.0, 16.0)),
+)
+
+# packaging bands the designer / optimiser stay inside (m, deg). Keyed role ->
+# variable; the inner dict's order IS the page order, by construction.
+BOUNDS = {role: {v[0]: v[4 + i] for v in DESIGN_VARS} for i, role in enumerate(ROLES)}
 V_REF = {"flank": 29.0875, "top": 40.0}      # m/s: R = 100 m limit speed / a fast straight
 RE_BANK = (1e5, 1.5e5, 2e5, 3e5, 5e5, 7e5, 1e6, 1.5e6, 2e6, 3e6)
 
@@ -47,6 +71,116 @@ RE_BANK = (1e5, 1.5e5, 2e5, 3e5, 5e5, 7e5, 1e6, 1.5e6, 2e6, 3e6)
 def re_bank_snap(re: float) -> float:
     lr = math.log(max(re, 1.0))
     return min(RE_BANK, key=lambda r: abs(math.log(r) - lr))
+
+
+# --------------------------------------------------------------------------- #
+#  the design vector: ONE order, the page's                                    #
+# --------------------------------------------------------------------------- #
+#  Four things used to be written out by hand and had to agree coordinate for
+#  coordinate: the bounds list, the start vector, the decode inside the
+#  objective and the write-back after the run. They did agree -- measured, see
+#  .handoff/task2-optimiser-order.md -- but nothing held them to it. These
+#  five functions are that hold: all of them walk DESIGN_VARS, so the only way
+#  to reorder the optimiser is to reorder the page's table.
+def design_vars(role: str = "flank", owner: str | None = None) -> tuple[str, ...]:
+    """The design vector's coordinate names, in the page's row order.
+    `owner='spec'` gives just the WingSpec fields, `'slot'` the mount angle."""
+    return tuple(v[0] for v in DESIGN_VARS if owner is None or v[1] == owner)
+
+
+def design_labels(role: str = "flank", unit: bool = False) -> list[str]:
+    """The page's own row labels, in the page's order. The flank panel stands
+    on its side, so the page calls its span 'span (vertical)' -- the label
+    lives here so a read-out and a row cannot end up naming a coordinate
+    differently."""
+    out = []
+    for attr, _owner, label, u, *_bands in DESIGN_VARS:
+        if attr == "span" and role != "top":
+            label = "span (vertical)"
+        out.append(f"{label} [{u}]" if unit and u else label)
+    return out
+
+
+def design_bounds(role: str = "flank", **override) -> list[tuple[float, float]]:
+    """`[(lo, hi), ...]` for `optimize.maximise`, in the page's order.
+
+    Keyword overrides narrow one band without touching the order -- the garage
+    passes `span=` to keep a flank panel between sill and roof. An unknown
+    keyword raises rather than being silently dropped: a typo there would
+    quietly hand the optimiser the full packaging band."""
+    names = design_vars(role)
+    bad = set(override) - set(names)
+    if bad:
+        raise ValueError(f"not design variables: {sorted(bad)}")
+    b = BOUNDS[role if role in BOUNDS else "flank"]
+    out = []
+    for attr in names:
+        lo, hi = override.get(attr, b[attr])
+        out.append((float(lo), float(hi)))
+    return out
+
+
+def design_x0(spec: "WingSpec", inc_deg: float) -> list[float]:
+    """The design vector of a wing as it stands, in the page's order: the
+    optimiser's starting point and the value its result is judged against."""
+    return [float(inc_deg) if v[1] == "slot" else float(getattr(spec, v[0]))
+            for v in DESIGN_VARS]
+
+
+def apply_design(spec: "WingSpec", x, *, clamp: bool = True) -> float:
+    """Decode a design vector onto `spec` in the page's order and return the
+    mount angle for the slot to take. The exact inverse of `design_x0`, which
+    is the point: the objective's decode and the write-back after the run are
+    now the same three lines of code, not two hand-kept lists."""
+    xa = np.asarray(x, float).ravel()
+    if xa.size != len(DESIGN_VARS):
+        raise ValueError(f"design vector has {xa.size} coordinates, "
+                         f"expected {len(DESIGN_VARS)} ({', '.join(design_vars())})")
+    inc = 0.0
+    for v, xi in zip(DESIGN_VARS, xa):
+        if v[1] == "spec":
+            setattr(spec, v[0], float(xi))
+        else:
+            inc = float(xi)
+    if clamp:
+        spec.clamp()
+    return inc
+
+
+#: The flank panel is a VERTICAL extent centred on its mount, so how tall it
+#: may be depends on where it is bolted: it has to clear the sill below and
+#: stay under the roof rail above. 0.28 m is the sill face the garage's body
+#: mesh puts the rocker at, 1.34 m the rail just under the 1.440 m published
+#: roof. They lived as two bare literals inside the optimiser's bounds and
+#: nowhere else, which is why the DESIGNER's span row did not know about them.
+SILL_Z, ROOF_Z = 0.28, 1.34
+
+
+def span_fit(role: str, h: float) -> float:
+    """The tallest span `role` can actually be packaged at, mounted at height
+    `h` -- the upper bound BOTH the page's span row and the optimiser's span
+    band should use, so the page cannot offer a panel the optimiser is
+    forbidden to propose. A top wing is limited by the car's width, not by
+    its ride height, so its band is unconditional."""
+    lo, hi = BOUNDS[role if role in BOUNDS else "flank"]["span"]
+    if role != "flank":
+        return hi
+    #  the floor keeps the band non-degenerate: a mount right under the rail
+    #  would otherwise collapse it to nothing and leave the GP no room at all
+    return max(min(hi, 2.0 * min(h - SILL_Z, ROOF_Z - h)), lo + 0.05)
+
+
+def format_design(x, role: str = "flank") -> str:
+    """One line naming every coordinate, in the page's order, for a read-out
+    or a log. Degrees carry a sign because the sign is the design decision
+    (washout vs wash-in, nose-down vs nose-up)."""
+    xa = np.asarray(x, float).ravel()
+    bits = []
+    for v, lab, xi in zip(DESIGN_VARS, design_labels(role), xa):
+        u = v[3]
+        bits.append(f"{lab} {xi:+.1f}{' ' + u}" if u == "deg" else
+                    f"{lab} {xi:.3f}" + (f" {u}" if u else ""))
+    return "   ".join(bits)
 
 
 @dataclass
@@ -90,7 +224,7 @@ class WingSpec:
         if self.role not in ROLES:
             self.role = "flank"
         b = BOUNDS[self.role]
-        for k in ("span", "chord", "taper", "twist_deg", "plate_h"):
+        for k in design_vars(self.role, owner="spec"):     # the page's order
             lo, hi = b[k]
             setattr(self, k, float(min(max(getattr(self, k), lo), hi)))
         self.n_strips = int(min(max(self.n_strips, 8), 48))
@@ -282,6 +416,64 @@ def self_check(verbose: bool = True) -> bool:
         ok = ok and passed
         if verbose:
             print(f"  [{'ok' if passed else 'FAIL'}] {tag}: {msg}")
+
+    # -- the design vector is the DESIGNER page's row order ----------------- #
+    #  CONTRACT section 7 lists the page as "section, span, chord, taper,
+    #  twist, end plates, the slot's mount". The section is a discrete library
+    #  choice, so the vector is the other six, in that order.
+    page_order = ("span", "chord", "taper", "twist_deg", "plate_h", "inc_deg")
+    rep("design vector is the DESIGNER page's row order (CONTRACT section 7)",
+        design_vars() == page_order, " -> ".join(design_vars()))
+    for role in ROLES:
+        bl = design_bounds(role)
+        labs = design_labels(role)
+        rep(f"{role}: bounds, labels and BOUNDS agree coordinate for coordinate",
+            len(bl) == len(labs) == len(DESIGN_VARS)
+            and all(bl[i] == BOUNDS[role][a] for i, a in enumerate(design_vars(role))),
+            f"{len(bl)} vars: {', '.join(labs)}")
+    sp0 = WingSpec("order", "flank", "naca2412", span=0.60, chord=0.40, taper=0.70,
+                   twist_deg=-2.0, plate_h=0.04)
+    x_ref = design_x0(sp0, 3.0)
+    sp1 = sp0.copy()
+    inc1 = apply_design(sp1, x_ref)
+    rep("design_x0 -> apply_design is the identity", design_x0(sp1, inc1) == x_ref,
+        format_design(x_ref))
+    # The failure a hand-written decode has: coordinate i writing variable j.
+    # Push one coordinate to its upper bound and check that exactly the one
+    # quantity it names moved.
+    crossed = []
+    for i, attr in enumerate(design_vars("flank")):
+        x = list(x_ref)
+        x[i] = BOUNDS["flank"][attr][1]
+        sp = sp0.copy()
+        inc = apply_design(sp, x)
+        moved = [a for a in design_vars("flank", owner="spec")
+                 if getattr(sp, a) != getattr(sp0, a)]
+        want_moved = [] if attr == "inc_deg" else [attr]
+        want_inc = x[i] if attr == "inc_deg" else 3.0
+        if moved != want_moved or inc != want_inc:
+            crossed.append(f"{attr}: moved {moved}, inc {inc:+.1f}")
+    rep("every coordinate decodes onto its own variable and no other",
+        not crossed, f"{len(x_ref)} coordinates, none crossed" if not crossed else str(crossed))
+    try:
+        design_bounds("flank", spann=(0.4, 0.9))
+        rep("an unknown bound override raises rather than being dropped", False, "no exception")
+    except ValueError as exc:
+        rep("an unknown bound override raises rather than being dropped", True, str(exc))
+    capped = design_bounds("flank", span=(0.35, span_fit("flank", 0.90)))
+    rep("an override narrows one band and leaves the order alone",
+        capped[0][0] == 0.35 and abs(capped[0][1] - 0.88) < 1e-12
+        and capped[1:] == design_bounds("flank")[1:],
+        f"span capped to {capped[0][1]:.3f} m by the sill/roof fit, the other five untouched")
+    #  the garage's optimiser has always used this fit; reproduce its two
+    #  literals exactly so adopting span_fit cannot move any bound
+    rep("span_fit reproduces the optimiser's sill/roof fit",
+        all(abs(span_fit("flank", h)
+                - max(min(1.05, 2.0 * min(h - 0.28, 1.34 - h)), 0.40)) < 1e-12
+            for h in (0.40, 0.60, 0.81, 0.90, 1.00, 1.15, 1.20))
+        and span_fit("top", 1.6) == BOUNDS["top"]["span"][1],
+        f"h 0.90 -> {span_fit('flank', 0.90):.2f} m, h 1.15 -> {span_fit('flank', 1.15):.2f} m, "
+        f"top unconditional {span_fit('top', 1.6):.2f} m")
 
     e423 = af.load_dat(af.DATA_DIR + "/e423.dat")[1]
     spec = WingSpec("flank-e423", "flank", "e423", span=0.78, chord=0.45, taper=1.0, plate_h=0.0)

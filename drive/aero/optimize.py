@@ -11,6 +11,15 @@ question at garage scale.
 `maximise(f, bounds, ...)`: f maps a design vector (real units) to a
 scalar; return -inf (or raise ValueError) for an infeasible design and it
 is scored at a penalty below the worst feasible value seen.
+
+Coordinate order is the CALLER's throughout: `bounds`, `x0`, the `labels`
+the caller may hand in, `x_best` and `X` are all in one order and it is the
+caller's. The garage's caller takes that order from
+`wing.DESIGN_VARS` = the DESIGNER page's row order, so what the optimiser
+reports reads top-to-bottom like the page. `labels` is checked against the
+dimension of `bounds` -- a label list that has drifted out of step with the
+bounds is the one mistake here that produces plausible, wrong read-outs
+rather than an exception, so it is made into an exception.
 """
 
 from __future__ import annotations
@@ -84,13 +93,26 @@ def sobol(n: int, d: int, seed: int = 0) -> np.ndarray:
         return np.random.default_rng(seed).random((n, d))
 
 
+def _check_labels(labels, d: int):
+    if labels is None:
+        return None
+    labels = list(labels)
+    if len(labels) != d:
+        raise ValueError(f"{len(labels)} labels for a {d}-variable design vector: "
+                         f"{labels}")
+    return labels
+
+
 def maximise(f, bounds, n_init: int = 8, n_iter: int = 24, seed: int = 0,
-             progress=None, x0=None) -> dict:
+             progress=None, x0=None, labels=None) -> dict:
     """BO on `f` over `bounds` = [(lo, hi), ...]. Returns x_best (real units),
-    f_best, and the whole history. `x0` (real units) is evaluated first."""
+    f_best, and the whole history. `x0` (real units) is evaluated first.
+    `labels` names the coordinates, in the same order as `bounds`, and is
+    carried into the result so a read-out cannot mis-name one."""
     bounds = np.asarray(bounds, float)
     lo, hi = bounds[:, 0], bounds[:, 1]
     d = len(lo)
+    labels = _check_labels(labels, d)
     rng = np.random.default_rng(seed)
     U = sobol(n_init, d, seed)
     if x0 is not None:
@@ -140,13 +162,14 @@ def maximise(f, bounds, n_init: int = 8, n_iter: int = 24, seed: int = 0,
     y = np.asarray(Y)
     i = int(np.argmax(y))
     return dict(x_best=lo + np.asarray(X)[i] * (hi - lo), f_best=float(y[i]),
-                X=lo + np.asarray(X) * (hi - lo), y=y, n_eval=len(Y),
+                X=lo + np.asarray(X) * (hi - lo), y=y, n_eval=len(Y), labels=labels,
                 best_trace=np.maximum.accumulate(np.where(np.isfinite(y), y, -np.inf)).tolist())
 
 
-def random_search(f, bounds, n: int = 32, seed: int = 1) -> dict:
+def random_search(f, bounds, n: int = 32, seed: int = 1, labels=None) -> dict:
     bounds = np.asarray(bounds, float)
     lo, hi = bounds[:, 0], bounds[:, 1]
+    labels = _check_labels(labels, len(lo))
     rng = np.random.default_rng(seed)
     X, Y = [], []
     for _ in range(n):
@@ -159,8 +182,18 @@ def random_search(f, bounds, n: int = 32, seed: int = 1) -> dict:
         Y.append(v if math.isfinite(v) else -math.inf)
     y = np.asarray(Y)
     i = int(np.argmax(y))
-    return dict(x_best=X[i], f_best=float(y[i]), n_eval=n,
+    return dict(x_best=X[i], f_best=float(y[i]), n_eval=n, labels=labels,
                 best_trace=np.maximum.accumulate(y).tolist())
+
+
+def describe(res: dict, labels=None, fmt: str = "{:+.4g}") -> str:
+    """`x_best` written out coordinate by coordinate, in the caller's order --
+    the order `bounds` was given in, so for the garage the DESIGNER page's row
+    order. Falls back to `x[i]` only if nobody named the variables."""
+    x = np.asarray(res["x_best"], float).ravel()
+    names = labels or res.get("labels") or [f"x[{i}]" for i in range(x.size)]
+    names = _check_labels(names, x.size)
+    return "   ".join(f"{n} {fmt.format(float(v))}" for n, v in zip(names, x))
 
 
 # --------------------------------------------------------------------------- #
@@ -197,6 +230,27 @@ def self_check(verbose: bool = True) -> bool:
     rep("infeasible designs are tolerated", math.isfinite(bo2["f_best"]) and bo2["x_best"][0] <= 5.0,
         f"best {-bo2['f_best']:.3f} at x0 {bo2['x_best'][0]:.2f}")
     rep("history complete", bo["n_eval"] == 32 and len(bo["best_trace"]) == 32, "")
+
+    # -- the coordinate order is the caller's, end to end ------------------- #
+    named = maximise(branin, bnds, n_init=8, n_iter=8, seed=3, labels=("x1", "x2"))
+    txt = describe(named)
+    rep("labels ride along and name x_best in the caller's order",
+        named["labels"] == ["x1", "x2"] and txt.startswith("x1 ") and "x2 " in txt[3:], txt)
+    try:
+        maximise(branin, bnds, n_init=4, n_iter=1, labels=("x1",))
+        rep("a label list out of step with bounds raises", False, "no exception")
+    except ValueError as exc:
+        rep("a label list out of step with bounds raises", True, str(exc)[:56])
+
+    # Reordering a design vector reassigns which Sobol coordinate drives which
+    # variable, so the TRAJECTORY moves; the problem does not. Branin with its
+    # two variables swapped is the same surface relabelled, and the same 32
+    # evaluations land just as close to the same optimum.
+    swapped = maximise(lambda x: branin((x[1], x[0])), [bnds[1], bnds[0]],
+                       n_init=8, n_iter=24, seed=3)
+    rep("permuting the design vector does not change the problem",
+        -swapped["f_best"] - 0.397887 < 0.5,
+        f"as given {-bo['f_best']:.4f}, swapped {-swapped['f_best']:.4f} (opt 0.3979)")
     if verbose:
         print("  ALL PASS" if ok else "  FAILURES ABOVE")
     return ok

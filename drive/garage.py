@@ -49,7 +49,8 @@ from .menu import Menu, StickNav
 from . import garage_ui as ui
 from .aero.library import Library
 from .aero.wing import (WingSpec, BOUNDS, V_REF, ROLES, design_point, spanwise,
-                        wing_cl, wing_cd, re_bank_snap)
+                        wing_cl, wing_cd, re_bank_snap, design_bounds, design_x0,
+                        design_labels, apply_design, span_fit, format_design)
 from .aero import optimize as opt
 from .vehicle import DevAero, TopAero
 
@@ -1109,13 +1110,29 @@ class Designer:
         self.update()
 
     # -- the parameter rows --------------------------------------------------
-    def _set(self, attr, lo=None, hi=None):
+    def _set(self, attr, lo=None, hi=None, cap=None):
+        """`cap()` is a band that moves while the page is open -- the flank
+        panel's span depends on the slot height, so `Param.hi` (read once at
+        build time) cannot express it and the setter has to. Without it the
+        page offered spans the optimiser was forbidden to propose."""
         def f(v):
+            if cap is not None:
+                lo_c, hi_c = cap()
+                v = min(max(float(v), lo_c), hi_c)
             setattr(self.spec, attr, float(v) if lo is not None else v)
             self.spec.clamp()
             self.dirty = True
             self.update()
         return f
+
+    def _span_band(self) -> tuple[float, float]:
+        """The span band BOTH the page's row and the optimiser use, at the
+        slot height the page is showing (`wing.span_fit`). One function, so
+        the page cannot offer a panel the optimiser may not propose -- which
+        it did: at h = 1.15 m the row went to 1.05 m and the optimiser
+        stopped at 0.40 m."""
+        lo = BOUNDS[self.role]["span"][0]
+        return lo, span_fit(self.role, self.g.build.slot(self.key).h)
 
     def _slot_set(self, attr):
         def f(v):
@@ -1137,9 +1154,11 @@ class Designer:
               choices=names, help="LEFT/RIGHT cycles the section library; A opens it with the polar plots"),
             P("browse", "browse the airfoil library  (A)", None, lambda _: self.g.open_airfoils(), kind="action"),
             P("pf", "PLANFORM", None, kind="label"),
-            P("span", "span" if self.role == "top" else "span (vertical)", lambda: self.spec.span, self._set("span", *b["span"]),
+            P("span", "span" if self.role == "top" else "span (vertical)", lambda: self.spec.span,
+              self._set("span", *b["span"], cap=self._span_band),
               step=0.02, fine=0.005, lo=b["span"][0], hi=b["span"][1], unit="m",
-              help="the lattice's first-order variable: at fixed area span IS aspect ratio"),
+              help="the lattice's first-order variable: at fixed area span IS aspect ratio; "
+                   "a flank panel is also capped by the sill/roof fit at this slot height"),
             P("chord", "root chord", lambda: self.spec.chord, self._set("chord", *b["chord"]),
               step=0.02, fine=0.005, lo=b["chord"][0], hi=b["chord"][1], unit="m"),
             P("taper", "taper (tip/root)", lambda: self.spec.taper, self._set("taper", *b["taper"]),
@@ -1262,44 +1281,44 @@ class Designer:
         if polar is None:
             return None
         from .aero.wing import analyse as _analyse
-        span_hi = b["span"][1]
-        if role == "flank":                       # fit between sill and roof
-            span_hi = min(span_hi, 2.0 * min(slot.h - 0.28, 1.34 - slot.h))
-        bounds = [(b["span"][0], max(span_hi, b["span"][0] + 0.05)), b["chord"], b["taper"],
-                  b["twist_deg"], b["plate_h"], b["inc_deg"]]
-        x0 = [self.spec.span, self.spec.chord, self.spec.taper, self.spec.twist_deg,
-              self.spec.plate_h, slot.inc_deg]
+        #  The design vector is `wing.DESIGN_VARS` = this page's row order, and
+        #  the bounds, the start vector, the objective's decode and the
+        #  write-back all walk that one table (`design_bounds` / `design_x0` /
+        #  `apply_design`). They used to be four hand-written lists that
+        #  happened to agree; now they cannot drift. The span band is the same
+        #  sill/roof fit the span row shows, through the same `span_fit`.
+        labels = design_labels(role)
+        bounds = design_bounds(role, span=self._span_band())
+        x0 = design_x0(self.spec, slot.inc_deg)
         V = V_REF[role]
 
         def f(x):
-            sp = self.spec.copy(span=float(x[0]), chord=float(x[1]), taper=float(x[2]),
-                                twist_deg=float(x[3]), plate_h=float(x[4]))
+            sp = self.spec.copy()
+            inc = apply_design(sp, x, clamp=False)     # `copy(**changes)` never clamped either
             if role == "flank" and (slot.x + 0.5 * sp.chord > CAR_X_FRONT or slot.x - 0.5 * sp.chord < CAR_X_REAR):
                 return -math.inf
             try:
                 sp.aero = _analyse(sp, polar, V=V, ride_h=ride, standoff=DEV_OUT0 + DEV_OUT1)
             except ValueError:
                 return -math.inf
-            dp = design_point(sp, float(x[5]), V=V, x_w=slot.x)
+            dp = design_point(sp, inc, V=V, x_w=slot.x)
             if not dp or dp.get("stalled") or dp["stall_margin_deg"] < 2.0:
                 return -math.inf
             return self._objective_value(dp)
 
         n = int(self.budget)
         t0 = time.perf_counter()
-        bo = opt.maximise(f, bounds, n_init=min(8, n // 2), n_iter=max(n - min(8, n // 2), 1), seed=0, x0=x0)
-        rs = opt.random_search(f, bounds, n=n, seed=1)
+        bo = opt.maximise(f, bounds, n_init=min(8, n // 2), n_iter=max(n - min(8, n // 2), 1), seed=0,
+                          x0=x0, labels=labels)
+        rs = opt.random_search(f, bounds, n=n, seed=1, labels=labels)
         dt = time.perf_counter() - t0
         f0 = f(np.asarray(x0))
         self.result = dict(bo=bo["f_best"], rs=rs["f_best"], start=f0, trace=bo["best_trace"],
                            rs_trace=rs["best_trace"], n=n, secs=dt, objective=self.objective,
-                           x=bo["x_best"].tolist())
+                           x=bo["x_best"].tolist(), labels=labels,
+                           design=format_design(bo["x_best"], role))
         if math.isfinite(bo["f_best"]) and bo["f_best"] >= f0:
-            x = bo["x_best"]
-            self.spec.span, self.spec.chord, self.spec.taper = float(x[0]), float(x[1]), float(x[2])
-            self.spec.twist_deg, self.spec.plate_h = float(x[3]), float(x[4])
-            self.spec.clamp()
-            slot.inc_deg = float(x[5])
+            slot.inc_deg = apply_design(self.spec, bo["x_best"])
             self.g.build.sync_mirror(self.key)
             self.dirty = True
             self.msg = (f"BO {bo['f_best']:.3g} vs random {rs['f_best']:.3g} vs start {f0:.3g} "
@@ -1434,6 +1453,9 @@ class Designer:
             text.blit(screen, f"optimiser: {rr['objective']}  BO {rr['bo']:.4g}  random {rr['rs']:.4g}  "
                       f"start {rr['start']:.4g}   {rr['n']} evals {rr['secs']:.1f} s", x, y, 13, ui.C_SECTION)
             y += 18
+            if rr.get("design"):                  # the winner, named in the page's row order
+                text.blit(screen, rr["design"], x, y, 12, ui.C_DIM)
+                y += 16
             tr = np.asarray([v if math.isfinite(v) else np.nan for v in rr["trace"]])
             rt = np.asarray([v if math.isfinite(v) else np.nan for v in rr["rs_trace"]])
             rr_rect = pygame.Rect(r5.right - 300, r5.y + 8, 288, 120)
