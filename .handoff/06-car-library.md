@@ -256,12 +256,21 @@ twist beam, and it shows: instantaneous share 0.183 / 0.186 against 0.315.
 `zeta_roll` is 0.35 and `f_n` 1.646 / 1.556 / 1.474 Hz; `_det_roll` is
 225 208 / 309 505 / 899 498, all well conditioned.
 
-**A real concern to pass on:** 5.75 °/g for an MX-5 and 6.01 °/g for a 540i
-are both too soft — a real MX-5 is nearer 4 °/g. The cause is not this
-scaling, it is `cars.py`'s `Kphi_tot` estimates (700 and 1250 N·m/deg) being
-low against those cars' `m_s * h_r`. One line each in `cars.py` if the owner
-wants them stiffer; not changed here, because changing an `est` to make a
-derived number look nicer is how provenance rots.
+**~~A real concern to pass on~~ — ADDRESSED in wave 4 item 3.** 5.75 °/g for
+an MX-5 and 6.01 °/g for a 540i were both too soft, and the cause was indeed
+`Kphi_tot`, not this scaling. Both are now derived from **published spring
+rates and published anti-roll bar diameters** rather than guessed:
+
+| | Kphi_tot was | now | roll gradient was | now |
+|---|---|---|---|---|
+| mx5 | 700.0 | **801.9** | 5.75 °/g | **5.02 °/g** |
+| 540i | 1250.0 | **1320.1** | 6.01 °/g | **5.69 °/g** |
+
+5.02 °/g is right for an NB. **The 540i is still soft at 5.69** and was not
+tuned to look better: its weakest input is the `est` rear motion ratio
+(0.65 ± 0.07 — the E39 multilink spring is well inboard) and behind that its
+`est` `h_cg` and `m_s`. Closing it needs a published motion ratio or a
+measured roll gradient; neither exists for this car.
 
 ## `qss.TYRE` — no derived dict was needed, and that is now asserted
 
@@ -399,10 +408,17 @@ the curve.
   0.900) — so use them to compare a change to one car against itself, not to
   rank the three cars against each other. CONTRACT §4's rule still holds:
   quantitative limits come from open-loop ramp steer.
-* The MX-5's and 540i's roll gradients are too soft — see the `Kphi_tot`
-  note above.
-* `CdA` for both is `Cd × A` with an estimated `A` and has never been
-  validated against a top speed (the 540i's 250 km/h is a limiter).
+* ~~The MX-5's and 540i's roll gradients are too soft~~ — **grounded in
+  wave 4 item 3** (published springs + published bars). The MX-5 is now
+  5.02 °/g; the 540i is 5.69 °/g and still soft, honestly labelled.
+* `CdA` for both is `Cd × A` with an estimated `A`, and **neither can be
+  validated by a top speed** — which is a wave-4 finding, not an omission.
+  `cars.self_check` now classifies the mechanism: the Corsa is **drag**-limited
+  (170 km/h against 188 at the rev cut, power ×1.00 → CdA *is* validated), the
+  MX-5 is **gearing**-limited (208 against 211 at the cut — 6915 rpm against a
+  7000 rpm cut, so the engine runs out of revs 3 km/h before the air would
+  stop it, ×1.23), and the 540i is **limiter**-set (250 against 323, ×1.33).
+  The MX-5's `Vmax` was also simply wrong at 196.9 km/h and is now 208.1.
 * ~~**The brakes are the Corsa's on every car**~~ — **FIXED (wave 3 item 2).**
   `CarSpec` carries the documented hardware (MX-5 255 mm front / 251 mm rear
   discs, 540i 325 / 320 mm vented discs, against the Corsa's 236 mm disc and
@@ -540,12 +556,18 @@ Three observations worth keeping:
    against a real ~8.5 s) and the 540i's ~0.15 s live here, along with launch
    and driveline losses. A real curve needs a dyno sheet; none of these have
    one. **This is the largest remaining gap.**
-2. **The whole suspension block is `est` on all three** — as it is for the
-   Corsa, because nobody publishes it. The two new cars' roll gradients are
-   too soft and that is `Kphi_tot`, not the scaling.
-3. **`CdA` for the two new cars is `Cd × estimated A`** and has never been
-   validated against a top speed. The 540i's cannot be — its 250 km/h is a
-   limiter.
+2. **The suspension is now derived from published springs and bars** on all
+   three, with two `est` steps left: the **motion ratios** (0.80 both ends on
+   the MX-5; 0.98 front / 0.65 rear on the 540i) and the **anti-roll bar
+   geometry constant**, calibrated on the Corsa because arm and torsion
+   lengths are not published for any of them. The 540i's roll gradient is
+   still soft at 5.69 °/g and its rear motion ratio is the reason.
+   Dampers remain `MISSING` on every car — `corsa_c.py` says so and it is
+   still true.
+3. **`CdA` is `Cd × estimated A`** on the two new cars and **cannot be
+   validated by a top speed on either** — the MX-5's is gearing-limited and
+   the 540i's is a limiter. Only the Corsa's is a genuine aerodynamic check,
+   and it still passes at ×1.00.
 4. **One tyre's worth of coefficient data.** All grip differences are a
    labelled `mu_scale` calibration. This is the deepest limitation in the
    library and no amount of work inside this repo fixes it.
