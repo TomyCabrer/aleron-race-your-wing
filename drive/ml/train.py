@@ -20,6 +20,15 @@ The fitness is a DETERMINISTIC rollout (`env.rollout` is pure in its
 arguments), so there is no evaluation noise to average over and one rollout
 per candidate is the right budget. That is unusual for an ES and it is a
 property of this problem, not an oversight.
+
+`--track arena,open` trains ONE policy on SEVERAL circuits: the fitness is
+then the mean over the tracks of that track's reward divided by the
+hand-written baseline's reward on the SAME track. Normalising matters. Raw
+metres would let the faster circuit own the objective -- open advances more
+metres in 70 s than arena does -- and the question being asked is "is it a
+better driver on both", not "where can it cover the most ground". With a
+single track the normaliser is exactly 1.0 and this path is bit-for-bit the
+old one; nothing about the single-track runs already committed moved.
 """
 
 from __future__ import annotations
@@ -48,6 +57,13 @@ def _track(name):
     return _TRACK_CACHE[name]
 
 
+def _tracks(spec) -> list:
+    """'arena' -> ['arena'];  'arena,open' or 'arena+open' -> both, in order."""
+    if isinstance(spec, (list, tuple)):
+        return [str(s) for s in spec]
+    return [s for s in str(spec).replace("+", ",").split(",") if s.strip()]
+
+
 def _init_worker(cfg):
     _CFG.clear()
     _CFG.update(cfg)
@@ -55,11 +71,25 @@ def _init_worker(cfg):
 
 def _score(theta) -> tuple:
     """One candidate's fitness. Runs in a pool worker; returns plain floats
-    only, so nothing large crosses the pickle boundary."""
-    ep = rollout(Policy(theta), _CFG["track"], dt=_CFG["dt"], T=_CFG["T"],
-                 wing=_CFG["wing"], tr=_track(_CFG["track"]))
-    return (ep.reward, ep.s_progress, ep.t, ep.v_mean, ep.wing_frac,
-            ep.wing_outer_frac, ep.laps, ep.ended)
+    only, so nothing large crosses the pickle boundary.
+
+    With one track this is one rollout and `norm` is 1.0, so the returned
+    fitness IS `ep.reward` to the last bit. With several it is the mean of
+    reward/baseline_reward per track -- see the module docstring on why the
+    normaliser is there -- and the reported diagnostics are the mean over
+    tracks, except `laps` (summed) and `ended` (every track's, in order, so a
+    policy that only falls off ONE of them is visible in the log).
+    """
+    pol = Policy(theta)
+    eps = [rollout(pol, tk, dt=_CFG["dt"], T=_CFG["T"], wing=_CFG["wing"],
+                   tr=_track(tk)) for tk in _CFG["tracks"]]
+    nrm = _CFG["norm"]
+    k = float(len(eps))
+    fit = sum(e.reward / w for e, w in zip(eps, nrm)) / k
+    return (fit, sum(e.s_progress for e in eps) / k, min(e.t for e in eps),
+            sum(e.v_mean for e in eps) / k, sum(e.wing_frac for e in eps) / k,
+            sum(e.wing_outer_frac for e in eps) / k,
+            sum(e.laps for e in eps), "/".join(e.ended for e in eps))
 
 
 def _save_atomic(theta, path: str, meta: dict) -> None:
@@ -89,9 +119,25 @@ def train(track: str = "arena", wing: str = "plate", iters: int = 60,
     rng = np.random.default_rng(seed)
     base = Policy.load(init) if init else Policy(np.zeros(Policy.N_PARAM))
     theta = base.theta.copy()
-    cfg = dict(track=track, wing=wing, dt=dt, T=T)
+    tracks = _tracks(track)
+    #  One track -> normaliser exactly 1.0, so `_score` returns `ep.reward`
+    #  unchanged and the arena runs already committed are reproducible bit for
+    #  bit. Several -> the baseline's own reward on each, measured here once
+    #  (2 rollouts, ~4 s) rather than 2880 times inside the fitness.
+    if len(tracks) == 1:
+        norm = [1.0]
+    else:
+        norm = [float(rollout(Policy(), tk, dt=dt, T=T, wing=wing).reward)
+                for tk in tracks]
+        if verbose:
+            print("  baseline reward per track (the fitness normaliser): "
+                  + ", ".join(f"{tk} {w:.1f} m" for tk, w in zip(tracks, norm)))
+    cfg = dict(track=tracks[0], tracks=tracks, norm=norm, wing=wing, dt=dt, T=T)
     workers = min(os.cpu_count() or 1, pop) if workers is None else workers
 
+    #  the multi-track fitness is a RATIO near 1, the single-track one is
+    #  metres near 1400: one print format cannot read well for both
+    ffmt = "8.4f" if len(tracks) > 1 else "8.1f"
     curve, t0, best = [], time.perf_counter(), (-1e18, theta.copy())
     pool = (mp.Pool(workers, initializer=_init_worker, initargs=(cfg,))
             if workers > 1 else None)
@@ -124,13 +170,14 @@ def train(track: str = "arena", wing: str = "plate", iters: int = 60,
             #  cannot be interrupted is a run that has to be repeated.
             if out and save_every and (it % save_every == 0):
                 _save_atomic(theta if m[0] >= best[0] else best[1], out, dict(
-                    track=track, wing=wing, iters=iters, pop=pop, sigma=sigma,
+                    track=",".join(tracks), tracks=tracks, norm=norm,
+                    wing=wing, iters=iters, pop=pop, sigma=sigma,
                     lr=lr, seed=seed, T=T, dt_train=dt, done=it + 1,
                     secs=round(time.perf_counter() - t0, 1),
                     reward=round(best[0], 2), curve=curve))
             if verbose:
-                print(f"  it {it:3d}  mean {m[0]:8.1f}  pop best {R.max():8.1f}  "
-                      f"med {np.median(R):8.1f}  s {m[1]:7.1f} m  v {m[3]:5.2f}  "
+                print(f"  it {it:3d}  mean {m[0]:{ffmt}}  pop best {R.max():{ffmt}}  "
+                      f"med {np.median(R):{ffmt}}  s {m[1]:7.1f} m  v {m[3]:5.2f}  "
                       f"wing {m[4]:4.2f} (outer {m[5]:4.2f})  laps {m[6]}  {m[7]}"
                       f"  [{time.perf_counter() - t0:5.1f} s]", flush=True)
     finally:
@@ -140,7 +187,8 @@ def train(track: str = "arena", wing: str = "plate", iters: int = 60,
 
     secs = time.perf_counter() - t0
     pol = Policy(best[1], meta=dict(
-        track=track, wing=wing, iters=iters, pop=pop, sigma=sigma, lr=lr,
+        track=",".join(tracks), tracks=tracks, norm=norm,
+        wing=wing, iters=iters, pop=pop, sigma=sigma, lr=lr,
         seed=seed, T=T, dt_train=dt, secs=round(secs, 1),
         reward=round(best[0], 2), curve=curve))
     if out:
@@ -152,7 +200,9 @@ def train(track: str = "arena", wing: str = "plate", iters: int = 60,
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="train a drive.ml policy (ES, numpy only)")
-    ap.add_argument("--track", default="arena")
+    ap.add_argument("--track", default="arena",
+                    help="one track, or several comma-separated ('arena,open') "
+                         "to train ONE policy on all of them")
     ap.add_argument("--wing", default="plate", choices=("off", "fin", "plate"))
     ap.add_argument("--iters", type=int, default=60)
     ap.add_argument("--pop", type=int, default=24)
@@ -169,16 +219,20 @@ def main(argv=None) -> int:
     ap.add_argument("--eval", action="store_true",
                     help="after training, re-measure at DT_EVAL and print lap times")
     a = ap.parse_args(argv)
+    tks = _tracks(a.track)
     print(f"ES  {Policy.N_PARAM} params  pop {a.pop}  sigma {a.sigma}  lr {a.lr}  "
           f"{a.iters} iters  dt {a.dt * 1e3:.0f} ms  T {a.duration:.0f} s  "
-          f"workers {a.workers or os.cpu_count()}")
+          f"workers {a.workers or os.cpu_count()}  "
+          f"track{'s' if len(tks) > 1 else ''} {'+'.join(tks)}"
+          f"{f'  ({len(tks)} rollouts per candidate)' if len(tks) > 1 else ''}")
     r = train(a.track, a.wing, a.iters, a.pop, a.sigma, a.lr, a.seed,
               a.duration, a.workers, a.dt, a.out, a.init,
               save_every=a.save_every)
     if a.eval:
         print("\n  re-measured at DT_EVAL = 1 ms:")
-        print("  ", json.dumps(lap_time(r["policy"], a.track, wing=a.wing,
-                                        dt=DT_EVAL), default=str))
+        for tk in tks:
+            print(f"   {tk}: ", json.dumps(lap_time(r["policy"], tk, wing=a.wing,
+                                                    dt=DT_EVAL), default=str))
     return 0
 
 
