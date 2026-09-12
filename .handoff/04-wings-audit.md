@@ -7,14 +7,17 @@ scripts that import the repo unchanged (a couple monkey-patch `Vehicle._aero`
 in-process via `inspect.getsource` + one textual substitution, so the
 "wrong-side" runs are provably the shipped code modulo one line).
 
-STATUS: in progress — numbers below are final unless marked TODO.
+NOTE ON LINE NUMBERS: `drive/vehicle.py` is being edited concurrently by
+another task (the TC work), so line numbers drift. They were re-checked
+against the working tree at the end of this audit, and **every patch below is
+given as an exact old/new STRING** so it applies regardless of drift.
 
 ---
 
 ## 1. Sign conventions  — PASS (so far)
 
 `steady_state_corner(R=100)`, `side=+1` (LEFT) and `side=-1` (RIGHT),
-default cfg (`qss_parity=False`), `drive/vehicle.py:1484 ramp_steer`:
+default cfg (`qss_parity=False`), `drive/vehicle.py:1487 ramp_steer`:
 
 | wing | side | V (m/s) | a_y (g) | F_dev (N) | D_dev (N) | Mz_dev (N.m) | sgn_dev | beta (deg) | phi (deg) |
 |---|---|---|---|---|---|---|---|---|---|
@@ -26,7 +29,7 @@ default cfg (`qss_parity=False`), `drive/vehicle.py:1484 ramp_steer`:
 | plate | -1 R | 30.415546 | 0.943023 | -310.835 | 97.136 | -231.572 | -1 | +9.534 | -4.670 |
 
 * **`sgn_dev = +1` for a LEFT turn** and the code picks `cfg.dev_right`
-  (`drive/vehicle.py:846`) = the OUTER flank. PASS.
+  (`drive/vehicle.py:849`) = the OUTER flank. PASS.
 * **`F_dev > 0` (= +y = LEFT = inward) for a left turn.** PASS, +177.4 N.
 * **beta IS negative at the limit in a left turn** (-4.34 g off / -5.64 fin /
   -9.53 plate): the contract's reason for never deriving the side from beta
@@ -37,7 +40,7 @@ default cfg (`qss_parity=False`), `drive/vehicle.py:1484 ramp_steer`:
   for off / fin / plate. (`TYRE_MIRROR=True` is what buys this.)
 
 ### Mz_dev — the code is RIGHT and the CONTRACT is WRONG (already a logged DEVIATION)
-`drive/vehicle.py:888` / `:873`: `Mz_dev = F_dev*x_w - sgn*Y_DEV*D_dev`.
+`drive/vehicle.py:891` / `:873`: `Mz_dev = F_dev*x_w - sgn*Y_DEV*D_dev`.
 The contract writes `Mz_dev = F_dev*x_w - D_dev*y_dev*sgn_dev` with
 `y_dev = -sgn_dev*0.72`, which squares the sign and gives `+0.72*D_dev` in
 BOTH directions — a non-mirroring term. Derivation: panel at
@@ -46,11 +49,11 @@ BOTH directions — a non-mirroring term. Derivation: panel at
 matches the geometry. Check: left turn fin `177.389*0.97 - 0.72*55.434
 = 132.155` == reported `Mz_dev`. Sense: `-0.72*D_dev < 0` = yaw to the
 RIGHT = out of the left turn, which is what a drag force on the outer flank
-must do. Already documented as `vehicle.py:177 DEVIATIONS[1]`.
+must do. Already documented as `vehicle.py:180 DEVIATIONS[1]`.
 **No patch wanted in `vehicle.py`; `CONTRACT.md` §4 is the thing that is wrong.**
 
 ### Roll arm `-F_dev*(h_w - h_ra)` — PASS
-`drive/vehicle.py:1059-1060`. Derivation: force `+y` at `dz = h_w - h_ra`
+`drive/vehicle.py:1062-1063`. Derivation: force `+y` at `dz = h_w - h_ra`
 above the roll axis, `M = r x F = (0,0,dz) x (0,F,0) = (-dz*F, 0, 0)`, so
 `Mx = -F_dev*(h_w-h_ra)`. Code sign is the geometry's sign. Physically the
 high inward force rolls the body INTO a left turn, i.e. it reduces the
@@ -61,7 +64,7 @@ phi 4.6654 (off) -> 4.6637 (fin) -> 4.6696 (plate) deg *while a_y rises
 
 ## 3. Deployment side selection — PASS, with the failure mode re-measured
 
-`drive/vehicle.py:806-817`: `want` from `ctl.delta` against
+`drive/vehicle.py:809-820`: `want` from `ctl.delta` against
 `DEV_DEADBAND = 0.05*LOCK_RAD = 1.631 deg` (`vehicle.py:101`), latched only
 after `DEV_HOLD = 0.30 s` of persistence and only while
 `dep_raw <= DEV_DEP_LOCKOUT`. **Never `beta`, never `v`.** PASS by inspection
@@ -84,9 +87,9 @@ the shipped plate reads **+2.2029 %** (baseline peak a_y 0.8539 g, contract
 0.8550 g) so the sign flip and the ~2 % magnitude are both reproduced.
 
 ### `wing_side` — it is the TURN sign (`sgn_dev`), not a side index
-`drive/vehicle.py:1296`: `self.wing_side = aer["sgn_dev"] if aer["dep"] > 0.0
+`drive/vehicle.py:1358`: `self.wing_side = aer["sgn_dev"] if aer["dep"] > 0.0
 else st.dev_side`, and `aer["sgn_dev"] = int(sgn)` with `sgn = float(st.dev_side)`
-(`:843`, `:863`), `st.dev_side = want` = sign of the steering command (`:814`).
+(`:843`, `:866`), `st.dev_side = want` = sign of the steering command (`:817`).
 So `wing_side = +1` means **left turn**, and the panel that deploys is
 `cfg.dev_right` (`:846`). Measured: `side=+1` (left) -> `sgn_dev=+1`,
 `F_dev=+177.4 N`. The renderer's reading is CORRECT; `CONTRACT.md` §4's
@@ -98,7 +101,7 @@ the same value, since `sgn_dev` is just `int(st.dev_side)`.)
 
 ## 2. The load path into the tyre normal loads — PASS, to round-off
 
-`drive/vehicle.py:756 normal_loads()`. `Fz_f_static = m g wdist_f/2 = 3021.9705 N`,
+`drive/vehicle.py:759 normal_loads()`. `Fz_f_static = m g wdist_f/2 = 3021.9705 N`,
 `Fz_r_static = 1932.0795 N`, `hx = dFz_x/2`; `f0 = static - hx - dFz_f`,
 `f1 = static - hx + dFz_f`, `r0/r1 = static + hx -/+ dFz_r`
 — **term for term the contract's four expressions**, `max(...,0)` included.
@@ -126,8 +129,8 @@ every k, and is exactly 0.000e+00 at step 0.
 `F_top = +366.343 N` and `sum(Fz) - m g = +366.36 N` (the 0.02 N is the
 one-step lag). PASS.
 
-**`SFy_tyre` carries tyre forces only** (`:1035` is the four `Fby` alone;
-`F_dev` is added at `:1036` into `SFy`, not `SFy_tyre`). `dFz_tot_demand`
+**`SFy_tyre` carries tyre forces only** (`:1038` is the four `Fby` alone;
+`F_dev` is added at `:1039` into `SFy`, not `SFy_tyre`). `dFz_tot_demand`
 matches `(SFy_tyre*h_cg + F_dev*(h_cg-h_w))/t_bar` to **0.00e+00** at
 h_w = 0.40 / 0.90 / 1.20 m; the leaked form (`SFy` instead of `SFy_tyre`)
 would read 8.1 / 8.5 / 8.8 % high. PASS.
@@ -161,15 +164,15 @@ h_t=1.3, 'fixed')` -> `CZ=1.360767, CD=0.131101`. Baseline peak a_y
 
 ## 3(b). **BUG 1 (MAJOR) — the flank panel can NEVER change flanks once deployed**
 
-**file:line**: `drive/vehicle.py:853`
+**file:line**: `drive/vehicle.py:856`
 ```python
         armed = has and ctl.wing_on and st.dev_side != 0
 ```
 
 **What the code does.** `st.dev_side` is only ever *written* inside
-`if want != 0 and want != st.dev_side:` (`:811-815`), and the write is gated on
+`if want != 0 and want != st.dev_side:` (`:814-818`), and the write is gated on
 `st.dep_raw <= DEV_DEP_LOCKOUT` (0.05) — "no side change while the panel is
-out". But `armed` (and therefore `cmd`, `:854`) asks only whether
+out". But `armed` (and therefore `cmd`, `:857`) asks only whether
 `st.dev_side != 0`, so nothing ever *commands* a retraction: once a side is
 latched, `dep_raw` is pinned at 1.0, `dep_raw <= 0.05` is never true again, and
 the side latch **deadlocks for the rest of the session**. `st.dev_side` also
