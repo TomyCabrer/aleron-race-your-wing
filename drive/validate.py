@@ -1127,6 +1127,22 @@ def main(argv=None) -> int:
     if opts.only and len(opts.only) > 1:
         rows = [c for c in CHECKS if fnmatch.fnmatch(c.name.lower(),
                                                      opts.only.lower())]
+    #  A FILTER THAT MATCHES NOTHING IS AN ERROR, not a pass. `--modules
+    #  --only ml` burned 324 s and printed `0/0 pass`, which reads as success
+    #  and is not: `ml` is a module self-check whose row is named after its
+    #  command, so the glob never matched. Say so, name what was available,
+    #  and exit non-zero -- a caller that greps for the count must not be told
+    #  everything passed when nothing ran.
+    if opts.only and not rows:
+        avail = sorted({c.group for c in CHECKS})
+        names = sorted(c.name for c in CHECKS)
+        print(f"\n  --only {opts.only!r} matched NOTHING of {len(CHECKS)} checks."
+              f"\n  Group letters: {' '.join(avail)}"
+              f"\n  A longer filter is a glob against the check NAME, e.g."
+              f"\n    --only 'M: python3 -m drive.ml*'   (module self-checks are"
+              f" named after their command)"
+              f"\n  Names start: {', '.join(names[:4])} ...")
+        return 2
 
     order = list(GROUPS) + ["M"]
     for key in order:
