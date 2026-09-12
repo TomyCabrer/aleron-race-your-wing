@@ -1,0 +1,296 @@
+##### CHASSIS #####
+SUMMARY:
+A 26-state, 3-DOF-planar + 1-DOF-roll two-track model whose steady state reproduces qss.py. I prototyped the whole EOM in the scratchpad and solved its steady constant-radius equilibrium against qss.corner_speed: it lands at 28.941 m/s at R=100 m (qss 29.0875, -0.50%) and 20.431 m/s at R=50 m (qss 20.5679, -0.67%), front-limited (util_f 0.995 vs util_r 0.942) with roll_dist_f=0.74, roll 4.55 deg, per-corner Fz [607, 5437, 1084, 2780] N summing exactly to m*g. The residual -0.5% is NOT a bug: qss.axle_capacity sums each tyre's own peak Fy, i.e. it puts both tyres of an axle at their individual peak slip angles simultaneously (8.4 deg at 600 N, 11.6 deg at 5400 N), which is geometrically impossible when both wheels share one slip angle. The two-track answer is the right one and qss is 0.5-0.9% optimistic. Three real disagreements with qss.py are called out below with numbers, one of them a genuine algebra bug in qss.residuals (Y_r violates qss's own stated force balance by 2.3% whenever the wing is on, which is why qss's sealed-plate/front-axle number at R=100 is non-monotonic and LOWER than its own clean-fin number — the rear goes spuriously limiting). Key structural results: the (x_w+b)/b multiplier emerges from the yaw balance and matches crossover.gain to 0.07% for the clean fin; qss's lumped scrub drag m*a_y*sin(7deg) is exactly the -m*v*r Coriolis term plus the Y_f*sin(delta) steer resolution, which the time-domain model produces automatically (662 + 584 = 1246 N vs qss's 1031 N at R=100); and the load transfer is made fully explicit (no algebraic loop) by carrying dFz as lagged states. Dampers, brakes, tyre relaxation lengths, wheel inertia and compliance steer are unpublished — each is estimated below with a derivation, a band, and a named cross-check.
+
+EQUATIONS:
+  FRAME (lock this first, everything else depends on it): ISO body frame, x forward, y LEFT, z up. yaw psi and yaw rate r positive counter-clockwise seen from above = LEFT turn. a_y positive = leftward = toward the centre of a left turn. roll phi positive about +x by the right-hand rule = LEFT side rises = body rolls to the RIGHT = the outside of a left turn. In a left turn: r>0, a_y>0, phi>0, and at the limit v<0 and beta<0.
+  STATE (26): s = [X, Y, psi, u, v, r, phi, p, w_fl, w_fr, w_rl, w_rr, a_fl, a_fr, a_rl, a_rr, k_fl, k_fr, k_rl, k_rr, dFz_f, dFz_r, dFz_x, dsw, dsw_dot, dep]  where a_* are RELAXED slip angles (rad), k_* relaxed slip ratios (-), dFz_* lagged load transfers (N), dsw filtered steering-wheel angle (rad), dep device deployment fraction 0..1. Non-state auxiliaries: gear index (int), dev_side (+1/-1, hysteretic).
+  --- STEP 1: STEERING ---
+  dsw_cmd = key_axis * dsw_lim(u);   key_axis in [-1,+1] from the keyboard integrator
+  dsw_lim(u) = min( dsw_lock , steer_ratio * a_y_cap * ( L/max(u,u_lo)^2 + K_us/g ) )   with dsw_lock = 9.1106 rad (522 deg), a_y_cap = 9.5 m/s^2, K_us = 0.0391 rad/g, u_lo = 1.0 m/s
+  dsw_ddot = ws^2 * (dsw_cmd - dsw) - 2*zs*ws*dsw_dot,   ws = 15.71 rad/s (2.5 Hz), zs = 1.0
+  dsw_dot := clamp(dsw_dot, -sw_rate, +sw_rate);   sw_rate = 12.22 rad/s (700 deg/s) when |dsw_cmd| > |dsw|, 15.71 rad/s (900 deg/s) on return to centre
+  delta_bic = dsw / steer_ratio                                  (steer_ratio = 16.0)
+  ACKERMANN: if |delta_bic| > 1e-4: Rt = L / tan(delta_bic); di_full = atan(L/(Rt - sgn*t_f/2)); do_full = atan(L/(Rt + sgn*t_f/2)) with sgn = sign(delta_bic); else di_full = do_full = delta_bic
+  delta_in  = delta_bic + A_ack*(di_full - delta_bic);  delta_out = delta_bic + A_ack*(do_full - delta_bic);   A_ack = 0.60
+  assign: for a LEFT turn (delta_bic>0) the INNER wheel is FL, so delta_FL = delta_in, delta_FR = delta_out; mirrored for a right turn
+  COMPLIANCE STEER (this is what sets the linear-range understeer; tyres alone give only 0.37 deg/g): delta_FL -= eps_f * Fy_f_prev ; delta_FR -= eps_f * Fy_f_prev   with Fy_f_prev = Fy_body_FL + Fy_body_FR from the previous substep, eps_f = 5.40e-6 rad/N
+  delta_RL = delta_RR = -c_rs * phi        with c_rs = 0.0 by DEFAULT (see pitfalls; corsa_c.rollsteer_r = 1.0 deg/deg is wrong in sign and magnitude)
+  --- STEP 2: PER-CORNER NORMAL LOADS (all algebraic, all from states -> no fixed-point iteration needed) ---
+  Fz_f_static = m*g*wdist_f/2 ;  Fz_r_static = m*g*(1-wdist_f)/2
+  Fz_FL = max( Fz_f_static - dFz_x/2 - dFz_f , 0 )
+  Fz_FR = max( Fz_f_static - dFz_x/2 + dFz_f , 0 )
+  Fz_RL = max( Fz_r_static + dFz_x/2 - dFz_r , 0 )
+  Fz_RR = max( Fz_r_static + dFz_x/2 + dFz_r , 0 )
+  (sign: dFz_f, dFz_r > 0 transfer load to the RIGHT wheels = the outside of a LEFT turn; dFz_x > 0 transfers load to the REAR = forward acceleration)
+  --- STEP 3: TYRE KINEMATICS, per corner i at body position (x_i, y_i): FL(+a,+t_f/2) FR(+a,-t_f/2) RL(-b,+t_r/2) RR(-b,-t_r/2) ---
+  vx_i = u - r*y_i ;   vy_i = v + r*x_i
+  vlon_i =  vx_i*cos(delta_i) + vy_i*sin(delta_i)
+  vlat_i = -vx_i*sin(delta_i) + vy_i*cos(delta_i)
+  alpha_i = atan2( vlat_i , max(|vlon_i|, v_low) )        v_low = 1.0 m/s  (matches VXLOW in the .tir files)
+  kappa_i = ( w_i*R_e - vlon_i ) / max(|vlon_i|, v_low)
+  sigma_y_i = clamp( C_alpha(Fz_i) / K_carc_y , 0.20 , 0.80 )   K_carc_y = 110e3 N/m
+  da_i/dt = ( max(|vlon_i|, v_low) / sigma_y_i ) * ( alpha_i - a_i )        [relaxed slip angle]
+  dk_i/dt = ( max(|vlon_i|, v_low) / sigma_x   ) * ( kappa_i - k_i )        sigma_x = 0.25 m
+  --- STEP 4: TYRE FORCES (wheel frame) — from the tyre module, called with the RELAXED slips ---
+  Fx_i, Fy_i = tyre(a_i, k_i, Fz_i, mu_scale)      Fy_i must satisfy: peak|Fy_i|(k=0) == mu(Fz_i)*Fz_i with mu(Fz) = 0.903 - 16.1e-6*(Fz - 2477), i.e. IDENTICAL to qss.TYRE, or the acceptance tests below will not close
+  Fxb_i = Fx_i*cos(delta_i) - Fy_i*sin(delta_i)         [rotate wheel -> body]
+  Fyb_i = Fx_i*sin(delta_i) + Fy_i*cos(delta_i)
+  --- STEP 5: AERO ---
+  q = 0.5*rho*V^2   with V = sqrt(u^2 + v^2), rho = 1.2
+  beta = atan2(v, max(u, v_low))
+  BASE DRAG:  D_aero = q * CdA                                     CdA = 0.66, applied at h_aero = h_cg (so it makes no pitch moment; the error at Vmax is 35 N of dFz_x, 0.4%)
+  BODY SIDE FORCE (default ON in drive mode, forced OFF in qss-parity mode):  Fy_body = -q * A * Cs_psi * beta ;  Mz_body = Fy_body * x_cp     A = 2.01, Cs_psi = 2.2 /rad, x_cp = +0.30 m. (beta<0 in a left turn -> Fy_body>0 = inward, i.e. it HELPS; its yaw moment ahead of the CG is destabilising, as it should be.)
+  FLANK WING — side selection: sgn_dev = +1 if the car is being turned LEFT, -1 if right. Take sgn_dev from sign(dsw) with a deadband of 0.05*dsw_lock and 0.3 s hold, NOT from sign(v) and NOT from sign(beta).
+  deployment actuator:  d(dep)/dt = clamp( (dep_cmd - dep)/tau_dev , -1/t_ret , +1/t_ext )   tau_dev = 0.25 s, t_ext = 0.45 s, t_ret = 0.30 s; forbid a change of sgn_dev while dep > 0.05
+  device incidence:  alpha_dev = delta_dev_geom + sgn_dev * (-beta)    [in a LEFT turn sgn_dev=+1 and beta<0, so the body slip ADDS incidence — that is the free bonus, and it is why the sign of beta must never be used to pick the side]
+  CL_dev = clamp( CL0 + dCLda * alpha_dev , 0 , CL_stall )      dCLda = 2.47 /rad, CL_stall = 1.6; set dCLda = 0 and CL_dev = CL0 to run in exact qss/crossover/ledger parity mode
+  F_dev = sgn_dev * dep * q * S_DEV * CL_dev            [+y = inward for a left turn]  S_DEV = 0.35 m^2 (ONE panel; only one panel is active at a time)
+  D_dev = dep * q * S_DEV * CL_dev / LD_dev             [always along -x]  LD_dev = 3.2
+  Mz_dev = F_dev * x_w  -  D_dev * y_dev * sgn_dev      y_dev = -sgn_dev * 0.72 m (the OUTER flank); the drag term is ~50 Nm against ~215 Nm from the side force, include it for completeness
+  --- STEP 6: FORCE AND MOMENT SUMS ---
+  SFx = sum(Fxb_i) - D_aero - D_dev
+  SFy_tyre = sum(Fyb_i)
+  SFy = SFy_tyre + F_dev + Fy_body
+  SMz = sum( x_i*Fyb_i - y_i*Fxb_i ) + Mz_dev + Mz_body        [the -y_i*Fxb_i term is how asymmetric drive/brake force makes yaw — do not drop it]
+  --- STEP 7: COUPLED LATERAL + ROLL (solve the 2x2 exactly, do not decouple) ---
+  Mx_ext = m_s*g*h_r*sin(phi) - Kphi*phi - Cphi*p - F_dev*(h_w - h_ra)      [this reproduces qss.roll_angle term for term]
+  [ m        -m_s*h_r ] [ a_y ]   [ SFy    ]
+  [ -m_s*h_r  I_roll  ] [ pdot ] = [ Mx_ext ]
+  det = m*I_roll - (m_s*h_r)^2 = 225219  (well conditioned)
+  a_y  = (  I_roll*SFy + m_s*h_r*Mx_ext ) / det
+  pdot = ( m_s*h_r*SFy + m*Mx_ext      ) / det
+  --- STEP 8: RIGID-BODY DERIVATIVES (the Coriolis terms a naive model omits are the +u*r and -v*r) ---
+  dX/dt   = u*cos(psi) - v*sin(psi)
+  dY/dt   = u*sin(psi) + v*cos(psi)
+  dpsi/dt = r
+  du/dt   = SFx/m + v*r                       <-- +v*r, NOT SFx/m alone
+  dv/dt   = a_y   - u*r                       <-- a_y is (vdot + u*r) from step 7, so dv/dt = a_y - u*r
+  dr/dt   = SMz / Izz
+  dphi/dt = p
+  dp/dt   = pdot   (from step 7)
+  --- STEP 9: LOAD-TRANSFER STATES (this is what makes the whole step explicit: dFz are states, so Fz does not depend on the Fy computed this step) ---
+  dFz_tot_demand = ( SFy_tyre*h_cg + F_dev*(h_cg - h_w) ) / t        [ALGEBRAICALLY IDENTICAL to qss's (m*a_y*h_cg - F*h_w)/t, because m*a_y = SFy_tyre + F_dev + Fy_body; the Fy_body term is the only difference and is 175 N at the limit]
+  dFz_x_demand   = ( sum(Fxb_i) * h_cg ) / L                          [drag omitted: it acts at h_aero = h_cg and cancels]
+  RECOMMENDED (two-rate, gets the instantaneous geometric split right): let LT = LPF(dFz_tot_demand, tau_roll) with tau_roll = 0.09 s. Then
+    ddFz_f/dt = ( 0.101*dFz_tot_demand + 0.639*LT - dFz_f ) / tau_LT
+    ddFz_r/dt = ( 0.221*dFz_tot_demand + 0.039*LT - dFz_r ) / tau_LT       tau_LT = 0.02 s
+    (steady state: 0.101+0.639 = 0.740 front, 0.221+0.039 = 0.260 rear == roll_dist_f exactly. At t=0+ only the geometric+unsprung part is present, split 0.101/0.221 = 31/69 front/rear, so the car is momentarily loose at turn-in and settles into understeer as roll builds — the real behaviour of a high-rear-roll-centre torsion beam.)
+  SIMPLE FALLBACK (use if the two-rate form is not wanted): ddFz_f/dt = (0.74*dFz_tot_demand - dFz_f)/tau_LT ; ddFz_r/dt = (0.26*dFz_tot_demand - dFz_r)/tau_LT with tau_LT = 0.06 s. Same steady state, no turn-in nuance.
+  ddFz_x/dt = ( dFz_x_demand - dFz_x ) / tau_pitch      tau_pitch = 0.12 s
+  --- STEP 10: WHEEL SPIN ---
+  I_eff_i = I_w + (i is a FRONT wheel ? I_driveline * (gear[g]*finaldrive)^2 / 2 : 0)      I_w = 0.65, I_driveline = 0.12 kg m^2
+  dw_i/dt = ( T_drive_i - T_brake_i*tanh(w_i/w_eps) - Fx_i*R_e - Crr*Fz_i*R_e ) / I_eff_i    w_eps = 1.0 rad/s, R_e = r_roll = 0.283 m
+  --- STEP 11: INTEGRATION ---
+  Semi-implicit (symplectic) Euler at dt_phys = 1/1000 s, sub-stepped inside the render frame (17 substeps at 60 Hz). Order within a substep: integrate the tyre relaxation and wheel-spin states first (they are the stiff ones), then the rigid-body states, then the load-transfer and steering states. Do NOT use RK4: the tanh brake term and the Fz clamp are non-smooth and RK4 buys nothing here.
+  --- DIAGNOSTIC IDENTITIES the sim should expose (for the HUD and the tests) ---
+  util_f = |Fyb_FL + Fyb_FR| / ( |Fy_peak(Fz_FL)| + |Fy_peak(Fz_FR)| )    ;  util_r likewise
+  Y_f_expected = ( b*m*a_y - F_dev*(b + x_w) ) / L        <-- the (x_w+b)/b multiplier; assert against the model's own Fyb_FL+Fyb_FR
+  P_wheel_required = V * ( -m*v*r + Y_f*sin(delta_bic) + D_aero + D_dev + Crr*m*g )   <-- this IS qss's scrub-drag term, emergent
+
+PARAMETERS:
+  m = 1010.0 [kg] (published) :: corsa_c.CorsaC.m (ADAC EU Leergewicht)
+  wdist_f = 0.61 [-] (estimated) :: corsa_c (est +/-0.02)
+  L (wheelbase) = 2.491 [m] (published) :: corsa_c
+  a (CG -> front axle) = 0.97149 [m] (derived) :: corsa_c.a = (1-wdist_f)*L
+  b (CG -> rear axle) = 1.51951 [m] (derived) :: corsa_c.b = wdist_f*L
+  t_f / t_r / t (mean) = 1.429 / 1.420 / 1.4245 [m] (published) :: corsa_c
+  h_cg = 0.55 [m] (estimated) :: corsa_c (est +/-0.04)
+  Izz = 1200.0 [kg m^2] (estimated) :: corsa_c (est, band 1000-1500)
+  m_s (sprung) = 892.0 [kg] (estimated) :: corsa_c
+  h_ra (roll axis height at the CG station) = 0.160 [m] (derived) :: qss.roll_angle, hard-coded there. Cross-check: linear interp of h_rc_f=0.075 and h_rc_r=0.300 at the CG station gives 0.075 + (0.075+ (0.300-0.075)*a/L) = 0.163 -- consistent to 2%.
+  h_r = h_cg - h_ra = 0.390 [m] (derived) :: derived
+  Kphi (Kphi_tot) = 640.0 Nm/deg = 36669 [Nm/rad] (estimated) :: corsa_c.Kphi_tot (with ARBs)
+  I_roll (about the roll axis) = 342.8 [kg m^2] (derived) :: DERIVED: Ixx_sprung = Ixx - (m_us_f+m_us_r)*(t/2)^2 = 267 - 59.9 = 207.1, then I_roll = 207.1 + m_s*h_r^2 = 207.1 + 135.7. Band 300-390 (tracks the Ixx band 210-330).
+  roll natural frequency = 10.342 rad/s = 1.646 [Hz] (derived) :: sqrt(Kphi/I_roll). Cross-check: 1.4-1.8 Hz is the normal band for a B-segment hatch. PASSES.
+  zeta_roll (roll damping ratio) = 0.35 [-] (estimated) :: UNPUBLISHED (corsa_c.dampers = MISSING). Chosen 0.35, band 0.25-0.50. Reasoning: road cars are damped for ride, not for flat cornering; 0.35 gives 31% overshoot on a step and settles in ~0.5 s, which is the subjective 'one soft roll and done' of a soft hatch. 0.7 would feel like a track car; <0.25 would visibly wallow. CROSS-CHECK from plausible damper rates: C_roll = c_f*t_f^2/2 + c_r*t_r^2/2; with 900/750 N s/m -> zeta 0.24, 1200/1000 -> 0.315, 1500/1250 -> 0.394. 1200/1000 N s/m is the class norm, so 0.31-0.35 is the honest centre.
+  Cphi (roll damping) = 2482 Nm/(rad/s) = 43.3 [Nm/(deg/s)] (estimated) :: 2*zeta*sqrt(Kphi*I_roll) at zeta=0.35. Band at zeta 0.25-0.50: 30.9 to 61.9 Nm/(deg/s).
+  roll gradient = 5.33 [deg/g] (derived) :: m_s*g*h_r/Kphi_tot. NOTE: corsa_c's own comment on Kphi_tot claims '4.7-5.1 deg/g' -- that comment is inconsistent with its own numbers by 5-13%. 5.33 deg/g is what qss.roll_angle actually computes (4.599 deg at 0.8625 g). Use 5.33.
+  roll_dist_f (LLTD front share) = 0.74 [-] (estimated) :: qss.residuals default. TREAT AS A CALIBRATION CONSTANT, NOT A SUSPENSION PROPERTY. Physics buildup from the published roll centres gives only 0.51: front elastic 1266 N + geometric 241 N + unsprung 94 N = 1601 N against a rear 798+622+105 = 1525 N. Even putting ALL the elastic roll stiffness on the front axle caps LLTD_f at 0.726, because h_rc_r = 0.300 m makes the rear geometric transfer 622 N (19% of the total) on its own. 0.74 is therefore marginally UNREACHABLE from the geometry and is standing in for what neither model has: front tyres also carrying tractive force, front tyres running deeper into slip, and steering/suspension compliance. Keep it at 0.74 (everything downstream in qss/crossover/ledger is pinned to it) and expose it as a top-level tunable.
+  instantaneous (geometric+unsprung) share of lateral transfer = 0.322 of the total, split 0.315 front / 0.685 rear within it [-] (derived) :: DERIVED from h_rc_f=0.075, h_rc_r=0.300, m_us_f=56, m_us_r=62, wheel CG height 0.283. Gives the two-rate coefficients 0.101/0.639 (front) and 0.221/0.039 (rear).
+  tau_LT / tau_roll / tau_pitch = 0.02 / 0.09 / 0.12 [s] (derived) :: tau_roll = 0.9/omega_n = 0.087 s, the 63% rise of the 1.65 Hz roll mode at zeta 0.35. tau_LT is a small numerical smoother only. tau_pitch from the pitch mode: Kpitch = 2*k_ride_f*a^2 + 2*k_ride_r*b^2 = 78772 Nm/rad, I_pitch = 1113 kg m^2 -> 1.34 Hz -> 0.9/omega = 0.107 s, rounded to 0.12.
+  pitch/heave DOF = NOT INCLUDED [-] (derived) :: DECISION: heave and pitch change no steady-state result, add two modes (1.22/1.24 Hz ride, plus 12+ Hz tyre hop) that are invisible in a 2D top-down view on a flat track, and cost stability. Longitudinal transfer is handled exactly by the lagged dFz_x state instead. If someone later insists: ride rates k_f = 16092, k_r = 10480 N/m (spring in series with 200 kN/m tyre), f_f = 1.22 Hz, f_r = 1.24 Hz, C_pitch at zeta 0.35 = 6555 Nm/(rad/s) = 114 Nm/(deg/s).
+  steer_ratio = 16.0 [-] (estimated) :: corsa_c (est +/-1.5)
+  dsw_lock = 522 deg = 9.1106 rad (road wheel +/-32.6 deg) [rad] (published) :: 2.9 turns lock-to-lock / 2 * 360 deg
+  A_ack (Ackermann fraction) = 0.60 [-] (estimated) :: UNPUBLISHED. Road racks run 50-80% Ackermann; 100% is a zero-speed ideal. 0.60 chosen. Effect on the acceptance tests is <0.05% because at the limit the front slip angle (10.4 deg) swamps the 1.5 deg Ackermann spread.
+  eps_f (front compliance steer) = 5.40e-6 rad/N = 0.310 [deg/kN of front-axle side force] (estimated) :: UNPUBLISHED. Tyres alone give K_us = W_f/C_f - W_r/C_r = 6044/90417 - 3864/63977 = 0.00645 rad = 0.37 deg/g, i.e. V_char = 61.6 m/s -- far too neutral for a B-segment hatch (real V_char 22-28 m/s). Tuned eps_f to put V_char at 25 m/s (K_us = 0.0391 rad = 2.24 deg/g). Resulting value 0.31 deg/kN sits inside the normal 0.2-0.5 deg/kN band for a MacPherson strut + rack. Band: 4.09e-6 (V_char 28) to 7.29e-6 (V_char 22). Does NOT affect the limit tests (the solver adjusts delta; max a_y is unchanged) -- it only changes how much steering the driver has to wind on.
+  c_rs (rear roll steer) = 0.0 (DEFAULT OFF) [deg toe per deg roll] (estimated) :: corsa_c.rollsteer_r = 1.0 deg toe-OUT per deg roll is wrong in both sign and magnitude: at the limit (4.55 deg roll) it would give 4.55 deg of rear toe-out and the car would spin instantly. Torsion beams are designed to roll-UNDERsteer. If enabled at all, use c_rs = +0.06 (rear steers INTO the turn), band 0.03-0.10.
+  a_y_cap (steering limiter target) = 9.5 [m/s^2] (derived) :: 1.12 x the model's own limit a_y (8.38 m/s^2 at R=100), so the driver can always reach and slightly exceed the limit but cannot ask for absurd steer at speed. Limiter starts biting above u = 6.7 m/s.
+  K_us (used inside the limiter) = 0.0391 [rad/g] (derived) :: target V_char = 25 m/s, K_us = g*L/V_char^2
+  ws, zs (steering filter) = 15.71 rad/s (2.5 Hz), 1.0 [rad/s, -] (estimated) :: UNPUBLISHED / design choice. Critically damped so a keyboard tap never overshoots into a spin; 2.5 Hz gives a 0.22 s rise, at the fast end of human steering bandwidth (1.5-3 Hz) so the car still feels responsive.
+  sw_rate (steering rate limit) = 700 deg/s out, 900 deg/s back to centre [deg/s] (estimated) :: A normal driver peaks around 400-600 deg/s, a competition driver 1000-1500. 700 out / 900 back mimics caster self-centring being faster than a deliberate input.
+  C_alpha(Fz) = 15.3132*4000*sin(1.99021*atan(Fz/(1.70483*4000)))  [N/rad] [N/rad] (derived) :: EXACT least-squares fit (max residual 0.22 N) to the MF6.2 Fy0 cornering stiffness of tyre_data/TNO_car205_60R15.tir, evaluated with tyre_data/mf_eval.py at Fz = 1500..5000 N. Gives 39151 N/rad at 2477 N, 44986 at 3000 N. NOTE the .tir is a 205/60R15 at FNOMIN 4000 N, not the car's 175/65R14 -- scale by Fz, never by radius.
+  mu(Fz) = 0.903 - 16.1e-6*(Fz - 2477), floored at 0.05 [-] (published) :: qss.TYRE / crossover.TYRES 'TNO 205/60R15 (measured)'. MUST be byte-identical to qss's or none of the acceptance numbers close. (For information: the raw .tir evaluated directly gives mu(2477)=0.9233 and d(mu)/dFz = -25e-6 over 2-3 kN, so qss's linear fit is its own smoothing of that data -- follow qss, not the .tir.)
+  sigma_y (lateral relaxation length) = C_alpha(Fz)/110e3, clamped [0.20, 0.80]; 0.41 m at 3000 N [m] (estimated) :: UNPUBLISHED -- the .tir files carry no PTY/PTX relaxation parameters (verified by grep). Standard construction sigma_y = C_alpha / K_carcass_lateral with K_carcass 110 kN/m for a passenger radial. Result 0.41 m at 3 kN sits mid-band for the quoted 0.3-0.7 m range. Cross-check: at 30 m/s this is a 14 ms lag, which is the right order for the yaw-response delay you feel on turn-in.
+  sigma_x (longitudinal relaxation length) = 0.25 [m] (estimated) :: UNPUBLISHED. Longitudinal relaxation is typically 0.5-0.7x lateral. Fixed value is fine; it only matters for wheelspin/lockup feel.
+  I_w (wheel + hub + brake, per corner) = 0.65 [kg m^2] (estimated) :: UNPUBLISHED. 175/65R14 steel wheel + tyre ~13 kg at radius of gyration ~0.22 m -> 0.63. Band 0.55-0.80.
+  I_driveline (engine + flywheel + clutch + gearbox, at the crank) = 0.12 [kg m^2] (estimated) :: UNPUBLISHED. Typical for a 1.2 4-cyl with a single-mass flywheel. CRITICAL: referred to each front wheel this is I_drv*(gear*FD)^2/2 = 12.36 kg m^2 in 1st, 4.93 in 2nd, 1.39 in 5th -- 19x the wheel's own inertia in 1st. Omit it and 1st gear will feel weightless and the car will spin its wheels wrongly. It is a powertrain-module input; vehicle.py must accept it, not hard-code it.
+  R_e (effective rolling radius) = 0.283 [m] (published) :: corsa_c.r_roll (OD 583.1 mm x 0.97). Treat as constant; load-dependent R_e buys nothing here.
+  CdA / rho / Crr = 0.66 / 1.2 / 0.012 [m^2 / kg m^-3 / -] (published) :: corsa_c. Cross-check PASSES: at Vmax 47.2 m/s the required wheel power is 47.253 kW against P_wheel = eta*P_max = 47.300 kW, a 0.10% miss.
+  h_aero (drag application height) = 0.55 (= h_cg) [m] (estimated) :: Chosen so drag makes no pitch moment. Justification: even a 0.10 m error changes dFz_x at Vmax by only 35 N (0.4% of the front axle load).
+  Cs_psi / A / x_cp (body side force) = 2.2 /rad / 2.01 m^2 / +0.30 m [-/rad, m^2, m] (estimated) :: Cs_psi from ledger.py's default (swept there over 1.0-3.0, unmeasured, no CFD). x_cp = +0.30 m is an estimate; a hatchback's aerodynamic centre of pressure sits ahead of the CG, which is why cars are yaw-unstable in a crosswind. At the R=100 limit this gives 175 N of inward force (4% of the cornering force) and 52 Nm of destabilising yaw moment. DEFAULT ON in drive mode, forced OFF in qss-parity mode.
+  S_DEV = 0.35 [m^2] (published) :: ledger.S_DEV, per side. ONE panel active at a time: crossover/ledger/qss all use k = 0.5*rho*S_DEV*CL with the one-side area, so the sim must not deploy both panels and double the force.
+  CL0 (clean fin / sealed plate) = 0.70 / 1.25 [-] (estimated) :: crossover.q3_gain, ledger.sweep
+  dCLda (device lift-curve slope) = 2.47 /rad = 0.0431 /deg [1/rad] (derived) :: DERIVED: 2*pi*AR/(AR+2) at AR = 1.3 (the AR crossover.py cites for the L/D 3.2 figure). Set to 0 to run exact qss/crossover parity. CL_stall = 1.6, band 1.4-1.8 for a low-AR endplated surface.
+  LD_dev = 3.2 [-] (estimated) :: qss.corner_speed / ledger, 'AR 1.2-1.4 fin'
+  x_w (mount station) = crossover.MOUNTS: front bumper +1.74, front axle +0.97, mid front door +0.40, at the CG 0.00, rear axle -1.52 [m, positive FORWARD of the CG] (published) :: crossover.MOUNTS
+  h_w (mount height) = 0.70 recommended (qss default 0.90) [m] (estimated) :: A flank panel spans sill (~0.35 m) to shoulder line (~1.05 m) -> centre of pressure ~0.70 m. Band 0.55-0.95. IT BARELY MATTERS for corner speed: sweeping h_w from 0.30 to 1.10 m moves the R=100 sealed-plate gain only from +2.23% to +2.39%. It matters for ROLL, which the driver feels: at 222 N and h_w=0.90 it removes 0.257 deg from a 4.55 deg roll (5.6%). Use 0.90 for the acceptance tests so they match qss defaults.
+  y_dev (device lateral station, for its drag's yaw moment) = 0.72 (on the outer flank, so y_dev = -sgn_dev*0.72) [m] (derived) :: half the mean track
+  dt_phys = 0.001 [s] (derived) :: Set by the wheel-spin mode: tau = I_eff*u/(C_kappa*R_e^2) ~ 4.9 ms at 30 m/s with I_w alone, and much stiffer at low speed. 1 ms with semi-implicit Euler is safe; 17 substeps per 60 Hz frame is ~5 microseconds of work in pure Python per corner.
+  v_low = 1.0 [m/s] (published) :: VXLOW in every .tir file in tyre_data/. Use it as the divisor floor in slip angle, slip ratio and relaxation rate.
+
+API:
+  @dataclass
+class ChassisParams:
+    car: CorsaC = field(default_factory=CorsaC)
+    h_ra: float = 0.160
+    I_roll: float = 342.8
+    zeta_roll: float = 0.35
+    Cphi: float = 2482.0            # Nm/(rad/s); derived from zeta_roll if left None
+    roll_dist_f: float = 0.74
+    lltd_geo_f: float = 0.101; lltd_roll_f: float = 0.639
+    lltd_geo_r: float = 0.221; lltd_roll_r: float = 0.039
+    tau_LT: float = 0.02; tau_roll: float = 0.09; tau_pitch: float = 0.12
+    A_ack: float = 0.60; eps_f: float = 5.40e-6; c_rs: float = 0.0
+    ws: float = 15.71; zs: float = 1.0
+    sw_rate_out: float = 12.22; sw_rate_back: float = 15.71
+    a_y_cap: float = 9.5; K_us: float = 0.0391
+    sigma_x: float = 0.25; K_carc_y: float = 110e3
+    I_w: float = 0.65; I_driveline: float = 0.12
+    h_aero: float = 0.55; Cs_psi: float = 2.2; x_cp: float = 0.30
+    qss_parity: bool = False        # forces Cs_psi=0, dCLda=0, combined_slip=False
+      All chassis constants in one frozen-ish place. Nothing in the EOM may read a magic number that is not here or in CorsaC. qss_parity=True is the switch that makes the validation tests reproducible; it must NOT be the default for driving.
+  @dataclass
+class DeviceParams:
+    S: float = 0.35; CL0: float = 0.70; dCLda: float = 2.47; CL_stall: float = 1.6
+    LD: float = 3.2; x_w: float = 0.97; h_w: float = 0.90; y_dev: float = 0.72
+    delta_dev_geom: float = 0.0     # rad, extra geometric incidence of the panel
+    tau_dev: float = 0.25; t_ext: float = 0.45; t_ret: float = 0.30
+    enabled: bool = False
+      The flank wing. CL0 = 0.70 clean fin, 1.25 sealed plate. Set dCLda = 0.0 for exact crossover/ledger/qss parity.
+  @dataclass
+class Controls:
+    steer: float = 0.0      # -1..+1, keyboard axis, +1 = LEFT
+    throttle: float = 0.0   # 0..1
+    brake: float = 0.0      # 0..1
+    clutch: float = 0.0     # 0..1
+    gear: int = 1           # 0 = neutral, -1 = reverse
+    deploy: bool = False    # flank wing toggle
+      The only thing the input layer is allowed to hand the chassis. steer is the RAW key axis; the filtering in step 1 lives inside vehicle.py so the physics owns its own driveability.
+  class VehicleState:
+    # 26 floats, laid out exactly as the STATE line in the equations
+    X: float; Y: float; psi: float
+    u: float; v: float; r: float
+    phi: float; p: float
+    w: list[float]        # 4, rad/s, order FL FR RL RR
+    alpha_r: list[float]  # 4, relaxed slip angle, rad
+    kappa_r: list[float]  # 4, relaxed slip ratio
+    dFz_f: float; dFz_r: float; dFz_x: float
+    dsw: float; dsw_dot: float
+    dep: float
+    # non-integrated auxiliaries
+    dev_side: int = 1
+    _lt_lpf: float = 0.0  # the tau_roll low-pass used by the two-rate split
+    def as_array(self) -> np.ndarray: ...
+    @classmethod
+    def from_array(cls, a) -> "VehicleState": ...
+    @classmethod
+    def at_rest(cls, X=0.0, Y=0.0, psi=0.0, u=0.0) -> "VehicleState": ...
+      Order matters and is load-bearing: the tests index the array. at_rest must initialise w[i] = u/R_e (not 0) or the first substep will produce a huge false slip ratio.
+  def wheel_positions(car) -> list[tuple[float, float]]:
+    """[(x_i, y_i)] in the ISO body frame, order FL FR RL RR, y positive LEFT.
+    Returns [(a, +t_f/2), (a, -t_f/2), (-b, +t_r/2), (-b, -t_r/2)]."""
+      Single source of truth for the corner geometry. Every load-transfer, moment and slip calculation must call this rather than re-deriving signs.
+  def steering(dsw: float, car, cp: ChassisParams, phi: float, Fy_f_prev: float) -> tuple[float, float, float, float]:
+    """Returns (delta_FL, delta_FR, delta_RL, delta_RR) in rad.
+    Ackermann + compliance steer + optional rear roll steer, per equation step 1."""
+      Pure function, no state. Fy_f_prev is the previous substep's front-axle body-frame lateral force (N, positive left) for compliance steer.
+  def steer_limit(u: float, car, cp: ChassisParams) -> float:
+    """Speed-sensitive steering-wheel limit in rad:
+    min(9.1106, steer_ratio * a_y_cap * (L/max(u,1)**2 + K_us/g))."""
+      This one function is what makes a keyboard driveable. It returns full lock below 6.7 m/s, 251.7 deg at 10 m/s, 88.9 deg at 20 m/s, 58.8 deg at 30 m/s.
+  def normal_loads(st: VehicleState, car) -> list[float]:
+    """Per-corner Fz in N, order FL FR RL RR, each clamped at 0.
+    Purely a function of the dFz_f/dFz_r/dFz_x STATES -- no iteration, no
+    dependence on this step's tyre forces."""
+      The clamp at 0 means sum(Fz) < m*g when a wheel lifts; that is accepted (no heave DOF). Expose wheel_lift = [Fz_i <= 0.0] for the HUD and the tests.
+  def aero(st: VehicleState, car, cp: ChassisParams, dev: DeviceParams) -> dict:
+    """Returns {'Fx': N (negative = drag), 'Fy': N (+left), 'Mz': Nm,
+               'F_dev': N (+left), 'D_dev': N, 'CL_dev': -, 'alpha_dev': rad,
+               'beta': rad, 'q': Pa}.
+    F_dev sign is sgn_dev, taken from the STEERING command, never from beta."""
+      The single place the device sign convention lives. Returning F_dev separately (not folded into Fy) is required because step 9 needs F_dev*(h_cg - h_w) on its own.
+  def derivatives(st: VehicleState, ctl: Controls, drive: DriveInputs, car,
+                cp: ChassisParams, dev: DeviceParams, tyre, mu_scale: float = 1.0)
+                -> tuple[np.ndarray, dict]:
+    """Full state derivative plus a diagnostics dict.
+    drive carries per-wheel T_drive (Nm), T_brake (Nm) and I_referred (kg m^2)
+    from the powertrain/brake modules -- vehicle.py never computes engine torque.
+    diagnostics: a_y, a_x, Fz[4], alpha[4], kappa[4], Fx[4], Fy[4],
+                 util_f, util_r, dFz_tot_demand, beta, P_wheel_required,
+                 Y_f_expected, wheel_lift[4], limiting_axle."""
+      The one entry point. It must be side-effect free so the acceptance tests can call it at a constructed state. The diagnostics dict is not optional -- every acceptance test below reads it.
+  def step(st: VehicleState, ctl: Controls, drive: DriveInputs, dt: float, *,
+         car, cp, dev, tyre, mu_scale=1.0, substeps: int = 17) -> tuple[VehicleState, dict]:
+    """Advance one render frame by semi-implicit Euler with `substeps` inner
+    steps of dt/substeps. Integration order inside a substep:
+    (1) alpha_r, kappa_r  (2) w  (3) u,v,r,phi,p  (4) X,Y,psi
+    (5) dFz_f,dFz_r,dFz_x  (6) dsw,dsw_dot,dep."""
+      Returns the diagnostics of the LAST substep for the HUD. substeps=17 at 60 Hz gives dt_phys = 0.98 ms.
+  def steady_state_corner(R: float, *, car, cp, dev, tyre, mu_scale=1.0,
+                        power_cap: bool = False, combined_slip: bool = False,
+                        tol: float = 1e-6) -> dict:
+    """Solve the EOM's own steady constant-radius equilibrium at radius R by
+    bisecting on V and, at each V, solving the 2-equation residual
+    [lateral balance, yaw balance] for (delta_bic, beta) with the load-transfer
+    states set to their fixed points.  Returns
+    {'V', 'ay_g', 'beta_deg', 'delta_deg', 'alpha_f_deg', 'alpha_r_deg',
+     'util_f', 'util_r', 'limiting', 'Fz', 'dFz_tot', 'phi_deg',
+     'coriolis_N', 'induced_N', 'P_required_kW'}."""
+      THIS is the function the acceptance tests call. It is not part of the real-time loop but it must use the SAME force/moment/load-transfer code as derivatives() -- share the internals or the tests validate nothing. power_cap=False means grip-only, matching qss.corner_speed(power_cap=False).
+  def validate(verbose: bool = True) -> bool:
+    """Run every acceptance test below and print a pass/fail table.
+    Must be callable as `python -m drive.vehicle` and must exit non-zero on
+    any failure."""
+      Non-negotiable. This is how anyone later touching the load-transfer signs finds out immediately.
+
+VALIDATION TESTS:
+  T1 qss parity, R=100 m, grip only, cp.qss_parity=True, dev.enabled=False: steady_state_corner(100).V: expected 28.941 m/s (qss.corner_speed(100, power_cap=False) = 29.0875, i.e. -0.50%). Assert V <= 29.0875 STRICTLY: a two-track model can never beat qss's axle_capacity, which sums both tyres at their individual peak slip angles. If V > qss, the axle capacity is being double-counted. (tol +/-1.5% of 29.0875, i.e. V in [28.65, 29.52], AND V <= 29.10)
+  T2 qss parity, R=50 m: steady_state_corner(50).V: expected 20.431 m/s (qss 20.5679, -0.67%) (tol +/-1.5% of 20.5679, i.e. V in [20.26, 20.88], AND V <= 20.58)
+  T3 limit lateral acceleration at R=100 (ay_g): expected 0.8538 g (qss reports 0.8625 g) (tol [0.845, 0.870] g)
+  T4 UNDERSTEER: front axle saturates first at R=100 with roll_dist_f=0.74: expected util_f = 0.995, util_r = 0.942, limiting = 'front'. Same at R=50 (0.994 / 0.939) and R=30 (0.993 / 0.933). The 4-6% front margin is the whole basis of qss's 4.8% figure. (tol util_f >= 0.985; util_r in [0.925, 0.960]; util_f > util_r at every R in {30,50,75,100,130})
+  T5 per-corner normal loads at the R=100 limit: expected Fz = [FL 607, FR 5437, RL 1084, RR 2780] N for a LEFT turn (FL is the inner front). sum(Fz) = 9908.1 N = m*g EXACTLY. (tol |sum(Fz) - m*g| < 1 N whenever no wheel is lifted; Fz_FL in [550, 680]; Fz_FR in [5300, 5570])
+  T6 total lateral load transfer at the R=100 limit (dFz_tot_demand): expected 3263 N; qss's (m*a_y*h_cg)/t at the same a_y = 3266 N (tol within 1% of (m*a_y*h_cg - F_dev*h_w)/t computed from the model's own a_y)
+  T7 roll angle at the R=100 limit: expected 4.55 deg (qss.roll_angle at its own a_y gives 4.599 deg). Roll gradient 5.33 deg/g. (tol [4.30, 4.80] deg)
+  T8 CORIOLIS / emergent scrub drag at the R=100 limit: expected beta = -4.49 deg; -m*v*r = 662 N; Y_f*sin(delta) = 584 N; total induced drag = 1246 N. qss's lumped m*a_y*sin(7 deg) = 1031 N -- the emergent value is 21% higher. Required wheel power = 49.05 kW against P_wheel = 47.30 kW, so R=100 flat-out is MARGINALLY POWER LIMITED in the EOM (28.892 m/s with the cap on) whereas qss calls it grip-limited to R=130. The EOM is right; qss's fixed 7 deg under-charges near the limit and over-charges away from it (qss's scrub is LINEAR in a_y, the true induced drag is quadratic). (tol beta in [-5.2, -3.9] deg; -m*v*r in [600, 730] N; P_required in [47.5, 50.5] kW)
+  T9 DEVICE SIGN (the classic bug). R=100, sealed plate CL0=1.25, x_w=0.97, h_w=0.90, dCLda=0: expected +2.35% corner-speed gain (28.941 -> 29.622 m/s). qss as shipped reports only +1.18% because of its Y_r algebra bug; qss with Y_r corrected reports +2.20%, matching to 0.15%. REVERSING the sign gives -2.14% (28.322 m/s). (tol gain in [+1.8%, +2.8%] and STRICTLY POSITIVE. A negative or zero gain means the sign is flipped.)
+  T10 device, clean fin CL0=0.70, x_w=0.97, h_w=0.90, R=100: expected +1.28% (29.312 m/s). qss as shipped: +1.21%. crossover.gain(k=0.1470, R=100, x_w=0.97) closed form: +1.21%. (tol gain in [+1.05%, +1.50%]; |EOM gain - qss gain| < 0.15 percentage points)
+  T11 (x_w+b)/b MULTIPLIER EMERGENCE — mount-station monotonicity, clean fin, R=100: expected front axle +1.28% > at the CG +0.77% > rear axle +0.01% >= 0. Ratio of the front-axle to CG gain = 1.66, against the closed-form multiplier ratio (0.97+1.5195)/1.5195 = 1.638. Also at R=50: +0.64 / +0.38 / -0.00. (tol strictly decreasing in x_w; ratio(front axle : CG) in [1.55, 1.75])
+  T12 Y_f matches the closed-form split at a fixed operating point: expected diagnostics['Y_f_expected'] = (b*m*a_y - F_dev*(b + x_w))/L must equal the model's own Fy_body_FL + Fy_body_FR (tol within 1.0% at any converged steady state (this is the direct proof the multiplier emerges rather than being imposed))
+  T13 mount-height insensitivity (guards against double-counting F_dev in the load transfer): expected sealed plate at R=100, h_w swept 0.30 -> 1.10 m: gain moves only +2.23% -> +2.39%, monotonically increasing. If your gain swings by more than ~0.5 points across that sweep you have added F_dev*h_cg twice in dFz_tot_demand (I made exactly this error in the prototype). NOTE: qss.sweep()'s annotation 'h_w = h_cg, load transfer unchanged' is wrong — dFz_tot is unchanged only at h_w = 0. (tol gain(h_w=1.10) - gain(h_w=0.30) in [0.05, 0.35] percentage points, and monotone increasing)
+  T14 LEFT/RIGHT SYMMETRY: expected steady_state_corner(100) for a left turn and a right turn must give identical V to machine precision with the device off, and identical V with the device on (with dev_side mirrored). Any asymmetry is a sign error in wheel_positions, the load-transfer split, or Mz. (tol |V_left - V_right| < 1e-9 m/s)
+  T15 straight-line power balance (corsa_c.self_check parity): expected at u = 47.2 m/s the total resistance is 1001.1 N and the required wheel power is 47.253 kW against P_wheel = 0.86*55 kW = 47.300 kW (tol |P_required(47.2) - 47.300 kW| < 0.5 kW)
+  T16 coast-down derivative: expected released at u = 30 m/s, straight, zero torque, zero brake: du/dt = -0.4706 m/s^2 at t = 0 (tol +/-0.002 m/s^2)
+  T17 roll step response (this is the ONLY test that exercises Cphi): expected step a pure lateral force at the CG height. Roll settles to phi_ss with 30.9% overshoot at t_peak = 0.324 s, damped frequency 9.688 rad/s (period 0.649 s), undamped 1.646 Hz. At zeta 0.25 the overshoot is 44.4%, at 0.50 it is 16.3% — the test therefore pins zeta to about +/-0.05. (tol overshoot in [25%, 37%]; t_peak in [0.29, 0.36] s)
+  T18 no-input straight-line stability: expected released at u = 40 m/s with beta = 0, r = 0, zero steer: after 20 s of simulated time |Y| < 0.05 m, |psi| < 0.002 rad, |r| < 1e-4 rad/s. Catches asymmetric Ackermann, an asymmetric Fz split, and a sign error in the -y_i*Fxb_i yaw term. (tol as stated)
+  T19 combined-slip honesty check (cp.qss_parity=False, combined_slip=True, R=50): expected V drops to 19.46 m/s, i.e. -5.4% vs qss's 20.568, with util_f 0.999 and util_r 0.791. Reason: sustaining the corner needs 1338 N of tractive force on the front axle alone, and the front inner is down to ~600 N of vertical load, so the friction ellipse eats the front's lateral capacity. At R=100 the combined-slip solve does not converge at all — the car cannot both hold 0.85 g and make the power. THIS IS THE REAL CAR'S BEHAVIOUR, and the gap between T1/T2 and T19 is the honest measure of what qss.py leaves out. (tol V in [18.9, 20.1] m/s; util_r < 0.85; the test asserts the DIRECTION (V_combined < V_parity), not a tight value)
+  T20 wheel-lift handling: expected force dFz_f above the static front axle load (e.g. by scripting a 1.2 g step): Fz_FL clamps to exactly 0.0, Fy_FL and Fx_FL go to exactly 0.0, wheel_lift[0] is True, and sum(Fz) < m*g by the clamped amount. The sim must not NaN, must not produce negative mu, and must recover smoothly when the load returns. (tol no NaN/inf anywhere in the state for 10 s of scripted 1.2 g steps at 1 kHz)
+
+PITFALLS:
+  - BUG IN qss.py — Y_r violates qss's own force balance. qss.residuals line 88 has Y_r = (a*m*a_y + F*x_w)/L. Solving qss's own two stated equations (Y_f + Y_r + F = m*a_y and Y_f*a - Y_r*b + F*x_w = 0) gives Y_r = (a*m*a_y - F*(a - x_w))/L. The shipped code is missing -F*a/L. Check: Y_f + Y_r as coded = m*a_y - F*b/L, not m*a_y - F. Magnitude at F = 200 N: Y_r 3410.6 N coded vs 3332.6 N correct, +2.34%, and the sum misses m*a_y - F by exactly 78 N. Y_f is correct, so with the wing OFF (F = 0) the two agree exactly and every baseline number in qss stands. With the wing ON the inflated Y_r makes the rear go spuriously limiting: qss reports the sealed plate at the front axle giving +1.18% at R=100, LOWER than its own clean fin's +1.21% — physically impossible for a front-limited car. Patch qss's Y_r and it becomes +2.20%, matching this EOM's +2.35%. THE EOM IS RIGHT; qss is wrong here. My model never has this bug because it sums real per-wheel forces instead of imposing an axle split. Tell the qss author.
+  - The EOM cannot and must not reproduce qss's corner speeds exactly. qss.axle_capacity sums fy_max(Fz_outer) + fy_max(Fz_inner), i.e. it puts both tyres of an axle at their own individual peak slip angles at the same instant. Both wheels on an axle share (to within Ackermann and track-speed effects) one slip angle, and the peak slip angle rises with load — 8.4 deg at 600 N, 9.0 deg at 2477 N, 11.6 deg at 5400 N. So one of the pair is always off-peak. The cost is -0.47% to -0.94% depending on radius. If your two-track model matches qss to better than 0.1%, or beats it, you have accidentally reimplemented axle_capacity somewhere. Bake the inequality V_eom <= V_qss into the test.
+  - SIGN OF THE DEVICE FORCE — pick the side from the STEERING COMMAND, never from beta or v. In a left turn at the limit, beta is NEGATIVE (-4.5 deg) because the nose points inside the velocity vector. A naive sgn_dev = sign(beta) therefore deploys the panel on the WRONG side at exactly the moment it matters, and gives -2.14% instead of +2.35%. Worse, beta changes sign near the apex on a trailing-throttle entry, so the panel would chatter. Use sign(dsw) with a 5% deadband and a 0.3 s hold. Acceptance: the gain must be positive at every mount and every radius; if you see a loss, the sign is flipped.
+  - DOUBLE-COUNTING THE DEVICE IN THE LOAD TRANSFER — I made this exact error in my own prototype and it took a mount-height sweep to catch it. qss's dFz_tot = (m*a_y*h_cg - F*h_w)/t. When you rewrite it in terms of forces (which you must, to break the algebraic loop) the substitution is m*a_y = SFy_tyre + F_dev, so dFz_tot = (SFy_tyre*h_cg + F_dev*(h_cg - h_w))/t. If your SFy_tyre already includes F_dev you get F_dev*(2*h_cg - h_w) and the h_w sensitivity comes out wrong. Symptom: the mount-height sweep (T13) moves by much more than 0.35 percentage points, and the h_w = 0 case does not leave the load transfer at m*a_y*h_cg/t.
+  - THE FRAME-INDEPENDENCE ARGUMENT (qss.roll_angle's docstring is correct and worth restating because it is the reason the model is simple). Take moments in the y-z plane about the OUTER contact line, at ground level, using only external forces: weight -W at t/2 inboard, inner normal N_in at t inboard, outer normal at the pivot (no arm), the total tyre lateral force at z = 0 (no arm), the device force F at height h_w, and the d'Alembert force m*a_y at h_cg. Result: N_in = W/2 + (F*h_w - m*a_y*h_cg)/t, i.e. dFz_tot = (m*a_y*h_cg - F*h_w)/t. No roll axis, no spring rate, no sprung/unsprung split appears anywhere — the TOTAL transfer is a ground-plane statement and is frame independent. The roll axis sets only (a) the front/rear SPLIT of that total and (b) the roll ANGLE. Do not try to build the total out of spring forces; you will get it wrong and it will not match qss.
+  - roll_dist_f = 0.74 IS NOT REACHABLE FROM THIS CAR'S PUBLISHED SUSPENSION GEOMETRY. Building the split properly — elastic (Kphi_f/Kphi_tot on m_s*a_y*(h_cg-h_ra)) plus geometric (m_s_axle*a_y*h_rc/t) plus unsprung — gives LLTD_f = 0.51 with the springs-only 311/195 ratio. Even assigning ALL the elastic roll stiffness to the front axle caps it at 0.726, because h_rc_r = 0.300 m makes the rear geometric transfer 622 N (19% of the 3300 N total) all by itself. So 0.74 is a calibration constant standing in for what neither model contains (front tyres also carrying tractive force, front tyres running deeper into slip, compliance). Keep it at 0.74 — qss's a_y = 0.8625 g, its 4.8% margin, crossover's sqrt(mu_r/mu_f) cap and ledger's entire verdict are all pinned to it — but expose it as a top-level tunable and never let anyone 'fix' it by deriving it from the roll centres.
+  - corsa_c.rollsteer_r = 1.0 deg toe-out per deg roll IS WRONG and will destroy the car if implemented literally. At the limit the body rolls 4.55 deg, so this would command 4.55 deg of rear toe-out — the car would snap into instant oversteer and no acceptance test would pass. Torsion beams are deliberately designed to roll-UNDERsteer (bushing compliance toes the outer rear wheel IN). Default c_rs = 0.0. If enabled, use +0.06 deg/deg INTO the turn. This is the same term qss.residuals already disables with the comment 'this term as written does not model what it claims' — the sign problem is real and it is in corsa_c, not just in qss.
+  - qss's SCRUB DRAG IS THE CORIOLIS TERM, and you get it for free if and only if you keep the u*r and v*r terms. m*(udot - v*r) = SFx with udot = 0 gives SFx = -m*v*r = m*a_y*|beta|. At the R=100 limit beta = -4.49 deg so -m*v*r = 662 N, and the front tyres' lateral force resolved through the steer angle adds Y_f*sin(delta) = 584 N, total 1246 N against qss's lumped m*a_y*sin(7 deg) = 1031 N. Do NOT add a separate 'scrub drag' term on top — you would be counting it twice. And note the structural difference: qss's version is linear in a_y with a fixed 7 deg, so it under-charges at the limit (by 21%) and over-charges below it. Below the limit qss is badly pessimistic: at R=250 qss says 36.44 m/s power-limited, the EOM says 40.40 m/s (+10.9%). The EOM is right; qss's power-limited radii are conservative.
+  - THE ALGEBRAIC LOOP. Fz depends on the lateral force, the lateral force depends on Fz. Do not iterate it inside the frame, and do not use last frame's Fy raw. Make dFz_f, dFz_r and dFz_x STATES with the lags of step 9 and the whole derivative evaluation becomes explicit and single-pass. (For reference, if you do choose to iterate: the loop gain is (h_cg/t)*(mu_marg_outer - mu_marg_inner) = 0.386 * -0.065 = -0.025, so one Gauss-Seidel pass is already accurate to 2.5% of the correction and two are exact to 0.06%. But the lag version is both faster and more physical.)
+  - STIFFNESS AT LOW SPEED. Slip ratio, slip angle and the relaxation rate all divide by longitudinal velocity. Use max(|vlon|, 1.0) everywhere — 1.0 m/s is VXLOW in every .tir in tyre_data/, so it is the tyre model's own documented floor. Separately, the wheel-spin mode has tau = I_eff*u/(C_kappa*R_e^2), about 4.9 ms at 30 m/s with the bare wheel inertia and far stiffer at low speed and in low gears. dt = 1 ms with semi-implicit Euler is the recommendation; explicit Euler at 60 Hz will explode on the first standing start.
+  - FIRST-GEAR DRIVELINE INERTIA. Referred to each front wheel, I_drv*(gear*FD)^2/2 is 12.36 kg m^2 in 1st against the wheel's own 0.65 — a factor of 19. Omit it and the wheels will spin up instantly on any throttle input, the car will feel weightless off the line, and the 0-100 time will be nonsense. vehicle.py must accept I_referred per wheel from the powertrain module rather than assuming I_w.
+  - tyre_data/mf_eval.py's file list points at a non-existent tir/ subdirectory, and it runs its whole report at import time. Do not `import mf_eval` — either fix the paths in a copy or exec only the function definitions (split the source at 'files=['). The 205/60R15 .tir files (TNO, TASS, Siemens) are byte-identical in every Fy0 parameter that matters; they are one dataset under three names, so averaging them is double-counting exactly as crossover.py warns. Also note they describe a 205/60R15 at FNOMIN 4000 N and UNLOADED_RADIUS 0.3135, not the car's 175/65R14 at r_roll 0.283: scale by Fz, never by radius.
+  - THE TYRE MODEL MUST REPRODUCE qss's mu(Fz) EXACTLY or none of these numbers close. qss uses the linear fit mu = 0.903 - 16.1e-6*(Fz - 2477). The raw TNO .tir evaluated directly gives mu(2477) = 0.9233 and a local slope near -25e-6 per N — a 2% higher peak and a 55% steeper load sensitivity. Those are different tyres as far as the acceptance tests are concerned (a_y would come out about 0.88 g instead of 0.8625 g). Follow qss's fit for the validation path and expose the raw-.tir path as a separate, clearly-labelled option.
+  - STEERING WITHOUT A FILTER MAKES THE CAR UNDRIVEABLE, and the fix must live in vehicle.py, not in the input layer. A raw keyboard axis is a step from 0 to full lock. At 30 m/s full lock (32.6 deg road wheel) commands roughly 40 g. Two things are needed together and neither alone is enough: (a) the speed-sensitive limit steer_limit(u), which returns full lock below 6.7 m/s and only 58.8 deg of steering wheel at 30 m/s, and (b) the critically damped 2.5 Hz second-order filter with a 700 deg/s rate limit. With only (a) the car still snaps; with only (b) it still asks for 40 g eventually.
+  - LINEAR-RANGE UNDERSTEER IS NOT THE SAME KNOB AS LIMIT UNDERSTEER, and this model gets them from different places. Limit understeer comes from roll_dist_f = 0.74. Linear-range understeer comes from K_us = W_f/C_f - W_r/C_r, which from the TNO cornering stiffnesses alone is only 0.00645 rad = 0.37 deg/g, i.e. a characteristic speed of 61.6 m/s — nearly neutral and completely unlike a real Corsa (V_char 22-28 m/s). Without the eps_f compliance-steer term the car will feel darty and nervous on the straight while still understeering at the limit, which is exactly backwards. eps_f = 5.40e-6 rad/N fixes the linear range and provably does not touch any limit test (the steady-state solver just winds on 1.3 deg more lock).
+  - S_DEV = 0.35 m^2 IS ONE PANEL, NOT TWO. crossover, ledger and qss all build k = 0.5*rho*S_DEV*CL from the one-side area, so the sim must deploy exactly one panel at a time. Deploying a mirrored pair would either double the force (wrong by 2x against every reference number) or cancel it entirely. The 39 kg mass penalty in ledger.py covers both panels plus the mechanism; that is a mass bookkeeping question, not an area question.
+  - WHEEL LIFT AND VERTICAL EQUILIBRIUM. At the R=100 limit the inner front is already down to 607 N, so any kerb, trail-brake or quick flick will lift it. Clamp Fz at 0 and let that corner produce zero force — but do NOT redistribute the shortfall to the other wheels, because that would break the ground-plane moment balance that the whole load-transfer derivation rests on. The consequence is that sum(Fz) < m*g while a wheel is lifted; with no heave DOF that is the correct and standard behaviour, and the error is bounded by the clamp. Expose wheel_lift[i] so the HUD and the tests can see it, and make sure mu(Fz) is guarded at Fz -> 0 so it cannot go negative or divide by zero in B = C_alpha/(C*D).

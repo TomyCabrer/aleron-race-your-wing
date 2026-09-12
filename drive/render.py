@@ -1,0 +1,1949 @@
+"""Top-down pygame renderer and HUD for the Corsa C flank-wing study.
+
+Why this file looks the way it does
+-----------------------------------
+Three measurements taken on THIS machine (pygame 2.5.2, SDL 2.28.3, dummy
+driver, 1280x800) dictate the entire drawing strategy, and none of them is
+negotiable:
+
+  * the tarmac ribbon as ONE concave polygon costs 0.58 ms/frame; the same
+    ribbon tessellated per centreline interval costs 20.41 ms and misses 60 fps
+    on its own.  So the ribbon is exactly one `pygame.draw.polygon` call over
+    the visible left edge plus the reversed right edge.
+  * 1500 individual `draw.line` calls cost 8.66 ms -- half the whole 16.7 ms
+    frame.  Skid marks are therefore culled to the camera radius BEFORE any
+    transform and then strided down to at most SKID_MAX_SEGS = 600 segments.
+  * a font render is 30-60 us and the HUD has ~30 strings.  Every surface goes
+    through one cache keyed on the finished string, and every number is
+    QUANTISED before it is formatted (speed to 1 km/h, rpm to 50, force to
+    10 N) so the cache actually hits instead of missing on every float.
+
+The honesty requirement, which is the reason the whole simulator exists
+--------------------------------------------------------------------
+The flank device makes 63-227 N against a 9908 N car: 0.6-1.5% of corner
+speed.  Its force arrow is drawn at exactly the same px/N as the tyre arrows
+(FORCE_PX_PER_N, cap FORCE_MAX_PX) and comes out about 3 px long.  It is not
+scaled up, given its own gain, or drawn with a minimum length.  A renderer that
+made the device look big would be lying about the central result of the study.
+Legibility is bought instead with numbers -- F_wing in newtons and live
+util_f/util_r in the HUD -- and, outside this module, with
+`plots.compare(by='distance')`, which is the only view that resolves 0.6%.
+
+Utilisation calls `qss.fy_max` with `qss.TYRE`.  It does NOT retype
+`mu = 0.903 - 16.1e-6*(Fz - 2477)`: the point of the HUD number is that it is
+literally the reference solver's own function, so V28 compares like with like
+and no silent drift can open up between the two files.
+
+This module reads physics state; it never writes any.  It imports `track`,
+`qss` and `pygame` per the contract's module map (plus `corsa_c`, see
+DEVIATION 5), and never `vehicle`, `powertrain` or `tyre`.
+
+Run `python3 -m drive.render` for the self-check (V22 frame budget, V28 vs
+qss.residuals, V30 headless boot, the camera-sign assertion, and a screenshot).
+"""
+
+from __future__ import annotations
+
+import math
+import os
+import time
+from collections import deque
+from dataclasses import dataclass, field
+
+import numpy as np
+import pygame
+
+from qss import TYRE, fy_max            # eq.12 -- NEVER reimplement mu(Fz)
+import qss
+from corsa_c import CorsaC, RHO, G
+
+from . import track as trk
+
+
+# ======================================================================= #
+#  CONSTANTS                                                              #
+# ======================================================================= #
+# --- camera (specs/harness.txt eq.13, all estimated; bands in the spec) ---
+PPM_HI = 14.0            # est  px/m at rest: the 3.82 m car is 53 px, enough
+PPM_LO = 6.0             # est  px/m at V_ZOOM: 1280 px shows 213 m ~ 6.5 s
+V_ZOOM = 45.0            # m/s  speed at which the zoom-out is complete
+TAU_ZOOM = 0.35          # s    est; stops zoom pumping under throttle modulation
+TAU_HEADING = 0.12       # s    est; keeps the world from snapping during a flick
+T_LEAD = 0.60            # s    est  lookahead time
+LEAD_MAX = 40.0          # m    est  lookahead cap
+CAR_SCREEN_FRAC = 0.62   # -    est  car sits 62% down the screen
+
+# --- track ribbon window (derived from the ppm range) ---------------------
+S_BEHIND = 60.0          # m  visible arclength behind the car
+S_AHEAD = 180.0          # m  ... and ahead: 240 m > the 213 m visible at PPM_LO
+S_NEAR = 60.0            # m  stride 1 out to here, stride 4 beyond
+FAR_STRIDE = 4           # derived: 4*DS = 2 m chords, sub-pixel at 6 px/m
+
+# --- skid marks (derived from the measured 8.66 ms per 1500 lines) --------
+SKID_MAXLEN = 4000       # points per wheel deque
+SKID_FADE_S = 12.0       # s
+SKID_MAX_SEGS = 600      # ~3.5 ms at the measured 8.66 ms / 1500 lines
+SKID_WIDTH = 0.18        # m  contact patch width
+SKID_EMIT_UTIL = 0.92    # eq.16 emission threshold on |Fy|/fy_max
+SKID_EMIT_KAPPA = 0.12   # eq.16 emission threshold on |kappa|
+
+# --- force vectors: the honesty constants --------------------------------
+# "1 px per 40 N at ppm = 10, scaling as ppm/10, cap 120 px".  A 3000 N tyre
+# force is 75 px and a 127 N wing force is 3 px.  ONE scale for both.
+FORCE_PX_PER_N = 1.0 / 40.0
+FORCE_PPM_REF = 10.0
+FORCE_MAX_PX = 120.0
+
+# --- g-g box (est) -------------------------------------------------------
+GG_AXIS_G = 1.2          # est: headroom above the 0.8625 g quasi-steady limit
+GG_TRAIL_N = 100         # 5.0 s at 20 Hz
+GG_TRAIL_HZ = 20.0
+GG_V_TOL = 1.0           # m/s -- qss.max_ay bisects 200x, so recompute rarely
+
+# --- car body drawing dimensions (published exterior dims) ---------------
+CAR_LEN = 3.817          # m  published 5-door
+CAR_HALF_W = 0.823       # m  published width 1.646
+CAR_X_FRONT = 1.7515     # m  ahead of CG  (0.780 overhang + a = 0.9715)
+CAR_X_REAR = -2.0675     # m  behind CG    (0.548 overhang + b = 1.5195)
+WHEEL_LEN = 0.583        # m  175/65R14 OD = 583.1 mm
+WHEEL_W = 0.175          # m
+WHEEL_XY = ((0.9715, 0.7145), (0.9715, -0.7145),      # FL, FR
+            (-1.5195, 0.7100), (-1.5195, -0.7100))    # RL, RR
+
+# --- flank device drawing (est; the geometry is UNPUBLISHED -- no such
+#     device exists).  S_DEV = 0.35 m^2 with a VERTICAL span, so the plan-view
+#     chord is 0.45 m and the span 0.78 m is a label only. -----------------
+DEV_CHORD = 0.45         # m   est, band 0.35-0.60
+DEV_THICK = 0.10         # m   est, plan-view thickness
+DEV_OUT0 = 0.25          # m   est, stowed standoff from the body side
+DEV_OUT1 = 0.35          # m   est, extra standoff when fully deployed
+DEV_SPAN = 0.78          # m   derived: S_DEV / DEV_CHORD, label only
+S_DEV = 0.35             # m^2 published (ledger.S_DEV) -- ONE panel
+X_W = 0.97               # m   published (crossover.MOUNTS['front axle'])
+H_W = 0.90               # m   published (qss default h_w)
+
+# --- HUD ---------------------------------------------------------------
+RPM_IDLE = 850.0         # est   Z12XE idle
+RPM_SHIFT_LIGHT = 5900.0 # est
+RPM_REDLINE = 6200.0     # est, band 6000-6400
+RPM_PMAX = 5600.0        # published: 55 kW @ 5600 rpm
+HUD_ALPHA = 190          # panel background alpha
+FONT_NAMES = ('Menlo', 'Monaco', 'DejaVu Sans Mono', 'Courier New')
+
+# HUD rects at the 1280x800 base size; multiplied by ui_scale elsewhere.
+R_SPEED = (12, 12, 300, 150)
+R_TIMING = (460, 12, 360, 86)
+R_LOADS = (968, 12, 300, 230)
+R_STATE = (12, 180, 220, 150)
+R_WING = (1028, 260, 240, 124)
+R_PEDALS = (12, 668, 300, 120)
+R_MINIMAP = (860, 640, 180, 140)
+R_GG = (1068, 588, 200, 200)
+R_WARN = (440, 760, 400, 22)
+
+# --- colours (est; dark ground so the yellow car and orange device read) --
+C_BG = (27, 29, 33)
+C_GRID = (35, 38, 41)
+C_TARMAC = (58, 61, 67)
+C_TARMAC_WET = (43, 58, 74)
+C_TARMAC_DAMP = (51, 57, 63)
+C_EDGE = (216, 218, 222)
+C_KERB_A = (200, 72, 60)
+C_KERB_B = (236, 239, 242)
+C_DASH = (106, 111, 118)
+C_CAR = (215, 195, 74)
+C_CAR_OUTLINE = (32, 31, 26)
+C_GLASS = (74, 70, 50)
+C_WHEEL = (35, 38, 42)
+C_WHEEL_SLIP = (224, 83, 63)
+C_SKID = (38, 40, 43)
+C_FY = (79, 163, 255)
+C_FX = (111, 208, 140)
+C_WING_ON = (255, 140, 43)
+C_WING_OFF = (107, 111, 117)
+C_HUD_BG = (16, 17, 20)
+C_HUD_TEXT = (232, 234, 238)
+C_HUD_DIM = (139, 144, 153)
+C_BAR_THR = (78, 194, 106)
+C_BAR_BRK = (226, 82, 63)
+C_BAR_STEER = (217, 206, 85)
+C_GG_ENV = (90, 96, 104)
+C_GG_TRAIL = (255, 181, 69)
+C_GG_DOT = (255, 255, 255)
+C_PURPLE = (176, 78, 224)
+C_GREEN = (78, 194, 106)
+C_YELLOW = (217, 206, 85)
+
+GRID_M = 20.0            # m  20 m ground grid; without it a top-down car at
+                         #    constant heading looks stationary
+
+CAP_HITS = {'force_arrow': 0}    # how often FORCE_MAX_PX actually binds
+
+DEVIATIONS = []          # filled at the bottom; printed by the self-check
+
+
+# ======================================================================= #
+#  EQ.12 -- AXLE UTILISATION.  This is the reference implementation.       #
+# ======================================================================= #
+def axle_utilisation(Fz, Fy, mu):
+    """(util_f, util_r) from per-corner loads, lateral forces and mu scales.
+
+    `from qss import fy_max, TYRE` and call them -- see the module docstring.
+    Retyping `mu = 0.903 - 16.1e-6*(Fz - 2477)` here is exactly the bug V28
+    exists to catch: the HUD and `qss.residuals()` would then drift apart the
+    first time either file is edited, and the failure has no local symptom.
+
+    `Fy` is the BODY-frame lateral force per corner, FL FR RL RR, because that
+    is what `qss` balances against `m*a_y`.  Only the axle sums are used, so
+    the left/right split within an axle is irrelevant.  `max(cap, 1.0)` keeps a
+    fully unloaded axle (wheel lift, or the car stopped) from dividing by zero.
+    """
+    cap_f = (fy_max(Fz[0], mu_scale=mu[0], **TYRE)
+             + fy_max(Fz[1], mu_scale=mu[1], **TYRE))
+    cap_r = (fy_max(Fz[2], mu_scale=mu[2], **TYRE)
+             + fy_max(Fz[3], mu_scale=mu[3], **TYRE))
+    util_f = abs(Fy[0] + Fy[1]) / max(cap_f, 1.0)
+    util_r = abs(Fy[2] + Fy[3]) / max(cap_r, 1.0)
+    return util_f, util_r
+
+
+def limiting_axle(util_f, util_r, throttle=0.0, rpm=0.0,
+                  rpm_pmax=RPM_PMAX):
+    """'FRONT' | 'REAR' | 'POWER' -- eq.12's display rule.
+
+    Additive helper (the spec lists only `axle_utilisation`), kept here so the
+    POWER rule lives next to the utilisation it qualifies rather than being
+    retyped in drive.py.  POWER is a DISPLAY state: the car is on the throttle
+    stop, above 85% of the power-peak speed, and neither axle is near its grip
+    limit -- which is the T7 (R = 130 m) case the layout exists to show.
+    """
+    if throttle > 0.98 and max(util_f, util_r) < 0.90 and rpm > 0.85 * rpm_pmax:
+        return 'POWER'
+    return 'FRONT' if util_f >= util_r else 'REAR'
+
+
+# ======================================================================= #
+#  EQ.18 -- g-g ENVELOPE, cached                                          #
+# ======================================================================= #
+_GG_CACHE = {'key': None, 'V': None, 'curve': None}
+_GG_STATS = {'calls': 0, 'recomputes': 0}
+_CAR = CorsaC()
+
+
+def gg_envelope(V, mu_scale=1.0, k_eff=0.0, x_w=X_W, h_w=H_W, n=91):
+    """Equation 18 as an (M,2) CLOSED curve in (ay_g, ax_g).
+
+    `qss.max_ay` bisects 200 times per call, so calling this per frame -- let
+    alone per axis point -- is thousands of bisections a second.  The curve is
+    cached and recomputed only when the speed has moved more than
+    GG_V_TOL = 1.0 m/s or the wing/surface configuration changed: 1-3
+    recomputes per second in normal driving.
+
+    Numerically identical to `plots.gg_envelope` (same formula, same order of
+    operations); only the default point count differs, 91 here against 181
+    there, because this one is rasterised into a 200 px box.
+    """
+    _GG_STATS['calls'] += 1
+    key = (round(mu_scale, 6), round(k_eff, 9), round(x_w, 6), round(h_w, 6), n)
+    if (_GG_CACHE['key'] == key and _GG_CACHE['V'] is not None
+            and abs(V - _GG_CACHE['V']) <= GG_V_TOL):
+        return _GG_CACHE['curve']
+
+    _GG_STATS['recomputes'] += 1
+    ay_env = qss.max_ay(V, k=k_eff, x_w=x_w, h_w=h_w, mu_scale=mu_scale)
+    drag = 0.5 * RHO * _CAR.CdA * V * V + _CAR.Crr * _CAR.m * G
+    ax_pow = min(_CAR.P_wheel / (_CAR.m * max(V, 3.0)), 0.90 * ay_env)
+
+    ay = np.linspace(-ay_env, ay_env, n)
+    frac = np.sqrt(np.maximum(0.0, 1.0 - (ay / ay_env) ** 2))
+    ax_acc = ax_pow * frac - drag / _CAR.m
+    ax_brk = -(ay_env * frac + drag / _CAR.m)
+    curve = np.concatenate([np.column_stack([ay, ax_acc]),
+                            np.column_stack([ay[::-1], ax_brk[::-1]]),
+                            np.column_stack([ay[:1], ax_acc[:1]])]) / G
+
+    _GG_CACHE.update(key=key, V=V, curve=curve)
+    return curve
+
+
+# ======================================================================= #
+#  SKID MARKS                                                             #
+# ======================================================================= #
+class SkidBuffer:
+    """One deque per wheel of (x, y, t, new_run).
+
+    `new_run` breaks the polyline: without it a wheel that stops sliding at one
+    corner and starts again at the next draws a straight line across the
+    intervening 200 m of track.
+
+    The whole cost model of this class is the measured 8.66 ms for 1500
+    `draw.line` calls.  `visible()` therefore culls to the camera radius FIRST
+    (a squared-distance test in world coordinates, no transform) and only then
+    strides the survivors down to `max_segs`.  Doing it the other way round --
+    transform everything, then cull -- is the version that degrades over a
+    session and gets blamed on the physics.
+    """
+
+    __slots__ = ('q', 'fade_s', 'maxlen', '_t_last', '_pending')
+
+    def __init__(self, maxlen: int = SKID_MAXLEN, fade_s: float = SKID_FADE_S):
+        self.maxlen = int(maxlen)
+        self.fade_s = float(fade_s)
+        self.q = [deque(maxlen=self.maxlen) for _ in range(4)]
+        self._t_last = 0.0
+        self._pending = [True, True, True, True]   # next point starts a run
+
+    def clear(self) -> None:
+        for d in self.q:
+            d.clear()
+        self._pending = [True, True, True, True]
+
+    def emit(self, t: float, xy4, active) -> None:
+        """Called at 100 Hz with the four contact-patch positions and eq.16."""
+        self._t_last = t
+        for i in range(4):
+            if active[i]:
+                x, y = xy4[i][0], xy4[i][1]
+                self.q[i].append((float(x), float(y), float(t),
+                                  self._pending[i]))
+                self._pending[i] = False
+            else:
+                self._pending[i] = True
+
+    def n_points(self) -> int:
+        return sum(len(d) for d in self.q)
+
+    def visible(self, cam_xy, radius_m, max_segs: int = SKID_MAX_SEGS,
+                t_now=None):
+        """[(x0, y0, x1, y1, alpha)] in world coordinates, <= max_segs long.
+
+        alpha follows eq.16, 150*(1 - age/fade_s), and is applied by the
+        renderer as a blend toward the tarmac colour rather than through a
+        per-pixel-alpha surface: an SRCALPHA overlay for 600 lines costs more
+        than the lines themselves, and the marks are always drawn on tarmac.
+        """
+        t_now = self._t_last if t_now is None else float(t_now)
+        cx, cy = float(cam_xy[0]), float(cam_xy[1])
+        r2 = float(radius_m) * float(radius_m)
+        fade = self.fade_s
+        segs = []
+        for d in self.q:
+            prev = None
+            for pt in d:
+                x, y, t, new_run = pt
+                if t_now - t > fade:
+                    prev = None
+                    continue
+                if new_run:
+                    prev = pt
+                    continue
+                if prev is not None:
+                    dx, dy = x - cx, y - cy
+                    if dx * dx + dy * dy <= r2:
+                        segs.append((prev[0], prev[1], x, y, t))
+                prev = pt
+        if not segs:
+            return []
+        stride = max(1, -(-len(segs) // max_segs))     # ceil
+        out = []
+        inv = 150.0 / fade
+        for k in range(0, len(segs), stride):
+            x0, y0, x1, y1, t = segs[k]
+            a = 150.0 - (t_now - t) * inv
+            if a > 0.0:
+                out.append((x0, y0, x1, y1, a))
+        return out
+
+
+# ======================================================================= #
+#  CONFIG / HUD PAYLOAD                                                   #
+# ======================================================================= #
+@dataclass
+class ViewConfig:
+    """All render tuning in one place; mode/hud/show_* are toggled by keys."""
+
+    size: tuple = (1280, 800)
+    fps: int = 60
+    mode: str = 'car_up'            # 'car_up' | 'world_up' | 'chase'
+    ppm_hi: float = PPM_HI
+    ppm_lo: float = PPM_LO
+    v_zoom: float = V_ZOOM
+    tau_zoom: float = TAU_ZOOM
+    tau_heading: float = TAU_HEADING
+    t_lead: float = T_LEAD
+    lead_max: float = LEAD_MAX
+    car_screen_frac: float = CAR_SCREEN_FRAC
+    show_vectors: bool = True
+    show_gg: bool = True
+    show_skid: bool = True
+    hud: str = 'full'               # 'full' | 'minimal' | 'off'
+
+
+@dataclass
+class HudData:
+    """Everything the HUD shows, assembled once per frame by the sim.
+
+    util_f/util_r/limited_by MUST come from `axle_utilisation` (i.e. from
+    `qss.fy_max`) so the displayed number is literally the reference
+    implementation and is directly comparable with `qss.residuals()`.
+
+    Every field has a default so a partially-built HUD still draws, and the
+    fields after `dropped_frames` are DEVIATION 3: the per-corner quantities
+    the wheel and vector drawing needs, which the spec's HudData does not carry
+    and `VehicleState` does not publish.
+    """
+
+    V: float = 0.0
+    V_kmh: float = 0.0
+    rpm: float = 0.0
+    gear: int = 0
+    ay_g: float = 0.0
+    ax_g: float = 0.0
+    yaw_rate_deg: float = 0.0
+    beta_deg: float = 0.0
+    util_f: float = 0.0
+    util_r: float = 0.0
+    limited_by: str = 'FRONT'
+    Fz: np.ndarray = field(default_factory=lambda: np.zeros(4))
+    mu: np.ndarray = field(default_factory=lambda: np.ones(4))
+    wing_on: bool = False
+    wing_deploy: float = 0.0
+    wing_side: int = 0
+    F_wing: float = 0.0
+    D_wing: float = 0.0
+    lap: int = 0
+    lap_time: float = 0.0
+    last_lap: float = 0.0
+    best_lap: float = 0.0
+    sector: int = 0
+    sector_times: list = field(default_factory=list)
+    sector_best: list = field(default_factory=list)
+    lap_valid: bool = True
+    on_track: bool = True
+    mu_scale_car: float = 1.0
+    rtf: float = 0.0
+    dropped_frames: int = 0
+    # --- DEVIATION 3: additive, for the wheel / vector drawing -----------
+    Fx: np.ndarray = field(default_factory=lambda: np.zeros(4))
+    Fy: np.ndarray = field(default_factory=lambda: np.zeros(4))
+    kappa: np.ndarray = field(default_factory=lambda: np.zeros(4))
+    alpha: np.ndarray = field(default_factory=lambda: np.zeros(4))
+    delta_wheel: np.ndarray = field(default_factory=lambda: np.zeros(4))
+    wheel_lift: np.ndarray = field(default_factory=lambda: np.zeros(4, bool))
+    stalled: bool = False
+    on_limiter: bool = False
+    steer_limited: bool = False
+    paused: bool = False
+    time_scale: float = 1.0
+    msg: str = ''
+    # --- the mount the garage chose; the panel is drawn at THIS station ---
+    x_w: float = X_W
+    h_w: float = H_W
+    wing_type: str = ''
+    inc_deg: float = 0.0
+    # --- the three designed wings (drive/garage.py CarBuild) ------------
+    # flank panels: present flags + their own stations / chords; the panel
+    # on the OUTER flank of the turn is the one that deploys (wing_side)
+    dev_left: bool = False
+    dev_right: bool = False
+    x_w_left: float = X_W
+    x_w_right: float = X_W
+    dev_chord: float = DEV_CHORD
+    dev_span: float = DEV_SPAN
+    dev_plate: float = 0.0
+    wing_left_name: str = ''
+    wing_right_name: str = ''
+    # top wing
+    top_on: bool = False
+    top_deploy: float = 0.0
+    F_top: float = 0.0
+    D_top: float = 0.0
+    top_x: float = -1.60
+    top_span: float = 1.40
+    top_chord: float = 0.30
+    top_plate: float = 0.0
+    top_mode: str = 'fixed'
+    wing_top_name: str = ''
+    # --- the pause menu (drive/menu.py), drawn last when open; duck-typed ---
+    menu: object = None
+    # --- gearbox mode label ('AUTO' | 'MAN' | 'MAN+CL'), ABS cycling, map ---
+    gearbox: str = ''
+    abs_active: bool = False
+    tc_active: bool = False
+    engine: str = ''          # the Engine setting's HUD label ('75 HP' ...)
+    eng_load: float = 0.0     # PowertrainOutput.load; the sound reads it
+    track_name: str = ''
+
+
+# ======================================================================= #
+#  HELPERS                                                                #
+# ======================================================================= #
+def _wrap_pi(a: float) -> float:
+    return math.atan2(math.sin(a), math.cos(a))
+
+
+def _pose(st):
+    """(x, y, psi) from a VehicleState (X, Y), a Vehicle (x, y), or a 3-tuple.
+
+    drive.Sim keeps the previous frame's pose as a bare tuple -- it is three
+    floats snapshotted once per physics step and there is no reason for it to be
+    an object. Accepting that here rather than forcing an object on the caller
+    is what stops the render-pose interpolation from being an interface trap.
+    """
+    if hasattr(st, 'X'):
+        return float(st.X), float(st.Y), float(st.psi)
+    if hasattr(st, 'x'):
+        return float(st.x), float(st.y), float(st.psi)
+    x, y, psi = st
+    return float(x), float(y), float(psi)
+
+
+def _speed(st) -> float:
+    return math.hypot(float(getattr(st, 'u', 0.0)), float(getattr(st, 'v', 0.0)))
+
+
+def _lerp_col(c0, c1, t):
+    t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+    return (int(c0[0] + (c1[0] - c0[0]) * t),
+            int(c0[1] + (c1[1] - c0[1]) * t),
+            int(c0[2] + (c1[2] - c0[2]) * t))
+
+
+# ======================================================================= #
+#  RENDERER                                                               #
+# ======================================================================= #
+class Renderer:
+    """Everything except the flip.
+
+    `draw_frame` builds the frame and `present` flips, so the V22 frame-budget
+    test can measure build time under the dummy driver without a display
+    server in the loop.  `frame_ms()` reports the last build.
+    """
+
+    def __init__(self, cfg: ViewConfig, track, headless: bool = False):
+        self.cfg = cfg
+        self.track = track
+        self.headless = bool(headless)
+
+        if self.headless:
+            # SDL reads these at pygame.display.init(), not at import; the
+            # package-level guard in drive/__init__.py (CARSIM_HEADLESS) is what
+            # covers an importer such as pytest that pulls the package in first.
+            os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')
+            os.environ.setdefault('SDL_AUDIODRIVER', 'dummy')
+
+        if not pygame.get_init():
+            pygame.init()
+        if not pygame.display.get_init():
+            pygame.display.init()
+        if not pygame.font.get_init():
+            pygame.font.init()
+
+        W, H = int(cfg.size[0]), int(cfg.size[1])
+        self.screen = pygame.display.set_mode((W, H))
+        pygame.display.set_caption('carsim - Corsa C flank-wing study')
+        self.W, self.H = W, H
+        self.ui = min(W / 1280.0, H / 800.0)
+
+        # --- camera state -------------------------------------------------
+        self.psi_cam = 0.0
+        self.ppm = cfg.ppm_hi
+        self.cam = np.zeros(2)
+        self.zoom_manual = 1.0
+        self.theta = 0.0
+        self._Rm = np.eye(2)
+        self._anchor = np.array([W * 0.5, H * cfg.car_screen_frac])
+        self._cam_init = False
+        self._t_render = 0.0
+
+        # --- fonts and the text cache -------------------------------------
+        self.f_lbl = self._font(int(round(14 * self.ui)))
+        self.f_val = self._font(int(round(18 * self.ui)))
+        self.f_gear = self._font(int(round(30 * self.ui)), bold=True)
+        self.f_speed = self._font(int(round(44 * self.ui)), bold=True)
+        self._txt_cache = {}
+        self._txt_hits = 0
+        self._txt_miss = 0
+
+        # --- per-track precomputation --------------------------------------
+        self._prep_track()
+        self._panels = {}
+        self._gg_trail = deque(maxlen=GG_TRAIL_N)
+        self._gg_t = -1.0
+        self._frame_ms = 0.0
+        self._frames = 0
+
+    # ------------------------------------------------------------------ #
+    def _font(self, size, bold=False):
+        for name in FONT_NAMES:
+            try:
+                f = pygame.font.SysFont(name, size, bold=bold)
+                if f is not None:
+                    return f
+            except Exception:
+                continue
+        return pygame.font.Font(None, size)
+
+    def _prep_track(self):
+        """Arrays the drawing needs every frame, computed once per track."""
+        tr = self.track
+        self._N = len(tr.s)
+        self._nper = (self._N - 1) if tr.closed else self._N   # wrap modulus
+        self._ds = tr.ds
+        self._hw = 0.5 * tr.width
+        c, s = np.cos(tr.psi), np.sin(tr.psi)
+        self._nrm = np.column_stack([-s, c])         # +n is LEFT of centreline
+        self._kabs = np.abs(tr.kappa)
+        # open map: world-space tarmac areas (filled polygons) and features
+        self._areas = [(a, a.polygon(), a.bbox()) for a in getattr(tr, 'areas', [])]
+        self._features = list(getattr(tr, 'features', []))
+        # minimap: the whole centreline, strided, in its own pixel box
+        x0, y0, x1, y1 = tr.bbox[0], tr.bbox[1], tr.bbox[2], tr.bbox[3]
+        for _a, _p, bb in self._areas:
+            x0, y0 = min(x0, bb[0]), min(y0, bb[1])
+            x1, y1 = max(x1, bb[2]), max(y1, bb[3])
+        rx, ry, rw, rh = [v * self.ui for v in R_MINIMAP]
+        pad = 8 * self.ui
+        sx = (rw - 2 * pad) / max(x1 - x0, 1e-6)
+        sy = (rh - 2 * pad) / max(y1 - y0, 1e-6)
+        self._mm_k = min(sx, sy)
+        self._mm_off = (rx + pad + 0.5 * ((rw - 2 * pad) - (x1 - x0) * self._mm_k),
+                        ry + pad + 0.5 * ((rh - 2 * pad) - (y1 - y0) * self._mm_k))
+        self._mm_bb = (x0, y0, x1, y1)
+        step = max(1, self._N // 300)
+        mm = tr.xy[::step]
+        self._mm_pts = [self._mm_xy(p[0], p[1]) for p in mm]
+        self._mm_areas = [[self._mm_xy(p[0], p[1]) for p in poly]
+                          for _a, poly, _bb in self._areas if _a.drivable]
+
+    def _mm_xy(self, x, y):
+        x0, y0, x1, y1 = self._mm_bb
+        return (int(self._mm_off[0] + (x - x0) * self._mm_k),
+                int(self._mm_off[1] + (y1 - y) * self._mm_k))   # world +y is up
+
+    def _i_of_s(self, s):
+        i = int(round(s / self._ds))
+        return i % self._nper if self.track.closed else max(0, min(self._N - 1, i))
+
+    def _rect(self, r):
+        return pygame.Rect(int(r[0] * self.ui), int(r[1] * self.ui),
+                           int(r[2] * self.ui), int(r[3] * self.ui))
+
+    # ------------------------------------------------------------------ #
+    #  WORLD -> SCREEN                                                    #
+    # ------------------------------------------------------------------ #
+    def world_to_screen(self, P):
+        """(N,2) world metres -> (N,2) screen pixels.  Eq.14, see DEVIATION 1.
+
+        S = ((P - cam) @ Rm.T) * [ppm, -ppm] + anchor, with the y flip because
+        world +y (LEFT) is screen -y.  Measured 0.12 ms for 5000 points, i.e.
+        the transform is never the cost -- rasterisation is.
+        """
+        P = np.asarray(P, dtype=np.float64)
+        single = (P.ndim == 1)
+        if single:
+            P = P.reshape(1, 2)
+        out = (P - self.cam) @ self._Rm.T
+        out[:, 0] *= self.ppm
+        out[:, 1] *= -self.ppm
+        out += self._anchor
+        return out[0] if single else out
+
+    def _px(self, P):
+        return self.world_to_screen(P).astype(np.int32).tolist()
+
+    def _set_rot(self, psi_cam):
+        """theta and Rm.  DEVIATION 1 lives here and nowhere else."""
+        if self.cfg.mode == 'world_up':
+            th = 0.0
+        else:
+            th = 0.5 * math.pi - psi_cam
+        self.theta = th
+        c, s = math.cos(th), math.sin(th)
+        self._Rm = np.array([[c, -s], [s, c]])
+
+    # ------------------------------------------------------------------ #
+    def update_camera(self, st, dt_frame: float) -> None:
+        """Eq.13.  Heading lag, speed lead, speed zoom; all exponential."""
+        cfg = self.cfg
+        x, y, psi = _pose(st)
+        V = _speed(st)
+        dt = max(float(dt_frame), 0.0)
+        self._t_render += dt
+
+        tau_h = cfg.tau_heading * (2.5 if cfg.mode == 'chase' else 1.0)
+        if not self._cam_init or dt <= 0.0:
+            # dt = 0 is "no time has passed": the first frame, a reset, or a
+            # single-stepped frame. The heading lag must SNAP there, exactly as
+            # the zoom does below. Lagging from a stale heading is how a reset
+            # ends up drawing the car sideways, which reads as a physics bug.
+            self.psi_cam = psi
+            self._cam_init = True
+        else:
+            self.psi_cam += _wrap_pi(psi - self.psi_cam) * (
+                1.0 - math.exp(-dt / max(tau_h, 1e-6)))
+        self.psi_cam = _wrap_pi(self.psi_cam)
+
+        lead = min(V * cfg.t_lead, cfg.lead_max)
+        if cfg.mode == 'chase':
+            lead *= 1.35
+        self.cam = np.array([x + lead * math.cos(self.psi_cam),
+                             y + lead * math.sin(self.psi_cam)])
+
+        f = min(max(V / cfg.v_zoom, 0.0), 1.0)
+        ppm_raw = (cfg.ppm_hi + (cfg.ppm_lo - cfg.ppm_hi) * f) * self.zoom_manual
+        if dt <= 0.0:
+            self.ppm = ppm_raw
+        else:
+            self.ppm += (ppm_raw - self.ppm) * (
+                1.0 - math.exp(-dt / max(cfg.tau_zoom, 1e-6)))
+        self.ppm = max(self.ppm, 0.5)
+
+        self._anchor = np.array(
+            [self.W * 0.5,
+             self.H * (0.5 if cfg.mode == 'world_up' else cfg.car_screen_frac)])
+        self._set_rot(self.psi_cam)
+
+    def set_zoom(self, k: float) -> None:
+        self.zoom_manual = min(max(float(k), 0.35), 3.0)
+
+    # ------------------------------------------------------------------ #
+    #  TEXT                                                               #
+    # ------------------------------------------------------------------ #
+    def _txt(self, s, font=None, col=C_HUD_TEXT):
+        """Cached surface.  ~30 strings/frame at 30-60 us each is 1.5 ms.
+
+        The key is the finished string, so a QUANTISED number (speed to 1 km/h,
+        rpm to 50, force to 10 N) hits the cache while a raw float would miss
+        on literally every frame.
+        """
+        font = font or self.f_val
+        key = (s, id(font), col)
+        surf = self._txt_cache.get(key)
+        if surf is None:
+            self._txt_miss += 1
+            if len(self._txt_cache) > 4096:
+                self._txt_cache.clear()
+            surf = font.render(s, True, col)
+            self._txt_cache[key] = surf
+        else:
+            self._txt_hits += 1
+        return surf
+
+    def _blit(self, s, x, y, font=None, col=C_HUD_TEXT):
+        self.screen.blit(self._txt(s, font, col), (int(x), int(y)))
+
+    def _panel(self, r):
+        """One alpha-blended HUD background per rect, built once and reused."""
+        rect = self._rect(r)
+        surf = self._panels.get(r)
+        if surf is None:
+            surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+            surf.fill((*C_HUD_BG, HUD_ALPHA))
+            pygame.draw.rect(surf, (60, 64, 70, 220), surf.get_rect(), 1)
+            self._panels[r] = surf
+        self.screen.blit(surf, rect.topleft)
+        return rect
+
+    # ------------------------------------------------------------------ #
+    #  FRAME                                                              #
+    # ------------------------------------------------------------------ #
+    def draw_frame(self, st, st_prev=None, alpha: float = 0.0,
+                   ctl=None, aux: HudData | None = None,
+                   skid: SkidBuffer | None = None) -> None:
+        """Build one frame.  Everything except the flip.
+
+        Order (spec, with DEVIATION 2 on the patches): BG, 20 m grid, ribbon,
+        surface patches, kerbs, edge lines, centre dashes, start/finish and
+        sector marks, skid, car, wheels, vectors, wing, HUD, g-g, minimap.
+        """
+        t0 = time.perf_counter()
+        aux = aux if aux is not None else HudData()
+        sc = self.screen
+
+        # --- render-pose interpolation: the POSE only.  HUD numbers use the
+        #     latest state, or the speed readout jitters by a frame. ---------
+        x, y, psi = _pose(st)
+        if st_prev is not None and alpha > 0.0:
+            xp, yp, pp = _pose(st_prev)
+            x = xp + (x - xp) * alpha
+            y = yp + (y - yp) * alpha
+            psi = pp + _wrap_pi(psi - pp) * alpha
+
+        sc.fill(C_BG)
+        self._draw_grid()
+        self._draw_areas()
+        runs, s_car, windows = self._visible_indices(x, y)
+        self._draw_ribbon(runs)
+        self._draw_patches(windows)
+        self._draw_kerbs(windows)
+        self._draw_edges(runs)
+        self._draw_dashes(windows)
+        self._draw_marks(windows)
+        self._draw_features()
+        if self.cfg.show_skid and skid is not None:
+            self._draw_skid(skid)
+        self._draw_car(x, y, psi, aux)
+        if self.cfg.show_vectors:
+            self._draw_vectors(x, y, psi, aux)
+        self._draw_wing(x, y, psi, aux)
+        if self.cfg.hud != 'off':
+            self._draw_hud(aux, ctl)
+            if self.cfg.show_gg:
+                self._draw_gg(aux)
+            if self.cfg.hud == 'full':
+                self._draw_minimap(x, y)
+        menu = getattr(aux, 'menu', None)
+        if menu is not None and getattr(menu, 'open', False):
+            menu.draw(sc)                  # ESC / OPTIONS: controls + reset
+
+        self._frame_ms = (time.perf_counter() - t0) * 1e3
+        self._frames += 1
+
+    def present(self) -> None:
+        pygame.display.flip()
+
+    def screenshot(self, path: str) -> str:
+        pygame.image.save(self.screen, path)
+        return path
+
+    def frame_ms(self) -> float:
+        return self._frame_ms
+
+    # ------------------------------------------------------------------ #
+    #  WORLD LAYERS                                                       #
+    # ------------------------------------------------------------------ #
+    def _view_radius(self) -> float:
+        return 0.5 * math.hypot(self.W, self.H) / self.ppm
+
+    def _draw_grid(self):
+        """20 m ground grid.
+
+        A top-down car on a flat background at constant heading looks
+        stationary; this is the only speed cue off track and it costs two
+        strided line families.  Drawn over the world AABB of the visible disc,
+        so it stays correct under the car-up rotation.
+        """
+        r = self._view_radius()
+        cx, cy = self.cam[0], self.cam[1]
+        x0 = math.floor((cx - r) / GRID_M) * GRID_M
+        x1 = cx + r
+        y0 = math.floor((cy - r) / GRID_M) * GRID_M
+        y1 = cy + r
+        nx = int((x1 - x0) / GRID_M) + 1
+        ny = int((y1 - y0) / GRID_M) + 1
+        if nx > 0 and ny > 0 and nx * ny < 4000:
+            xs = x0 + GRID_M * np.arange(nx)
+            ys = y0 + GRID_M * np.arange(ny)
+            va = np.column_stack([xs, np.full(nx, y0)])
+            vb = np.column_stack([xs, np.full(nx, y1)])
+            ha = np.column_stack([np.full(ny, x0), ys])
+            hb = np.column_stack([np.full(ny, x1), ys])
+            A = self._px(np.vstack([va, ha]))
+            B = self._px(np.vstack([vb, hb]))
+            for a, b in zip(A, B):
+                pygame.draw.line(self.screen, C_GRID, a, b, 1)
+
+    def _window(self, s_car):
+        """The visible arclength window [s0, s1], UNWRAPPED (it may be < 0 or
+        > length; every consumer maps back through _i_of_s).
+
+        The spec's fixed [s-60, s+180] is right at 14 px/m but not at 6: the
+        view radius is then 126 m, and in a corner that curls back -- T3 turns
+        129 deg inside 180 m -- the far end of the window is still on screen
+        and the ribbon visibly stops in mid-air. The window is therefore tied
+        to the actual view radius, with the spec's numbers as the floor.
+        """
+        r = self._view_radius()
+        return (s_car - min(max(S_BEHIND, r), 120.0),
+                s_car + min(max(S_AHEAD, 2.5 * r + S_BEHIND), 420.0))
+
+    def _visible_indices(self, x, y):
+        """Centreline sample index RUNS plus one arclength window per run.
+
+        Circuit / skidpad / dragstrip: one run over the arclength window
+        [s-60, s+180] (strided far away) and one window -- the spec's path.
+        Open map: the perimeter loop can cross the view twice (the car in the
+        middle of the pad sees the road on both sides), and an arclength
+        window around the nearest point draws only one of them. The samples
+        are therefore culled by DISTANCE from the camera and split into
+        contiguous runs (wrapping at the seam), each with its own window so
+        the kerbs, dashes and marks follow the ribbon everywhere it is seen.
+        """
+        tr = self.track
+        s_car = trk.project(tr, x, y)[0]
+        ds = self._ds
+        if not self._areas:
+            s0, s1 = self._window(s_car)
+            i_c = int(round(s_car / ds))
+            i0 = int(round(s0 / ds))
+            i_m = i_c + int(S_NEAR / ds)
+            i1 = int(round(s1 / ds))
+            near = np.arange(i0, i_m, 1)
+            far = np.arange(i_m, i1, FAR_STRIDE)
+            idx = np.concatenate([near, far, [i1]])
+            if tr.closed:
+                idx = np.mod(idx, self._nper)
+            else:
+                idx = np.clip(idx, 0, self._N - 1)
+                idx = idx[np.concatenate([[True], np.diff(idx) != 0])]
+            return [idx], s_car, [(s0, s1)]
+
+        n = self._nper
+        r = self._view_radius() * 1.3
+        xy = tr.xy[:n]
+        d2 = (xy[:, 0] - self.cam[0]) ** 2 + (xy[:, 1] - self.cam[1]) ** 2
+        vis = d2 < r * r
+        if not vis.any():
+            return [], s_car, []
+        pad = 3
+        if vis.all():
+            starts, lengths = [0], [n]
+        else:
+            k0 = int(np.flatnonzero(~vis)[0])           # rotate to start on a gap
+            vr = np.roll(vis, -k0)
+            d = np.diff(vr.astype(np.int8))
+            st = np.flatnonzero(d == 1) + 1
+            en = np.flatnonzero(d == -1)
+            starts = [int((a + k0) % n) for a in st]
+            lengths = [int(b - a + 1) for a, b in zip(st, en)]
+        runs, windows = [], []
+        for a, ln in zip(starts, lengths):
+            a0 = a - pad
+            cnt = ln + 2 * pad
+            idx = np.arange(a0, a0 + cnt, 2)
+            idx = np.append(idx, a0 + cnt - 1) % n
+            runs.append(idx)
+            s0 = a0 * ds
+            windows.append((s0, s0 + cnt * ds))
+        return runs, s_car, windows
+
+    def _draw_areas(self):
+        """Open map: the tarmac pad (and the wet square) as filled polygons,
+        culled by bounding box against the view. Drawn under the ribbon."""
+        if not self._areas:
+            return
+        r = self._view_radius()
+        cx, cy = self.cam[0], self.cam[1]
+        for area, poly, bb in self._areas:
+            if bb[2] < cx - r or bb[0] > cx + r or bb[3] < cy - r or bb[1] > cy + r:
+                continue
+            pts = self._px(poly)
+            if len(pts) >= 3:
+                pygame.draw.polygon(self.screen, tuple(area.colour), pts)
+                if area.drivable and area.kind == 'rrect':
+                    pygame.draw.polygon(self.screen, C_EDGE, pts,
+                                        max(1, int(round(0.12 * self.ppm))))
+
+    def _draw_features(self):
+        """Open map decorations: painted circles / lines / boxes and cones.
+        The physics never reads any of these."""
+        if not self._features:
+            return
+        r = self._view_radius() * 1.1
+        cx, cy = self.cam[0], self.cam[1]
+        r2 = r * r
+        sc = self.screen
+        ppm = self.ppm
+        for f in self._features:
+            kind = f[0]
+            if kind == 'circle':
+                _k, fx, fy, rad, col, w = f
+                if (fx - cx) ** 2 + (fy - cy) ** 2 > (r + rad) ** 2:
+                    continue
+                c = self.world_to_screen(np.array([fx, fy]))
+                pygame.draw.circle(sc, col, (int(c[0]), int(c[1])), int(rad * ppm),
+                                   max(1, int(round(w * ppm))))
+            elif kind == 'cone':
+                _k, fx, fy = f
+                if (fx - cx) ** 2 + (fy - cy) ** 2 > r2:
+                    continue
+                c = self.world_to_screen(np.array([fx, fy]))
+                rad = max(2, int(round(0.22 * ppm)))
+                pygame.draw.circle(sc, C_WING_ON, (int(c[0]), int(c[1])), rad)
+                if rad >= 4:
+                    pygame.draw.circle(sc, (40, 30, 20), (int(c[0]), int(c[1])), rad, 1)
+            elif kind == 'line':
+                _k, x0, y0, x1, y1, col, w = f
+                mx, my = 0.5 * (x0 + x1), 0.5 * (y0 + y1)
+                half = 0.5 * math.hypot(x1 - x0, y1 - y0)
+                if (mx - cx) ** 2 + (my - cy) ** 2 > (r + half) ** 2:
+                    continue
+                p = self._px(np.array([(x0, y0), (x1, y1)]))
+                pygame.draw.line(sc, col, p[0], p[1], max(1, int(round(w * ppm))))
+            elif kind == 'box':
+                _k, x0, y0, x1, y1, col = f
+                if (0.5 * (x0 + x1) - cx) ** 2 + (0.5 * (y0 + y1) - cy) ** 2 > r2:
+                    continue
+                p = self._px(np.array([(x0, y0), (x1, y0), (x1, y1), (x0, y1)]))
+                pygame.draw.polygon(sc, col, p)
+
+    def _draw_ribbon(self, runs):
+        """THE ribbon: ONE concave polygon per run.  0.58 ms measured; 20.41 ms
+        if tessellated per interval, which misses 60 fps on its own."""
+        tr = self.track
+        for idx in runs:
+            poly = np.vstack([tr.left[idx], tr.right[idx][::-1]])
+            pts = self._px(poly)
+            if len(pts) >= 3:
+                pygame.draw.polygon(self.screen, C_TARMAC, pts)
+
+    def _overlaps(self, a, b, s0, s1):
+        """[a,b] intersected with the unwrapped window, or None.
+
+        On a closed track the patch is also tried shifted by +/- one lap, which
+        is what makes a patch that straddles the start line -- or a window that
+        does -- appear at all instead of being silently dropped.
+        """
+        L = self.track.length
+        shifts = (-L, 0.0, L) if self.track.closed else (0.0,)
+        best = None
+        for k in shifts:
+            lo, hi = max(a + k, s0), min(b + k, s1)
+            if hi > lo and (best is None or (hi - lo) > (best[1] - best[0])):
+                best = (lo, hi)
+        return best
+
+    def _pt(self, i, n):
+        """World point at centreline sample i, lateral offset n."""
+        return self.track.xy[i] + n * self._nrm[i]
+
+    def _draw_patches(self, windows):
+        """Surface patches.
+
+        DEVIATION 2: the spec's drawing order puts these BEFORE the ribbon,
+        which would bury them under the tarmac polygon.  They are the wet and
+        split-mu regions and exist to be seen, so they are drawn immediately
+        after it.
+        """
+        tr = self.track
+        if not tr.surfaces:
+            return
+        L = tr.length
+        for s0, s1 in windows:
+            for p in tr.surfaces:
+                pa, pb = p.s0, p.s1
+                if tr.closed and pb < pa:
+                    pb += L
+                hit = self._overlaps(pa, pb, s0, s1)
+                if hit is None:
+                    continue
+                a, b = hit
+                step = max(self._ds, (b - a) / 40.0)
+                ss = np.arange(a, b + 0.5 * step, step)
+                ii = np.array([self._i_of_s(v) for v in ss])
+                n0 = max(p.n0, -self._hw)
+                n1 = min(p.n1, self._hw)
+                edge_a = tr.xy[ii] + n0 * self._nrm[ii]
+                edge_b = tr.xy[ii] + n1 * self._nrm[ii]
+                pts = self._px(np.vstack([edge_a, edge_b[::-1]]))
+                if len(pts) >= 3:
+                    pygame.draw.polygon(self.screen, tuple(p.colour), pts)
+
+    def _draw_kerbs(self, windows):
+        """0.8 m kerbs in 3 m blocks on corner INSIDES (|kappa| > 1/60).
+
+        Inside means toward the centre of curvature: kappa > 0 is a left turn,
+        so the inside is +n (left).  Getting this backwards paints the kerb on
+        the outside of every corner, which reads as a track that turns the
+        other way.
+        """
+        tr = self.track
+        blk = 3.0
+        col_on = self._kabs > (1.0 / 60.0)
+        for s0, s1 in windows:
+            s = math.floor(s0 / blk) * blk
+            while s < s1:
+                i0 = self._i_of_s(s)
+                i1 = self._i_of_s(s + blk)
+                if col_on[i0]:
+                    sgn = 1.0 if tr.kappa[i0] > 0 else -1.0
+                    n_out = sgn * self._hw
+                    n_in = sgn * (self._hw - 0.8)
+                    quad = np.array([self._pt(i0, n_in), self._pt(i0, n_out),
+                                     self._pt(i1, n_out), self._pt(i1, n_in)])
+                    col = C_KERB_A if int(s // blk) % 2 == 0 else C_KERB_B
+                    pygame.draw.polygon(self.screen, col, self._px(quad))
+                s += blk
+
+    def _draw_edges(self, runs):
+        tr = self.track
+        w = max(1, int(round(0.12 * self.ppm)))
+        for idx in runs:
+            for arr in (tr.left, tr.right):
+                pts = self._px(arr[idx])
+                if len(pts) >= 2:
+                    pygame.draw.lines(self.screen, C_EDGE, False, pts, w)
+
+    def _draw_dashes(self, windows):
+        """3 m on / 6 m off centre dashes -- the second speed cue."""
+        w = max(1, int(round(0.10 * self.ppm)))
+        tr = self.track
+        for s0, s1 in windows:
+            s = math.floor(s0 / 9.0) * 9.0
+            while s < s1:
+                i0 = self._i_of_s(s)
+                i1 = self._i_of_s(s + 3.0)
+                p = self._px(np.array([tr.xy[i0], tr.xy[i1]]))
+                pygame.draw.line(self.screen, C_DASH, p[0], p[1], w)
+                s += 9.0
+
+    def _draw_marks(self, windows):
+        """Start/finish chequer and the sector bands."""
+        tr = self.track
+        lines = list(tr.sector_s) + [g[0] for g in tr.gates]
+        for s0, s1 in windows:
+            for k, s_line in enumerate(lines):
+                hit = self._overlaps(s_line, s_line + 1.2, s0, s1)
+                if hit is None:
+                    continue
+                ss = hit[0]
+                i0 = self._i_of_s(ss)
+                i1 = self._i_of_s(ss + (1.2 if k == 0 else 0.4))
+                if k == 0:
+                    nseg = 8
+                    ns = np.linspace(-self._hw, self._hw, nseg + 1)
+                    for j in range(nseg):
+                        quad = np.array([self._pt(i0, ns[j]), self._pt(i0, ns[j + 1]),
+                                         self._pt(i1, ns[j + 1]), self._pt(i1, ns[j])])
+                        col = C_EDGE if j % 2 == 0 else (40, 42, 46)
+                        pygame.draw.polygon(self.screen, col, self._px(quad))
+                else:
+                    quad = np.array([self._pt(i0, -self._hw), self._pt(i0, self._hw),
+                                     self._pt(i1, self._hw), self._pt(i1, -self._hw)])
+                    pygame.draw.polygon(self.screen, C_PURPLE, self._px(quad))
+
+    def _draw_skid(self, skid: SkidBuffer):
+        """<= 600 lines.  Culled in world coordinates, then strided, then
+        transformed in ONE numpy batch."""
+        segs = skid.visible(self.cam, self._view_radius() * 1.15, SKID_MAX_SEGS)
+        if not segs:
+            return
+        arr = np.empty((len(segs) * 2, 2))
+        for k, (x0, y0, x1, y1, _a) in enumerate(segs):
+            arr[2 * k] = (x0, y0)
+            arr[2 * k + 1] = (x1, y1)
+        P = self._px(arr)
+        w = max(1, int(round(SKID_WIDTH * self.ppm)))
+        sc = self.screen
+        for k, seg in enumerate(segs):
+            col = _lerp_col(C_TARMAC, C_SKID, seg[4] / 255.0)
+            pygame.draw.line(sc, col, P[2 * k], P[2 * k + 1], w)
+
+    # ------------------------------------------------------------------ #
+    #  CAR                                                                #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _body_to_world(x, y, psi, pts):
+        c, s = math.cos(psi), math.sin(psi)
+        R = np.array([[c, -s], [s, c]])
+        return np.asarray(pts) @ R.T + np.array([x, y])
+
+    def _draw_car(self, x, y, psi, aux):
+        body = np.array([
+            (CAR_X_FRONT, CAR_HALF_W * 0.72), (CAR_X_FRONT - 0.30, CAR_HALF_W),
+            (CAR_X_REAR + 0.25, CAR_HALF_W), (CAR_X_REAR, CAR_HALF_W * 0.80),
+            (CAR_X_REAR, -CAR_HALF_W * 0.80), (CAR_X_REAR + 0.25, -CAR_HALF_W),
+            (CAR_X_FRONT - 0.30, -CAR_HALF_W), (CAR_X_FRONT, -CAR_HALF_W * 0.72),
+        ])
+        glass = np.array([(0.55, 0.60), (-0.55, 0.66), (-1.15, 0.55),
+                          (-1.15, -0.55), (-0.55, -0.66), (0.55, -0.60)])
+
+        # wheels first so the body overlaps them, as it does in plan view
+        for i, (wx, wy) in enumerate(WHEEL_XY):
+            d = float(aux.delta_wheel[i]) if i < 2 else 0.0
+            cw, sw = math.cos(d), math.sin(d)
+            rect = np.array([(0.5 * WHEEL_LEN, 0.5 * WHEEL_W),
+                             (0.5 * WHEEL_LEN, -0.5 * WHEEL_W),
+                             (-0.5 * WHEEL_LEN, -0.5 * WHEEL_W),
+                             (-0.5 * WHEEL_LEN, 0.5 * WHEEL_W)])
+            rect = rect @ np.array([[cw, -sw], [sw, cw]]).T + np.array([wx, wy])
+            slipping = (abs(float(aux.kappa[i])) > SKID_EMIT_KAPPA
+                        or abs(float(aux.alpha[i])) > math.radians(9.0)
+                        or bool(aux.wheel_lift[i]))
+            col = C_WHEEL_SLIP if slipping else C_WHEEL
+            pygame.draw.polygon(self.screen, col,
+                                self._px(self._body_to_world(x, y, psi, rect)))
+
+        pw = self._px(self._body_to_world(x, y, psi, body))
+        pygame.draw.polygon(self.screen, C_CAR, pw)
+        pygame.draw.polygon(self.screen, C_CAR_OUTLINE, pw,
+                            max(1, int(round(0.05 * self.ppm))))
+        pygame.draw.polygon(self.screen, C_GLASS,
+                            self._px(self._body_to_world(x, y, psi, glass)))
+
+    def _force_px(self, F):
+        """px per newton -- the SAME function for tyre and device forces."""
+        px = abs(F) * FORCE_PX_PER_N * (self.ppm / FORCE_PPM_REF)
+        if px > FORCE_MAX_PX:
+            CAP_HITS['force_arrow'] += 1
+            px = FORCE_MAX_PX
+        return math.copysign(px, F)
+
+    def _arrow(self, p0_screen, vec_screen, col):
+        x0, y0 = p0_screen
+        x1, y1 = x0 + vec_screen[0], y0 + vec_screen[1]
+        L = math.hypot(vec_screen[0], vec_screen[1])
+        if L < 1.0:
+            # An arrow shorter than a pixel is drawn as a pixel, never padded
+            # to a minimum length: the flank device is 3 px and must stay 3 px.
+            pygame.draw.line(self.screen, col, (int(x0), int(y0)),
+                             (int(round(x1)), int(round(y1))), 2)
+            return
+        pygame.draw.line(self.screen, col, (int(x0), int(y0)),
+                         (int(x1), int(y1)), 2)
+        if L > 6.0:
+            ux, uy = vec_screen[0] / L, vec_screen[1] / L
+            h = min(6.0, 0.3 * L)
+            pygame.draw.polygon(self.screen, col, [
+                (int(x1), int(y1)),
+                (int(x1 - h * (ux + 0.5 * uy)), int(y1 - h * (uy - 0.5 * ux))),
+                (int(x1 - h * (ux - 0.5 * uy)), int(y1 - h * (uy + 0.5 * ux)))])
+
+    def _draw_vectors(self, x, y, psi, aux):
+        """Tyre forces, anchored at the CONTACT PATCH.
+
+        Drawing them from the wheel centre looks fine until the car slides,
+        when the arrows visibly lead or lag the tyre.  The rotation is the same
+        matrix as everything else, so the world +y -> screen -y flip is applied
+        once and the lateral forces cannot end up on the wrong side.
+        """
+        cp = self._body_to_world(x, y, psi, np.array(WHEEL_XY))
+        base = self.world_to_screen(cp)
+        for i in range(4):
+            d = float(aux.delta_wheel[i]) if i < 2 else 0.0
+            th = psi + d
+            fwd = np.array([math.cos(th), math.sin(th)])
+            lat = np.array([-math.sin(th), math.cos(th)])
+            for F, vec, col in ((float(aux.Fy[i]), lat, C_FY),
+                                (float(aux.Fx[i]), fwd, C_FX)):
+                n_px = self._force_px(F)
+                if abs(n_px) < 0.5:
+                    continue
+                w = (vec * n_px) @ self._Rm.T
+                self._arrow(base[i], (w[0], -w[1]), col)
+
+    def _draw_wing(self, x, y, psi, aux):
+        """The three wings -- both flank panels and the top wing -- with the
+        DEPLOYED one(s) filled in the device colour and THE FORCE ARROW AT
+        THE TYRE SCALE.
+
+        63-227 N against a 9908 N car: at 10 px/m a 127 N force is 3 px.  That
+        is the point.  `_force_px` is the same function the tyre arrows use and
+        there is no separate gain, no minimum length and no exaggeration here.
+
+        Flank panels: a stowed panel hugs the flank (standoff DEV_OUT0) in
+        the dim colour; the panel on the OUTER flank of the turn slides out
+        by DEV_OUT1 * deploy and lights up.  In the published (legacy) car
+        both flanks carry the same panel; a garage build may have one, two
+        or none, each at its own station and chord.
+        Top wing: a span-wide bar with end plates at its station; stowed =
+        outline, deployed = filled, its drag drawn as the (backward) arrow.
+        """
+        side_dep = int(aux.wing_side)
+        dep = float(aux.wing_deploy)
+        f = dep * dep * (3.0 - 2.0 * dep)
+        legacy = bool(getattr(aux, 'wing_type', '')) and aux.wing_type != 'off'
+        chord = float(getattr(aux, 'dev_chord', DEV_CHORD) or DEV_CHORD)
+        plate = float(getattr(aux, 'dev_plate', 0.0) or 0.0)
+        for side in (+1, -1):                       # +1 = the LEFT flank (y > 0)
+            present = (aux.dev_left if side > 0 else aux.dev_right) or legacy
+            if not present:
+                continue
+            xw = float(aux.x_w_left if side > 0 else aux.x_w_right)
+            if legacy and not (aux.dev_left or aux.dev_right):
+                xw = float(getattr(aux, 'x_w', X_W))
+            # the deployed panel is on the OUTER flank: y = -sgn * 0.72
+            active = (side_dep != 0 and side == -side_dep and dep > 0.0)
+            fs = f if active else 0.0
+            y_side = side * CAR_HALF_W
+            out = side * (DEV_OUT0 + DEV_OUT1 * fs)
+            panel = np.array([
+                (xw + 0.5 * chord, y_side + out),
+                (xw - 0.5 * chord, y_side + out),
+                (xw - 0.5 * chord, y_side + out + side * DEV_THICK),
+                (xw + 0.5 * chord, y_side + out + side * DEV_THICK)])
+            col = C_WING_ON if (active and dep > 0.05) else C_WING_OFF
+            pts = self._px(self._body_to_world(x, y, psi, panel))
+            pygame.draw.polygon(self.screen, col, pts)
+            if plate > 0.0:                         # end plates: two short bars
+                for dx in (-0.5 * chord, 0.5 * chord - 0.04):
+                    pl = np.array([(xw + dx, y_side + out - side * 0.02),
+                                   (xw + dx + 0.04, y_side + out - side * 0.02),
+                                   (xw + dx + 0.04, y_side + out + side * (DEV_THICK + 0.02)),
+                                   (xw + dx, y_side + out + side * (DEV_THICK + 0.02))])
+                    pygame.draw.polygon(self.screen, col,
+                                        self._px(self._body_to_world(x, y, psi, pl)))
+            # struts from the sill to the panel
+            for dxs in (-0.3 * chord, 0.3 * chord):
+                st = np.array([(xw + dxs, y_side), (xw + dxs, y_side + out)])
+                p = self._px(self._body_to_world(x, y, psi, st))
+                pygame.draw.line(self.screen, C_WING_OFF, p[0], p[1], 1)
+            if active and self.cfg.show_vectors:
+                anchor_b = np.array([[xw, y_side + out]])
+                base = self.world_to_screen(
+                    self._body_to_world(x, y, psi, anchor_b))[0]
+                lat = np.array([-math.sin(psi), math.cos(psi)])
+                n_px = self._force_px(float(aux.F_wing))
+                w = (lat * n_px) @ self._Rm.T
+                self._arrow(base, (w[0], -w[1]), C_WING_ON)
+
+        if getattr(aux, 'top_on', False):
+            xt = float(aux.top_x)
+            b2 = 0.5 * float(aux.top_span)
+            ct = float(aux.top_chord)
+            dpt = float(aux.top_deploy)
+            on = dpt > 0.05
+            bar = np.array([(xt + 0.5 * ct, b2), (xt - 0.5 * ct, b2),
+                            (xt - 0.5 * ct, -b2), (xt + 0.5 * ct, -b2)])
+            pts = self._px(self._body_to_world(x, y, psi, bar))
+            col = C_WING_ON if on else C_WING_OFF
+            if on:
+                pygame.draw.polygon(self.screen, col, pts)
+            pygame.draw.polygon(self.screen, col, pts, max(1, int(round(0.04 * self.ppm))))
+            if float(aux.top_plate) > 0.0:
+                for sgn in (+1.0, -1.0):
+                    pl = np.array([(xt + 0.6 * ct, sgn * b2), (xt - 0.6 * ct, sgn * b2),
+                                   (xt - 0.6 * ct, sgn * (b2 + 0.03)), (xt + 0.6 * ct, sgn * (b2 + 0.03))])
+                    pygame.draw.polygon(self.screen, col, self._px(self._body_to_world(x, y, psi, pl)))
+            # pylons
+            for yp in (-0.25 * b2 * 2 / 2, 0.25 * b2):
+                p = self._px(self._body_to_world(x, y, psi, np.array([(xt - 0.5 * ct, yp), (xt - 0.5 * ct - 0.10, yp)])))
+                pygame.draw.line(self.screen, C_WING_OFF, p[0], p[1], 1)
+            if on and self.cfg.show_vectors and float(aux.D_top) > 0.0:
+                base = self.world_to_screen(self._body_to_world(x, y, psi, np.array([[xt, 0.0]])))[0]
+                fwd = np.array([math.cos(psi), math.sin(psi)])
+                n_px = self._force_px(-float(aux.D_top))
+                w = (fwd * n_px) @ self._Rm.T
+                self._arrow(base, (w[0], -w[1]), C_WING_ON)
+
+    # ------------------------------------------------------------------ #
+    #  HUD                                                                #
+    # ------------------------------------------------------------------ #
+    def _bar(self, rect, frac, col, bg=(38, 40, 45)):
+        pygame.draw.rect(self.screen, bg, rect)
+        f = min(max(frac, 0.0), 1.0)
+        if f > 0:
+            pygame.draw.rect(self.screen, col,
+                             (rect[0], rect[1], int(rect[2] * f), rect[3]))
+
+    def _draw_hud(self, aux, ctl):
+        u = self.ui
+        minimal = (self.cfg.hud == 'minimal')
+
+        # --- speed / gear / rpm ------------------------------------------
+        r = self._panel(R_SPEED)
+        kmh = int(round(aux.V_kmh))                     # quantised: 1 km/h
+        self._blit(f'{kmh:3d}', r.x + 10 * u, r.y + 6 * u, self.f_speed)
+        self._blit('km/h', r.x + 130 * u, r.y + 34 * u, self.f_lbl, C_HUD_DIM)
+        self._blit(f'{aux.V:5.1f} m/s', r.x + 130 * u, r.y + 12 * u,
+                   self.f_lbl, C_HUD_DIM)
+        g = aux.gear
+        gs = 'N' if g == 0 else ('R' if g < 0 else str(g))
+        self._blit(gs, r.x + 250 * u, r.y + 8 * u, self.f_gear, C_YELLOW)
+        gb = getattr(aux, 'gearbox', '') or ''
+        if gb:
+            self._blit(gb, r.x + 290 * u - self.f_lbl.size(gb)[0], r.y + 46 * u,
+                       self.f_lbl, C_HUD_DIM)
+        eng = getattr(aux, 'engine', '') or ''
+        if eng:
+            self._blit(eng, r.x + 290 * u - self.f_lbl.size(eng)[0], r.y + 66 * u,
+                       self.f_lbl, C_HUD_DIM)
+        rpm_q = int(round(aux.rpm / 50.0) * 50)         # quantised: 50 rpm
+        self._blit(f'{rpm_q:5d} rpm', r.x + 10 * u, r.y + 66 * u, self.f_val,
+                   C_HUD_TEXT if rpm_q < RPM_SHIFT_LIGHT else C_BAR_BRK)
+        bar = (r.x + 10 * u, r.y + 92 * u, 280 * u, 12 * u)
+        frac = min(max(aux.rpm / RPM_REDLINE, 0.0), 1.0)
+        col = (C_GREEN if aux.rpm < RPM_SHIFT_LIGHT else C_BAR_BRK)
+        self._bar(bar, frac, col)
+        pygame.draw.line(self.screen, C_PURPLE,
+                         (bar[0] + bar[2] * RPM_PMAX / RPM_REDLINE, bar[1]),
+                         (bar[0] + bar[2] * RPM_PMAX / RPM_REDLINE,
+                          bar[1] + bar[3]), 1)
+        flags = []
+        if aux.stalled:
+            flags.append('STALL')
+        if aux.on_limiter:
+            flags.append('LIMIT')
+        if flags:
+            self._blit(' '.join(flags), r.x + 10 * u, r.y + 112 * u,
+                       self.f_lbl, C_BAR_BRK)
+        aids = ' '.join(k for k, on in (('TC', getattr(aux, 'tc_active', False)),
+                                        ('ABS', getattr(aux, 'abs_active', False)))
+                        if on)
+        if aids:
+            self._blit(aids, r.x + 290 * u - self.f_lbl.size(aids)[0],
+                       r.y + 112 * u, self.f_lbl, C_YELLOW)
+
+        # --- timing --------------------------------------------------------
+        r = self._panel(R_TIMING)
+        self._blit(f'LAP {aux.lap}', r.x + 10 * u, r.y + 6 * u, self.f_lbl,
+                   C_HUD_DIM)
+        self._blit(_fmt_t(aux.lap_time), r.x + 10 * u, r.y + 24 * u,
+                   self.f_val, C_HUD_TEXT if aux.lap_valid else C_BAR_BRK)
+        self._blit('LAST', r.x + 130 * u, r.y + 6 * u, self.f_lbl, C_HUD_DIM)
+        self._blit(_fmt_t(aux.last_lap), r.x + 130 * u, r.y + 24 * u,
+                   self.f_val)
+        self._blit('BEST', r.x + 250 * u, r.y + 6 * u, self.f_lbl, C_HUD_DIM)
+        self._blit(_fmt_t(aux.best_lap), r.x + 250 * u, r.y + 24 * u,
+                   self.f_val, C_PURPLE)
+        secs = ' '.join(_fmt_t(v, short=True) for v in aux.sector_times[:3])
+        self._blit(f'S {secs}', r.x + 10 * u, r.y + 52 * u, self.f_lbl,
+                   C_HUD_DIM)
+        if not aux.lap_valid:
+            self._blit('INVALID', r.x + 250 * u, r.y + 52 * u, self.f_lbl,
+                       C_BAR_BRK)
+
+        # --- loads / utilisation ------------------------------------------
+        r = self._panel(R_LOADS)
+        self._blit('Fz  [N]      mu', r.x + 10 * u, r.y + 6 * u, self.f_lbl,
+                   C_HUD_DIM)
+        names = ('FL', 'FR', 'RL', 'RR')
+        for i in range(4):
+            fz = int(round(float(aux.Fz[i]) / 10.0) * 10)     # 10 N quantum
+            mus = f'{float(aux.mu[i]):.2f}'
+            col = C_BAR_BRK if bool(aux.wheel_lift[i]) else C_HUD_TEXT
+            self._blit(f'{names[i]} {fz:5d}   {mus}', r.x + 10 * u,
+                       r.y + (26 + 20 * i) * u, self.f_val, col)
+        for j, (lbl, uval) in enumerate((('util_f', aux.util_f),
+                                         ('util_r', aux.util_r))):
+            yy = r.y + (114 + 30 * j) * u
+            self._blit(f'{lbl} {uval:5.3f}', r.x + 10 * u, yy, self.f_val)
+            bar = (r.x + 10 * u, yy + 20 * u, 280 * u, 8 * u)
+            col = C_GREEN if uval < 0.90 else (C_YELLOW if uval < 1.0
+                                               else C_BAR_BRK)
+            self._bar(bar, uval, col)
+        lb = aux.limited_by
+        lb_col = {'FRONT': C_YELLOW, 'REAR': C_BAR_BRK,
+                  'POWER': C_GREEN}.get(lb, C_HUD_TEXT)
+        self._blit(f'LIMITED BY {lb}', r.x + 10 * u, r.y + 196 * u,
+                   self.f_val, lb_col)
+
+        if minimal:
+            self._draw_warn(aux)
+            return
+
+        # --- state ---------------------------------------------------------
+        r = self._panel(R_STATE)
+        rows = ((f'r    {aux.yaw_rate_deg:7.1f} d/s', C_HUD_TEXT),
+                (f'beta {aux.beta_deg:7.2f} deg', C_HUD_TEXT),
+                (f'ay   {aux.ay_g:7.3f} g', C_HUD_TEXT),
+                (f'ax   {aux.ax_g:7.3f} g', C_HUD_TEXT),
+                ('mu   ' + ' '.join(f'{float(m):.2f}' for m in aux.mu),
+                 C_HUD_TEXT if aux.on_track else C_BAR_BRK))
+        for j, (s, c) in enumerate(rows):
+            self._blit(s, r.x + 10 * u, r.y + (8 + 26 * j) * u, self.f_val, c)
+
+        # --- active aero: flank panels + top wing ---------------------------
+        r = self._panel(R_WING)
+        on = aux.wing_deploy > 0.01
+        top_on = bool(getattr(aux, 'top_on', False))
+        top_dep = float(getattr(aux, 'top_deploy', 0.0))
+        any_on = on or top_dep > 0.01
+        self._blit('ACTIVE AERO', r.x + 10 * u, r.y + 6 * u, self.f_lbl,
+                   C_WING_ON if any_on else C_HUD_DIM)
+        self._blit('ARMED' if aux.wing_on else 'OFF', r.right - 10 * u - self.f_lbl.size('ARMED')[0],
+                   r.y + 6 * u, self.f_lbl, C_WING_ON if aux.wing_on else C_HUD_DIM)
+        legacy = bool(getattr(aux, 'wing_type', '')) and aux.wing_type != 'off'
+        has_l = bool(getattr(aux, 'dev_left', False)) or legacy
+        has_r = bool(getattr(aux, 'dev_right', False)) or legacy
+        side = int(aux.wing_side)
+        # the deployed panel sits on the OUTER flank: side +1 (left turn) -> RIGHT
+        l_txt = ('L ' + ('>' if (on and side == -1) else '-')) if has_l else 'L  x'
+        r_txt = ('R ' + ('<' if (on and side == +1) else '-')) if has_r else 'R  x'
+        self._blit(f'FLANK  {l_txt}  {r_txt}  {int(round(aux.wing_deploy * 100)):3d}%',
+                   r.x + 10 * u, r.y + 24 * u, self.f_val, C_WING_ON if on else C_HUD_DIM)
+        fw = int(round(aux.F_wing / 10.0) * 10)              # 10 N quantum
+        dw = int(round(aux.D_wing))
+        pct = 100.0 * abs(aux.F_wing) / (_CAR.m * G)
+        self._blit(f'  F {fw:4d} N  D {dw:3d} N  {pct:4.2f}%mg', r.x + 10 * u, r.y + 46 * u,
+                   self.f_lbl, C_HUD_TEXT if on else C_HUD_DIM)
+        if top_on:
+            ft = int(round(float(aux.F_top) / 10.0) * 10)
+            dt_ = int(round(float(aux.D_top)))
+            mode = 'ACT' if getattr(aux, 'top_mode', 'fixed') == 'active' else 'FIX'
+            self._blit(f'TOP    {"v" if top_dep > 0.05 else "-"} {int(round(top_dep * 100)):3d}%  {mode}',
+                       r.x + 10 * u, r.y + 64 * u, self.f_val, C_WING_ON if top_dep > 0.05 else C_HUD_DIM)
+            self._blit(f'  Fz {ft:4d} N  D {dt_:3d} N  {100.0 * float(aux.F_top) / (_CAR.m * G):4.2f}%mg',
+                       r.x + 10 * u, r.y + 86 * u, self.f_lbl,
+                       C_HUD_TEXT if top_dep > 0.05 else C_HUD_DIM)
+        else:
+            self._blit('TOP    none', r.x + 10 * u, r.y + 64 * u, self.f_val, C_HUD_DIM)
+        names = [n for n in (getattr(aux, 'wing_left_name', ''), getattr(aux, 'wing_top_name', '')) if n]
+        wt = getattr(aux, 'wing_type', '') or ''
+        if names:
+            self._blit(' / '.join(names)[:34], r.x + 10 * u, r.y + 106 * u, self.f_lbl, C_HUD_DIM)
+        elif wt:
+            self._blit(f'{wt} x_w {aux.x_w:+.2f} h_w {aux.h_w:.2f} '
+                       f'inc {aux.inc_deg:+.0f}', r.x + 10 * u, r.y + 106 * u,
+                       self.f_lbl, C_HUD_DIM)
+
+        # --- pedals / steer -------------------------------------------------
+        r = self._panel(R_PEDALS)
+        thr = float(getattr(ctl, 'throttle', 0.0) or 0.0)
+        brk = float(getattr(ctl, 'brake', 0.0) or 0.0)
+        clu = float(getattr(ctl, 'clutch', 0.0) or 0.0)
+        hbk = float(getattr(ctl, 'handbrake', 0.0) or 0.0)
+        dlt = float(getattr(ctl, 'delta', 0.0) or 0.0)
+        for j, (lbl, v, col) in enumerate((('THR', thr, C_BAR_THR),
+                                           ('BRK', brk, C_BAR_BRK),
+                                           ('CLU', clu, C_HUD_DIM),
+                                           ('HBK', hbk, C_BAR_BRK))):
+            yy = r.y + (8 + 20 * j) * u
+            self._blit(lbl, r.x + 8 * u, yy, self.f_lbl, C_HUD_DIM)
+            self._bar((r.x + 46 * u, yy + 4 * u, 240 * u, 10 * u), v, col)
+        yy = r.y + 92 * u
+        mid = r.x + 150 * u
+        half = 140 * u
+        pygame.draw.rect(self.screen, (38, 40, 45),
+                         (mid - half, yy, 2 * half, 12 * u))
+        f = min(max(math.degrees(dlt) / 32.625, -1.0), 1.0)
+        pygame.draw.rect(self.screen, C_BAR_STEER,
+                         (mid if f >= 0 else mid + half * f, yy,
+                          abs(half * f), 12 * u))
+        self._blit(f'steer {math.degrees(dlt):6.2f} deg'
+                   + ('  [aid]' if aux.steer_limited else ''),
+                   r.x + 8 * u, r.y + 106 * u, self.f_lbl, C_HUD_DIM)
+
+        self._draw_warn(aux)
+
+    def _draw_warn(self, aux):
+        msgs = []
+        if aux.paused:
+            msgs.append('PAUSED')
+        if aux.stalled:
+            msgs.append('STALLED - clutch fully in (Z / SQUARE) or S to restart')
+        if not aux.on_track:
+            msgs.append('OFF TRACK')
+        if aux.dropped_frames:
+            msgs.append(f'DROPPED {aux.dropped_frames}')
+        if aux.rtf and aux.rtf < 1.0:
+            msgs.append(f'RTF {aux.rtf:.2f}')
+        if aux.time_scale != 1.0:
+            msgs.append(f'x{aux.time_scale:.2f}')
+        if aux.msg:
+            msgs.append(aux.msg)
+        if not msgs:
+            return
+        r = self._panel(R_WARN)
+        self._blit(' | '.join(msgs), r.x + 8 * self.ui, r.y + 2 * self.ui,
+                   self.f_lbl, C_YELLOW)
+
+    def _draw_gg(self, aux):
+        u = self.ui
+        r = self._panel(R_GG)
+        cx, cy = r.centerx, r.centery
+        k = (r.w * 0.5 - 8 * u) / GG_AXIS_G
+        pygame.draw.line(self.screen, (60, 64, 70), (r.x + 6 * u, cy),
+                         (r.right - 6 * u, cy), 1)
+        pygame.draw.line(self.screen, (60, 64, 70), (cx, r.y + 6 * u),
+                         (cx, r.bottom - 6 * u), 1)
+        for g in (0.5, 1.0):
+            pygame.draw.circle(self.screen, (48, 52, 58), (cx, cy),
+                               int(g * k), 1)
+        V = max(aux.V, 3.0)
+        k_eff = (aux.F_wing / (V * V)) if V > 3.0 else 0.0
+        curve = gg_envelope(V, mu_scale=aux.mu_scale_car, k_eff=k_eff)
+        pts = [(int(cx + p[0] * k), int(cy - p[1] * k)) for p in curve]
+        pygame.draw.lines(self.screen, C_GG_ENV, True, pts, 1)
+
+        if self._t_render - self._gg_t >= 1.0 / GG_TRAIL_HZ:
+            self._gg_t = self._t_render
+            self._gg_trail.append((aux.ay_g, aux.ax_g))
+        if len(self._gg_trail) > 1:
+            tp = [(int(cx + a * k), int(cy - b * k)) for a, b in self._gg_trail]
+            pygame.draw.lines(self.screen, C_GG_TRAIL, False, tp, 1)
+        pygame.draw.circle(self.screen, C_GG_DOT,
+                           (int(cx + aux.ay_g * k), int(cy - aux.ax_g * k)),
+                           max(2, int(3 * u)))
+        self._blit('g-g', r.x + 6 * u, r.y + 4 * u, self.f_lbl, C_HUD_DIM)
+
+    def _draw_minimap(self, x, y):
+        r = self._panel(R_MINIMAP)
+        for poly in self._mm_areas:
+            pygame.draw.polygon(self.screen, (40, 42, 46), poly)
+            pygame.draw.polygon(self.screen, (70, 74, 80), poly, 1)
+        pygame.draw.lines(self.screen, C_HUD_DIM, self.track.closed,
+                          self._mm_pts, 1)
+        pygame.draw.circle(self.screen, C_CAR, self._mm_xy(x, y),
+                           max(2, int(3 * self.ui)))
+        name = getattr(self.track, 'title', '') or self.track.name
+        self._blit(name, r.x + 6 * self.ui, r.y + 4 * self.ui, self.f_lbl,
+                   C_HUD_DIM)
+
+
+def _fmt_t(t, short=False):
+    """m:ss.mmm, quantised to 1 ms so the text cache can hit."""
+    if t is None or t <= 0.0 or not math.isfinite(t):
+        return '--.---' if short else '--:--.---'
+    ms = int(round(t * 1000.0))
+    m, rem = divmod(ms, 60000)
+    s, ms = divmod(rem, 1000)
+    if short or m == 0:
+        return f'{s + 60 * m:02d}.{ms:03d}'
+    return f'{m:d}:{s:02d}.{ms:03d}'
+
+
+# ======================================================================= #
+#  SELF-CHECK                                                             #
+# ======================================================================= #
+def _demo_state(x, y, psi, u=25.0, v=-0.6, r=0.25):
+    """A car-shaped stand-in so render.py can be tested without vehicle.py."""
+    class _S:
+        pass
+    s = _S()
+    s.X, s.Y, s.psi = x, y, psi
+    s.u, s.v, s.r = u, v, r
+    s.phi, s.p = 0.03, 0.0
+    return s
+
+
+def _demo_ctl(delta=0.06, throttle=0.85, brake=0.0):
+    class _C:
+        pass
+    c = _C()
+    c.delta, c.throttle, c.brake = delta, throttle, brake
+    c.clutch, c.handbrake = 0.0, 0.0
+    c.wing_on, c.gear_req, c.auto_gearbox, c.starter = True, 0, True, False
+    return c
+
+
+def _demo_hud(V=28.0):
+    Fz = np.array([1900.0, 3900.0, 1200.0, 2900.0])
+    mu = np.ones(4)
+    Fy = np.array([-1500.0, -3100.0, -900.0, -2100.0])
+    uf, ur = axle_utilisation(Fz, Fy, mu)
+    return HudData(
+        V=V, V_kmh=V * 3.6, rpm=4820.0, gear=3,
+        ay_g=-0.81, ax_g=0.12, yaw_rate_deg=16.4, beta_deg=-2.6,
+        util_f=uf, util_r=ur, limited_by=limiting_axle(uf, ur, 0.85, 4820.0),
+        Fz=Fz, mu=mu, wing_on=True, wing_deploy=1.0, wing_side=-1,
+        F_wing=127.4, D_wing=127.4 / 3.2,
+        lap=2, lap_time=23.412, last_lap=61.204, best_lap=59.881,
+        sector=1, sector_times=[18.44, 21.09, 20.35],
+        sector_best=[18.20, 20.90, 20.30], lap_valid=True,
+        on_track=True, mu_scale_car=1.0, rtf=4.2, dropped_frames=0,
+        Fx=np.array([420.0, 520.0, -60.0, -60.0]), Fy=Fy,
+        kappa=np.array([0.04, 0.05, 0.0, 0.0]),
+        alpha=np.radians([-6.0, -6.5, -3.0, -3.2]),
+        delta_wheel=np.radians([5.2, 4.6, 0.0, 0.0]),
+        wheel_lift=np.zeros(4, bool), steer_limited=True)
+
+
+def _v28():
+    """axle_utilisation() vs qss.residuals() at the R = 100 skidpad limit.
+
+    The load split fed in is qss's own (eq. in its docstring): total transfer
+    (m*a_y*h_cg - F*h_w)/t with F = 0, split 0.74/0.26 front/rear, and the axle
+    lateral forces from the two-equation yaw balance.  What is under test is
+    NOT that split -- it is that this module's mu(Fz) is qss's mu(Fz), which is
+    the only way the numbers can be identical rather than merely close.
+    """
+    car = qss.car
+    R = 100.0
+    V, _lim = qss.corner_speed(R, power_cap=False)
+    a_y = qss.max_ay(V)
+    F = 0.0
+    W = car.m * G
+    dFz = (car.m * a_y * car.h_cg - F * H_W) / car.t
+    rdf = 0.74
+    Fz = np.array([W * car.wdist_f / 2 - dFz * rdf,
+                   W * car.wdist_f / 2 + dFz * rdf,
+                   W * (1 - car.wdist_f) / 2 - dFz * (1 - rdf),
+                   W * (1 - car.wdist_f) / 2 + dFz * (1 - rdf)])
+    Y_f = (car.b * car.m * a_y - F * (car.b + 0.0)) / car.L
+    Y_r = (car.a * car.m * a_y + F * 0.0) / car.L
+    Fy = np.array([Y_f / 2, Y_f / 2, Y_r / 2, Y_r / 2])
+    uf, ur = axle_utilisation(Fz, Fy, np.ones(4))
+    qf, qr = qss.residuals(a_y, V, 0.0, 0.0, H_W, rdf, 1.0)
+    return V, a_y, uf, ur, qf, qr
+
+
+def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
+    """V22, V28, V30, the camera-sign assertion and a screenshot."""
+    ok_all = True
+    res = []
+
+    def rep(tag, passed, msg):
+        nonlocal ok_all
+        ok_all = ok_all and passed
+        res.append((tag, passed, msg))
+        if verbose:
+            print(f'  [{"ok" if passed else "FAIL"}] {tag:26s} {msg}')
+
+    if verbose:
+        print('drive/render.py self-check')
+        print(f'  pygame {pygame.version.ver}  SDL {pygame.version.SDL}')
+
+    # ---- V30 headless boot ------------------------------------------------
+    os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')
+    os.environ.setdefault('SDL_AUDIODRIVER', 'dummy')
+    tr = trk.make_arena()
+    cfg = ViewConfig()
+    rnd = Renderer(cfg, tr, headless=True)
+    drv = pygame.display.get_driver()
+    rep('V30 driver', drv == 'dummy', f'get_driver() = {drv!r}')
+    rep('V30 set_mode', rnd.screen.get_size() == (1280, 800),
+        f'surface {rnd.screen.get_size()}')
+    fs = rnd.f_lbl.render('Menlo 16 0123456789', True, C_HUD_TEXT)
+    rep('V30 SysFont renders', fs.get_width() > 0 and fs.get_height() > 0,
+        f'label surface {fs.get_size()}')
+
+    # ---- camera sign ------------------------------------------------------
+    st = _demo_state(tr.xy[0][0], tr.xy[0][1], 0.0, u=0.0, v=0.0, r=0.0)
+    rnd.update_camera(st, 0.0)
+    rnd.psi_cam = 0.0
+    rnd.cam = np.array([st.X, st.Y])
+    rnd._set_rot(0.0)
+    P = rnd.world_to_screen(np.array([[st.X + 10.0, st.Y],
+                                      [st.X, st.Y + 10.0]]))
+    anc = rnd._anchor
+    ahead_dx, ahead_dy = P[0][0] - anc[0], P[0][1] - anc[1]
+    left_dx, left_dy = P[1][0] - anc[0], P[1][1] - anc[1]
+    ok_ahead = abs(ahead_dx) < 1e-9 and ahead_dy < -1.0
+    ok_left = abs(left_dy) < 1e-9 and left_dx < -1.0
+    rep('camera psi=0 ahead', ok_ahead,
+        f'10 m ahead -> ({ahead_dx:+.3f}, {ahead_dy:+.3f}) px, must be ABOVE')
+    rep('camera psi=0 left', ok_left,
+        f'10 m left  -> ({left_dx:+.3f}, {left_dy:+.3f}) px, must be LEFT')
+    # and at psi = pi/2, which is what separates pi/2-psi from -(psi+pi/2)
+    rnd.psi_cam = 0.5 * math.pi
+    rnd._set_rot(rnd.psi_cam)
+    P2 = rnd.world_to_screen(np.array([[st.X, st.Y + 10.0]]))
+    a2dx, a2dy = P2[0][0] - anc[0], P2[0][1] - anc[1]
+    rep('camera psi=90 ahead', abs(a2dx) < 1e-9 and a2dy < -1.0,
+        f'10 m ahead -> ({a2dx:+.3f}, {a2dy:+.3f}) px')
+
+    # ---- V28 utilisation vs qss ------------------------------------------
+    V, a_y, uf, ur, qf, qr = _v28()
+    d = max(abs(uf - qf), abs(ur - qr))
+    rep('V28 util vs qss.residuals', d <= 0.02,
+        f'R=100 V={V:.3f} ay={a_y / G:.4f}g  render ({uf:.4f}, {ur:.4f}) '
+        f'vs qss ({qf:.4f}, {qr:.4f})  max|d| = {d:.2e}')
+
+    # ---- honesty: the device arrow is drawn at the tyre scale -------------
+    rnd.ppm = 10.0
+    px_tyre = rnd._force_px(3000.0)
+    px_wing = rnd._force_px(127.4)
+    ratio = px_wing / px_tyre
+    rep('wing arrow at tyre scale', abs(ratio - 127.4 / 3000.0) < 1e-12,
+        f'3000 N -> {px_tyre:.1f} px, 127.4 N -> {px_wing:.2f} px at 10 px/m')
+
+    # ---- SkidBuffer -------------------------------------------------------
+    sk = SkidBuffer()
+    rng = np.random.default_rng(7)
+    x0, y0 = tr.xy[0]
+    for n in range(1500):
+        t = n * 0.01
+        base = tr.xy[(n * 2) % (len(tr.xy) - 1)]
+        xy4 = base + rng.normal(0.0, 0.7, size=(4, 2))
+        sk.emit(t, xy4, (True, True, n % 7 != 0, True))
+    vis = sk.visible(tr.xy[0], 400.0, SKID_MAX_SEGS, t_now=14.99)
+    rep('skid cap <= 600', len(vis) <= SKID_MAX_SEGS,
+        f'{sk.n_points()} points -> {len(vis)} drawn segments')
+    old = sk.visible(tr.xy[0], 1e9, SKID_MAX_SEGS, t_now=1e6)
+    rep('skid fades out', len(old) == 0,
+        f'{len(old)} segments survive t_now = 1e6 s')
+
+    # ---- V22 frame budget -------------------------------------------------
+    aux = _demo_hud()
+    sk2 = SkidBuffer()
+    # lay a dense mat of marks around the car so the 600-segment cap binds
+    s0 = 300.0
+    for n in range(2000):
+        t = n * 0.01
+        i = trk_index(tr, s0 + n * 0.05)
+        base = tr.xy[i]
+        off = np.array([[0.7, 0.6], [0.7, -0.6], [-1.4, 0.6], [-1.4, -0.6]])
+        sk2.emit(t, base + off, (True, True, True, True))
+    n_vis = len(sk2.visible(tr.xy[trk_index(tr, s0 + 50.0)], 200.0))
+    times = []
+    st_prev = None
+    for n in range(600):
+        s = s0 + 0.35 * n
+        i = trk_index(tr, s)
+        px, py = tr.xy[i]
+        st_n = _demo_state(px, py, float(tr.psi[i]), u=28.0, v=-0.6, r=0.25)
+        rnd.update_camera(st_n, 1.0 / 60.0)
+        t0 = time.perf_counter()
+        rnd.draw_frame(st_n, st_prev, 0.5, _demo_ctl(), aux, sk2)
+        times.append((time.perf_counter() - t0) * 1e3)
+        st_prev = st_n
+    times = np.array(times)
+    mean = float(times.mean())
+    p99 = float(np.percentile(times, 99))
+    rep('V22 frame budget', mean <= 12.0 and p99 <= 16.0,
+        f'600 frames: mean {mean:.2f} ms, p99 {p99:.2f} ms, '
+        f'max {times.max():.2f} ms ({n_vis} skid segs drawn)')
+
+    hit = rnd._txt_hits / max(rnd._txt_hits + rnd._txt_miss, 1)
+    rep('text cache hit rate', hit > 0.95,
+        f'{rnd._txt_hits} hits / {rnd._txt_miss} misses = {hit * 100:.2f}%')
+    rep('gg envelope cached',
+        _GG_STATS['recomputes'] < 0.15 * max(_GG_STATS['calls'], 1),
+        f'{_GG_STATS["recomputes"]} recomputes in {_GG_STATS["calls"]} calls')
+
+    # ---- screenshot -------------------------------------------------------
+    # A frame a human can judge: T2 (R = 30 m, the tightest corner, so the
+    # kerbs are on), the WET_T2_ENTRY split-mu patch in shot, skid marks laid
+    # down the corner, the device deployed, everything on.
+    os.makedirs(screenshot_dir, exist_ok=True)
+    sk3 = SkidBuffer()
+    for n in range(1200):
+        s = 285.0 + n * 0.06
+        i = trk_index(tr, s)
+        base = tr.xy[i] + tr.xy[i] * 0.0
+        nrm = np.array([-math.sin(tr.psi[i]), math.cos(tr.psi[i])])
+        fwd = np.array([math.cos(tr.psi[i]), math.sin(tr.psi[i])])
+        pts = np.array([base + 0.97 * fwd + 0.71 * nrm,
+                        base + 0.97 * fwd - 0.71 * nrm,
+                        base - 1.52 * fwd + 0.71 * nrm,
+                        base - 1.52 * fwd - 0.71 * nrm]) + 1.2 * nrm
+        sk3.emit(n * 0.01, pts, (True, True, True, True))
+    i = trk_index(tr, 313.0)
+    st3 = _demo_state(float(tr.xy[i][0]) + 1.2 * -math.sin(tr.psi[i]),
+                      float(tr.xy[i][1]) + 1.2 * math.cos(tr.psi[i]),
+                      float(tr.psi[i]) + 0.05, u=16.0, v=-0.9, r=0.52)
+    aux3 = _demo_hud(V=16.0)
+    aux3.wing_side = 1                       # T2 is a LEFT-hander
+    aux3.F_wing, aux3.D_wing = 62.9, 62.9 / 3.2
+    aux3.mu = np.array([1.0, 0.632, 1.0, 0.632])
+    aux3.mu_scale_car = 0.85
+    aux3.rpm, aux3.gear = 3900.0, 2
+    rnd.update_camera(st3, 0.0)
+    rnd.update_camera(st3, 0.0)
+    rnd.draw_frame(st3, None, 0.0, _demo_ctl(delta=0.14, throttle=0.35),
+                   aux3, sk3)
+    shot = os.path.join(os.path.abspath(screenshot_dir), 'render_frame.png')
+    rnd.screenshot(shot)
+    ok_shot = os.path.exists(shot) and os.path.getsize(shot) > 10000
+    rep('screenshot', ok_shot,
+        f'{shot} ({os.path.getsize(shot) if os.path.exists(shot) else 0} bytes)')
+
+    # a second, wide-angle frame with the wing deployed and the world-up camera
+    cfg2 = ViewConfig(mode='world_up')
+    rnd2 = Renderer(cfg2, tr, headless=True)
+    rnd2.set_zoom(0.6)
+    i = trk_index(tr, 470.0)
+    st2 = _demo_state(tr.xy[i][0], tr.xy[i][1], float(tr.psi[i]), u=26.0)
+    rnd2.update_camera(st2, 0.0)
+    rnd2.draw_frame(st2, None, 0.0, _demo_ctl(), aux, sk2)
+    shot2 = os.path.join(os.path.abspath(screenshot_dir), 'render_frame_wide.png')
+    rnd2.screenshot(shot2)
+    rep('screenshot (world_up)', os.path.exists(shot2),
+        f'{shot2} ({os.path.getsize(shot2)} bytes)')
+
+    # the open map: areas + features + distance-culled ribbon runs, in budget,
+    # from the middle of the pad (the perimeter road is in view on BOTH sides
+    # at the wide zoom, which the arclength window cannot draw) and from the
+    # road itself. Two screenshots.
+    op = trk.make_open()
+    rnd3 = Renderer(ViewConfig(), op, headless=True)
+    rnd3.set_zoom(0.5)
+    st_o = _demo_state(105.0, 150.0, 0.6, u=12.0, v=0.0, r=0.0)
+    aux_o = _demo_hud(V=12.0)
+    aux_o.gearbox, aux_o.abs_active = 'MAN', True
+    aux_o.wing_side, aux_o.wing_deploy = 0, 0.0
+    rnd3.update_camera(st_o, 0.0)
+    rnd3.update_camera(st_o, 0.0)
+    t_o = []
+    for _ in range(60):
+        t0 = time.perf_counter()
+        rnd3.draw_frame(st_o, None, 0.0, _demo_ctl(), aux_o, SkidBuffer())
+        t_o.append((time.perf_counter() - t0) * 1e3)
+    runs, _s, wins = rnd3._visible_indices(105.0, 150.0)
+    rep('open map: pad centre frame', float(np.mean(t_o)) <= 12.0 and len(runs) >= 2
+        and len(wins) == len(runs),
+        f'{np.mean(t_o):.2f} ms mean over 60 frames, {len(runs)} ribbon runs in view '
+        f'(need >= 2: the road on both sides of the pad)')
+    shot4 = os.path.join(os.path.abspath(screenshot_dir), 'render_open_pad.png')
+    rnd3.screenshot(shot4)
+    i = trk_index(op, 430.0)                       # into the first corner
+    st_o2 = _demo_state(float(op.xy[i][0]), float(op.xy[i][1]), float(op.psi[i]),
+                        u=22.0, v=-0.4, r=0.3)
+    rnd3.set_zoom(1.0)
+    rnd3.update_camera(st_o2, 0.0)
+    rnd3.update_camera(st_o2, 0.0)
+    t_o = []
+    for _ in range(60):
+        t0 = time.perf_counter()
+        rnd3.draw_frame(st_o2, None, 0.0, _demo_ctl(), aux_o, SkidBuffer())
+        t_o.append((time.perf_counter() - t0) * 1e3)
+    rep('open map: road frame', float(np.mean(t_o)) <= 12.0,
+        f'{np.mean(t_o):.2f} ms mean over 60 frames')
+    shot5 = os.path.join(os.path.abspath(screenshot_dir), 'render_open_road.png')
+    rnd3.screenshot(shot5)
+    rep('open map screenshots', os.path.exists(shot4) and os.path.exists(shot5),
+        f'{shot4}, {shot5}')
+
+    # the pause menu over a frame: it must draw, dim the frame, stay in budget
+    from .menu import Menu
+    from .input import menu_help, MENU_NO_PAD
+    aux3.menu = Menu('PAUSED', [('Resume', 'resume'), ('Reset', 'reset'),
+                                ('Quit', 'quit')],
+                     menu_help('ps'), subtitle='arena  lap 2', footer='ESC resume')
+    aux3.menu.show()
+    aux3.paused = True
+    rnd.draw_frame(st3, None, 0.0, _demo_ctl(), aux3, sk3)     # warm fonts
+    rnd.draw_frame(st3, None, 0.0, _demo_ctl(), aux3, sk3)
+    ms_menu = rnd.frame_ms()
+    px = rnd.screen.get_at((rnd.W // 2, rnd.H // 2))[:3]
+    rep('menu overlay', ms_menu < 16.0 and px != C_BG,
+        f'{ms_menu:.1f} ms with the menu open, centre px {px}')
+    shot3 = os.path.join(os.path.abspath(screenshot_dir), 'render_menu.png')
+    rnd.screenshot(shot3)
+    aux3.menu.show(menu_help(None), note=MENU_NO_PAD)
+    aux3.menu = None
+
+    if verbose:
+        print(f'  CAP_HITS {CAP_HITS}')
+        print('  DEVIATIONS:')
+        for d_ in DEVIATIONS:
+            print(f'    - {d_}')
+        print(f'  {"PASS" if ok_all else "FAIL"}: '
+              f'{sum(1 for _, p, _ in res if p)}/{len(res)} checks')
+    return ok_all
+
+
+def trk_index(tr, s):
+    n = (len(tr.s) - 1) if tr.closed else len(tr.s)
+    i = int(round(s / tr.ds))
+    return i % n if tr.closed else max(0, min(len(tr.s) - 1, i))
+
+
+DEVIATIONS[:] = [
+    "eq.14 camera rotation: the spec pairs theta = -(psi_cam + pi/2) with "
+    "S = ((P-cam) @ Rm.T)*[ppm,-ppm]. Written literally in numpy that is "
+    "Rot(theta) applied to the world vector, and it puts a point 10 m AHEAD "
+    "of a psi=0 car BELOW the anchor -- the view is 180 deg out, not 90. "
+    "Requiring car-forward -> screen up gives cos(th)=sin(psi), sin(th)=cos(psi), "
+    "i.e. theta = pi/2 - psi_cam, which is what _set_rot uses. The spec's own "
+    "acceptance test (10 m ahead lands ABOVE) is the arbiter and it passes at "
+    "psi = 0 AND at psi = pi/2, where the two candidate formulas differ.",
+    "drawing order: surface patches are drawn AFTER the ribbon, not before. "
+    "The spec's order would bury every wet/split-mu patch under the tarmac "
+    "polygon drawn on top of it.",
+    "HudData carries 11 additive fields after dropped_frames (Fx, Fy, kappa, "
+    "alpha, delta_wheel, wheel_lift, stalled, on_limiter, steer_limited, "
+    "paused, time_scale, msg). The spec's HudData has no per-corner force or "
+    "steer data, and draw_frame's `st` is a VehicleState, which publishes "
+    "none either -- so without them the wheels cannot be steered and the "
+    "force vectors cannot be drawn at all.",
+    "skid alpha is applied by blending the mark colour toward C_TARMAC rather "
+    "than through a per-pixel-alpha surface: an SRCALPHA overlay for 600 "
+    "lines costs more than the 600 lines, and the marks are always on tarmac.",
+    "imports corsa_c directly (for m, CdA, Crr, P_wheel in eq.18 and the "
+    "weight fraction in the wing panel). The contract's module map lists only "
+    "track/qss/pygame; qss re-exports neither the car nor RHO/G, and eq.18 "
+    "needs all four. No physics is imported (never vehicle/tyre/powertrain).",
+    "gg_envelope defaults to n = 91 points, not plots.py's 181: the curve is "
+    "rasterised into a 200 px box. The formula and its order of operations "
+    "are identical to plots.gg_envelope.",
+    "limiting_axle() is an additive helper: eq.12's FRONT/REAR/POWER display "
+    "rule kept next to the utilisation it qualifies.",
+]
+
+
+if __name__ == '__main__':
+    import sys
+    sys.exit(0 if self_check() else 1)

@@ -1,0 +1,242 @@
+##### POWERTRAIN #####
+SUMMARY:
+Complete real-time powertrain/brake spec for the Opel Corsa C 1.2 16V (Z12XE). Engine is a 19-breakpoint PCHIP torque curve passing EXACTLY through the two published points (110.000 Nm @ 4000 rpm, 55001 W @ 5600 rpm) with an NA-16V shape; I ran it and it reproduces Vmax = 47.2174 m/s = 169.983 km/h in 5th against the 0.5*rho*CdA*V^2 + Crr*m*g load at 5599.5 rpm — +0.037% vs the corsa_c.py target of 47.2 m/s, and 47.301 kW at the wheels vs corsa_c.self_check()'s 47.3 kW. Peak power is 55.003 kW at 5612 rpm, peak torque 110.000 Nm at 4000 rpm, and P(n) is monotone up to 5600 rpm. Full-vehicle longitudinal integration gives 0-100 km/h = 15.50 s (launch 2400 rpm, 0.70 s shift) against the published ~15.5 s. Driveline uses a saturated PD (spring-damper) clutch rather than a discrete lock/unlock state machine — this is the single most important architectural choice, it never chatters at 60-400 Hz, it stalls correctly, and it gives real driveline shunt. Brakes are UNPUBLISHED and derived bottom-up from the known 236 mm vented front disc / 200 mm rear drum arrangement: front 16.187 Nm/bar per wheel, rear 5.415 Nm/bar per wheel, a 30 bar / 0.30-slope proportioning valve, which I verified locks the FRONT first with a 7.7% pressure margin dry and 75% wet, peaks at 1.041 g (vs a 1.050 g perfect-distribution tyre limit on the TNO mu_x fit) and stops 100-0 km/h in 36.5 m. Longitudinal tyre mu_x is taken from the SAME TNO_car205_60R15.tir file qss.py's lateral fit came from (PDX1=1.0422, PDX2=-0.0827, FNOMIN=4000), so the brake and cornering modules are provably consistent: mu_x = 1.0737 - 20.675e-6*(Fz-2477), which is exactly 1.189x qss.py's mu_y at the same reference load.
+
+EQUATIONS:
+  # ============ CONSTANTS (module level) ============
+  RPM_BP  = [0, 500, 800, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5200, 5400, 5600, 6000, 6200, 6600, 7000]   # rpm
+  NM_BP   = [0,  45,  62,   70,   85,   95,  102, 106.5, 109, 110.0, 108.5, 103.0, 100.0, 96.5, 93.79, 85, 78, 66, 55]     # Nm  (4000 and 5600 are the two PUBLISHED points, do not touch)
+  ORPM_BP = [0, 800, 1500, 2500, 3500, 4500, 5500, 6200, 7000]   # rpm
+  ONM_BP  = [-4.0, -5.5, -7.0, -9.5, -12.0, -14.8, -18.0, -20.5, -23.0]   # Nm, motoring/overrun (negative)
+  PEDAL_BP = [0.00, 0.10, 0.20, 0.30, 0.50, 0.70, 1.00]
+  LOAD_BP  = [0.00, 0.28, 0.47, 0.61, 0.80, 0.92, 1.00]   # butterfly (1-cos) area law
+  N_TOT[g] = GEAR[g] * FINALDRIVE ; GEAR = (3.545, 2.143, 1.429, 1.121, 0.892), GEAR[R] = -3.308, GEAR[N] = 0.0, FINALDRIVE = 3.94
+  # ============ 1. PEDAL MAPS ============
+  load_raw   = pchip(PEDAL_BP, LOAD_BP)(clip(throttle, 0, 1))
+  load_idle  = clip(K_IDLE * (N_IDLE_TGT - n_e) / 1000.0, 0.0, 0.30)          # P-only idle governor, N_IDLE_TGT = 850 rpm, K_IDLE = 0.90
+  load_eff   = max(load_raw, load_idle) if n_e < 1400.0 else load_raw
+  # ============ 2. ENGINE TORQUE ============
+  n_e = omega_e * 30.0 / pi                                                    # rad/s -> rpm
+  T_wot = pchip(RPM_BP, NM_BP)(clip(n_e, 0.0, 7000.0))                         # Nm
+  T_ovr = pchip(ORPM_BP, ONM_BP)(clip(n_e, 0.0, 7000.0))                       # Nm, negative
+  if n_e >= N_CUT (6200): cut_latch = True
+  if n_e <= N_RESTORE (6050): cut_latch = False                                # hysteresis latch -> the classic limiter bounce
+  fuel = 0.0 if cut_latch else clip((N_CUT - n_e) / N_SOFT (120.0), 0.0, 1.0)  # soft band into the cut
+  T_eng = fuel * load_eff * (T_wot - T_ovr) + T_ovr                            # load_eff=0 -> T_ovr ; load_eff=1, fuel=1 -> T_wot
+  if stalled: T_eng = T_START (60.0) if starter_held and n_e < 400.0 else 0.0
+  if omega_e < OMEGA_STALL (450 rpm = 47.12 rad/s) and not stalled and not starter_held: stalled = True
+  if stalled and n_e > 500.0: stalled = False
+  # ============ 3. CLUTCH  (saturated PD, NOT a lock/unlock state machine) ============
+  e = clip((P_DISENGAGE (0.75) - clutch_pedal) / (P_DISENGAGE - P_BITE (0.35)), 0.0, 1.0)   # 0 = fully in (disengaged), 1 = fully out (engaged)
+  if gear is NEUTRAL: e = 0.0
+  T_cap = T_CLUTCH_CAP (200.0) * e**1.5                                        # Nm, progressive diaphragm spring
+  omega_in = omega_wheel_mean_driven * N_TOT[g]        where omega_wheel_mean_driven = 0.5*(omega_FL + omega_FR)
+  dw = omega_e - omega_in                                                      # rad/s
+  theta_slip += dw * dt                                                        # rad, integrate FIRST (semi-implicit)
+  T_c_raw = K_C (800.0) * theta_slip + C_C (15.0) * dw                         # Nm
+  T_c = clip(T_c_raw, -T_cap, +T_cap)
+  if abs(T_c_raw) > T_cap: theta_slip = clip(theta_slip, -T_cap/K_C, +T_cap/K_C)   # anti-windup, this IS the slipping branch
+  if gear is NEUTRAL or e == 0.0: T_c = 0.0 ; theta_slip = 0.0
+  # ============ 4. ENGINE ODE ============
+  omega_e += (T_eng - T_c) / I_ENG (0.16) * dt
+  omega_e = max(omega_e, 0.0)                                                  # engine cannot be driven backwards; hitting 0 is a stall
+  # ============ 5. GEARBOX + FINAL DRIVE ============
+  eta_eff = ETA_DRIVE (0.86) if T_c >= 0.0 else 1.0 / ETA_DRIVE               # losses always oppose power flow; on overrun they ADD to engine braking
+  T_axle = T_c * N_TOT[g] * eta_eff                                            # Nm at the front diff crown wheel; 0 in neutral
+  # ============ 6. OPEN DIFFERENTIAL (FWD) ============
+  T_bias = T_DIFF_FRIC (15.0) * tanh((omega_FL - omega_FR) / W_DIFF (2.0))
+  T_drive_FL = 0.5 * T_axle - T_bias
+  T_drive_FR = 0.5 * T_axle + T_bias                                           # sum preserved = T_axle, exactly
+  T_drive_RL = T_drive_RR = 0.0                                                # FWD
+  # ============ 7. BRAKES ============
+  brake_cmd_ramped: d(brake)/dt limited to +/- 4.0 /s   (keyboard key -> 0.25 s to full)
+  P_line = P_MAX_LINE (110e5) * clip((brake - B_DEAD (0.05)) / (1.0 - B_DEAD), 0.0, 1.0)      # Pa; B_DEAD is the booster jump-in dead band
+  P_rear = P_line if P_line <= P_KNEE (30e5) else P_KNEE + S_PROP (0.30) * (P_line - P_KNEE)  # Pa, fixed pressure-reducing valve
+  T_brk_front_wheel = KBF (1.6187e-4) * P_line                                 # Nm   (= 16.187 Nm/bar)
+  T_brk_rear_wheel  = KBR (5.4154e-5) * P_rear + T_HB_MAX (700.0) * handbrake  # Nm   (= 5.415 Nm/bar)
+  # ============ 8. WHEEL SPIN-UP ODE (per wheel i) ============
+  I_w_eff_front(g) = I_WF (0.76) + 0.5 * I_TRANS (0.020) * N_TOT[g]**2 * ETA_DRIVE     # kg m^2; recompute ONLY on gear change. Neutral -> I_WF.
+  I_w_eff_rear     = I_WR (0.73)
+  T_rr_i = C_RR (0.012) * Fz_i * R_ROLL (0.283)                                # Nm, rolling resistance, from the tyre/suspension module's Fz_i
+  T_resist_i = (T_brk_i + T_rr_i) * clip(omega_i / W_EPS (1.0), -1.0, 1.0)     # regularised Coulomb, never sign-flips per step
+  domega_i = (T_drive_i - Fx_i * R_ROLL - T_resist_i) / I_w_eff_i
+  omega_i += domega_i * dt
+  if abs(omega_i) < W_STICK (0.5) and abs(T_drive_i - Fx_i*R_ROLL) <= (T_brk_i + T_rr_i): omega_i = 0.0    # static hold, kills lock-up chatter and stops the car from creeping under the brakes
+  # ============ 9. INTERFACE TO THE TYRE MODULE (consumed, not computed here) ============
+  kappa_i = (omega_i * R_ROLL - vx_i) / max(abs(vx_i), V_LOW (2.0))            # slip ratio; V_LOW regularisation is mandatory at standstill
+  # ============ 10. QUANTITIES FOR THE HUD / CROSS-CHECKS ============
+  v_per_1000rpm[g] = (1000.0 * pi/30.0) / N_TOT[g] * R_ROLL                    # m/s ; 5th -> 8.4326 m/s = 30.357 km/h  (corsa_c.self_check says 30.4)
+  P_wheel = T_axle * omega_wheel_mean_driven                                   # W
+  m_eff(g) = M (1010) + ETA_DRIVE*(I_ENG + I_TRANS)*N_TOT[g]**2/R_ROLL**2 + (2*I_WF + 2*I_WR)/R_ROLL**2   # kg, DIAGNOSTIC ONLY - the sim gets this for free from the ODEs above; do not add it a second time
+
+PARAMETERS:
+  RPM_BP / NM_BP torque table = (0,0) (500,45) (800,62) (1000,70) (1500,85) (2000,95) (2500,102) (3000,106.5) (3500,109) (4000,110.0) (4500,108.5) (5000,103.0) (5200,100.0) (5400,96.5) (5600,93.79) (6000,85) (6200,78) (6600,66) (7000,55) [rpm, Nm] (published) :: Two points are published Opel data for the Z12XE: 110 Nm @ 4000 and 55 kW @ 5600 (93.79 Nm = 55000/(5600*pi/30)). The rest is constructed under naturally-aspirated 16-valve shape constraints: (a) BMEP at peak = 110*4pi/1.199e-3 = 11.53 bar, correct for a 1990s-2000s NA 16V port-injected engine (typical 10.5-12.0 bar); (b) a broad torque plateau 3000-4600 rpm within 3% of peak, which is what the 16V four-valve head buys over the 8V X12XE; (c) monotone torque rise from idle to 4000 and monotone fall 4000-redline, no double hump; (d) torque at 2000 rpm = 86% of peak, the usual figure for a small NA 16V with a moderate-length intake; (e) breakpoints packed at 200 rpm spacing from 5000-5600 solely so PCHIP does not overshoot the power peak. Verified: peak power 55.003 kW at 5612 rpm, peak torque 110.000 Nm at 4000 rpm, P(n) monotone up to 5600 rpm.
+  torque interpolation scheme = scipy.interpolate.PchipInterpolator(RPM_BP, NM_BP), argument clipped to [0, 7000] [-] (derived) :: PCHIP not cubic spline: it is shape-preserving, so it passes EXACTLY through the two published breakpoints, produces no spurious wiggle between them and does not overshoot at the torque peak (a natural cubic spline overshoots 110 Nm at ~4150 rpm and puts the power peak at the wrong rpm). Not linear interpolation either: linear puts a visible torque kink at every breakpoint that the driver feels as a step. Build the interpolator ONCE at import; calling PchipInterpolator per frame costs ~40 us and will show up at 400 Hz.
+  N_IDLE_TGT = 850 [rpm] (estimated) :: Z12XE ECU idle target, warm, no load; band 780-900. Not critical.
+  K_IDLE = 0.90 [load fraction per 1000 rpm error] (estimated) :: P-only idle governor tuned so a stalling engine at 600 rpm gets 0.225 load (~24 Nm) which recovers it in ~0.4 s. Cap at 0.30 load prevents it fighting the driver.
+  N_CUT / N_RESTORE / N_SOFT = 6200 / 6050 / 120 [rpm] (estimated) :: Z12XE limiter is quoted 6200-6400 rpm; the 5600 rpm power peak with a 600 rpm tail is consistent with 6200. 150 rpm hysteresis gives the ~4 Hz bounce a real limiter makes at WOT. Band 6100-6400.
+  ORPM_BP / ONM_BP overrun torque = (0,-4.0) (800,-5.5) (1500,-7.0) (2500,-9.5) (3500,-12.0) (4500,-14.8) (5500,-18.0) (6200,-20.5) (7000,-23.0) [rpm, Nm] (estimated) :: UNPUBLISHED. Derived from motoring FMEP: T = FMEP*Vd/(4*pi) with Vd = 1.199e-3 m^3. The table corresponds to FMEP rising 0.58 bar at idle to 2.15 bar at 6200 rpm, i.e. FMEP ~ 0.55 + 0.26*(N/1000) bar, which is the standard Chen-Flynn form for a small NA four with 0.5 bar of throttled pumping work added. Band +/-30%. Cross-check: it gives lift-off decel of 0.058 g in 3rd at 20 m/s and 0.099 g in 5th at 40 m/s (including aero+rolling), which is the right order for a 1.2 (real cars: 0.05-0.12 g).
+  PEDAL_BP / LOAD_BP throttle map = pedal (0, .10, .20, .30, .50, .70, 1.00) -> load (0, .28, .47, .61, .80, .92, 1.00) [-] (derived) :: Butterfly effective-area law, normalised (1-cos(theta))/(1-cos(theta_max)), which puts most of the airflow authority in the first third of pedal travel. Without this the car feels dead off-idle and the keyboard driver cannot modulate. Do NOT use a linear map.
+  I_ENG (crank + flywheel + clutch cover) = 0.16 [kg m^2] (estimated) :: UNPUBLISHED. Bottom-up: flywheel ~7.0 kg at radius of gyration 0.115 m -> 0.093; crank+rods+pistons reciprocating equivalent ~0.045; clutch pressure plate assembly ~0.020. Band 0.12-0.22. Sensitivity checked: 0-100 km/h changes only 15.16 s (I=0.12) to 14.88 s (I=0.22), so this is NOT a critical calibration parameter for straight-line time, but it does set how fast the engine picks up on a blip and on clutch-in, which the driver feels directly.
+  I_TRANS (clutch disc + input shaft + gears + diff carrier, at gearbox input speed) = 0.020 [kg m^2] (estimated) :: UNPUBLISHED. Clutch driven disc ~0.006, input shaft + constant-mesh gear pairs ~0.010, crown wheel and carrier reflected ~0.004. Band 0.012-0.030. IMPORTANT: this must be reflected into the driven wheels as 0.5*I_TRANS*N_TOT^2*eta per front wheel. In 1st (N_TOT = 13.967) that is 1.678 kg m^2 per front wheel, 2.2x the wheel's own inertia. Omitting it makes 1st gear feel weightless and lets the front wheels spin up unphysically fast.
+  I_WF (front wheel + tyre + 236 mm vented disc + hub + driveshaft) = 0.76 [kg m^2] (estimated) :: UNPUBLISHED. Bottom-up for 175/65R14 on 5.5Jx14 ET49 steel: tyre 7.2 kg split 60% tread band at r=0.285 m (0.351) + 40% sidewall annulus 0.178-0.292 m (0.168) = 0.519; steel wheel 7.5 kg as 65% rim at r=0.180 (0.158) + 35% centre disc r=0.16 (0.034) = 0.192; wheel+tyre 0.711. Add vented disc 5.0 kg at r_g 0.090 (0.041) and hub/outer CV/stub ~0.010. Total 0.762 -> 0.76. Band 0.65-0.90. Cross-check: 5.5Jx14 steel + 175/65R14 assembly mass 14.7 kg is consistent with the m_us_f = 56 kg (28 kg/corner) in corsa_c.py once knuckle, arm and inboard driveshaft share are added.
+  I_WR (rear wheel + tyre + 200 mm drum + hub) = 0.73 [kg m^2] (estimated) :: UNPUBLISHED. Same 0.711 wheel+tyre, plus 200 mm drum 4.0 kg at r_g 0.085 (0.029). Band 0.62-0.86. Together the four wheels give (2*0.76+2*0.73)/0.283^2 = 37.2 kg of equivalent mass = 3.7% of the 1010 kg car, in the usual 3-5% band.
+  T_CLUTCH_CAP = 200 [Nm] (estimated) :: UNPUBLISHED. 1.82x engine peak torque, inside the usual 1.5-2.0x design margin for a single-plate dry clutch. Equivalent: mu_c 0.30, 2 friction faces, r_eff 0.083 m, clamp 4020 N (a 180 mm disc). Band 165-220 Nm. Verified it does not slip in any gear at WOT (max engine torque 110 Nm << 200) and slips 0.34 s on a 2900 rpm launch.
+  K_C / C_C (clutch PD stiffness and damping) = 800 / 15 [Nm/rad, Nm s/rad] (derived) :: Numerical, not physical: these represent driveline torsional compliance (clutch hub springs + driveshafts). With I_ENG = 0.16 the locked-mode natural frequency is sqrt(800/0.16) = 70.7 rad/s = 11.3 Hz and damping ratio C/(2*sqrt(K*I)) = 15/22.6 = 0.66. That is both physically representative of a real driveline shunt mode AND stable at dt = 1/400 s (omega*dt = 0.18). If you raise K_C you MUST shrink dt: require K_C*dt^2/I_ENG < 0.25.
+  P_BITE / P_DISENGAGE (clutch pedal) = 0.35 / 0.75 [pedal fraction] (estimated) :: Typical cable clutch: nothing happens in the first 25% of travel (free play, here folded into the 0.75 point), bite starts at 35% from the floor. Gives a keyboard-friendly 40% window of modulation.
+  GEAR / GEAR_REV / FINALDRIVE / ETA_DRIVE = (3.545, 2.143, 1.429, 1.121, 0.892) / -3.308 / 3.94 / 0.86 [-] (published) :: corsa_c.py, the only parameter source. F13 CR box. Reverse is stored NEGATIVE so the kinematics fall out automatically. eta_drive = 0.86 was itself derived from the top-speed power balance, which is exactly the check this module has to reproduce.
+  N_TOT overall ratios = 1st 13.967, 2nd 8.443, 3rd 5.630, 4th 4.417, 5th 3.514, R -13.034 [-] (derived) :: GEAR[g] * 3.94. Gives 30.357 km/h per 1000 rpm in 5th, matching corsa_c.self_check()'s 30.4. Top speed in each gear at the 6200 limiter: 47.4 / 78.3 / 117.5 / 149.8 km/h; 5th is drag-limited at 169.98 km/h and 5599 rpm.
+  T_DIFF_FRIC / W_DIFF (open diff internal friction) = 15 / 2.0 [Nm, rad/s] (estimated) :: UNPUBLISHED. A truly ideal open diff (0 Nm bias) is numerically pathological: lift the inside front wheel in a corner and both wheels go to zero torque and the sim locks up. 15 Nm of bevel-gear and thrust-washer friction is what an open diff actually has (torque bias ratio ~1.1-1.2 at low torque) and it is enough to keep the sim well-posed. Do NOT model this as an LSD; the Corsa C 1.2 has none, and the one-wheel-spin understeer on power is a REAL and important feel cue for this car.
+  front brake geometry = 236 mm x 20 mm vented disc, single-piston sliding caliper, piston dia 54.0 mm, effective radius 0.093 m, pad mu 0.38 [mm, m, -] (estimated) :: UNPUBLISHED (corsa_c.py: 'brakes: MISSING'). The 236 mm vented front disc is the documented Corsa C 1.2/1.4 arrangement. Piston 54 mm is the standard sliding caliper for that disc size in this class; band 52-56 mm. r_eff = 0.093 m from disc OD 236 mm with a 40 mm radial pad height centred at 93 mm; band 0.090-0.096. Pad mu 0.38 is OE low-metallic organic at 100-300 C; band 0.34-0.42.
+  KBF (front brake gain) = 1.6187e-4 Nm/Pa = 16.187 Nm/bar per front wheel [Nm/Pa] (derived) :: DERIVED: KBF = 2 * mu_pad * A_piston * r_eff = 2 * 0.38 * (pi*0.054^2/4) * 0.093. The factor 2 is the two pad faces of a sliding caliper. Band 13.5-19.5 Nm/bar (from the geometry bands above). Treat KBF and KBR as ONE calibrated pair: their RATIO is pinned by the lock-order requirement, their absolute level only by the pedal feel.
+  rear brake geometry = 200 mm x ~32 mm leading-trailing drum, wheel cylinder dia 19.05 mm, brake factor C* = 1.9, drum radius 0.100 m [mm, -, m] (estimated) :: UNPUBLISHED. 200 mm rear drum is the Corsa C 1.2 arrangement. 19.05 mm (3/4 in) wheel cylinder; band 19.05-20.64 mm. C* = 1.9 is a leading-trailing (simplex) drum at lining mu 0.38 — the textbook range for L-T is 1.7-2.1, and this is what makes drums so much less pressure-sensitive than the servo/duo-servo layouts (C* 3-6) you must NOT use here.
+  KBR (rear brake gain) = 5.4154e-5 Nm/Pa = 5.415 Nm/bar per rear wheel [Nm/Pa] (derived) :: DERIVED: KBR = C* * A_wheel_cyl * r_drum = 1.9 * (pi*0.01905^2/4) * 0.100. Band 4.3-7.3 Nm/bar.
+  P_KNEE / S_PROP (proportioning valve) = 30e5 Pa (30 bar) / 0.30 [Pa, -] (derived) :: UNPUBLISHED, but SELECTED, not guessed. I swept knee in {20,25,30,35} bar x slope in {0.25,0.30,0.35,0.40} and computed the pressure at which each axle first locks, with load transfer and the TNO mu_x fit. knee=30/slope=0.30 is the point that maximises rear brake contribution while keeping the front locking first: front locks at 75.6 bar (1.041 g), rear at 81.4 bar (1.050 g), a 7.7% margin dry and 75% in the wet (mu x 0.632). knee=30/slope=0.35 FLIPS to rear-locks-first (-0.8% margin) and must not be used. A load-sensing valve was rejected: the Corsa C base car has a fixed pressure-reducing valve, and a load-sensing model needs suspension travel data that does not exist.
+  front/rear brake torque split = 74.93% front below the 30 bar knee, rising to 83.28% at 70 bar and 85.42% at 110 bar [-] (derived) :: Emergent from KBF, KBR and the proportioning valve, not an input. Cross-check against the ideal (zero-margin) front share, wdist_f + (h_cg/L)*a_x/g = 0.61 + 0.2208*a_x/g: at 0.46 g the valve gives 74.9% vs ideal 71.2% (safely front-biased); at 1.10 g it gives 84.2% vs ideal 84.2% (exactly on the ideal curve, which is why peak decel reaches 99.1% of the perfect-distribution limit).
+  P_MAX_LINE = 110e5 [Pa (110 bar)] (derived) :: Set so full pedal demands 1.479 g (4146 Nm total, 14650 N) against a 1.041 g tyre limit — a 42% lock-up authority margin, correct for a servo car. Front lock arrives at 0.687 of pedal travel, so the keyboard driver has 69% of the travel for modulation. Do not set this at the lock threshold or the brakes will feel like an on/off switch.
+  pedal-force-to-line-pressure gain = master cylinder 20.6 mm (A = 3.333e-4 m^2), pedal ratio 3.8:1, vacuum booster ratio 3.2:1 -> 3.29 bar per newton of pedal force [bar/N] (estimated) :: UNPUBLISHED. 20.64 mm (13/16 in) master cylinder is standard for this class. Gives 274 N of pedal force at 100 bar and 329 N at full 110 bar pedal, inside the normal 250-450 N panic-stop band. Only needed if you want a force-calibrated HUD readout; the sim itself runs on the pedal fraction.
+  T_HB_MAX (handbrake, per rear wheel) = 700 [Nm] (derived) :: DERIVED from the requirement that the handbrake must actually lock the rears: rear axle capacity with no load transfer is mu_x(1932 N)*3865 N = 4190 N = 1186 Nm/axle = 593 Nm/wheel. 700 Nm gives an 18% margin so the rears lock in a trail-braked handbrake turn too, which is the whole point of having the key. Cable-only, rear-only, no proportioning.
+  B_DEAD (brake pedal dead band) = 0.05 [pedal fraction] (estimated) :: Booster jump-in / pad knock-back. Small but stops the brake lights and the drag torque flickering on key-repeat noise.
+  brake pedal / throttle key ramp rate = 4.0 /s up, 6.0 /s down (brake); 3.0 /s up, 5.0 /s down (throttle); 6.0 /s (clutch) [pedal fraction per second] (estimated) :: A keyboard gives 0 or 1. Without a ramp the car is undriveable. 0.25 s to full brake and 0.33 s to full throttle match a real driver's foot. Expose these as constants — the user WILL want to tune them.
+  C_RR (rolling resistance coefficient) = 0.012 [-] (published) :: corsa_c.py. Apply it per wheel as C_RR*Fz_i*R_ROLL Nm so it sums to Crr*m*g at the ground, keeping it identical to what qss.py, crossover.py and corsa_c.self_check() charge. Do not also add a separate chassis drag term.
+  mu_x longitudinal friction fit = mu_x(Fz) = 1.0737 - 20.675e-6 * (Fz - 2477) [-, N] (published) :: Read directly out of tyre_data/TNO_car205_60R15.tir: PDX1 = 1.0422, PDX2 = -0.0827, FNOMIN = 4000 N, so mu_x = 1.0422 - 0.0827*(Fz-4000)/4000. Re-referenced to Fz_ref = 2477 N to sit in exactly the same form as qss.py's TYRE dict. THIS IS THE SAME FILE qss.py's lateral fit came from: the same file gives PDY1 = 0.8784, PDY2 = -0.06445 -> mu_y(2477) = 0.9029, which is qss.py's mu_ref = 0.903 to 4 significant figures. mu_x/mu_y = 1.189 at 2477 N, essentially constant (1.185-1.191) over 1-5 kN. Use this fit for the brake and traction acceptance tests; the live sim should call the real Magic Formula Fx0 through the tyre module.
+  T_SHIFT phases (declutch / gate / engage) = 0.15 / 0.25 / 0.30 s, total 0.70 s [s] (derived) :: CALIBRATED: this is the parameter that lands 0-100 km/h on the published figure. Sweep run: 0.45 s -> 14.79 s, 0.55 s -> 15.02 s, 0.70 s -> 15.36 s, 0.85 s -> 15.70 s (all at 2900 rpm launch). With a realistic 2400 rpm launch, 0.70 s gives exactly 15.50 s. Physically it is also right for a cable-shift road-car manual driven briskly but not aggressively.
+  auto-upshift threshold = gears 1-2: N_UP = 2400 + 3750*throttle rpm (6150 at WOT); gears 3-4: N_UP = 2400 + 3650*throttle rpm (6050 at WOT) [rpm] (derived) :: DERIVED from the wheel-force crossover. Ratio steps are 1.654, 1.500, 1.275, 1.257. For 1->2 and 2->3 the step is so large that 1st/2nd still out-pull the next gear AT the 6200 limiter (wheel torque 937 vs 796 Nm, and 566 vs 532 Nm), so the max-accel shift point is the limiter itself. For 3->4 and 4->5 the crossover falls at 6051 and 6031 rpm, so shift just under the limiter. Backing off to 6150/6050 avoids bouncing the limiter and costs 0.06 s over the whole 0-100.
+  auto-downshift threshold = N_DOWN = 1500 + 3100*throttle rpm (4600 at WOT); N_DOWN_BRAKE = 2200 rpm constant when brake > 0.3; overrev guard n_e*GEAR[g-1]/GEAR[g] < 5900; lockout 0.8 s after any shift [rpm, s] (estimated) :: Standard throttle-scheduled automatic strategy. The brake-downshift branch is what keeps the engine in range on corner entry so the driver can get back on the throttle at the apex — without it the auto-box leaves the car in 4th at 2000 rpm at every apex and the flank-wing A/B test becomes untestable.
+  launch rpm (auto-launch assist) = 2400 [rpm] (derived) :: Sweep: 1800 rpm -> 15.37 s (0.19 s slip), 2400 -> 15.16 s (0.27 s), 2900 -> 15.02 s (0.34 s), 3500 -> 14.89 s (0.42 s). 2400 rpm is what a normal driver uses and, combined with the 0.70 s shift, lands 0-100 at 15.50 s.
+  OMEGA_STALL = 47.12 rad/s (450 rpm) [rad/s] (estimated) :: Below ~450 rpm a warm port-injected four cannot sustain combustion. Band 400-500 rpm.
+  dt_phys (powertrain sub-step) = 1/400 s = 2.5e-3 s, with N_SUB = ceil(dt_render/dt_phys) sub-steps per render frame [s] (derived) :: Set by the stiffest element, the PD clutch: K_C*dt^2/I_ENG = 800*6.25e-6/0.16 = 0.031, comfortably stable. At 60 Hz render this is 7 sub-steps. Running the powertrain at the 60 Hz render rate makes the clutch ring and then blow up (K_C*dt^2/I_ENG = 1.39 > 1).
+
+API:
+  @dataclass
+class PowertrainParams:
+    rpm_bp: tuple; nm_bp: tuple; orpm_bp: tuple; onm_bp: tuple
+    pedal_bp: tuple; load_bp: tuple
+    gear: tuple = (3.545, 2.143, 1.429, 1.121, 0.892); gear_rev: float = -3.308; finaldrive: float = 3.94
+    eta_drive: float = 0.86; r_roll: float = 0.283
+    I_eng: float = 0.16; I_trans: float = 0.020; I_wf: float = 0.76; I_wr: float = 0.73
+    T_clutch_cap: float = 200.0; K_c: float = 800.0; C_c: float = 15.0
+    p_bite: float = 0.35; p_diseng: float = 0.75
+    n_idle: float = 850.0; k_idle: float = 0.90; n_cut: float = 6200.0; n_restore: float = 6050.0; n_soft: float = 120.0; n_stall: float = 450.0
+    kbf: float = 1.6187e-4; kbr: float = 5.4154e-5; p_max_line: float = 110e5; p_knee: float = 30e5; s_prop: float = 0.30
+    b_dead: float = 0.05; t_hb_max: float = 700.0
+    T_diff_fric: float = 15.0; w_diff: float = 2.0; crr: float = 0.012
+    t_declutch: float = 0.15; t_gate: float = 0.25; t_engage: float = 0.30; t_shift_lockout: float = 0.8
+
+    @classmethod
+    def from_car(cls, car: CorsaC) -> 'PowertrainParams': ...
+      Frozen parameter block. from_car() pulls gear, gear_rev, finaldrive, eta_drive, r_roll and crr straight out of the CorsaC dataclass so corsa_c.py stays the single source of truth for everything it actually publishes, and only fills in the estimated powertrain/brake values itself. Never hard-code a ratio, radius or eta anywhere else in this module.
+  @dataclass
+class PowertrainState:
+    omega_e: float = 89.0        # rad/s, 850 rpm
+    theta_slip: float = 0.0      # rad, clutch PD spring wind-up
+    gear: int = 0                # -1 = reverse, 0 = neutral, 1..5 = forward
+    stalled: bool = False
+    cut_latch: bool = False
+    shift_phase: str = 'none'    # 'none' | 'declutch' | 'gate' | 'engage'
+    shift_t: float = 0.0         # s into the current phase
+    shift_target: int = 0
+    t_since_shift: float = 99.0  # s, for the auto-shift lockout
+    clutch_auto: float = 0.0     # pedal fraction commanded by the shift machine
+    # cached, recomputed on gear change only:
+    n_tot: float = 0.0
+    I_w_front_eff: float = 0.76
+      All mutable powertrain state in one place, so the sim can snapshot/restore for a flying-lap reset or a replay. omega_e is the ONLY engine DOF; wheel omegas live in the vehicle state, not here.
+  @dataclass
+class DriverInput:
+    throttle: float = 0.0   # 0..1, already key-ramped
+    brake: float = 0.0      # 0..1, already key-ramped
+    clutch: float = 0.0     # 0..1, 0 = engaged
+    handbrake: float = 0.0  # 0..1
+    shift_up: bool = False  # rising edge
+    shift_dn: bool = False  # rising edge
+    starter: bool = False
+    auto_gearbox: bool = True
+      Edge-triggered shift flags, level-triggered pedals. The caller does the key-to-pedal ramping (see the ramp-rate parameters) and clears shift_up/shift_dn after one call.
+  @dataclass
+class PowertrainOutput:
+    T_drive: tuple      # (FL, FR, RL, RR) Nm at the wheels, RL=RR=0.0 for FWD
+    T_brake: tuple      # (FL, FR, RL, RR) Nm, magnitude only, always >= 0
+    I_w_eff: tuple      # (FL, FR, RL, RR) kg m^2, gear-dependent on the front
+    rpm: float
+    gear: int
+    T_eng: float
+    T_clutch: float
+    clutch_slip: float  # rad/s, omega_e - omega_in
+    P_wheel: float      # W
+    stalled: bool
+    on_limiter: bool
+      Everything the vehicle integrator and the HUD need. T_brake is a magnitude; the sign/regularisation is applied inside step_wheel() so the caller cannot get it wrong.
+  def engine_torque(p: PowertrainParams, n_e: float, load: float, fuel: float) -> float
+      T = fuel*load*(T_wot(n_e) - T_ovr(n_e)) + T_ovr(n_e), in Nm. Pure, no state. load and fuel already in [0,1]. Returns the overrun torque (negative) at load = 0.
+  def wot_torque(p: PowertrainParams, n_e: float) -> float
+def overrun_torque(p: PowertrainParams, n_e: float) -> float
+def wot_power(p: PowertrainParams, n_e: float) -> float
+      The three curve lookups, each a pre-built PchipInterpolator with the rpm argument clipped to [0, 7000]. Build the interpolators once at module import, not per call. These are the functions the acceptance tests hit directly.
+  def throttle_map(p: PowertrainParams, pedal: float) -> float
+      Pedal fraction -> engine load fraction via the (1-cos) butterfly table. Monotone, throttle_map(0)=0, throttle_map(1)=1.
+  def clutch_torque(p: PowertrainParams, s: PowertrainState, clutch_pedal: float, omega_in: float, dt: float) -> float
+      Advances s.theta_slip by (omega_e - omega_in)*dt, returns the saturated PD torque and applies the anti-windup clamp in place. Returns 0.0 and zeroes theta_slip when the gearbox is in neutral or engagement is zero. This function IS the lock/slip logic — there is no separate state machine.
+  def brake_torques(p: PowertrainParams, brake: float, handbrake: float) -> tuple[float, float]
+      Returns (T_front_per_wheel, T_rear_per_wheel) in Nm, both >= 0, including the proportioning-valve knee and the handbrake added to the rear only.
+  def diff_split(p: PowertrainParams, T_axle: float, omega_l: float, omega_r: float) -> tuple[float, float]
+      Open-differential split with tanh friction bias. Guarantees T_l + T_r == T_axle exactly.
+  def step_wheel(I_w: float, omega: float, T_drive: float, T_brake: float, T_rr: float, Fx: float, r_roll: float, dt: float) -> float
+      One wheel's spin-up ODE with the regularised Coulomb brake sign and the static-hold guard. Returns the new omega. Kept separate and pure so it can be unit-tested against the lock-up and static-hold cases.
+  def update_shift(p: PowertrainParams, s: PowertrainState, inp: DriverInput, v_x: float, dt: float) -> tuple[float, float]
+      Runs the shift state machine (and, if inp.auto_gearbox, the auto-shift scheduler and anti-stall launch assist) for one sub-step. Mutates s.gear, s.shift_phase, s.shift_t, s.clutch_auto, s.n_tot, s.I_w_front_eff. Returns (clutch_pedal_effective, throttle_scale) where clutch_pedal_effective = max(inp.clutch, s.clutch_auto) and throttle_scale is 0 during declutch/gate and ramps 0->1 during engage (this is the automatic throttle lift on a shift).
+  def step(p: PowertrainParams, s: PowertrainState, inp: DriverInput, omega_w: tuple, Fz: tuple, Fx: tuple, v_x: float, dt: float) -> PowertrainOutput
+      The one call the sim loop makes per sub-step. Order inside is exactly the ten numbered blocks of the equations list: pedal maps, engine torque, clutch, engine ODE, gearbox, diff, brakes, then it RETURNS the wheel torques and effective inertias rather than integrating the wheels itself — the vehicle module owns omega_w because Fx couples the wheels to the chassis. omega_w, Fz, Fx are 4-tuples in (FL, FR, RL, RR) order and Fz comes from the load-transfer model, so brake and rolling-resistance torques track load transfer automatically.
+  def kmh_per_1000rpm(p: PowertrainParams, g: int) -> float
+def speed_at_rpm(p: PowertrainParams, g: int, n_e: float) -> float
+def rpm_at_speed(p: PowertrainParams, g: int, v: float) -> float
+      Gearing helpers for the HUD and the acceptance tests. kmh_per_1000rpm(p, 5) must return 30.357, matching corsa_c.self_check().
+  def self_check(p: PowertrainParams | None = None, car: CorsaC | None = None) -> None
+      Mirrors corsa_c.self_check(): prints T(4000), P(5600), peak power and rpm, km/h per 1000 rpm in 5th, the solved Vmax in 5th against the aero+rolling load, the full-pedal brake torques and the front/rear lock pressures. Runnable as `python3 -m drive.powertrain`. Any parameter edit that breaks these prints is wrong.
+
+VALIDATION TESTS:
+  published_point_torque — wot_torque(p, 4000.0): expected 110.000 Nm (tol +/- 0.001 Nm (must be EXACT, it is a PCHIP breakpoint))
+  published_point_power — wot_power(p, 5600.0): expected 55001.3 W (tol +/- 5 W (i.e. 55.000 kW to 4 significant figures))
+  peak_power_location — argmax over 300..6300 rpm at 1 rpm resolution: expected 55.003 kW at 5612 rpm (tol power +/- 0.05 kW; rpm within 5560-5650 (the published peak is 5600; PCHIP puts the true stationary point 12 rpm late, which is 0.005% of the power and physically meaningless))
+  peak_torque_location: expected 110.000 Nm at 4000 rpm (tol torque +/- 0.01 Nm; rpm +/- 25 rpm (PCHIP must not overshoot — a natural cubic spline fails this at ~111.3 Nm @ 4150 rpm))
+  power_monotonicity — wot_power(n) must be non-decreasing for n in [800, 5600]: expected True (no local maximum before the power peak) (tol allow diff > -1e-9 W per 1 rpm step)
+  bmep_at_peak_torque — 110.0*4*pi/1.199e-3: expected 11.53 bar (tol band 10.5-12.0 bar for an NA 16V; this is the shape sanity check, not a free parameter)
+  VMAX_5TH — bisect V such that wot_torque(rpm_at_speed(p,5,V)) * 3.514 * 0.86 / 0.283 == 0.5*1.2*0.66*V^2 + 0.012*1010*9.81: expected V = 47.2174 m/s = 169.983 km/h at 5599.5 rpm. THIS IS THE NUMBER I RAN: +0.0174 m/s, i.e. +0.037%, versus the 47.2 m/s in corsa_c.py. (tol +/- 0.10 m/s (+/- 0.2%). Anything outside means the 5000-5600 rpm breakpoints were edited.)
+  VMAX_POWER_BALANCE — V*(0.5*rho*CdA*V^2 + Crr*m*g) at V = Vmax, and that divided by eta_drive: expected 47.301 kW at the wheels, 55.001 kW at the engine — exactly reproducing corsa_c.self_check()'s '47.3 kW at wheels vs 47.3 kW available' (tol +/- 0.1 kW)
+  gearing — kmh_per_1000rpm(p, 5): expected 30.357 km/h per 1000 rpm (tol +/- 0.05 (corsa_c.self_check() prints 30.4))
+  gear_top_speeds at the 6200 rpm limiter: expected 1st 47.36, 2nd 78.34, 3rd 117.48, 4th 149.76 km/h; 5th is drag-limited at 169.98 km/h and never reaches the limiter (tol +/- 0.1 km/h; the 4th-gear number must be BELOW Vmax or the gearing is wrong)
+  ACCEL_0_100 — full longitudinal integration, launch 2400 rpm, 0.70 s shift, auto-upshift 6150/6050, dt <= 2e-4 s, with load transfer and the mu_x traction cap: expected 15.50 s (published ~15.5 s for the 1.2 16V) (tol 14.8-15.8 s. Reference points from my run: 0-60 km/h 6.87 s, 0-80 km/h 10.72 s, 0-120 km/h 21.86 s, 0-60 mph 14.68 s)
+  ACCEL_sensitivity — 0-100 km/h vs shift time: expected 0.45 s -> 14.79 s, 0.55 s -> 15.02 s, 0.70 s -> 15.36 s, 0.85 s -> 15.70 s (all at 2900 rpm launch) (tol +/- 0.1 s; this is the calibration knob if the implementer's integrator differs slightly from mine)
+  FWD_traction_limit — self-consistent a = mu_x(Fzf/2)*Fzf/m with Fzf = m*(g*0.61 - a*0.55/2.491): expected a_max = 5.101 m/s^2 = 0.520 g, front axle load 4906 N (tol +/- 0.02 g. Cross-check: 1st gear at 110 Nm delivers 4669 N = 4.62 m/s^2 at the ground, which is 91% of the traction limit — so the Corsa 1.2 is engine-limited, NOT traction-limited, and should NOT spin its wheels on a dry standing start. If your sim spins the fronts in 1st on dry tarmac, something is wrong.)
+  brake_gains — brake_torques(p, 1.0, 0.0): expected front 1780.6 Nm/wheel, rear 292.4 Nm/wheel (P_line 110 bar, P_rear 54 bar). Total 4146 Nm = 14650 N at the ground = 1.479 g demanded. (tol +/- 1 Nm)
+  brake_lock_order_DRY — bisect the line pressure at which each axle first exceeds mu_x*Fz with load transfer: expected FRONT locks at 75.6 bar (0.687 of pedal) at 1.041 g; REAR locks at 81.4 bar at 1.050 g. Margin +7.7%. (tol the SIGN is the hard requirement: P_lock_rear > P_lock_front, always. Pressures +/- 3 bar. If this flips, the car will spin under braking and the whole flank-wing study becomes undriveable.)
+  brake_lock_order_WET — same test with mu scaled to 0.55/0.87 = 0.632, the scale qss.py uses: expected FRONT locks at 42.9 bar (0.627 g); REAR at 75.2 bar (0.670 g). Margin +75.2%. (tol sign requirement again; the wet margin must be LARGER than the dry margin (fixed proportioning gets safer as mu falls))
+  peak_deceleration vs perfect distribution: expected fixed-split max before any lock = 1.041 g; the perfect-distribution tyre limit on the same mu_x fit = 1.050 g. Efficiency 99.1%. (tol +/- 0.03 g. Requirement stated in the brief: ~1.0 g stopping without locking the rears first. MET.)
+  stopping_distance_100_0 at full pedal, including aero and rolling: expected 36.5 m in 2.63 s, mean 1.076 g (aero adds 0.035 g at the top of the stop). Wet at full pedal: 56.4 m, 4.08 s, 0.695 g. (tol +/- 2 m dry. Real-world Corsa C tests report 38-41 m from 100 km/h including ~0.2 s of pedal build-up, which adds ~5.5 m; 36.5 + 5.5 = 42 m. Consistent.)
+  ideal_vs_actual_front_share: expected at 1.10 g the valve gives 84.16% front against the ideal 84.18%; at 0.46 g it gives 74.93% against the ideal 71.21% (front-biased = safe) (tol the actual share must be >= the ideal share at every pressure below the lock point)
+  engine_braking — closed throttle, no brakes, T_w = T_ovr*N_TOT/eta (note: DIVIDE by eta on overrun): expected 3rd at 20 m/s (3800 rpm) -0.058 g; 3rd at 25 m/s -0.073 g; 4th at 30 m/s -0.075 g; 5th at 40 m/s -0.099 g (all including aero + rolling) (tol +/- 0.02 g; band for a real 1.2 is 0.05-0.12 g)
+  reflected_inertia — I_w_front_eff by gear = 0.76 + 0.5*0.020*N_TOT^2*0.86: expected 1st 2.438, 2nd 1.373, 3rd 1.033, 4th 0.928, 5th 0.866, neutral 0.760 kg m^2 (tol +/- 0.01 kg m^2. Equivalent-mass cross-check (diagnostic only): m_eff = 1424.3 / 1185.0 / 1108.5 / 1084.9 / 1071.1 kg in gears 1-5, i.e. 1.41x down to 1.06x the 1010 kg kerb mass. If your sim's measured 1st-gear m_eff is not ~1420 kg you have either double-counted or dropped I_TRANS.)
+  clutch_lock_convergence — engine at 3000 rpm, gearbox input held at 2000 rpm equivalent, clutch fully out, dt = 1/400 s: expected slip decays to < 1 rad/s within 0.15 s with no more than one overshoot (damping ratio 0.66), and T_c never exceeds 200 Nm (tol settling 0.10-0.25 s; ZERO high-frequency oscillation. If it rings, dt is too big or K_C too high.)
+  stall_test — 1st gear, clutch released instantly at idle with no throttle, auto assist OFF: expected engine stalls (omega_e crosses 47.12 rad/s) within 0.4 s and stalled == True; the car does not lurch forward more than ~0.3 m (tol 0.2-0.7 s. With the auto anti-stall assist ON it must NOT stall under any keyboard input.)
+  idle_creep — 1st gear, clutch fully out, zero throttle, flat ground, idle governor active: expected steady creep at ~1.7 m/s (6.1 km/h) at 800 rpm, engine not stalled (tol 1.2-2.0 m/s. This is a real behaviour of the car and is the fastest way to eyeball that the idle governor and the clutch are both wired correctly.)
+  reverse — gear -1, N_TOT = -13.034: expected at 3000 rpm the car moves BACKWARDS at 6.82 m/s (24.6 km/h); selecting R above 1.0 m/s forward is refused; engaging R while rolling forward with the clutch out drives omega_e toward zero and stalls the engine (tol speed +/- 0.05 m/s; the stall behaviour is qualitative but must happen)
+  rev_limiter — hold WOT in 1st against a fixed load: expected rpm oscillates between 6050 and 6200 at roughly 4 Hz; the sim never exceeds 6210 rpm; wot_torque is never evaluated above 7000 rpm (tol 3-6 Hz, peak rpm <= 6230)
+  diff_torque_conservation — diff_split(p, T, wl, wr) for 500 random (T, wl, wr): expected T_l + T_r == T_axle (tol |error| < 1e-9 Nm)
+  energy_audit — coast in neutral from 40 m/s, no brakes, flat ground: expected the deceleration equals (0.5*1.2*0.66*V^2 + 0.012*1010*9.81)/1010 exactly, i.e. -0.985 m/s^2 at 40 m/s falling to -0.118 m/s^2 at 5 m/s (tol +/- 1%. This proves the powertrain adds no phantom drag and that C_RR is charged once, consistently with qss.py and crossover.py.)
+
+PITFALLS:
+  - DO NOT use a discrete clutch lock/unlock state machine. It is the classic way this module fails. At any realistic dt the lock test (|dw| < eps AND required torque <= capacity) flickers on and off every few frames near the boundary, the engine rpm buzzes, and the driver feels a permanent judder in 1st and 2nd. The saturated PD clutch in the equations has no state boundary at all: it is continuous, it degenerates to the locked solution when |T| < T_cap and to pure Coulomb slip when it saturates, and it also gives you free driveline shunt (the head-nod on a throttle reversal), which is one of the strongest feel cues a real car has. If you insist on the discrete version, the constraint torque in the locked branch is T_c = (I_line*T_eng + I_ENG*T_load)/(I_ENG + I_line) with I_line the whole downstream inertia reflected to engine speed — and you will then need hysteresis on the lock test anyway.
+  - DO NOT double-count the reflected engine inertia. There are exactly two correct architectures: (a) integrate omega_e separately and put ONLY I_TRANS*N_TOT^2 into the wheels (this spec's choice), or (b) collapse the locked driveline into one DOF with m_eff = m + eta*(I_ENG+I_TRANS)*N_TOT^2/r^2 + sum(I_w)/r^2. Mixing them adds the engine twice and the car becomes 380 kg heavier in 1st gear. The m_eff table in the parameters is DIAGNOSTIC ONLY.
+  - DO NOT forget that I_w_front_eff is gear-dependent. It swings from 0.76 kg m^2 in neutral to 2.438 kg m^2 in 1st — a factor of 3.2. If you hard-code a constant wheel inertia, 1st gear wheelspin becomes instantaneous and unrecoverable, and shifts produce a torque spike as the reflected inertia changes discontinuously. Recompute it on gear change and ramp it over the 0.25 s neutral gate to avoid the spike.
+  - The driveline efficiency must DIVIDE, not multiply, on overrun. eta_eff = 0.86 when T_c >= 0 and 1/0.86 = 1.163 when T_c < 0. Losses always oppose motion; if you multiply by 0.86 in both directions you make engine braking 26% weaker than it should be and the car will not slow on a lift, which the driver will read as a broken sim.
+  - Regularise the brake torque sign or the wheels will chatter at standstill. T_brake * sign(omega) flips every step once omega crosses zero, injecting energy. Use the clip(omega/W_EPS, -1, 1) ramp AND the static-hold guard together; the ramp alone still leaves the car creeping under full brakes, and the guard alone still lets the wheel oscillate before it triggers.
+  - The slip ratio kappa = (omega*r - vx)/|vx| is singular at standstill. Use max(|vx|, V_LOW) with V_LOW = 2 m/s. Without it the tyre module returns garbage on the first frame of every standing start and the launch behaviour is nondeterministic. This is a tyre-module concern but it is the powertrain that surfaces it, because the powertrain is what spins the wheel up from zero.
+  - Do NOT set the rear proportioning slope above 0.30 with this knee. I swept it: knee 30 bar / slope 0.35 makes the REAR lock first (-0.8% margin), and knee 35 / slope 0.30 is -2.7%. The car will then snap-spin under trail braking, and because the flank wing's whole claimed benefit lives in the front/rear balance, a rear-locking baseline would corrupt the A/B comparison the sim exists to make. If you retune the brakes for any reason, re-run the lock-order test in BOTH dry and wet before shipping.
+  - Do NOT use a duo-servo drum brake factor. C* for a duo-servo or leading-leading drum is 3-6; for the leading-trailing (simplex) layout the Corsa C actually has it is 1.7-2.1. Using 4.0 by mistake triples the rear torque, flips the lock order, and produces a car that spins on every brake application.
+  - Build the PchipInterpolator objects ONCE at module import. Constructing them inside wot_torque() costs ~40 us per call; at 400 Hz with four wheels and a HUD that is several percent of your frame budget for nothing. Conversely do not pre-tabulate onto a coarse rpm grid and linearly interpolate — you reintroduce the torque steps PCHIP exists to remove.
+  - Run the powertrain at a sub-step, not the render rate. K_C*dt^2/I_ENG must stay below ~0.25; at 60 Hz it is 1.39 and the clutch spring diverges within a second. 1/400 s (7 sub-steps at 60 Hz render) is the specified value. If the user's machine cannot hold it, reduce K_C to 300 and C_C to 9 rather than raising dt — a softer driveline is a legitimate model, an unstable one is not.
+  - The 6200 rpm limiter must latch with hysteresis, not just cut above the threshold. A bare threshold cut produces a 200 Hz buzz as the engine crosses back and forth in a single step. The 6200/6050 latch produces the ~4 Hz bounce that real limiters make, and is also what stops the auto-upshift scheduler from thrashing.
+  - Do not add a separate chassis rolling-resistance force on top of the per-wheel T_rr. C_RR*Fz_i*R_ROLL summed over four wheels is already exactly Crr*m*g at the ground, which is the same number corsa_c.self_check(), qss.py and crossover.py all charge. Adding both makes Vmax come out ~1.5 m/s low and silently breaks the one cross-check the whole parameter set is anchored to.
+  - Brakes and dampers are marked MISSING in corsa_c.py for a reason: no published source has them. Every brake number in this spec is a bottom-up estimate from the known 236 mm disc / 200 mm drum arrangement, and the pair (KBF, KBR) should be treated as one calibrated unit — their RATIO is pinned by the front-locks-first requirement, their absolute level only by pedal feel. If the user ever finds real data, change KBF and KBR together and re-run the lock-order test; do not tune them independently to chase a stopping distance.
+  - The auto-gearbox needs the brake-downshift branch or the flank-wing A/B test is not measurable. Without it the box sits in 4th at 2000 rpm at every apex, the car is power-limited everywhere, and the corner-speed difference the wing is supposed to produce is buried in gearing noise. qss.py already shows R = 130 m is POWER limited for this car — the gearbox strategy is therefore part of the experiment, not a convenience.
+  - 0-100 km/h of 15.50 s is the number this spec's parameters produce with a 2400 rpm launch and a 0.70 s shift, matching the published figure. But it is sensitive to the shift model (0.45 s shift gives 14.79 s) and mildly to launch rpm. If the implementer's integrator lands outside 14.8-15.8 s, tune the SHIFT TIME first — it is the least-known parameter and the most influential. Do NOT tune the torque curve; it is pinned at both published points and by the Vmax balance, and moving it breaks the 47.2 m/s result.

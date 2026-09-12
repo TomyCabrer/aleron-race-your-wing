@@ -1,0 +1,455 @@
+##### HARNESS #####
+SUMMARY:
+Real-time keyboard/gamepad harness around the (separately specified) vehicle model. Fixed-timestep physics at 1000 Hz with an accumulator, decoupled 60 fps pygame top-down renderer, and a headless mode (SDL_VIDEODRIVER=dummy, verified working on this machine: driver='dummy', SysFont('Menlo') OK, 1280x800 surface OK) so every acceptance test runs without a window.
+
+Three tracks are given as literal geometry: SKIDPAD (concentric guide circles R=30.48/50/75/100/130 m — the qss.py validation radii), DRAGSTRIP (1500 m straight with 1/8, 1/4 mile and standing-km gates plus a braking box), and CIRCUIT_ARENA, a closed 1249.202 m circuit whose seven corner radii are 45/30/80/55/110/35/130 m — deliberately spanning exactly the 30–130 m band, with T7 (R=130) the only power-limited corner (qss: 31.88 m/s power vs 33.17 m/s grip). Closure verified to 3.8e-8 m and 360.000000 deg; min self-clearance 66 m so a 12 m ribbon never overlaps. A quasi-steady lap solve over it using qss.max_ay gives an ideal lap of 53.7 s, which independently validates ledger.py's 60 s lap assumption.
+
+Keyboard is made driveable by ramping the ROAD-WHEEL ANGLE at a physical hand rate (900 deg/s at the wheel / 16.0 = 56.25 deg/s at the road wheel; full lock 32.625 deg is reached in 0.58 s, which is 2.9 turns lock-to-lock at 900 deg/s — self-consistent), plus a speed-dependent soft limit delta_lim(V) built from the car's own steady-state cornering equation with a 15% margin, relaxed by body slip so the driver can still catch (or fail to catch) a slide. A --no-steer-limit path commands delta directly and is what the validation scripts use, so the aid never contaminates a test.
+
+The flank wing produces only 63–227 N (R=50 to R=130, CL 0.70 to 1.25) against a ~9908 N car. That is 0.6–1.5% of corner speed. The harness therefore makes the effect legible NUMERICALLY (wing force in N drawn at the same px/N scale as the tyre-force vectors, live util_f/util_r computed with qss.fy_max itself, and a delta-time-vs-distance compare plot) rather than pretending it is felt through the seat.
+
+Renderer costs were measured on this machine under the dummy driver: the track ribbon as ONE concave polygon is 0.58 ms/frame, whereas per-quad tessellation is 20.4 ms/frame and would miss 60 fps. That single measurement dictates the whole drawing strategy.
+
+EQUATIONS:
+  --- 1. FRAME LOOP (drive.py, interactive) ---
+  dt_wall = clock.tick(FPS) / 1000.0
+  dt_wall = min(dt_wall, MAX_FRAME_DT)                      # MAX_FRAME_DT = 0.10 s
+  if first_frame or just_unpaused or just_reset: dt_wall = DT_PHYS; acc = 0.0
+  acc = acc + dt_wall * time_scale                          # time_scale = 1.0, or 0.25 slow-mo
+  n = 0
+  while acc >= DT_PHYS and n < MAX_SUBSTEPS:  step_physics(DT_PHYS); acc -= DT_PHYS; n += 1
+  if acc >= DT_PHYS:  dropped_s += acc; acc = 0.0; dropped_frames += 1   # bail out, never spiral
+  alpha_render = acc / DT_PHYS                              # in [0,1)
+  --- 2. HEADLESS LOOP (no wall clock anywhere -> bitwise deterministic) ---
+  for i in range(int(round(T_total / DT_PHYS))):  step_physics(DT_PHYS)
+  --- 3. INPUT RAMPS (integrated at DT_PHYS using key state sampled at 60 Hz) ---
+  ramp(x, tgt, rise, fall, dt) = min(tgt, x + rise*dt) if tgt > x else max(tgt, x - fall*dt)
+  throttle  = ramp(throttle,  1.0 if KEY_UP    else 0.0, 3.5, 6.0,  dt)
+  brake     = ramp(brake,     1.0 if KEY_DOWN  else 0.0, 5.0, 8.0,  dt)
+  clutch    = ramp(clutch,    1.0 if KEY_Z     else 0.0, 8.0, 3.0,  dt)
+  handbrake = ramp(handbrake, 1.0 if KEY_SPACE else 0.0, 8.0, 10.0, dt)
+  if FINE (LSHIFT held): throttle = min(throttle, 0.50); brake = min(brake, 0.50)
+  --- 4. STEERING: ramp the ROAD-WHEEL angle, not a normalised axis ---
+  d_in = (+1 if KEY_RIGHT else 0) + (-1 if KEY_LEFT else 0)      # note: RIGHT is -delta by SAE sign
+  w_drv    = 900.0 / STEER_RATIO                                  # = 56.25 deg/s road wheel
+  w_ret(V) = (720.0 + 720.0*clamp(V/22.0, 0, 1)) / STEER_RATIO    # = 45 -> 90 deg/s road wheel
+  w_cnt(V) = w_drv + w_ret(V)                                     # = 101.25 -> 146.25 deg/s
+  if FINE: all three rates are halved
+  if d_in == 0:            delta_dot = -sign(delta) * w_ret(V);  snap to 0 if |delta| <= w_ret*dt
+  elif d_in*delta < 0:     delta_dot = d_in * w_cnt(V)            # counter-steer / flick back
+  else:                    delta_dot = d_in * w_drv
+  delta = delta + delta_dot * dt
+  --- 5. SPEED-DEPENDENT STEER LIMIT (driver aid; bypassed by --no-steer-limit) ---
+  a_ref     = 1.15 * AY_MAX_DRY                                   # = 1.15*0.8624671*9.81 = 9.7299 m/s^2
+  delta_ss(V) = degrees( L * a_ref / max(V, 3.0)**2 ) + K_US_DEG * (a_ref / G)
+  delta_lim(V) = min(DELTA_LOCK_DEG, delta_ss(V))                 # DELTA_LOCK_DEG = 32.625
+  beta_deg  = degrees( atan2(v_body, max(|u_body|, 0.5)) )
+  delta_lim_eff = min(DELTA_LOCK_DEG, delta_lim(V) + 1.2*|beta_deg|)   # open up the lock in a slide
+  delta = clamp(delta, -delta_lim_eff, +delta_lim_eff)
+  --- 6. GAMEPAD (absolute axes: ramps bypassed, only a rate cap applied) ---
+  dz(a, z) = 0.0 if |a| < z else sign(a)*(|a| - z)/(1.0 - z)      # z = 0.12 sticks, 0.05 triggers
+  steer_axis = dz(axis[0], 0.12);  expo: g = sign(s)*|s|**1.5
+  delta_target = delta_lim_eff * g
+  delta = delta + clamp(delta_target - delta, -PAD_RATE*dt, +PAD_RATE*dt)   # PAD_RATE = 250 deg/s
+  throttle = dz((axis[RT] + 1.0)/2.0, 0.05);  brake = dz((axis[LT] + 1.0)/2.0, 0.05)
+  blend rule: if |pad_value| > 0.02 the pad wins that axis, else the keyboard ramp value is used
+  --- 7. AUTO-CLUTCH / SHIFT STATE MACHINE (harness-side, feeds the vehicle model) ---
+  launch:   if gear == 1 and V < 3.0:  clutch_auto = clamp(1.0 - V/3.0, 0, 1) * (1.0 - 0.6*throttle)
+  stall guard: if gear != 0 and rpm < 1100:  clutch_auto = max(clutch_auto, clamp((1100-rpm)/600, 0, 1))
+  shift (on edge, queue depth 1, ignored while busy):
+    phase A 0.000-0.100 s: clutch 0->1 linear, throttle_out = 0 (upshift) or throttle_out = throttle (downshift)
+    phase B 0.100-0.160 s: gear applied at t=0.100; throttle_out = 0.35 blip on downshift, 0 on upshift
+    phase C 0.160-0.360 s: clutch 1->0 linear, throttle_out = throttle * smoothstep((t-0.160)/0.200)
+  clutch_cmd = max(clutch_pedal, clutch_auto, clutch_shift)
+  --- 8. FLANK WING ---
+  wing_deploy_dot = (+1 if want_deployed else -1) / T_DEPLOY      # T_DEPLOY = 0.45 s
+  d = clamp(wing_deploy + wing_deploy_dot*dt, 0, 1)
+  f = d*d*(3.0 - 2.0*d)                                           # smoothstep, no force discontinuity
+  k_eff = 0.5 * RHO * S_DEV * CL_DEV * f                          # RHO=1.2, S_DEV=0.35
+  F_wing = k_eff * V*V                                            # N, +ve toward the inside of the corner
+  D_wing = F_wing / LD_DEV                                        # LD_DEV = 3.2 (ledger.py)
+  side selection (auto): side = -sign(delta) held through a 0.5 s hysteresis on |delta| < 0.5 deg
+  applied by the vehicle model at x_w = 0.97 m (MOUNTS['front axle']), h_w = 0.90 m
+  --- 9. TRACK CENTRELINE CONSTRUCTION (track.py, exact, DS = 0.5 m) ---
+  straight seg: p(t) = p0 + t*[cos(psi0), sin(psi0)];  psi = psi0;  kappa = 0
+  arc seg (turn_deg d, radius R, sgn = sign(d)):
+    c   = p0 + sgn*R*[-sin(psi0), cos(psi0)]
+    p(t)= c + Rot(sgn*t/R) @ (p0 - c);  psi = psi0 + sgn*t/R;  kappa = sgn/R
+    arc_length = |radians(d)| * R
+  left[i]  = xy[i] + (W/2)*[-sin(psi[i]),  cos(psi[i])]
+  right[i] = xy[i] - (W/2)*[-sin(psi[i]),  cos(psi[i])]
+  --- 10. NEAREST-POINT PROJECTION (grid hash, cell = 8.0 m) ---
+  cand = union of grid buckets in the 3x3 (then 5x5, then full) neighbourhood of (x,y)
+  i    = argmin_{j in cand} |xy[j] - p|
+  refine on chord i-1..i and i..i+1:  u = clip( dot(p-xy[i], t_i)/|t_i|^2, -1, 1 )
+  s = s[i] + u*DS   (wrapped mod length if closed)
+  n = cross(t_hat_i, p - xy[i])                                   # +ve = LEFT of the centreline
+  kappa_track = kappa[i];  psi_c = psi[i]
+  --- 11. SURFACE ---
+  on_track = |n| <= W/2
+  mu_scale(p) = product over matching patches of patch.mu_scale, else 1.0 if on_track else MU_OFF (0.55)
+  crr_scale(p) = 1.0 on track, CRR_OFF_SCALE = 25.0 off track (Crr 0.012 -> 0.30)
+  patch matches if (s0 <= s <= s1, wrapped) and (n0 <= n <= n1)
+  global wet override (key T / --wet all): mu_scale *= 0.632  (= 0.55/0.87, qss.sweep)
+  --- 12. AXLE UTILISATION FOR THE HUD -- must import qss itself, not reimplement ---
+  from qss import fy_max, TYRE      # TYRE = mu_ref 0.903, Fz_ref 2477.0, s -16.1e-6
+  cap_f = fy_max(Fz_FL, mu_scale=mu_FL, **TYRE) + fy_max(Fz_FR, mu_scale=mu_FR, **TYRE)
+  cap_r = fy_max(Fz_RL, mu_scale=mu_RL, **TYRE) + fy_max(Fz_RR, mu_scale=mu_RR, **TYRE)
+  util_f = |Fy_FL + Fy_FR| / max(cap_f, 1.0)
+  util_r = |Fy_RL + Fy_RR| / max(cap_r, 1.0)
+  limited_by = 'FRONT' if util_f >= util_r else 'REAR'
+  (display 'POWER' instead when throttle > 0.98 and max(util_f,util_r) < 0.90 and rpm > 0.85*RPM_PMAX)
+  --- 13. CAMERA ---
+  psi_err  = atan2( sin(psi - psi_cam), cos(psi - psi_cam) )      # wrap-safe
+  psi_cam += psi_err * (1.0 - exp(-dt_frame / TAU_HEADING))       # TAU_HEADING = 0.12 s
+  lead     = clamp(V * T_LEAD, 0.0, LEAD_MAX) * [cos(psi_cam), sin(psi_cam)]   # 0.6 s, 40 m
+  cam_tgt  = p_car + lead
+  ppm_raw  = PPM_HI + (PPM_LO - PPM_HI) * clamp(V / V_ZOOM, 0, 1)  # 14.0 -> 6.0 over 0..45 m/s
+  ppm     += (ppm_raw*zoom_manual - ppm) * (1 - exp(-dt_frame/TAU_ZOOM))        # TAU_ZOOM = 0.35 s
+  --- 14. WORLD -> SCREEN (numpy, (N,2) at a time; 5000 pts costs 0.12 ms) ---
+  theta = -(psi_cam + pi/2) in car_up/chase mode, 0.0 in world_up mode
+  Rm    = [[cos(theta), -sin(theta)], [sin(theta), cos(theta)]]
+  anchor = (Wpx/2, Hpx*CAR_SCREEN_FRAC) in car_up/chase, (Wpx/2, Hpx/2) in world_up
+  S = ((P - cam_tgt) @ Rm.T) * [ppm, -ppm] + anchor        # y flip: world +y is screen -y
+  --- 15. RENDER-POSE INTERPOLATION (only the pose; HUD numbers use the latest state) ---
+  p_draw   = p_prev + (p_now - p_prev) * alpha_render
+  psi_draw = psi_prev + atan2(sin(psi_now-psi_prev), cos(psi_now-psi_prev)) * alpha_render
+  --- 16. SKID MARK EMISSION (100 Hz, per wheel) ---
+  emit if  |Fy_i| / max(fy_max(Fz_i, mu_scale=mu_i, **TYRE), 1.0) > 0.92  or  |kappa_i| > 0.12
+  alpha_px = 150 * (1 - age / SKID_FADE_S)                        # SKID_FADE_S = 12.0
+  draw with stride = max(1, ceil(n_visible / SKID_MAX_SEGS))      # SKID_MAX_SEGS = 600
+  --- 17. LAP / SECTOR TIMING (sub-step accurate) ---
+  crossing at s=S_line if (s_prev < S_line <= s_now) or (closed and s_prev > L-20 and s_now < 20)
+  frac = (S_line - s_prev) / ((s_now - s_prev) mod L)
+  t_cross = t_prev + frac * DT_PHYS
+  lap_time = t_cross - t_cross_previous
+  lap invalid if any physics step in the lap had all four wheels with |n_wheel| > W/2
+  --- 18. g-g ENVELOPE OVERLAY (recomputed only when |V - V_cached| > 1.0 m/s) ---
+  ay_env  = qss.max_ay(V, k=k_eff, x_w=X_W, h_w=H_W, mu_scale=mu_car)
+  ax_accel(ay) = min( P_WHEEL/(m*max(V,3)), 0.90*ay_env ) * sqrt(max(0, 1-(ay/ay_env)**2)) - drag/m
+  ax_brake(ay) = -( ay_env * sqrt(max(0, 1-(ay/ay_env)**2)) + drag/m )
+  drag = 0.5*RHO*CdA*V*V + Crr*m*G
+  --- 19. IDEAL-LAP REFERENCE SOLVER (validation only, drive/ideal_lap.py) ---
+  V_lim[i] : solve V = V + 0.3*(sqrt(max_ay(V)*1/|kappa_i|) - V), 200 iters; = Vmax where kappa=0
+  forward:  V[i+1] = min(V[i+1], sqrt(V[i]^2 + 2*ax_fwd*DS)), 2 wraps
+  backward: V[i-1] = min(V[i-1], sqrt(V[i]^2 + 2*ax_bwd*DS)), 2 wraps
+  t_lap = sum(DS / V[i])
+
+PARAMETERS:
+  DT_PHYS = 0.001 [s] (derived) :: derived. Measured: qss-grade MF Fy0 in pure python is 1.95 us/call on this machine, so 4 wheels x 1000 Hz costs 0.0078 s per simulated second for the tyre alone; a full combined-slip step budgeted at 150 us gives RTF ~6.7. Also needs to resolve tyre relaxation (sigma/V = 0.4/30 = 13 ms) and wheel-spin lock/unlock transients with explicit integration.
+  DT_PHYS_FALLBACK = 0.002 [s] (derived) :: 500 Hz fallback selected by --dt if the RTF acceptance test (V8) fails on slower hardware. Must be re-validated against tests V1-V4 because wheel-spin stability is dt sensitive.
+  MAX_SUBSTEPS = 40 [steps/frame] (derived) :: derived: one 60 fps frame is 16.7 ms = 16.7 steps; 40 allows 2.4x catch-up before time is dropped. Above this the loop bails rather than spiralling.
+  MAX_FRAME_DT = 0.10 [s] (derived) :: derived: caps a window drag / GC pause / debugger break at 100 ms of integrated time.
+  FPS = 60 [Hz] (published) :: requirement
+  TELEM_HZ = 100 [Hz] (derived) :: chosen: every 10th physics step at 1 kHz; resolves the 0.36 s shift event and 0.45 s wing deploy with >30 samples each. ~3.6 MB/min at 60 columns.
+  SURFACE_LOOKUP_HZ = 200 [Hz] (derived) :: derived: at 33 m/s a wheel moves 0.17 m per update, finer than any painted surface boundary. Car-body projection still runs at the full 1 kHz for lap timing.
+  WINDOW_SIZE = 1280 x 800 [px] (estimated) :: chosen; fits a MacBook panel. All HUD rects are given in these base units and multiplied by ui_scale = min(W/1280, H/800).
+  PPM_HI / PPM_LO / V_ZOOM = 14.0 / 6.0 / 45.0 [px per m, px per m, m/s] (estimated) :: derived: at 6 px/m the 1280 px width shows 213 m ~ 6.5 s of road at Vmax; at 14 px/m the 3.82 m car is 53 px, enough to read steer angle. TAU_ZOOM = 0.35 s stops zoom pumping under throttle modulation.
+  TAU_HEADING / T_LEAD / LEAD_MAX / CAR_SCREEN_FRAC = 0.12 / 0.60 / 40.0 / 0.62 [s / s / m / -] (estimated) :: estimated. 0.12 s heading lag keeps the world from snapping during a flick; the car sits 62% down the screen so 0.6 s of lookahead is visible ahead of it.
+  STEER_RATIO = 16.0 [-] (estimated) :: corsa_c.py (est +/-1.5, derived 15.86:1 from 2.9 turns lock-to-lock)
+  DELTA_LOCK_DEG = 32.625 [deg road wheel] (derived) :: derived: 2.9 turns lock-to-lock = 1044 deg total = 522 deg each way / 16.0 = 32.625 deg.
+  W_HAND_DRIVE = 900 [deg/s at the steering wheel] (estimated) :: estimated, band 600-1200. A normal driver turns at 300-500 deg/s, an emergency input at 700-1000 deg/s. 900 is the keyboard concession. Consistency check: 522/900 = 0.58 s to full lock, which is exactly a brisk lock-to-lock in a real Corsa, so the rate is physical, not arbitrary. -> 56.25 deg/s at the road wheel.
+  W_HAND_RETURN = 720 at V=0 rising to 1440 at V>=22 m/s [deg/s at the steering wheel] (estimated) :: estimated. Self-aligning torque grows with speed, so the return rate must too, or the car feels glued off-centre at low speed and twitchy at high speed. -> 45 to 90 deg/s at the road wheel.
+  W_HAND_COUNTER = 1620 to 2340 (= drive + return) [deg/s at the steering wheel] (estimated) :: derived. Deliberately superhuman; without it a keyboard driver cannot catch a slide. Disclose it in the HUD when --no-steer-limit is off.
+  K_US_DEG = 3.2 [deg road-wheel per g] (estimated) :: estimated, band 2.0-5.0 for a FWD hatch. TUNING CONSTANT FOR THE STEER LIMITER ONLY — it never enters the physics. MUST be recalibrated once the vehicle model reports its actual steady-state delta at the R=50 limit: target delta_ss = degrees(2.491/50) + K_US*0.8625 = 2.854 + 2.760 = 5.614 deg.
+  AY_MAX_DRY = 8.4608 (0.8624671 g) [m/s^2] (derived) :: qss.max_ay(V) with k=0 — constant in V because the baseline car has no downforce. Verified: qss.balance(100) returns ay_g 0.8624671, util_f 1.0000, util_r 0.9523.
+  delta_lim(V) table = V<=6.87 -> 32.625 (lock); 8 -> 24.87; 10 -> 17.06; 15 -> 9.35; 20 -> 6.65; 20.568 -> 6.46; 25 -> 5.40; 29.087 -> 4.82; 30 -> 4.72; 40 -> 4.04; 47.2 -> 3.80 [deg road wheel] (derived) :: derived from eq.5 with a_ref = 1.15*AY_MAX_DRY. Cross-check: needed delta_ss at R=50 is 5.614 deg vs limit 6.457 -> 15% margin exactly as designed; at R=30 needed 7.517 vs limit 8.645. The margin is what lets the driver exceed grip and spin.
+  BETA_LOCK_GAIN = 1.2 [deg extra lock per deg body slip] (estimated) :: estimated. Without it delta_lim(30 m/s)=4.72 deg gives too little opposite lock to catch a 12 deg slide; with it 4.72 + 14.4 = 19.1 deg is available. Band 0.8-1.5.
+  THROTTLE rise / fall = 3.5 / 6.0 [1/s] (estimated) :: estimated: 0->1 in 0.29 s, 1->0 in 0.17 s. A real driver's foot is ~0.15-0.3 s across the pedal.
+  BRAKE rise / fall = 5.0 / 8.0 [1/s] (estimated) :: estimated: 0->1 in 0.20 s. Published emergency pedal application times are 0.15-0.25 s.
+  CLUTCH rise / fall = 8.0 / 3.0 [1/s] (estimated) :: estimated: press in 0.125 s, release over 0.33 s. Asymmetric because release rate is what makes or breaks a launch.
+  HANDBRAKE rise / fall = 8.0 / 10.0 [1/s] (estimated) :: estimated, cable lever.
+  SHIFT_TIMES = disengage 0.100, gear change at 0.100, hold to 0.160, re-engage to 0.360 [s] (estimated) :: estimated, band 0.30-0.80 s total for a road-car H-pattern with a quick driver. CROSS-CHECK: 0-100 km/h is reached in 3rd (100 km/h = 5278 rpm in 3rd), so 2 upshifts cost ~0.7 s of the ~15.5 s target. If the vehicle model overshoots 15.5 s, shorten these before touching the torque curve.
+  T_DEPLOY (flank wing) = 0.45 [s] (estimated) :: estimated, band 0.30-1.00 s for an electric actuator on a 0.35 m^2 panel. UNPUBLISHED — no such device exists. Its only functional role is to prevent a step discontinuity in side force; smoothstep on the deploy fraction makes the force C1.
+  S_DEV / CL_DEV / LD_DEV / X_W / H_W = 0.35 / 0.70 (fin) or 1.25 (plate) / 3.2 / 0.97 / 0.90 [m^2 / - / - / m / m] (published) :: ledger.py S_DEV, crossover.q3_gain CL values, ledger device L/D, crossover.MOUNTS['front axle'], qss default h_w.
+  F_wing reference values = R=50 V=20.69: 62.9 N fin, 113.5 N plate. R=100 V=29.44: 127.4 N fin, 227.4 N plate. R=130: 166.6 / 293.4 N [N] (derived) :: computed from qss.corner_speed with k=0.147 (fin) and k=0.2625 (plate), x_w=0.97. HUD must show these; they are 0.6-3.0% of the 9908 N car weight, which is why the effect must be shown numerically.
+  MU_WET_SCALE = 0.632183908 [-] (published) :: qss.sweep: 0.55/0.87
+  MU_DAMP_SCALE = 0.80 [-] (estimated) :: estimated, band 0.75-0.88. Intermediate between dry 1.0 and standing-water 0.632.
+  MU_OFF_TRACK / CRR_OFF_SCALE = 0.55 / 25.0 [- / -] (estimated) :: estimated. Grass/gravel mu_scale 0.55 and Crr 0.012*25 = 0.30, typical for a car ploughing off a circuit. Purely a deterrent; not calibrated.
+  CIRCUIT_ARENA length = 1249.2022 [m] (derived) :: derived by exact integration of the 14-segment list. Closure |P(L)-P(0)| = 3.8e-8 m, total heading 360.0000000 deg.
+  CIRCUIT_ARENA segments = [('S',169.2669025), ('A',R=45,+100), ('S',80.0), ('A',R=30,+120), ('S',60.0), ('A',R=80,-100), ('S',50.0), ('A',R=55,+110), ('S',105.2229498), ('A',R=110,+80), ('S',40.0), ('A',R=35,+100), ('S',30.0), ('A',R=130,-50)]  ; + = left/CCW [m, m/deg] (derived) :: constructed; the two straight lengths were solved from the 2x2 linear closure system with all other quantities fixed at round values.
+  CIRCUIT_ARENA origin / heading0 = (213.20402134, 84.41894405) / 0.0 [m / rad] (derived) :: offset chosen so the centreline bbox min is (15,15); with a 6 m half-width the tarmac edge is >=9 m from the world border. World bounds (0,0)-(442,283) m.
+  CIRCUIT_ARENA node coordinates (segment start points, m) = s=0 (213.204,84.419) hdg 0; 169.267 (382.471,84.419); 247.807 (426.787,137.233); 327.807 (412.895,216.018); 390.639 (364.068,233.790); 450.639 (318.105,195.222); 590.265 (197.400,216.506); 640.265 (172.400,259.807); 745.857 (82.636,267.661); 851.080 (15.000,187.055); 1004.669 (15.000,45.642); 1044.669 (40.712,15.000); 1105.756 (94.335,15.000); 1135.756 (113.618,37.981); 1249.202 -> back to (213.204,84.419) [m] (derived) :: computed; paste as a unit test fixture for the centreline builder.
+  CIRCUIT_ARENA arc centres (m) = T1 R45 (382.471,129.419); T2 R30 (383.351,210.808); T3 R80 (266.682,256.506); T4 R55 (124.768,232.307); T5 R110 (99.265,116.348); T6 R35 (67.523,37.498); T7 R130 (213.204,-45.581) [m] (derived) :: computed
+  CIRCUIT_ARENA corner reference speeds (dry, no wing, qss.corner_speed) = T1 R45 19.51 grip; T2 R30 15.93 grip; T3 R80 26.02 grip; T4 R55 21.57 grip; T5 R110 30.51 grip; T6 R35 17.21 grip; T7 R130 31.88 POWER (grip-only would be 33.17) [m/s] (derived) :: qss.corner_speed(R). T7 is the only power-limited corner — that is the pedagogical point of the layout and the HUD's POWER indicator must light there.
+  CIRCUIT_ARENA width / sectors = 12.0 / sector lines at s = 0.0, 390.639, 851.080 [m / m] (derived) :: chosen. 12 m is a two-lane racing width; min self-clearance of the centreline is 66.0 m (measured over all point pairs >90 m apart in arclength), so the ribbon never overlaps itself.
+  CIRCUIT_ARENA surface patches (off by default) = WET_T3: s 455.0-585.0, n -6.0..+6.0, mu_scale 0.632, colour (43,58,74). DAMP_T5_EXIT: s 960.0-1010.0, n -6.0..0.0, mu_scale 0.80 (SPLIT MU, right half only). WET_T2_ENTRY: s 300.0-330.0, n -6.0..0.0, mu_scale 0.632 (split-mu braking zone). [m, -] (estimated) :: chosen to put a wet patch in the fastest grip-limited corner and split-mu in a braking zone.
+  CIRCUIT_ARENA ideal lap time = 53.71 [s] (derived) :: derived: quasi-steady forward/backward pass over the centreline at DS=1.0 m using qss.max_ay for the lateral envelope, a friction-ellipse longitudinal split, P_wheel=47.3 kW and drag 0.5*1.2*0.66*V^2 + 0.012*m*g. Vmax on the lap 32.5 m/s, Vmin 15.9 m/s. This independently corroborates ledger.py's 60 s lap assumption.
+  SKIDPAD geometry = centre (200.0, 200.0); paved disc radius 145.0 m; guide circles R = 30.48 (200 ft standard), 50.0, 75.0, 100.0, 130.0 m; centreline = the selected R as a single Seg('A', 2*pi*R, R, +360); default R = 50.0; width 20.0 m; start pose (200+R, 200) psi = +pi/2 (CCW), --cw gives psi = -pi/2; lap line = the +x ray from centre (s=0) [m] (derived) :: constructed. R=50 and R=100 are exactly qss.py's stated validation radii (20.57 and 29.09 m/s); R=130 is the power-limit crossover (31.88 m/s power vs 33.17 grip); R=30.48 is the ISO/FIA 200 ft skidpad.
+  DRAGSTRIP geometry = single Seg('S', 1500.0); origin (20.0, 40.0); heading0 0.0; width 15.0 m; not closed; gates at s = 0.0 (launch), 201.168 (1/8 mi), 402.336 (1/4 mi), 1000.0 (standing km); brake boards at s = 900/1000/1100/1200; distance boards every 100 m; optional wet patch s 1050-1120 full width mu 0.632; optional split-mu s 1050-1150 n -7.5..0.0 mu 0.632 [m] (derived) :: constructed. 1500 m is long enough that the car asymptotes toward Vmax = 47.2 m/s (corsa_c self_check: 47.3 kW needed vs 47.3 kW available at Vmax — the power balance closes exactly).
+  DS (centreline sample spacing) = 0.5 [m] (derived) :: chosen: 2499 samples for CIRCUIT_ARENA. On the tightest radius (30 m) the chordal sag is DS^2/(8R) = 1.04 mm, invisible at 14 px/m.
+  PROJECTION_GRID_CELL = 8.0 [m] (derived) :: chosen: a 3x3 neighbourhood spans 24 m, always >= DS and >= the 6 m half-width, so the nearest sample is never missed on track. Fall back to 5x5 then to a full argmin when a bucket query is empty (only happens far off track).
+  Render cost: single concave ribbon polygon = 0.58 [ms/frame] (derived) :: MEASURED on this machine (pygame 2.5.2, SDL 2.28.3, dummy driver, 700-point concave polygon at 1280x800).
+  Render cost: per-quad tessellation (rejected) = 20.41 [ms/frame] (derived) :: MEASURED, 400 filled quads/frame. Exceeds the 16.7 ms budget on its own. Do not tessellate the ribbon.
+  Render cost: 1500 individual draw.line calls = 8.66 [ms/frame] (derived) :: MEASURED. This is why SKID_MAX_SEGS is capped at 600 (~3.5 ms).
+  Render cost: numpy world->screen transform, 5000 points = 0.12 [ms] (derived) :: MEASURED. Transform cost is negligible; rasterisation is the whole budget.
+  Frame budget (target) = ribbon 0.6 + edges/kerbs 1.5 + patches 0.3 + skid 3.5 + car/wheels/vectors 0.5 + HUD text 1.5 + g-g 0.4 + minimap 0.2 = 8.5 ms, leaving >8 ms for flip and physics catch-up [ms] (derived) :: sum of the measured components above.
+  SKID_MAXLEN / SKID_FADE_S / SKID_MAX_SEGS / SKID_WIDTH = 4000 per wheel / 12.0 / 600 / 0.18 [pts / s / segs / m] (derived) :: chosen from the measured 8.66 ms per 1500 lines.
+  GG_TRAIL = 5.0 s at 20 Hz = 100 points; axes +/-1.2 g; box 200x200 px [-] (estimated) :: chosen. 1.2 g axis leaves headroom above the 0.8625 g envelope so the driver can see when a transient exceeds the quasi-steady limit.
+  FORCE_VECTOR_SCALE = 1 px per 40 N at ppm = 10 (scales as ppm/10); cap 120 px [px/N] (estimated) :: chosen so a 3000 N tyre force is 75 px and a 127 N wing force is 3 px — the visual honesty that the wing is small. Draw them at the SAME scale; do not exaggerate the wing arrow.
+  Car body drawing dimensions = length 3.817, width 1.646, front overhang 0.780 ahead of the front axle, rear overhang 0.548 behind the rear axle; body x from +1.7515 to -2.0675 about the CG; half width 0.823 [m] (derived) :: published Corsa C 5-door exterior dims; overhangs derived so 0.780 + 2.491 + 0.548 = 3.819 ~ 3.817. Front axle at x = +a = +0.9715, rear at x = -b = -1.5195 (corsa_c properties with wdist_f 0.61, L 2.491).
+  Wheel drawing dimensions / positions = rect 0.583 x 0.175 m; front at (+0.9715, +/-0.7145), rear at (-1.5195, +/-0.7100) [m] (published) :: 175/65R14 OD = 14*25.4 + 2*0.65*175 = 583.1 mm (matches corsa_c r_roll 0.283 = OD*0.97/2); half tracks t_f/2 = 0.7145, t_r/2 = 0.7100.
+  Wing drawing = panel 0.45 m chord x 0.10 m thick in plan, hinged at x = +0.97 m, extending 0.25 + 0.35*f m from the body side; vertical span 0.78 m (0.35/0.45) shown as a label only [m] (estimated) :: derived from S_DEV = 0.35 m^2 with a VERTICAL span (crossover.q3_gain: a horizontal-span panel would make downforce, not side force). Chord 0.45 chosen; band 0.35-0.60.
+  Gear speed limits at 6200 rpm redline = 1st 13.15, 2nd 21.76, 3rd 32.64, 4th 41.60, 5th 52.28 (power-capped to 47.2) [m/s] (derived) :: derived: V = omega_e * r_roll / (gear_i * finaldrive) with r_roll 0.283, FD 3.94. Confirms the circuit (Vmax 32.5 m/s) uses gears 2-4, and 100 km/h = 27.78 m/s = 5278 rpm in 3rd.
+  RPM_IDLE / RPM_STALL / RPM_SHIFT_LIGHT / RPM_REDLINE / RPM_PMAX = 850 / 500 / 5900 / 6200 / 5600 [rpm] (estimated) :: RPM_PMAX published (corsa_c: 55 kW @ 5600). Idle/stall/redline are ESTIMATES for the Z12XE; redline band 6000-6400. Cross-check: corsa_c.self_check shows 5597 rpm at Vmax in 5th, i.e. the car tops out exactly at the power peak, so the redline must sit above it.
+  Colours (hex) = BG_OFFTRACK #1b1d21; GRID #232629 (20 m spacing); TARMAC #3a3d43; TARMAC_WET #2b3a4a; TARMAC_DAMP #33393f; EDGE_LINE #d8dade (0.12 m); KERB_A #c8483c / KERB_B #eceff2 (0.8 m wide, 3 m blocks, on corner insides where |kappa| > 1/60); CENTRE_DASH #6a6f76 (3 m on / 6 m off, 0.10 m); CAR_BODY #d7c34a; CAR_OUTLINE #201f1a; CAR_GLASS #4a4632; WHEEL #23262a; WHEEL_SLIP #e0533f; SKID #26282b; FORCE_FY #4fa3ff; FORCE_FX #6fd08c; WING_ON #ff8c2b; WING_OFF #6b6f75; HUD_BG #101114 at alpha 190; HUD_TEXT #e8eaee; HUD_DIM #8b9099; BAR_THROTTLE #4ec26a; BAR_BRAKE #e2523f; BAR_STEER #d9ce55; GG_ENVELOPE #5a6068; GG_TRAIL #ffb545; GG_DOT #ffffff; PB_PURPLE #b04ee0; GREEN #4ec26a; YELLOW #d9ce55 [-] (estimated) :: chosen; dark ground so the yellow car and the orange wing read at a glance.
+  HUD rects at 1280x800 (x, y, w, h) = SPEED/GEAR/RPM (12,12,300,150); TIMING (460,12,360,86); LOADS+UTIL+LIMITED (968,12,300,230); STATE (yaw rate, beta, ay, ax, mu x4) (12,180,220,150); WING (1028,260,240,110); PEDALS+STEER (12,668,300,120); MINIMAP (860,640,180,140); GG (1068,588,200,200); WARN BAR (440,760,400,22) [px] (estimated) :: chosen; multiply by ui_scale = min(W/1280, H/800) for other window sizes.
+  Fonts = try SysFont in order ['Menlo','Monaco','DejaVu Sans Mono','Courier New'], then pygame.font.Font(None, size). Sizes 14 label / 18 value / 30 gear / 44 speed. [-] (derived) :: VERIFIED on this machine: pygame.font.SysFont('Menlo',16) renders under SDL_VIDEODRIVER=dummy.
+  Gamepad deadzones / mapping = stick deadzone 0.12 with rescale, trigger deadzone 0.05, expo 1.5, PAD_RATE 250 deg/s road wheel. axis0 = steer; if get_numaxes() >= 6: axis5 = throttle, axis4 = brake; elif >= 3: axis2 = throttle, axis5 = brake; else triggers unavailable -> fall back to buttons 6/7. buttons: 0 handbrake, 1 wing, 2 clutch, 3 reset, 4 shift down, 5 shift up, 6 pause, 7 full reset. [-] (estimated) :: estimated; SDL2 Xbox/DualShock layout on macOS. VERIFIED that pygame.joystick.get_count() == 0 on this machine right now, so the keyboard fallback path is the one that will actually run and must be the default.
+  Published cross-checks the harness must reproduce = Vmax 47.2 m/s (170 km/h); 0-100 km/h ~15.5 s (band 14.5-16.0, UNPUBLISHED for this exact variant); 100-0 km/h braking 40-50 m; corsa_c.self_check power balance 47.3 kW needed = 47.3 kW available at Vmax; 5597 rpm at Vmax in 5th [-] (estimated) :: corsa_c.py published values plus contemporary road-test bands. Braking is UNPUBLISHED (corsa_c.brakes = MISSING); the 45.7 m figure is the pure tyre limit V^2/(2*0.8625*9.81) at 27.78 m/s, so any brake model that cannot reach it is under-specified and any that beats 40 m is over-specified.
+
+API:
+  # ---- drive/track.py ----
+@dataclass(frozen=True)
+class Seg:
+    kind: str            # 'S' straight | 'A' arc
+    length: float        # m: straight length, or arc length for 'A'
+    radius: float = 0.0  # m, > 0 for 'A'
+    turn_deg: float = 0.0  # + = left / CCW
+      One centreline primitive. For 'A' the implementer passes radius and turn_deg and length is recomputed as abs(radians(turn_deg))*radius in __post_init__ (frozen dataclass -> use object.__setattr__ or a classmethod Seg.arc(R, deg)).
+  @dataclass(frozen=True)
+class SurfacePatch:
+    s0: float; s1: float          # arclength window, m (wraps if s1 < s0 on a closed track)
+    n0: float; n1: float          # lateral window, m, +ve = LEFT of centreline
+    mu_scale: float = 1.0
+    crr_scale: float = 1.0
+    label: str = ''
+    colour: tuple = (43, 58, 74)
+      A rectangular-in-(s,n) surface region. Overlapping patches multiply their mu_scale. Used for the wet and split-mu regions listed in the parameters.
+  @dataclass
+class Track:
+    name: str
+    width: float
+    segs: list[Seg]
+    origin: tuple[float, float]
+    heading0: float
+    closed: bool
+    surfaces: list[SurfacePatch] = field(default_factory=list)
+    sector_s: list[float] = field(default_factory=list)
+    guide_radii: list[float] = field(default_factory=list)   # skidpad only
+    gates: list[tuple[float, str]] = field(default_factory=list)  # dragstrip only
+    # built by build(): s, xy, psi, kappa, left, right : np.ndarray; length: float; bbox: tuple
+      Immutable track description plus the sampled arrays built from it at DS = 0.5 m. xy/left/right are (N,2) float64; s/psi/kappa are (N,).
+  def build(tr: Track) -> Track
+      Integrates segs from origin/heading0 at DS = 0.5 m, fills xy/psi/kappa/left/right/s/length/bbox, and builds the 8.0 m projection grid hash. Asserts closure for closed tracks: norm(xy[-1] - xy[0]) < 1e-4 m and abs(sum(turn_deg) - 360) < 1e-6.
+  def project(tr: Track, x: float, y: float) -> tuple[float, float, float, float, int]
+      Returns (s, n, kappa_track, psi_c, i). n is +ve to the LEFT of the centreline. Grid-hashed 3x3 -> 5x5 -> full-argmin fallback, then refined by projecting onto the two adjacent chords. Must be < 20 us per call; it runs 1000/s for the car body and 800/s for the wheels.
+  def surface_at(tr: Track, x: float, y: float, global_wet: float = 1.0) -> tuple[float, float, bool]
+      Returns (mu_scale, crr_scale, on_track). Applies patch products, then the off-track MU_OFF_TRACK = 0.55 / CRR_OFF_SCALE = 25.0, then multiplies by global_wet (1.0 dry, 0.632183908 wet). Called per wheel at SURFACE_LOOKUP_HZ = 200 and the result held between updates.
+  def start_pose(tr: Track, offset_n: float = 0.0) -> tuple[float, float, float]
+      Returns (x, y, psi) on the centreline at s = 0 offset laterally by offset_n. For SKIDPAD returns (cx + R, cy, +pi/2).
+  def point_at(tr: Track, s: float, n: float = 0.0) -> tuple[float, float]
+      Inverse of project(); used by the round-trip acceptance test and by the scripted path-following controllers.
+  def make_arena() -> Track
+def make_skidpad(radius: float = 50.0, cw: bool = False) -> Track
+def make_dragstrip() -> Track
+TRACKS: dict[str, Callable[..., Track]] = {'arena': make_arena, 'skidpad': make_skidpad, 'dragstrip': make_dragstrip}
+      Factories returning fully built Track objects using the literal geometry given in the parameters list. make_skidpad sets centreline = the chosen guide circle so s/n projection and lap timing work unchanged.
+  # ---- vehicle contract consumed by the harness (implemented by the physics module) ----
+class VehicleState(Protocol):
+    x: float; y: float; psi: float          # m, m, rad (world)
+    u: float; v: float; r: float            # m/s, m/s, rad/s (body: u fwd, v left)
+    ax: float; ay: float                    # m/s^2, body axes, at the CG
+    Fz: np.ndarray; Fx: np.ndarray; Fy: np.ndarray   # (4,) N, order FL, FR, RL, RR
+    alpha: np.ndarray; kappa: np.ndarray    # (4,) rad, -
+    delta_wheel: np.ndarray                 # (4,) rad, actual steer per wheel
+    omega_wheel: np.ndarray                 # (4,) rad/s
+    rpm: float; gear: int                   # gear 0 = neutral, -1 = reverse
+    engaged: bool                           # clutch fully engaged
+    F_wing: float; wing_side: int           # N (magnitude), -1 left / 0 none / +1 right
+
+class Vehicle(Protocol):
+    state: VehicleState
+    def reset(self, x: float, y: float, psi: float, V: float = 0.0, gear: int = 1) -> None: ...
+    def step(self, ctl: 'Controls', mu: np.ndarray, crr: np.ndarray, dt: float) -> None: ...
+      The ONLY coupling between the harness and the physics. mu and crr are (4,) per-wheel surface scales supplied by the harness from surface_at(). The harness never reaches inside the model. If the model cannot supply a field, it must expose it as NaN rather than omitting it, so the telemetry schema stays fixed.
+  # ---- drive/input.py ----
+@dataclass
+class Controls:
+    delta: float = 0.0        # rad, ROAD-WHEEL angle command (already ramped and limited)
+    throttle: float = 0.0     # 0..1
+    brake: float = 0.0        # 0..1
+    clutch: float = 0.0       # 0..1, 1 = fully disengaged
+    handbrake: float = 0.0    # 0..1
+    gear_req: int = 0         # -1 down, 0 none, +1 up (edge, consumed by the model)
+    wing_deploy: float = 0.0  # 0..1 smoothstepped deploy fraction
+    wing_side: int = 0        # -1 left, 0 none, +1 right
+      Everything the vehicle model needs from the driver, in physical units. Note delta is in RADIANS at the road wheel: the harness has already done the ratio, the ramp and the limiter.
+  class InputSource(Protocol):
+    def poll_events(self) -> list[str]: ...            # discrete commands: 'reset', 'pause', 'camera', ...
+    def update(self, dt: float, V: float, beta_deg: float, rpm: float, gear: int) -> Controls: ...
+      update() is called once per PHYSICS step so the ramps integrate at 1 kHz; poll_events() is called once per RENDER frame and drains the pygame event queue. Key state is sampled at 60 Hz and held between polls.
+  class KeyboardInput(InputSource):
+    def __init__(self, steer_limit: bool = True, fine_key: int = pygame.K_LSHIFT)
+class GamepadInput(InputSource):
+    def __init__(self, index: int = 0, mapping: dict | None = None)
+    @staticmethod
+    def available() -> bool                    # pygame.joystick.get_count() > 0
+class BlendedInput(InputSource):
+    def __init__(self, kb: KeyboardInput, pad: GamepadInput | None)
+class ScriptedInput(InputSource):
+    def __init__(self, fn: Callable[[float, VehicleState, Track], Controls])
+      BlendedInput takes the larger-magnitude value per axis, pad winning above |0.02|; with pad=None it is exactly KeyboardInput plus a single printed line 'no gamepad found - keyboard only'. ScriptedInput takes (t, state, track) and NEVER reads the wall clock or pygame, which is what makes headless runs bitwise deterministic.
+  def steer_limit_deg(V: float, beta_deg: float, ay_max: float = 8.4608,
+                    L: float = 2.491, k_us_deg: float = 3.2,
+                    lock_deg: float = 32.625, beta_gain: float = 1.2) -> float
+      Equation 5. Pure function, unit-testable against the delta_lim table in the parameters (V=20 -> 6.65 deg, V=30 -> 4.72 deg, V<=6.87 -> 32.625 deg).
+  # ---- drive/render.py ----
+@dataclass
+class ViewConfig:
+    size: tuple = (1280, 800); fps: int = 60
+    mode: str = 'car_up'            # 'car_up' | 'world_up' | 'chase'
+    ppm_hi: float = 14.0; ppm_lo: float = 6.0; v_zoom: float = 45.0
+    tau_zoom: float = 0.35; tau_heading: float = 0.12
+    t_lead: float = 0.60; lead_max: float = 40.0; car_screen_frac: float = 0.62
+    show_vectors: bool = True; show_gg: bool = True; show_skid: bool = True
+    hud: str = 'full'               # 'full' | 'minimal' | 'off'
+      All render tuning in one place. mode/hud/show_* are toggled live by keys C, H, V, B, N.
+  class Renderer:
+    def __init__(self, cfg: ViewConfig, track: Track, headless: bool = False)
+    def world_to_screen(self, P: np.ndarray) -> np.ndarray
+    def update_camera(self, st: VehicleState, dt_frame: float) -> None
+    def draw_frame(self, st: VehicleState, st_prev: VehicleState, alpha: float,
+                   ctl: Controls, aux: 'HudData', skid: 'SkidBuffer') -> None
+    def present(self) -> None
+    def screenshot(self, path: str) -> None
+    def frame_ms(self) -> float
+      draw_frame does everything except the flip so the render-perf test can measure frame build time with the dummy driver. Drawing order: fill BG -> 20 m grid -> surface patches -> ONE concave tarmac ribbon polygon (visible s window [s_car-60, s_car+180], stride 1 near / 4 far) -> kerbs -> edge lines -> centre dashes -> start/finish chequer and sector bands -> skid marks (strided to <=600 segments) -> car body -> wheels -> slip/force vectors -> wing -> HUD -> g-g -> minimap.
+  @dataclass
+class HudData:
+    V: float; V_kmh: float; rpm: float; gear: int
+    ay_g: float; ax_g: float; yaw_rate_deg: float; beta_deg: float
+    util_f: float; util_r: float; limited_by: str      # 'FRONT' | 'REAR' | 'POWER'
+    Fz: np.ndarray; mu: np.ndarray
+    wing_on: bool; wing_deploy: float; wing_side: int; F_wing: float; D_wing: float
+    lap: int; lap_time: float; last_lap: float; best_lap: float
+    sector: int; sector_times: list[float]; sector_best: list[float]; lap_valid: bool
+    on_track: bool; mu_scale_car: float
+    rtf: float; dropped_frames: int
+      Everything the HUD shows, assembled once per frame by Sim. util_f/util_r/limited_by MUST be computed by calling qss.fy_max with qss.TYRE so the HUD number is literally the reference implementation and is directly comparable with qss.residuals().
+  def axle_utilisation(Fz: np.ndarray, Fy: np.ndarray, mu: np.ndarray) -> tuple[float, float]
+      Equation 12. from qss import fy_max, TYRE — do not reimplement mu(Fz) = 0.903 - 16.1e-6*(Fz - 2477); any divergence silently breaks the comparison with qss.balance().
+  class SkidBuffer:
+    def __init__(self, maxlen: int = 4000, fade_s: float = 12.0)
+    def emit(self, t: float, xy4: np.ndarray, active: np.ndarray) -> None
+    def visible(self, cam_xy, radius_m, max_segs: int = 600) -> list
+      One deque per wheel of (x, y, t). emit() is called at 100 Hz with the four contact-patch positions and a boolean mask from equation 16.
+  def gg_envelope(V: float, mu_scale: float, k_eff: float, x_w: float, h_w: float) -> np.ndarray
+      Equation 18, returning an (M,2) closed curve in (ay_g, ax_g). Cached and recomputed only when V moves more than 1.0 m/s, because it calls qss.max_ay which bisects 200 times.
+  # ---- drive/telemetry.py ----
+class TelemetryWriter:
+    def __init__(self, path: str, hz: int = 100, precision: str = '6g',
+                 meta: dict | None = None)
+    def maybe_log(self, step_index: int, row: dict) -> None
+    def mark(self, label: str) -> None
+    def close(self) -> None
+      Writes runs/<track>_<YYYYmmdd_HHMMSS>.csv with a fixed 60-column header, buffering 200 rows between csv.writer.writerows calls, opened with newline=''. Floats formatted with f'{v:.6g}' by default, repr() when precision='full' (used by the determinism test). Also writes a sidecar .json with column units, the full corsa_c.CorsaC field dump, the tyre file name, the wing config, every harness constant, and DT_PHYS — so a plot is reproducible without the session.
+  TELEMETRY_COLUMNS = ['t','x','y','psi','u','v','r','V','beta_deg','ax','ay','ax_g','ay_g',
+ 'gear','rpm','clutch_eng','throttle','brake','clutch','handbrake','delta_road_deg','steer_in',
+ 'Fz_fl','Fz_fr','Fz_rl','Fz_rr','Fx_fl','Fx_fr','Fx_rl','Fx_rr','Fy_fl','Fy_fr','Fy_rl','Fy_rr',
+ 'alpha_fl_deg','alpha_fr_deg','alpha_rl_deg','alpha_rr_deg','kappa_fl','kappa_fr','kappa_rl','kappa_rr',
+ 'mu_fl','mu_fr','mu_rl','mu_rr','omega_fl','omega_fr','omega_rl','omega_rr',
+ 'util_f','util_r','limited_by','wing_deploy','wing_side','F_wing','D_wing',
+ 's','n','kappa_track','on_track','lap','sector','lap_time','event']
+      Fixed schema, 63 columns. 'event' carries mark() labels and is empty otherwise. Column order is part of the contract so plots.py and any diff tooling can rely on it.
+  # ---- drive/plots.py ----
+def overview(csv_path: str, out: str | None = None) -> str
+def gg(csv_path: str, out: str | None = None) -> str
+def track_map(csv_path: str, track_name: str, out: str | None = None) -> str
+def laps(csv_path: str, out: str | None = None) -> str
+def compare(csv_a: str, csv_b: str, by: str = 'distance', out: str | None = None) -> str
+def main(argv=None) -> int
+      matplotlib.use('Agg') at import so it runs headless. overview() is a 6-panel figure (V vs t; ax/ay vs t; steer/throttle/brake vs t; four Fz; util_f and util_r with a 1.0 line; beta and yaw rate). gg() scatters ay_g vs ax_g coloured by V with the qss envelope overlaid. compare(by='distance') interpolates t(s) for both runs onto a common s grid and plots t_a(s) - t_b(s): THIS is the only plot that can resolve the wing's 0.6-1.5% corner-speed gain, and it is the deliverable that answers the project question. All save PNG at 150 dpi next to the CSV and return the path.
+  # ---- drive/drive.py ----
+class Sim:
+    def __init__(self, vehicle: Vehicle, track: Track, inp: InputSource,
+                 renderer: Renderer | None = None, telem: TelemetryWriter | None = None,
+                 dt: float = 0.001, wing: str = 'off', global_wet: float = 1.0)
+    def step_physics(self, dt: float) -> None
+    def run_interactive(self) -> None
+    def run_headless(self, duration_s: float) -> None
+    def reset(self, to_checkpoint: bool = False) -> None
+      step_physics(): sample surfaces (200 Hz) -> inp.update(dt, ...) -> vehicle.step(ctl, mu, crr, dt) -> project car -> lap/sector crossing test with sub-step interpolation -> skid emit (100 Hz) -> telemetry (100 Hz) -> advance t. run_headless() has no clock, no accumulator and no pygame calls at all. run_interactive() implements equation 1.
+  def main(argv=None) -> int
+# python -m drive.drive [--track arena|skidpad|dragstrip] [--radius 50] [--cw]
+#   [--wet none|patch|all] [--wing off|fin|plate] [--wing-x 0.97] [--wing-h 0.90]
+#   [--tyre TNO_car205_60R15.tir] [--dt 0.001] [--fps 60] [--size 1280x800]
+#   [--camera car_up|world_up|chase] [--headless] [--render off|offscreen|window]
+#   [--script NAME] [--duration 60] [--telemetry PATH] [--telem-hz 100]
+#   [--telem-precision 6g|full] [--no-steer-limit] [--pad-calib]
+      --headless sets os.environ['SDL_VIDEODRIVER']='dummy' and ['SDL_AUDIODRIVER']='dummy' BEFORE importing pygame anywhere in the package, and implies --render off unless --render offscreen is given. --script names an entry in SCRIPTS (below) and runs run_headless. --pad-calib prints all axes/buttons at 10 Hz and exits, so a user can write ~/.carsim_pad.json.
+  SCRIPTS: dict[str, Callable] = {
+  'skidpad_limit': skidpad_limit_script,   # bisect the sustainable speed at a fixed radius
+  'accel': accel_script,                   # WOT from rest, auto upshift at 5900 rpm
+  'brake': brake_script,                   # accelerate to 27.78 m/s, then brake = 1.0
+  'wing_ab': wing_ab_script,               # N laps wing off then N laps wing on
+  'ramp_probe': ramp_probe_script,         # holds keys for fixed times to test the input ramps
+}
+      The scripted controllers that make the acceptance tests runnable with no window. skidpad_limit_script holds a path-following steer (P on lateral error n, gain 0.06 rad/m, plus feedforward atan(L*kappa)) and a PI on speed, then bisects the commanded speed between departure and non-departure over 8 s windows. All scripts command delta directly with steer_limit=False so the driver aid never contaminates a measurement.
+  KEY BINDINGS (single source of truth, printed by --help and by H twice)
+  ARROW UP throttle | ARROW DOWN brake | ARROW LEFT/RIGHT steer | LSHIFT fine (half rates, 50% pedal)
+  Z clutch | SPACE handbrake | E shift up | Q shift down
+  F flank-wing toggle | G cycle wing side (auto / left / right)
+  R reset to last sector line | SHIFT+R full reset (clears skid marks and timing)
+  P pause | O single physics step while paused | [ ] slow-mo 0.25x / 1.0x
+  C camera cycle | - / = zoom | 0 auto zoom | H HUD cycle | V force vectors | B g-g | N skid | X clear skid
+  T toggle wet (global mu_scale 1.0 <-> 0.632) | M telemetry marker | L toggle recording
+  TAB next track | ESC quit
+      No collisions: W is not used for throttle so F/G/C/H/V/B/N/X/T/M/L are all free. Arrow keys only for the four continuous axes.
+
+VALIDATION TESTS:
+  V1 track geometry closure (CIRCUIT_ARENA): expected norm(xy[-1] - xy[0]) = 3.8e-8 m; sum(turn_deg) = 360.000000; length = 1249.2022 m; bbox = (15.000, 15.000) to (426.787, 267.661) (tol closure < 1e-4 m; heading within 1e-6 deg; length within 0.01 m; bbox within 0.005 m)
+  V2 track node fixture: expected Segment start points equal the 14 literal coordinates listed in the parameters, e.g. s=450.639 -> (318.105, 195.222) and s=1004.669 -> (15.000, 45.642) (tol 0.002 m on every node)
+  V3 projection round trip: expected for 500 random (s, n) with n in [-6, 6]: project(point_at(s, n)) returns the same (s, n) (tol |ds| < 1e-3 m, |dn| < 1e-3 m; and < 20 us mean per call)
+  V4 track self-clearance: expected min distance between centreline points more than 90 m apart in arclength = 65.96 m, so a 12 m ribbon never overlaps (tol > 20 m (must exceed the full width with margin))
+  V5 skidpad limit, dry, no wing, R = 50 m (script 'skidpad_limit'): expected max sustainable V = 20.57 m/s; ay = 0.8625 g; HUD util_f = 1.000, util_r = 0.952; limited_by = 'FRONT' (tol V within 4%; ay_g within 4%; util_f and util_r within 0.05; limited_by exact)
+  V6 skidpad limit, dry, no wing, R = 100 m: expected V = 29.09 m/s, ay = 0.8625 g, util_f 1.000 / util_r 0.952, limited_by 'FRONT' (tol V within 4%; utilisations within 0.05)
+  V7 skidpad, R = 130 m -> POWER limited: expected V = 31.88 m/s (grip-only would be 33.17); throttle saturates at 1.0 with max(util_f, util_r) < 0.90; HUD limited_by shows 'POWER' (tol V within 5%; indicator must read POWER, not FRONT)
+  V8 wing A/B on the skidpad, clean fin CL 0.70, x_w 0.97, h_w 0.90 (paired difference): expected dV/V = +0.60% at R=50 (20.568 -> 20.692 m/s) and +1.21% at R=100 (29.087 -> 29.441); HUD F_wing = 62.9 N at R=50 and 127.4 N at R=100 (tol gain within +/-0.25 percentage points (paired, same seed, same script); F_wing within 3 N)
+  V9 sealed plate flips the limiting axle (the understeer-margin cap made visible): expected with CL 1.25 at x_w 0.97: R=50 stays limited_by 'FRONT' (util_f 1.000, util_r 0.986) but R=100 and R=130 flip to limited_by 'REAR' (util_f 0.979 / util_r 1.000, and 0.957 / 1.000) (tol indicator string exact; utilisations within 0.05. This is the assertion crossover.q3_gain asks for.)
+  V10 wet skidpad, global mu_scale 0.632183908, R = 50 m: expected V = 16.53 m/s (dry 20.57); at R=30 V = 12.80; at R=100 V = 23.37 (tol within 5%)
+  V11 acceleration run on DRAGSTRIP (script 'accel'): expected 0-100 km/h (0 to 27.778 m/s) = 15.5 s; V at s = 1500 m >= 44 m/s; asymptotic Vmax = 47.2 m/s; 100 km/h reached in 3rd gear at ~5278 rpm (tol 0-100 within +/-1.5 s (published band 14.5-16.0 s, UNPUBLISHED for this exact variant); Vmax within +/-1.0 m/s; gear at 100 km/h must be 3)
+  V12 braking run on DRAGSTRIP (script 'brake'): expected 100 km/h to standstill in 45.7 m (pure tyre limit V^2 / (2 * 0.8625 * 9.81), slightly less with drag) (tol 40-50 m. Brakes are MISSING from every source (corsa_c.brakes); this test is the only constraint on them. Below 40 m the brake model is over-specified; above 50 m it cannot lock the wheels and is under-specified.)
+  V13 corsa_c power balance still closes through the harness: expected at steady 47.2 m/s in 5th on DRAGSTRIP: rpm = 5597, and drivetrain power at the wheels = 47.3 kW = the tractive power required (0.5*1.2*0.66*47.2^2 + 0.012*1010*9.81) * 47.2 (tol rpm within 30; power within 2%. Reproduces corsa_c.self_check() exactly.)
+  V14 ideal-lap reference on CIRCUIT_ARENA: expected quasi-steady forward/backward solve gives 53.71 s; Vmax on lap 32.5 m/s; Vmin 15.9 m/s; only T7 (R=130) is power limited (tol lap within +/-2 s; Vmax within 1 m/s. A competent human on keyboard should record 58-75 s; if a scripted or human lap comes in under 53 s the vehicle model is too fast for qss and something is wrong.)
+  V15 input ramp: steering at rest: expected from delta = 0 holding RIGHT: delta = 11.25 deg at t = 0.200 s; delta = 32.625 deg (lock) at t = 0.580 s and clamped thereafter (tol 0.01 deg at t = 0.200 s; lock time within 0.005 s)
+  V16 input ramp: steering limited at speed, and released: expected at V = 25 m/s, beta = 0, holding RIGHT for 2 s: delta saturates at delta_lim = 5.396 deg. On release it returns to 0 in 5.396 / 90.0 = 0.060 s (tol delta_lim within 0.05 deg; return time within 0.005 s)
+  V17 steer limiter opens up in a slide: expected at V = 30 m/s with beta_deg = 12: delta_lim_eff = 4.717 + 1.2*12 = 19.12 deg (vs 4.72 deg at beta = 0) (tol 0.05 deg. With --no-steer-limit the command is the raw ramp clamped only at 32.625 deg.)
+  V18 pedal ramps: expected throttle 0 -> 1 in 0.2857 s and 1 -> 0 in 0.1667 s; brake 0 -> 1 in 0.200 s and 1 -> 0 in 0.125 s; with LSHIFT held both cap at 0.500 (tol within one physics step (0.001 s))
+  V19 wing deploy transient is C1: expected wing_deploy goes 0 -> 1 over exactly 0.45 s; the smoothstepped force f = d^2(3-2d) has zero slope at both ends, so dF_wing/dt = 0 at t = 0 and t = 0.45 s; at constant 29.09 m/s the force rises 0 -> 127.4 N with no step (tol max |dF/dt| over the transient < 700 N/s; no single-step jump greater than 3 N)
+  V20 headless determinism: expected the same ScriptedInput run twice with --headless --telem-precision full produces byte-identical CSVs (tol exact byte equality. Any difference means wall-clock time, dict iteration order, or an unseeded RNG has leaked into the physics path.)
+  V21 real-time factor, headless: expected 60 s of simulation at DT_PHYS = 0.001 with telemetry on completes in <= 20 s wall on this machine (RTF >= 3.0) (tol RTF >= 2.0 minimum; below that, fall back to DT_PHYS = 0.002 and re-run V5-V12)
+  V22 render frame budget, headless offscreen: expected 600 frames of draw_frame() on CIRCUIT_ARENA with full HUD, 600 skid segments and vectors on: mean build time <= 12.0 ms, p99 <= 16.0 ms (tol mean <= 12.0 ms. Measured component references on this machine: 700-pt concave ribbon polygon 0.58 ms, 1500 draw.line calls 8.66 ms, 5000-pt numpy transform 0.12 ms.)
+  V23 accumulator does not spiral: expected inject a synthetic 1.5 s frame stall: exactly MAX_SUBSTEPS = 40 physics steps run (0.040 s of sim), dropped_s increases by ~1.46 s, dropped_frames += 1, and the sim continues in real time on the next frame (tol exact step count; the loop must never take more than 40 * DT_PHYS of physics in one frame)
+  V24 first-frame and unpause guard: expected the first frame after init, reset or unpause integrates exactly one physics step regardless of the (often 0.5-2 s) macOS first-frame delta (tol exactly 1 step)
+  V25 lap timing sub-step accuracy: expected a scripted constant-30 m/s run around CIRCUIT_ARENA reports lap = 1249.2022 / 30 = 41.640 s (tol within 0.002 s (one physics step is 0.001 s; interpolation must beat it))
+  V26 surface patch boundary: expected driving the centreline through WET_T3 (s 455.0 to 585.0), every wheel's mu_scale reads 1.0 before s = 455.0, 0.632 inside, and 1.0 after s = 585.0 (tol boundary resolved to within 0.20 m (the 200 Hz surface lookup at 33 m/s = 0.17 m))
+  V27 split-mu detection: expected in DAMP_T5_EXIT (n from -6 to 0, i.e. the right half) the two right-hand wheels read mu_scale 0.80 and the two left-hand wheels 1.00 simultaneously (tol exact; proves the lookup is per wheel, not per car)
+  V28 HUD utilisation identical to qss: expected at the R=100 skidpad limit, axle_utilisation() from render.py and qss.residuals(a_y, V, 0, 0, 0.90, 0.74, 1.0) agree (tol within 0.02 on both util_f and util_r. If they diverge, render.py has reimplemented mu(Fz) instead of importing qss.fy_max.)
+  V29 gamepad absent fallback: expected with pygame.joystick.get_count() == 0 (the current state of this machine), the sim starts, prints one line, and is fully driveable on the keyboard; no exception, no None dereference (tol exact; this is the default path)
+  V30 headless boot: expected SDL_VIDEODRIVER=dummy: pygame.display.get_driver() == 'dummy', set_mode((1280,800)) succeeds, SysFont('Menlo', 16) renders, draw + flip succeed (tol exact. VERIFIED working on this machine (pygame 2.5.2, SDL 2.28.3, Python 3.11.4).)
+
+PITFALLS:
+  - THE RIBBON MUST BE ONE POLYGON. Measured on this machine: 400 filled quads per frame costs 20.41 ms and misses 60 fps outright; a single 700-point concave polygon built from the visible left edge plus the reversed right edge costs 0.58 ms. pygame.draw.polygon handles concave outlines correctly. Do not tessellate the track per centreline interval, and do not pre-render the whole track and rotate it per frame (subsurface rotate+blit measured 2.3-6.7 ms and forces a fixed zoom).
+  - SKID MARKS ARE THE ONLY UNBOUNDED DRAW COST. 1500 individual pygame.draw.line calls measured 8.66 ms per frame, half the entire 16.7 ms budget. Cap visible segments at 600 by strided subsampling of the deques (stride = ceil(n_visible / 600)) and cull to the camera radius BEFORE transforming. Symptom if ignored: fps degrades progressively during a session and the user blames the physics.
+  - PYGAME'S FIRST FRAME ON macOS CAN BE 0.5-2 s. Feeding that into the accumulator runs 500-2000 physics steps in one go and the car is somewhere else before the first frame is drawn. Fix: force dt_wall = DT_PHYS and acc = 0 on the first frame after init, after any reset, and after unpausing. Same applies after a window drag (the loop is blocked entirely by the OS) and after a GC pause; MAX_FRAME_DT = 0.10 s catches those.
+  - SDL_VIDEODRIVER MUST BE SET BEFORE pygame IS IMPORTED ANYWHERE IN THE PACKAGE, not just before pygame.display.init(). If drive/render.py does a module-level 'import pygame' and drive/drive.py sets the env var in main(), the dummy driver silently does not take effect under pytest (which imports the package first) and CI tries to open a window. Fix: set os.environ in drive/__init__.py guarded by a CARSIM_HEADLESS env var, or set it at the very top of the test conftest. Also set SDL_AUDIODRIVER=dummy to avoid CoreAudio init. Verified: with dummy set correctly, get_driver() == 'dummy', set_mode, SysFont('Menlo') and flip all work on this machine.
+  - DO NOT RAMP A NORMALISED STEER AXIS. Mapping a [-1,1] axis onto full lock (32.625 deg) and ramping that gives a car that is undriveable above 15 m/s: at 29 m/s the whole usable range is the first 15% of the axis. Ramp the ROAD-WHEEL ANGLE at a hand rate (900 deg/s / 16.0 = 56.25 deg/s) and clamp it with the speed-dependent delta_lim(V). The two are not equivalent and the difference is the whole feel of the sim.
+  - THE STEER LIMITER MUST OPEN UP WITH BODY SLIP OR THE CAR CANNOT BE CAUGHT. delta_lim(30 m/s) = 4.72 deg; a 12 deg slide needs roughly 10-15 deg of opposite lock. Without the +1.2*|beta_deg| term every slide becomes an unrecoverable spin and the user concludes the physics is broken when it is the input layer. Conversely, do NOT apply the limiter in any validation script: run those with steer_limit=False so the aid never contaminates a measured number.
+  - UTILISATION MUST IMPORT qss.fy_max, NOT REIMPLEMENT IT. The whole point of the HUD's util_f / util_r / limited_by is that it is directly comparable with qss.residuals(). Retyping mu = 0.903 - 16.1e-6*(Fz - 2477) in render.py guarantees a slow drift as one file is edited and the other is not, and V28 will fail for a reason nobody can find. from qss import fy_max, TYRE.
+  - THE WING EFFECT IS 0.6-1.5% AND WILL NOT BE FELT. 62.9 N at R=50 against a 9908 N car. If the implementer scales the wing's force arrow differently from the tyre arrows to 'make it visible', the sim lies about the central result of the study. Draw both at the same px/N and let the wing arrow be 3 px. Legibility comes from the numeric HUD (F_wing in N, live util_f/util_r delta) and from plots.compare(by='distance'), which is the only view that resolves a 0.6% corner-speed gain.
+  - AN INSTANTANEOUS WING TOGGLE PUTS A STEP IN THE LATERAL FORCE AND A SPIKE IN THE YAW ACCELERATION. At 29 m/s the plate is 227 N applied 0.97 m ahead of the CG: a 220 N-m step into Izz = 1200 kg m^2. It will look like a bug. Ramp the deploy over 0.45 s with a smoothstep so dF/dt is zero at both ends (V19).
+  - OFF-TRACK WITH NO GROUND TEXTURE GIVES NO SPEED CUE. A top-down car on a flat background at constant heading looks stationary. Draw a 20 m grid in BG_OFFTRACK+GRID over the whole visible area before anything else. Cheap (two strided line families) and it is the difference between a driveable and an unreadable view.
+  - SURFACE mu MUST BE LOOKED UP PER WHEEL. A single car-centre lookup silently deletes split-mu, which is the only reason the DAMP_T5_EXIT and dragstrip split patches exist and is the most interesting thing a wet surface can do to a FWD car under braking. Four lookups at 200 Hz is 800 project() calls per second, roughly 1% of one core.
+  - THE NEAREST-SAMPLE PROJECTION FAILS SILENTLY FAR OFF TRACK. If the 3x3 grid neighbourhood is empty, argmin over an empty candidate list raises, or worse a stale index is reused and n jumps sign. Implement the 3x3 -> 5x5 -> full-argmin fallback explicitly and unit-test it at a point 200 m outside the circuit. Also: on a closed track s must wrap, so the chord refinement at i = 0 and i = N-1 needs modular indexing or the car's s glitches to 1249 m every lap and the lap timer fires twice.
+  - LAP DETECTION BY 'DID s DECREASE' DOUBLE-FIRES. Lateral noise near the start line and the wrap discontinuity both look like a crossing. Require (s_prev > length - 20 and s_now < 20) for the wrap case, add a 3 s minimum lap time lockout, and interpolate the crossing fraction (V25 needs 0.002 s accuracy, better than one physics step).
+  - INTEGRATING THE INPUT RAMPS AT THE RENDER RATE MAKES THE CAR FRAME-RATE DEPENDENT. Sample key state at 60 Hz (that is all pygame gives you) but integrate the ramps inside step_physics at DT_PHYS with the held state. Otherwise the same key press produces different steering on a 60 fps and a 45 fps machine, and V20 determinism fails the moment anyone runs interactively.
+  - CSV WRITING WILL DOMINATE THE PHYSICS BUDGET IF DONE PER ROW. 100 Hz x 63 columns through csv.writer one row at a time with a flush is far more expensive than the physics step it logs. Buffer 200 rows and use writerows; open with newline='' or every line gets a stray \r on some tooling. Format with f'{v:.6g}' by default — repr() roughly doubles file size — but the determinism test must use full precision or it compares rounded values and passes vacuously.
+  - matplotlib WILL TRY TO OPEN A WINDOW. drive/plots.py must call matplotlib.use('Agg') before importing pyplot, or importing it inside a headless test run hangs or crashes on macOS. Do not use pandas anywhere in this module; csv + numpy is enough and pandas is not in the verified dependency list.
+  - THE g-g ENVELOPE CALLS qss.max_ay, WHICH BISECTS 200 TIMES PER CALL. Calling it every frame per axis point is thousands of bisections a second. Cache the envelope curve and recompute only when |V - V_cached| > 1.0 m/s; that is 1-3 recomputes per second in normal driving.
+  - FONT RENDERING IS 30-60 us PER STRING AND THE HUD HAS ~30 OF THEM. That is 1.5 ms a frame of pure text. Cache every static label surface at startup, and cache numeric surfaces keyed on the QUANTISED value (speed to 1 km/h, rpm to 50, forces to 10 N) so the cache actually hits instead of missing on every float.
+  - DRAWING SLIP AND FORCE VECTORS FROM THE WHEEL CENTRE INSTEAD OF THE CONTACT PATCH looks fine until the car is sliding, when the arrows visibly lead or lag the tyre. Anchor them at the contact patch position in the body frame, transform with the same matrix as everything else, and remember world +y maps to screen -y so a naive rotation puts every lateral force on the wrong side.
+  - TIME_SCALE AND SLOW-MO MUST MULTIPLY dt_wall, NOT DT_PHYS. Changing DT_PHYS at runtime changes the integration accuracy and can destabilise the wheel-spin ODE mid-corner. Slow-mo is acc += dt_wall * 0.25 with DT_PHYS untouched.
+  - THE CAR-UP CAMERA ROTATION SIGN IS EASY TO GET BACKWARDS AND THE BUG IS SUBTLE. theta = -(psi_cam + pi/2). Test it by placing the car at psi = 0 (heading world +x) and asserting a point 10 m directly ahead of it lands directly ABOVE the car anchor on screen. Getting it wrong by pi/2 produces a sim that drives sideways and is often mistaken for a physics sign error.
+  - K_US_DEG = 3.2 IS A GUESS INSIDE THE INPUT LAYER. It sets delta_lim only, never the physics, but if it is far from the vehicle model's true understeer gradient the steering will feel either capped (too small) or vague (too large). Once the model runs, measure its actual steady-state road-wheel angle at the R=50 limit — the target is 5.614 deg — and set K_US_DEG = (delta_measured - degrees(2.491/50)) / 0.8625.
+  - SHIFT AND WING KEYS MUST BE EDGE-TRIGGERED, NOT LEVEL-TRIGGERED. Reading pygame.key.get_pressed() for E/Q/F in the physics loop at 1 kHz fires a thousand shift requests per key press. Consume them from the pygame event queue in poll_events() (KEYDOWN only), queue at most one pending shift, and ignore new requests while a shift is in progress.
