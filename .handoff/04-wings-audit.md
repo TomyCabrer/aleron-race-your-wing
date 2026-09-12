@@ -439,8 +439,16 @@ the RIGHT one. `render.py` reads it correctly. Suggested wording for both:
 §10 flags as wrong (`-F*(a - x_w)` is correct). It is a synthetic fixture, not
 physics, and the code labels it "the same moment balance qss uses", so it is
 deliberate. Flagging it only so it is not mistaken for a second, independent
-derivation. `vehicle.py`'s own `Y_f_expected` (`:1380`) uses the correct
+derivation. `vehicle.py`'s own `Yf_expected` (`:1383`) uses the correct
 `-F_dev*(b + x_w)` form and closes to 0.000 % (group D).
+
+### FINDING 11b (COSMETIC) — `P_req` omits the downforce's rolling drag
+`drive/vehicle.py:1332` charges rolling resistance as `Crr*m*G`, but the wheel
+ODE charges `Crr*crr[i]*Fz[i]*R_e` over the four `Fz`, which include `F_top`.
+So the `P_required_kW` diagnostic understates the cost of downforce by
+`Crr*F_top*V` = 0.012 x 272 x 28.9 = **94.3 W** out of 48.5 kW (0.19 %) at the
+W3 operating point. The force balance itself is right; only the diagnostic is
+short. (It also ignores `grade`.)
 
 ### FINDING 11 (LATENT) — `_top_share_f` is cached in `__init__`
 `drive/vehicle.py:626`. Replacing `cfg.top` on a live `Vehicle` leaves the
