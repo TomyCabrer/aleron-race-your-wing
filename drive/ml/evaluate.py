@@ -4,6 +4,8 @@
     python3 -m drive.ml.evaluate <ckpt> --plot runs/ml_learning.png
     python3 -m drive.ml.evaluate <ckpt> --wing off --track open
     python3 -m drive.ml.evaluate <ckpt> --transfer
+    python3 -m drive.ml.evaluate <ckpt> --car mx5
+    python3 -m drive.ml.evaluate --car-matrix          (no checkpoint needed)
 
 Every number printed here is measured at `env.DT_EVAL = 1 ms`, the contract's
 `DT_PHYS`, not at the 2 ms the trainer uses -- so a quoted lap time is a lap
@@ -19,7 +21,9 @@ import argparse
 import multiprocessing as mp
 import os
 
-from .env import lap_time, rollout, DT_EVAL, DT_TRAIN
+import numpy as np
+
+from .env import lap_time, rollout, DT_EVAL, DT_TRAIN, _kappa_at
 from .policy import Policy
 
 #: The transfer grid: every track a lap time means something on, and every
@@ -31,17 +35,35 @@ from .policy import Policy
 TRANSFER_TRACKS = ("arena", "open", "skidpad")
 TRANSFER_WINGS = ("plate", "off", "fin")
 
+#: The cross-car matrix's cars, in `cars.CAR_ORDER`. Wave 4's question is the
+#: owner's original one -- task 9 said "teach the CARS how to drive the aero",
+#: plural -- and the three in the library are genuinely different machines:
+#: 1010 kg FWD 55 kW, 1140 kg RWD 109 kW, 1780 kg RWD 210 kW.
+TRANSFER_CARS = ("corsa", "mx5", "540i")
+
+#: Where the per-car checkpoints live, keyed by the car they trained on. The
+#: `corsa` entry is the arena specialist, because the matrix is measured on the
+#: arena and the row has to be that car's OWN best policy or the matrix is
+#: comparing a specialist against two generalists.
+CAR_CKPTS = {
+    "corsa": "drive/ml/checkpoints/arena_plate.json",
+    "mx5": "drive/ml/checkpoints/mx5_arena_plate.json",
+    "540i": "drive/ml/checkpoints/540i_arena_plate.json",
+}
+
 
 def compare(path: str, track: str = "arena", wing: str = "plate",
-            T: float = 280.0, verbose: bool = True) -> dict:
-    """Baseline vs learned, at DT_EVAL, same track and same aero."""
+            T: float = 280.0, verbose: bool = True, car=None) -> dict:
+    """Baseline vs learned, at DT_EVAL, same track, same aero, same car."""
     learned = Policy.load(path)
     base = Policy()                     # theta = 0 -> the hand-written driver
     rows = {}
     for tag, pol in (("baseline", base), ("learned", learned)):
-        rows[tag] = lap_time(pol, track, wing=wing, dt=DT_EVAL, T=T)
+        rows[tag] = lap_time(pol, track, wing=wing, dt=DT_EVAL, T=T,
+                             car=_car_of(car))
     if verbose:
-        print(f"  {track} / wing {wing} / dt {DT_EVAL * 1e3:.0f} ms / {T:.0f} s")
+        print(f"  {track} / wing {wing} / car {car or 'corsa'} / "
+              f"dt {DT_EVAL * 1e3:.0f} ms / {T:.0f} s")
         print(f"  {'':9s} {'best lap':>9s} {'laps':>5s} {'v_mean':>7s} {'v_max':>7s} "
               f"{'dist':>8s} {'wing%':>6s} {'outer%':>7s}  ended")
         for tag in ("baseline", "learned"):
@@ -153,6 +175,193 @@ def transfer(path: str, tracks=TRANSFER_TRACKS, wings=TRANSFER_WINGS,
     return out
 
 
+def _car_of(name):
+    """'corsa' -> None (so `rollout` builds `CorsaC()` and the path is
+    bit-for-bit the pre-wave-4 one); anything else -> that `cars.CarSpec`."""
+    if name in (None, "", "corsa"):
+        return None
+    import cars
+    return cars.get(name)
+
+
+def _car_cell(arg) -> tuple:
+    """One (policy-or-baseline, car) cell of the cross-car matrix.
+
+    `path is None` means the hand-written anchor on that car, which is the
+    row every learned row has to be read against: the anchor is ONE driver
+    (same gains, same 0.75 g plan) given each car's own lock and wheelbase,
+    so a column's baseline is a property of the CAR and not of the policy.
+    """
+    path, car_name, track, wing, T = arg
+    pol = Policy() if path is None else Policy.load(path)
+    r = lap_time(pol, track, wing=wing, dt=DT_EVAL, T=T,
+                 car=_car_of(car_name))
+    return (path, car_name, r)
+
+
+def car_transfer(paths=None, cars_=TRANSFER_CARS, track: str = "arena",
+                 wing: str = "plate", T: float = 280.0,
+                 workers: int | None = None, verbose: bool = True) -> dict:
+    """The cross-car matrix: every (trained-on car x evaluated-on car) cell.
+
+    Built exactly the way wave 3 built the cross-TRACK grid, and asking the
+    same question one axis over: **does one policy generalise across cars, or
+    does each car need its own?** A policy is 308 numbers tuned against one
+    car's grip, power, brakes and driven axle, so there is no a-priori reason
+    for it to travel -- and a negative result is a finding about the device
+    and the driving, not a failure of the method.
+
+    Evaluated UNCHANGED in every off-diagonal cell: no re-tuning, no warm
+    start, the same 308 numbers. What travels with the car and not with the
+    policy is only the ANCHOR's two per-car arguments (`lock_rad`,
+    `wheelbase`), which is what makes the comparison meaningful rather than
+    a units mismatch -- see `policy.Policy.action`.
+
+    Same `__main__`-guard requirement as `transfer`: macOS spawns.
+    """
+    paths = dict(CAR_CKPTS if paths is None else paths)
+    rows = [None] + [c for c in cars_ if paths.get(c)]
+    jobs = [(paths.get(r) if r else None, c, track, wing, T)
+            for r in rows for c in cars_]
+    workers = min(os.cpu_count() or 1, len(jobs)) if workers is None else workers
+    if workers > 1:
+        with mp.Pool(workers) as pool:
+            res = pool.map(_car_cell, jobs, chunksize=1)
+    else:
+        res = [_car_cell(j) for j in jobs]
+    out = {(("baseline" if p is None else _row_of(p, paths)), c): r
+           for p, c, r in res}
+
+    if verbose:
+        print(f"\n  cross-car matrix, {track} / wing {wing} / "
+              f"dt {DT_EVAL * 1e3:.0f} ms / {T:.0f} s")
+        print(f"  best flying lap; '--' is no flying lap, distance in 280 s "
+              f"in brackets")
+        print(f"  {'trained on':12s}" + "".join(f"{c:>26s}" for c in cars_))
+        for r in ["baseline"] + [c for c in cars_ if paths.get(c)]:
+            line = f"  {r:12s}"
+            for c in cars_:
+                cell = out[(r, c)]
+                b = out[("baseline", c)]
+                if cell["best"]:
+                    pc = (f" {100 * (b['best'] - cell['best']) / b['best']:+6.2f} %"
+                          if b["best"] and r != "baseline" else "        ")
+                    line += f"{cell['best']:12.3f}{pc:>14s}"
+                else:
+                    line += f"{'--':>9s} ({cell['s']:6.1f} m) {cell['ended'][:6]:>6s}"
+            print(line)
+        #  the wing statistics are the whole point of the item: different cars
+        #  may want different aero timing, and this is where that shows
+        print(f"\n  flank panel: % of steps deployed / % of those on the OUTER flank")
+        print(f"  {'trained on':12s}" + "".join(f"{c:>20s}" for c in cars_))
+        for r in ["baseline"] + [c for c in cars_ if paths.get(c)]:
+            line = f"  {r:12s}"
+            for c in cars_:
+                cell = out[(r, c)]
+                line += (f"{100 * cell['wing_frac']:12.1f} / "
+                         f"{100 * cell['wing_outer_frac']:5.1f}")
+            print(line)
+    return out
+
+
+def _row_of(path: str, paths: dict) -> str:
+    for k, v in paths.items():
+        if v == path:
+            return k
+    return str(path)
+
+
+#: Curvature above which a station counts as "in a corner" for the timing
+#: histogram. The SAME 1/220 m the hand-written wing rule arms on
+#: (`baseline.KAPPA_ARM`), so "armed before the corner" is measured against
+#: the same definition of corner the anchor uses.
+K_CORNER = 1.0 / 220.0
+
+
+def wing_timing(path, track: str = "arena", wing: str = "plate",
+                car: str = "corsa", T: float = 140.0, verbose: bool = True) -> dict:
+    """WHEN in the corner is the panel armed, not just how often.
+
+    `wing_frac` says the device is out 56 % of the time and says nothing about
+    whether that 56 % is the right 56 %. This splits every sampled step into
+    four phases of the circuit and reports the deployed fraction in each, plus
+    the median LEAD DISTANCE: how many metres before the corner's entry
+    station the panel first came out on each deployment.
+
+    Phases, from the track's own `kappa` array (so they are a property of the
+    circuit, not of the driver):
+
+        straight   |k| here < 1/220 and |k| 35 m ahead < 1/220
+        approach   |k| here < 1/220 but a corner is within 35 m
+        entry      in a corner, |k| still rising along s
+        exit       in a corner, |k| falling
+
+    A car that arms the device on the approach is using it to buy turn-in
+    grip; one that arms it at entry is using it mid-corner; one that carries
+    it down the straights is paying drag for nothing. That distinction is the
+    interesting per-car result and `wing_frac` cannot see it.
+    """
+    from .. import track as trk
+    pol = Policy() if path is None else Policy.load(path)
+    tr = trk.make_track(track)
+    coll: list = []
+    r = lap_time(pol, track, wing=wing, dt=DT_EVAL, T=T, car=_car_of(car),
+                 collect=coll)
+
+    #  corner-entry stations: |kappa| crossing K_CORNER upward along s
+    kap = np.abs(np.asarray(tr.kappa, float))
+    inc = kap >= K_CORNER
+    entries = [float(tr.s[i]) for i in range(1, len(kap))
+               if inc[i] and not inc[i - 1]]
+    if tr.closed and inc[0] and inc[-2]:
+        pass                              # a corner across the seam: no edge
+    L = float(tr.length)
+
+    def phase(s: float) -> str:
+        k_here = _kappa_at(tr, s)
+        k_ahead = _kappa_at(tr, (s + 35.0) % L if tr.closed else s + 35.0)
+        if abs(k_here) < K_CORNER:
+            return "approach" if abs(k_ahead) >= K_CORNER else "straight"
+        k_next = _kappa_at(tr, (s + 5.0) % L if tr.closed else s + 5.0)
+        return "entry" if abs(k_next) >= abs(k_here) else "exit"
+
+    cnt = {p: 0 for p in ("straight", "approach", "entry", "exit")}
+    dep = dict(cnt)
+    leads, armed_prev = [], False
+    for (_t, x, y, _psi, _u, wdep, _side) in coll:
+        s, _n, _k, _p, _i = trk.project(tr, x, y)
+        ph = phase(s)
+        cnt[ph] += 1
+        on = wdep > 0.05
+        if on:
+            dep[ph] += 1
+        if on and not armed_prev and entries:
+            #  distance to the next corner entry AHEAD, along s
+            d = min(((e - s) % L) for e in entries)
+            if d <= 120.0:               # a deployment 400 m from a corner is
+                leads.append(d)          # not "early", it is unrelated
+        armed_prev = on
+
+    out = dict(car=car, track=track, wing=wing, n=len(coll),
+               frac={p: (dep[p] / cnt[p] if cnt[p] else float("nan"))
+                     for p in cnt},
+               count=dict(cnt), arms=len(leads),
+               lead_med=float(np.median(leads)) if leads else float("nan"),
+               lead_mean=float(np.mean(leads)) if leads else float("nan"),
+               wing_frac=r["wing_frac"], wing_outer_frac=r["wing_outer_frac"],
+               best=r["best"], ended=r["ended"], s=r["s"])
+    if verbose:
+        f = out["frac"]
+        print(f"  {car:6s} {('anchor' if path is None else 'learned'):8s} "
+              f"deployed {100 * out['wing_frac']:5.1f} % "
+              f"(outer {100 * out['wing_outer_frac']:5.1f} %)   "
+              f"by phase: straight {100 * f['straight']:5.1f}  "
+              f"approach {100 * f['approach']:5.1f}  "
+              f"entry {100 * f['entry']:5.1f}  exit {100 * f['exit']:5.1f}   "
+              f"lead {out['lead_med']:5.1f} m median over {out['arms']} arms")
+    return out
+
+
 def plot_curve(path: str, out: str) -> str | None:
     """The learning curve out of the checkpoint's own metadata."""
     import matplotlib
@@ -224,7 +433,9 @@ def plot_curve(path: str, out: str) -> str | None:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="measure a drive.ml checkpoint at DT_PHYS")
-    ap.add_argument("checkpoint")
+    ap.add_argument("checkpoint", nargs="?", default=None,
+                    help="omit it only with --car-matrix, which reads the "
+                         "per-car checkpoints out of CAR_CKPTS")
     ap.add_argument("--track", default=None, help="default: the one it trained on")
     ap.add_argument("--wing", default=None, choices=("off", "fin", "plate"))
     ap.add_argument("--duration", type=float, default=280.0)
@@ -235,13 +446,35 @@ def main(argv=None) -> int:
                          "does the gain transfer off the cell it trained on?")
     ap.add_argument("--only-transfer", action="store_true",
                     help="the transfer grid and nothing else")
+    ap.add_argument("--car", default=None,
+                    help="cars.py key to MEASURE on: corsa | mx5 | 540i")
+    ap.add_argument("--car-matrix", action="store_true",
+                    help="the cross-car matrix: every (trained-on car x "
+                         "evaluated-on car) cell, baseline vs learned")
+    ap.add_argument("--wing-timing", action="store_true",
+                    help="per-car flank-panel deployment BY CORNER PHASE, "
+                         "anchor and learned, for every car")
     a = ap.parse_args(argv)
+    if a.car_matrix or a.wing_timing:
+        if a.car_matrix:
+            car_transfer(track=a.track or "arena", wing=a.wing or "plate",
+                         T=a.duration)
+        if a.wing_timing:
+            print(f"\n  flank-panel timing by corner phase, "
+                  f"{a.track or 'arena'} / {a.wing or 'plate'} / dt 1 ms")
+            for cn in TRANSFER_CARS:
+                for pth in (None, CAR_CKPTS.get(cn)):
+                    if pth is None or os.path.exists(pth):
+                        wing_timing(pth, track=a.track or "arena",
+                                    wing=a.wing or "plate", car=cn)
+        if not a.checkpoint:
+            return 0
     meta = Policy.load(a.checkpoint).meta
     track = a.track or meta.get("track", "arena")
     wing = a.wing or meta.get("wing", "plate")
     print(f"  {a.checkpoint}\n  trained: { {k: v for k, v in meta.items() if k != 'curve'} }")
     if not a.only_transfer:
-        compare(a.checkpoint, track, wing, a.duration)
+        compare(a.checkpoint, track, wing, a.duration, car=a.car)
     if a.transfer or a.only_transfer:
         transfer(a.checkpoint, T=a.duration)
     if a.ablation:

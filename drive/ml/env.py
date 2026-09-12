@@ -17,7 +17,8 @@ from corsa_c import CorsaC, G
 from .. import track as trk
 from ..vehicle import Vehicle, VehicleConfig, Controls
 from .policy import (Policy, N_OBS,  # noqa: F401  (re-exported for __main__)
-                     LOCK_RAD as POLICY_LOCK_RAD)
+                     LOCK_RAD as POLICY_LOCK_RAD,
+                     WHEELBASE as POLICY_WHEELBASE)
 
 #: Training and evaluation timesteps. See the package docstring for the
 #: measured drift that chose them: 2 ms costs 0.128 m over 20 s and buys 2x,
@@ -124,6 +125,10 @@ def rollout(policy: Policy, track: str = "arena", *, dt: float = DT_TRAIN,
 
     ep = Episode()
     lock_rad = float(getattr(veh, "lock_rad", POLICY_LOCK_RAD))
+    #  the anchor's pure-pursuit feedforward is the bicycle angle L*kappa, so
+    #  it wants THIS car's wheelbase: 2.491 / 2.265 / 2.830 m over the three
+    #  cars in the library. Exactly POLICY_WHEELBASE on the Corsa.
+    wheelbase = float(getattr(veh.car, "L", POLICY_WHEELBASE))
     obs = np.empty(N_OBS)
     mu = [1.0, 1.0, 1.0, 1.0]
     crr = [1.0, 1.0, 1.0, 1.0]
@@ -137,10 +142,12 @@ def rollout(policy: Policy, track: str = "arena", *, dt: float = DT_TRAIN,
     for k in range(n_steps):
         t = k * dt                       # contract section 0: never accumulated
         observe(veh, tr, obs)
-        #  this car's own lock, not the Corsa's (policy.LOCK_RAD is only the
-        #  default). Exactly LOCK_RAD on the Corsa, so every committed
-        #  checkpoint's numbers are unmoved.
-        ctl = policy.controls(obs, Controls, lock_rad=lock_rad)
+        #  this car's own lock and wheelbase, not the Corsa's (the constants
+        #  in `policy`/`baseline` are only the defaults). Both are exactly the
+        #  Corsa's values on the Corsa, so every committed checkpoint's
+        #  measured numbers are unmoved by either change.
+        ctl = policy.controls(obs, Controls, lock_rad=lock_rad,
+                              wheelbase=wheelbase)
         m, c, _on = trk.surface_at(tr, veh.x, veh.y)
         mu[0] = mu[1] = mu[2] = mu[3] = m
         crr[0] = crr[1] = crr[2] = crr[3] = c
@@ -204,16 +211,25 @@ def rollout(policy: Policy, track: str = "arena", *, dt: float = DT_TRAIN,
 
 
 def lap_time(policy: Policy, track: str = "arena", *, wing: str = "plate",
-             dt: float = DT_EVAL, T: float = 240.0, laps: int = 3) -> dict:
+             dt: float = DT_EVAL, T: float = 240.0, laps: int = 3,
+             car=None, collect=None) -> dict:
     """Best flying lap at the EVALUATION timestep, for a reported number.
 
     Everything the ES sees is measured at `DT_TRAIN`; everything quoted to a
     human is measured here, at the contract's `DT_PHYS`.
+
+    `car` is a `cars.CarSpec` (or `None` for the stock Corsa). It was added
+    in wave 4 for the cross-car matrix: `rollout` had taken a car since the
+    package was written, but the only function that reports a LAP TIME could
+    not, so every quoted number in the study was a Corsa number by
+    construction rather than by choice.
     """
-    ep = rollout(policy, track, dt=dt, T=T, wing=wing)
+    ep = rollout(policy, track, dt=dt, T=T, wing=wing, car=car,
+                 collect=collect)
     times = ep.lap_times
     flying = [b - a for a, b in zip(times, times[1:])][:laps]
     return dict(best=min(flying) if flying else None, laps=ep.laps,
                 flying=flying, ended=ep.ended, t=ep.t, s=ep.s_progress,
                 v_mean=ep.v_mean, v_max=ep.v_max, wing_frac=ep.wing_frac,
-                wing_outer_frac=ep.wing_outer_frac, reward=ep.reward)
+                wing_outer_frac=ep.wing_outer_frac, reward=ep.reward,
+                util_f_max=ep.util_f_max, util_r_max=ep.util_r_max)

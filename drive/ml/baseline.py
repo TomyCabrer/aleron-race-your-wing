@@ -29,6 +29,16 @@ from corsa_c import CorsaC, G
 
 _CAR = CorsaC()
 
+#: The CORSA's wheelbase, m, and the DEFAULT only -- exactly the story
+#: `policy.LOCK_RAD` already tells. The pure-pursuit feedforward below is the
+#: bicycle angle `L * kappa`, so `L` is a property of the CAR, and wave 4
+#: pointed this driver at three of them: 2.491 m (corsa), 2.265 (mx5), 2.830
+#: (540i). Left hard-wired, the 540i would have been given 14 % too much
+#: feedforward and the MX-5 10 % too little -- a systematic steering bias
+#: dressed up as a policy result. `env.rollout` passes `veh.car.L`; for the
+#: Corsa it IS this number, so every committed checkpoint is unmoved.
+WHEELBASE = _CAR.L
+
 # --- pure pursuit -----------------------------------------------------------
 #  Gains from a 36-point grid sweep over (K_PSI, K_N, AY_PLAN, K_V) on the
 #  arena, scored on distance covered in 120 s with the plate fitted. The
@@ -103,13 +113,19 @@ K70_PLAN = 0.45
 KAPPA_ARM = 1.0 / 220.0
 
 
-def baseline_action(obs, lock_rad: float) -> np.ndarray:
+def baseline_action(obs, lock_rad: float,
+                   wheelbase: float = WHEELBASE) -> np.ndarray:
     """(N_OBS,) -> (steer, pedal, wing) each in [-1, 1], the policy's own units.
 
     `steer` is a FRACTION of lock, not radians, so it composes with the
-    network's tanh output directly. `lock_rad` is passed in rather than
-    imported from `policy`, which imports THIS module for the residual: one
-    argument instead of an import cycle or a duplicated constant.
+    network's tanh output directly. `lock_rad` and `wheelbase` are passed in
+    rather than imported from `policy`, which imports THIS module for the
+    residual: two arguments instead of an import cycle or a duplicated
+    constant. They are the ONLY two things this driver takes from the car --
+    `AY_PLAN`, `K_PSI`, `K_N` and `K_V` are deliberately the same numbers on
+    every car, so that the anchor the residual sits on is ONE hand-written
+    driver evaluated on three machines and not three different drivers. It is
+    a Corsa-swept driver; wave 4 measures exactly how badly that travels.
     """
     u = obs[0] * 40.0
     n_norm = obs[1]
@@ -123,7 +139,7 @@ def baseline_action(obs, lock_rad: float) -> np.ndarray:
     #    centreline and psi_err > 0 points left of the tangent, so both
     #    feedback terms are negative.
     k_path = 0.6 * k0 + 0.4 * k1
-    delta = K_FF * _CAR.L * k_path - K_PSI * psi_err - K_N * n_norm
+    delta = K_FF * wheelbase * k_path - K_PSI * psi_err - K_N * n_norm
     steer = delta / lock_rad
 
     # -- speed: plan for the tightest curvature in the lookahead window, so

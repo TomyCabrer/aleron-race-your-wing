@@ -21,8 +21,10 @@ arguments), so there is no evaluation noise to average over and one rollout
 per candidate is the right budget. That is unusual for an ES and it is a
 property of this problem, not an oversight.
 
-`--track arena,open` trains ONE policy on SEVERAL circuits: the fitness is
-then the mean over the tracks of that track's reward divided by the
+`--car mx5` trains against that car's engine, brakes, mass, driven axle, lock
+and wheelbase (the Corsa is the default and `--car corsa` is bit-for-bit the
+no-car path). `--track arena,open` trains ONE policy on SEVERAL circuits: the
+fitness is then the mean over the tracks of that track's reward divided by the
 hand-written baseline's reward on the SAME track. Normalising matters. Raw
 metres would let the faster circuit own the objective -- open advances more
 metres in 70 s than arena does -- and the question being asked is "is it a
@@ -57,6 +59,22 @@ def _track(name):
     return _TRACK_CACHE[name]
 
 
+def _car(name):
+    """The named `cars.CarSpec`, or None for the stock Corsa.
+
+    A NAME crosses the pickle boundary, not a `CarSpec`: the dataclass carries
+    provenance strings and a `PointMass` list, and `cars.get` is a dict lookup,
+    so there is nothing to gain by shipping the object to 12 workers 2880
+    times. None (not `cars.get('corsa')`) is the Corsa so that a run with no
+    `--car` is bit-for-bit the old code path -- `rollout` builds `CorsaC()`,
+    which `cars.self_check` asserts is field-for-field `CORSA_C` anyway.
+    """
+    if name in (None, "", "corsa"):
+        return None
+    import cars
+    return cars.get(name)
+
+
 def _tracks(spec) -> list:
     """'arena' -> ['arena'];  'arena,open' or 'arena+open' -> both, in order."""
     if isinstance(spec, (list, tuple)):
@@ -81,8 +99,9 @@ def _score(theta) -> tuple:
     policy that only falls off ONE of them is visible in the log).
     """
     pol = Policy(theta)
+    car = _car(_CFG.get("car"))
     eps = [rollout(pol, tk, dt=_CFG["dt"], T=_CFG["T"], wing=_CFG["wing"],
-                   tr=_track(tk)) for tk in _CFG["tracks"]]
+                   tr=_track(tk), car=car) for tk in _CFG["tracks"]]
     nrm = _CFG["norm"]
     k = float(len(eps))
     fit = sum(e.reward / w for e, w in zip(eps, nrm)) / k
@@ -113,7 +132,7 @@ def train(track: str = "arena", wing: str = "plate", iters: int = 60,
           seed: int = 0, T: float = 60.0, workers: int | None = None,
           dt: float = DT_TRAIN, out: str | None = None,
           init: str | None = None, verbose: bool = True,
-          save_every: int = 1) -> dict:
+          save_every: int = 1, car: str | None = None) -> dict:
     if pop % 2:
         pop += 1                      # mirrored sampling needs pairs
     rng = np.random.default_rng(seed)
@@ -127,12 +146,14 @@ def train(track: str = "arena", wing: str = "plate", iters: int = 60,
     if len(tracks) == 1:
         norm = [1.0]
     else:
-        norm = [float(rollout(Policy(), tk, dt=dt, T=T, wing=wing).reward)
+        norm = [float(rollout(Policy(), tk, dt=dt, T=T, wing=wing,
+                              car=_car(car)).reward)
                 for tk in tracks]
         if verbose:
             print("  baseline reward per track (the fitness normaliser): "
                   + ", ".join(f"{tk} {w:.1f} m" for tk, w in zip(tracks, norm)))
-    cfg = dict(track=tracks[0], tracks=tracks, norm=norm, wing=wing, dt=dt, T=T)
+    cfg = dict(track=tracks[0], tracks=tracks, norm=norm, wing=wing, dt=dt,
+               T=T, car=car)
     workers = min(os.cpu_count() or 1, pop) if workers is None else workers
 
     #  the multi-track fitness is a RATIO near 1, the single-track one is
@@ -171,6 +192,7 @@ def train(track: str = "arena", wing: str = "plate", iters: int = 60,
             if out and save_every and (it % save_every == 0):
                 _save_atomic(theta if m[0] >= best[0] else best[1], out, dict(
                     track=",".join(tracks), tracks=tracks, norm=norm,
+                    car=car or "corsa",
                     wing=wing, iters=iters, pop=pop, sigma=sigma,
                     lr=lr, seed=seed, T=T, dt_train=dt, done=it + 1,
                     secs=round(time.perf_counter() - t0, 1),
@@ -188,6 +210,7 @@ def train(track: str = "arena", wing: str = "plate", iters: int = 60,
     secs = time.perf_counter() - t0
     pol = Policy(best[1], meta=dict(
         track=",".join(tracks), tracks=tracks, norm=norm,
+        car=car or "corsa",
         wing=wing, iters=iters, pop=pop, sigma=sigma, lr=lr,
         seed=seed, T=T, dt_train=dt, secs=round(secs, 1),
         reward=round(best[0], 2), curve=curve))
@@ -216,6 +239,9 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default="drive/ml/checkpoints/policy.json")
     ap.add_argument("--save-every", type=int, default=1,
                     help="iterations between checkpoints (0 = only at the end)")
+    ap.add_argument("--car", default=None,
+                    help="cars.py key: corsa (default) | mx5 | 540i. The "
+                         "policy trims THAT car's own lock and wheelbase.")
     ap.add_argument("--eval", action="store_true",
                     help="after training, re-measure at DT_EVAL and print lap times")
     a = ap.parse_args(argv)
@@ -223,11 +249,12 @@ def main(argv=None) -> int:
     print(f"ES  {Policy.N_PARAM} params  pop {a.pop}  sigma {a.sigma}  lr {a.lr}  "
           f"{a.iters} iters  dt {a.dt * 1e3:.0f} ms  T {a.duration:.0f} s  "
           f"workers {a.workers or os.cpu_count()}  "
+          f"car {a.car or 'corsa'}  "
           f"track{'s' if len(tks) > 1 else ''} {'+'.join(tks)}"
           f"{f'  ({len(tks)} rollouts per candidate)' if len(tks) > 1 else ''}")
     r = train(a.track, a.wing, a.iters, a.pop, a.sigma, a.lr, a.seed,
               a.duration, a.workers, a.dt, a.out, a.init,
-              save_every=a.save_every)
+              save_every=a.save_every, car=a.car)
     if a.eval:
         print("\n  re-measured at DT_EVAL = 1 ms:")
         for tk in tks:

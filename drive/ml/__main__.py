@@ -97,6 +97,39 @@ def self_check(verbose: bool = True) -> bool:
          f"{op.s_progress:.0f} m in {op.t:.0f} s, ended '{op.ended}' "
          f"(K70_PLAN = {K70_PLAN}; at 0.0 it was off the road at 451.5 m)")
 
+    # --- three cars, and the anchor takes each one's own numbers ----------
+    #  Wave 4 pointed this package at the whole library. Two things have to
+    #  hold or a cross-car number is meaningless: the anchor's pure-pursuit
+    #  feedforward must use the CAR's wheelbase (a fixed 2.491 m would give
+    #  the 540i 14 % too much and the MX-5 10 % too little), and the Corsa
+    #  must be bit-for-bit unmoved by that change, because every committed
+    #  checkpoint's quoted lap time is a Corsa number.
+    import cars
+    from .baseline import WHEELBASE
+    o_turn = obs[0].copy()
+    o_turn[3] = o_turn[4] = o_turn[5] = 50.0 / 40.0      # a real R = 40 m bend
+    a_corsa = baseline_action(o_turn, LOCK_RAD, cars.get("corsa").L)
+    a_dflt = baseline_action(o_turn, LOCK_RAD)
+    a_mx5 = baseline_action(o_turn, LOCK_RAD, cars.get("mx5").L)
+    _rep("the anchor's feedforward follows the car's wheelbase",
+         float(np.max(np.abs(a_corsa - a_dflt))) == 0.0
+         and abs(a_mx5[0] - a_corsa[0]) > 1e-4,
+         f"corsa == default to 0.0e+00 (L = {WHEELBASE:.3f} m); "
+         f"mx5 steer differs by {a_mx5[0] - a_corsa[0]:+.5f} of lock "
+         f"(L = {cars.get('mx5').L:.3f} m)")
+    #  the skidpad is the ONE cell the Corsa-tuned anchor drives on all three
+    #  cars: it spins the MX-5 and the 540i on the arena at 485 / 488 m and
+    #  cannot brake the 540i for open's R = 45 m corner. That is a measured
+    #  wave-4 finding, not a bug, so the check asserts only what holds.
+    per_car = {k: rollout(p0, "skidpad", T=25.0, wing="plate",
+                          car=cars.get(k)) for k in ("corsa", "mx5", "540i")}
+    vs = [e.v_mean for e in per_car.values()]
+    _rep("a rollout drives every car in the library",
+         all(e.ended == "time" for e in per_car.values())
+         and len(set(round(v, 6) for v in vs)) == 3,
+         "skidpad, 25 s: " + ", ".join(
+             f"{k} {e.v_mean:.3f} m/s" for k, e in per_car.items()))
+
     # --- the training timestep is the one the docstring claims -----------
     e1 = rollout(p0, "arena", T=20.0, dt=DT_EVAL, tr=tr)
     e2 = rollout(p0, "arena", T=20.0, dt=DT_TRAIN, tr=tr)

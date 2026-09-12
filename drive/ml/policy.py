@@ -19,7 +19,7 @@ import os
 
 import numpy as np
 
-from .baseline import baseline_action
+from .baseline import WHEELBASE, baseline_action
 
 #: The observation, in order. Every entry is a read-only quantity the contract
 #: already publishes (CONTRACT section 4's attribute list) or a pure function
@@ -121,19 +121,28 @@ class Policy:
         h = np.tanh(self.W1 @ obs + self.b1)
         return np.tanh(self.W2 @ h + self.b2)
 
-    def action(self, obs, lock_rad: float = LOCK_RAD) -> np.ndarray:
+    def action(self, obs, lock_rad: float = LOCK_RAD,
+               wheelbase: float = WHEELBASE) -> np.ndarray:
         """(steer, pedal, wing) in [-1, 1]: the baseline plus this net's trim.
 
         Clipped, so the composed action can never ask for more than full lock
         or more than a full pedal however large the network's output grows.
+
+        `lock_rad` and `wheelbase` go to the ANCHOR only -- the network reads
+        neither. That is deliberate: the 308 parameters are a trim in the
+        car's own actuator units (a fraction of ITS lock, a fraction of ITS
+        pedal), so a checkpoint means the same thing on any car, and the
+        cross-car matrix in `evaluate.car_transfer` is comparing the same
+        policy rather than the same numbers meaning different angles.
         """
         net = self.act(obs)
         if not self.residual:
             return net[:3]
-        base = baseline_action(obs, lock_rad)
+        base = baseline_action(obs, lock_rad, wheelbase)
         return np.clip(base + RESID_GAIN * net[:3], -1.0, 1.0)
 
-    def controls(self, obs, Controls, lock_rad: float = LOCK_RAD):
+    def controls(self, obs, Controls, lock_rad: float = LOCK_RAD,
+                 wheelbase: float = WHEELBASE):
         """The action decoded into a `vehicle.Controls`.
 
         `Controls` is passed in rather than imported so this module has no
@@ -141,7 +150,7 @@ class Policy:
         importable with `drive.vehicle` absent, which is what keeps the
         self-check cheap and the package honestly additive.
         """
-        a = self.action(obs, lock_rad)
+        a = self.action(obs, lock_rad, wheelbase)
         pedal = float(a[1])
         return Controls(
             delta=float(a[0]) * lock_rad,
