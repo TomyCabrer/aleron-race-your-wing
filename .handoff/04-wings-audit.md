@@ -238,3 +238,93 @@ imply, it removes a 302 N uncommanded side force on every straight, and it
 costs nothing in the acceptance suite. Patch A is the option if someone wants
 the smaller behavioural delta.
 
+### 3(c). The rest of the deployment logic — PASS
+| item | contract | measured |
+|---|---|---|
+| `DEV_DEADBAND` | 5 % of lock | `0.028471 rad = 1.6313 deg` at the road wheel (`vehicle.py:101`, `LOCK_RAD = radians(32.625)`) |
+| `DEV_HOLD` | 0.3 s | side latched at **t = 0.299 s** of steady steer |
+| flank `t_ext` | 0.45 s | `dep_raw` 0 -> 1 in **0.449 s** (latch at 0.299, full at 0.748) |
+| flank `t_ret` | 0.30 s | `dep_raw` 1 -> 0 in **0.300 s** after `wing_on = False` |
+| `dep` law | smoothstep | `_smoothstep(x) = x*x*(3-2x)` (`vehicle.py:589`); `dep = 0.5033` at half of `t_ext` |
+| top `t_ext` | 0.45 | `top_raw` reaches 1.0 at **t = 0.449 s** after `wing_on` ('fixed') |
+| top `t_ret` | 0.30 | reaches 0 at t = 2.599 s = 1.500 (brake off) + 0.800 + **0.299** |
+| `TOP_HOLD` | 0.80 s | **0.799 s** between the trigger dropping and the retract starting |
+| `'fixed'` | out whenever armed | out at 0.449 s, never retracts while `wing_on` |
+| `'active'` | `brake > 0.05 or abs(delta) > DEADBAND`, held | out only during the brake window + 0.8 s |
+
+---
+
+## 4. Drag book-keeping — PASS, by an energy balance
+
+* `SFx = SFx_t - D_aero - D_dev - D_top - m g sin(grade)` (`vehicle.py:1039`).
+  Over a 2500-step closed-loop run with all three wings,
+  `max abs(SFx_code - (SFx_tyre - D_aero - D_dev - D_top)) = 2.842e-13 N`
+  with all three drags recomputed independently from `q` and the coefficients
+  (`max abs(tel drag - recomputed) = 1.492e-13 N`). **Each drag is charged
+  exactly once.**
+* `P_req = V*(coriolis + induced + D_aero + D_dev + D_top + Crr*m*g)`:
+  `max abs(P_required - that) = 1.455e-11 W`. Validate W3 independently:
+  48.50 -> 52.22 kW with the top wing.
+* **Coast-down energy closure** (free-rolling so `kappa == 0` and the only
+  longitudinal forces ARE the drags), 40 -> 20 m/s,
+  `runs/wingaudit_coastdown.json`:
+
+| case | time (s) | distance (m) | W_aero (J) | W_top (J) | (sum W)/dKE |
+|---|---|---|---|---|---|
+| bare car | 63.762 | 1767.85 | 605997 | 0 | **0.999993901** |
+| top wing 'fixed' (CD 0.1311) | 59.086 | 1638.40 | 561810 | 44190 | 0.999993422 |
+| top wing stowed, CD_stowed 0.05 | 61.887 | 1715.86 | 588174 | 17823 | 0.999993716 |
+
+  Closure to 6e-6 of dKE in every case: **no drag double-counted, none
+  missing**. The top wing costs 4.676 s and 129.45 m (-7.32 %) of coast-down,
+  and its own work is 7.29 % of the kinetic energy shed.
+* `CD_stowed` is honoured exactly: stowed (`dep_top = 0.000`) with
+  `CD_stowed = 0.05`, `D_top = 10.7808 N == q*S*CD_stowed = 10.7808 N`.
+* Pitch arm. `demand_x = (SFx_t*h_cg + D_top*(h_t - h_cg))/L`
+  (`vehicle.py:1095`) is the contract term for term, and the sign is the
+  geometry's: a rearward force `dz` above the CG is a couple `M_y = -D*dz`,
+  i.e. nose-UP, i.e. load to the REAR, and `dFz_x > 0` IS rear load in this
+  code's convention. Isolated measurement (CZ = 0, CD = 0.20, free-rolling,
+  steady at 30 m/s):
+
+| h_t | D_top | dFz_x measured | `D_top*(h_t-h_cg)/L` |
+|---|---|---|---|
+| 0.55 (= h_cg) | 43.200 N | **+0.0000 N** | +0.0000 N |
+| 1.30 | 43.200 N | **+13.0068 N** | +13.0068 N |
+
+  Exact, and zero arm at `h_t = h_cg` as it must be.
+* Flank-panel drag for scale: plate deployed at 40 m/s, `D_dev = 126.01 N`
+  against `D_aero = 475.23 N` = **+26.5 % of the aero drag budget**. That is
+  the standing cost of BUG 1 on every straight.
+
+---
+
+## 5. Frozen numbers at 1 kHz — PASS
+
+* `DevAero` and `TopAero` are both `@dataclass(frozen=True)`
+  (`__dataclass_params__.frozen == True`); **every field is a plain `float` or
+  `str`** (12 and 10 fields checked, `non-scalar fields: none`), and
+  `setattr` raises `FrozenInstanceError`.
+* After `import drive.vehicle` in a clean interpreter:
+  `drive.aero in sys.modules = False`, `pygame in sys.modules = False`.
+  (`scipy` is present, via `drive.powertrain`, which the contract's module map
+  allows.) `drive/aero` contains **no** `import pygame` anywhere.
+* `_aero`'s entire global surface, from the bytecode:
+  `CL_STALL, DEV_DEADBAND, DEV_DEP_LOCKOUT, DEV_HOLD, LD_DEV, RHO, S_DEV,
+  TOP_HOLD, Y_DEV, _smoothstep, atan2, bool, dict, fabs, float, int, max,
+  min, sqrt` and the methods `DevAero.cd, DevAero.cl, VehicleConfig.cl0,
+  cs_psi, dclda`. **No numpy, no interpolation, no table lookup, no solver.**
+* `step()` timing, 40 000 steps, gc off, after a 2000-step warm-up:
+
+| configuration | us/step | real-time factor |
+|---|---|---|
+| no wings | 45.9 | 21.8 x |
+| closed-form fin | 46.8 | 21.3 x |
+| two `DevAero` | 46.6 | 21.4 x |
+| two `DevAero` + `TopAero` | **48.0** | **20.8 x** |
+
+  All three wings cost **2.1 us/step (4.6 %)**, and `_aero` on its own is
+  **1.18-1.34 us/call** whatever is fitted. The only allocation is the
+  diagnostics dict (`dict(base, ...)` = two dicts a step); it is inside that
+  1.3 us and matches the contract's "`tel` is rebuilt every step".
+
