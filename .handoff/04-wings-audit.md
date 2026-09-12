@@ -157,3 +157,81 @@ h_t=1.3, 'fixed')` -> `CZ=1.360767, CD=0.131101`. Baseline peak a_y
 `share_f`, sign change of the benefit at share_f ~ +0.13. Evidence file:
 `runs/wingaudit_top_station.json`.
 
+---
+
+## 3(b). **BUG 1 (MAJOR) — the flank panel can NEVER change flanks once deployed**
+
+**file:line**: `drive/vehicle.py:853`
+```python
+        armed = has and ctl.wing_on and st.dev_side != 0
+```
+
+**What the code does.** `st.dev_side` is only ever *written* inside
+`if want != 0 and want != st.dev_side:` (`:811-815`), and the write is gated on
+`st.dep_raw <= DEV_DEP_LOCKOUT` (0.05) — "no side change while the panel is
+out". But `armed` (and therefore `cmd`, `:854`) asks only whether
+`st.dev_side != 0`, so nothing ever *commands* a retraction: once a side is
+latched, `dep_raw` is pinned at 1.0, `dep_raw <= 0.05` is never true again, and
+the side latch **deadlocks for the rest of the session**. `st.dev_side` also
+never returns to 0, so the panel never stows when the steering centres.
+
+**What the contract/physics says.** §4: "exactly one panel is active, the one
+on the **OUTER** flank of the turn", `sgn_dev` = sign of the steering command.
+After the first left-hand corner the panel must move to the left flank for the
+next right-hand corner. It does not.
+
+**Measured magnitude.**
+* Chicane rig (30 m/s, +0.10 rad for 2 s, straight 1 s, -0.10 rad for 3 s):
+  `dev_side` stays `+1` for all 6 s, `dev_hold` accumulates to 2.901 s (ten
+  times `DEV_HOLD`) and is never honoured; `F_dev = +302.40 N` **outward** for
+  the whole right-hand phase. `sides ever latched: [0, +1]`.
+* Toggling `wing_on` off on the straight does NOT rescue it: `dep_raw` reaches
+  0 but `want == 0` there so no hold accumulates, and on re-arming
+  `armed` is true again from `dev_side != 0`, so `dep_raw` is back past 0.05
+  (0.667) before the 0.3 s hold elapses. Still `[0, +1]`.
+* **90 s scripted arena lap, `--wing plate`, `runs/wingaudit_lap_plate.csv`:
+  the panel is on the INNER (wrong) flank for 2114 of 5778 cornering samples
+  = 36.6 % of cornering time (21.1 s of 57.8 s), and `wing_side` only ever
+  takes the values `{0, +1}` across the whole run.** In that 21.1 s the panel
+  is worth **-1.94 %** instead of **+3.82 %** of corner speed (measured above),
+  a 5.76 pp swing, while still charging its drag.
+* Straight-line consequence (30 m/s, `delta = 0`, `wing_on = True`, after one
+  left corner): `dep = 1.000`, `F_dev = +302.40 N` sideways, `D_dev = 94.50 N`,
+  `Mz_dev = +225.29 N.m`, uncorrected — the free-rolling rig spins the car up
+  to `r = 4.21 rad/s` in 5 s.
+
+**Minimal patch — pick ONE.** Both were regression-tested by monkey-patching
+`_aero` in-process: `validate --only D` **9/9 pass with every printed number
+bit-identical**, `validate --only W` **13/13 pass, identical**, and
+`steady_state_corner(100)` with the plate is `V = 30.415546 m/s` (gain
++3.8198 %) in all three variants, so neither patch moves a single acceptance
+number.
+
+*Patch A — conservative: retract in order to swap, keep the panel out between
+same-direction corners.*
+```
+OLD:        armed = has and ctl.wing_on and st.dev_side != 0
+NEW:        armed = (has and ctl.wing_on and st.dev_side != 0
+                     and not (want != 0 and want != st.dev_side))
+```
+Result: chicane swaps to `dev_side = -1` at t = 3.299 s (0.3 s hold + the
+retract to 0.05); lap wrong-flank time **36.6 % -> 2.9 %** (the residue is the
+honest swap transient); mean `D_dev` over the lap 34.28 -> 34.23 N.
+
+*Patch B — also stow when the steering centres, which is what a DEPLOYABLE
+device is for.*
+```
+OLD:        armed = has and ctl.wing_on and st.dev_side != 0
+NEW:        armed = has and ctl.wing_on and want != 0 and want == st.dev_side
+```
+Result: chicane swaps at t = 3.299 s AND `dep = 0.000, F_dev = 0.0 N` on the
+straight; lap wrong-flank time **36.6 % -> 0.1 %**; mean `D_dev` over the lap
+**34.28 -> 20.99 N (-39 %)**, i.e. the drag the device is supposed to save on
+the straights is now actually saved.
+
+**Recommendation: patch B.** It is the behaviour §4's "`dep` = smoothstepped
+deploy fraction" + `t_ret` + the top wing's explicit `'active'` mode all
+imply, it removes a 302 N uncommanded side force on every straight, and it
+costs nothing in the acceptance suite. Patch A is the option if someone wants
+the smaller behavioural delta.
+
