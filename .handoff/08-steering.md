@@ -96,6 +96,14 @@ axle is 26 deg past its peak.
 
 ---
 
+## Where it landed
+
+The repro harness is commit `a5f36b1`. The fixes themselves were staged when a
+concurrent session's `git commit` swept them into **`0b145f6`** ("handoff:
+wings audit -- fix P_req line number"), whose message is therefore NOT about
+them -- this note is the record. The flank-panel latch fix is its own commit,
+`ceb5e04`, and the eased-bound initialisation is the commit carrying this line.
+
 ## What was changed
 
 Four changes, all in `drive/input.py`, `drive/vehicle.py`, `drive/drive.py`,
@@ -260,3 +268,29 @@ WOT from rest, `power_scale 2.0`:
   "no gamepad found".
 * Everything here is at `--engine sport` (`power_scale 2.0`) on dry tarmac with
   `mu = 1` everywhere, which is the owner's car but not his wet patches.
+
+## One more, unrelated to the three symptoms
+
+`ceb5e04` fixes the flank panel's side latch, which the concurrent wings audit
+found. `armed` asked `st.dev_side != 0`, but the latch only moves while
+`dep_raw <= DEV_DEP_LOCKOUT`, so the first corner pinned `dep_raw` at 1.0 and
+the gate could never reopen: the panel never changed flanks again and never
+stowed. `armed` now asks `want != 0 and want == st.dev_side`. Verified on the
+latch state machine alone through a left-straight-right chicane (old: sides
+{0, +1}, no swap, 57.1% of cornering on the wrong flank, `dep` still 1.000
+with the wheel centred; new: sides {-1, 0, +1}, swap at 2.799 s, 0.0%,
+`dep` 0.000) and on the real `Vehicle` at 25 m/s with `--wing plate`
+(deploys +1 / F_dev +193 N at 0.50 s, stows by 2.00 s, latches -1 and deploys
+F_dev -157 N at 3.00 s). `steady_state_corner(100)` with the plate is
+unchanged at V = 30.415546 m/s, gain +3.8198%.
+
+## Why nothing was added to validate.py
+
+The task allowed cheap deterministic groups there. Deliberately not taken: the
+suite's counts are pinned at 82/82 and 100/100, and adding groups moves them.
+Every new assertion lives in `drive/input.py`'s own `self_check()` instead --
+the directional pair on both sides, the V17 catch magnitude, the eased
+unwind, the pad's pre-report pedal gate, both trigger-rest conventions, and
+the pad's directional stick limit. `--modules` runs `python3 -m drive.input`
+as group M and checks its exit code, so they are enforced by the suite without
+changing a single count.

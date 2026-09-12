@@ -592,10 +592,14 @@ class KeyboardInput:
         self.delta_lim_deg = DELTA_LOCK_DEG
         self.n_events = 0
         # The eased soft-lock bounds, one per direction (see update()). They
-        # start wide open so the first step cannot clamp a car that is already
-        # turned, and they only ever fall at the self-centring rate.
-        self._lim_l = DELTA_LOCK_DEG
-        self._lim_r = DELTA_LOCK_DEG
+        # start CLOSED, not at lock: a bound only ever falls at the self-centring
+        # rate, so starting wide open would leave the aid effectively off for the
+        # 0.26 s it takes to ease 32.625 deg down to the 9.30 deg floor after
+        # every construction and every R. Closed costs nothing instead, because
+        # a bound rises to its commanded value in one step and `delta_deg` is 0
+        # at both of those moments anyway.
+        self._lim_l = 0.0
+        self._lim_r = 0.0
 
     # -- key state ---------------------------------------------------------
 
@@ -781,7 +785,7 @@ class KeyboardInput:
         self.throttle = self.brake = self.clutch = self.handbrake = 0.0
         self._pending_gear = 0
         self._pending_starter = False
-        self._lim_l = self._lim_r = DELTA_LOCK_DEG
+        self._lim_l = self._lim_r = 0.0        # see __init__: closed, not lock
         self.delta_lim_deg = DELTA_LOCK_DEG
 
 
@@ -875,9 +879,10 @@ class GamepadInput:
         self._trig_rest = {"throttle": -1.0, "brake": -1.0}
         self._check_rest()
 
-        # the eased directional soft-lock bounds, as on the keyboard
-        self._lim_l = DELTA_LOCK_DEG
-        self._lim_r = DELTA_LOCK_DEG
+        # the eased directional soft-lock bounds, as on the keyboard: closed,
+        # so the first update() sets them rather than easing 0.26 s down to them
+        self._lim_l = 0.0
+        self._lim_r = 0.0
         self.delta_deg = 0.0
         self.axis_steer = 0.0           # post-deadzone stick, for the blend rule
         self.throttle = 0.0
