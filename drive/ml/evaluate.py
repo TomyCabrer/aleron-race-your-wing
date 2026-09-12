@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 import os
 
-from .env import lap_time, DT_EVAL
+from .env import lap_time, rollout, DT_EVAL, DT_TRAIN
 from .policy import Policy
 
 
@@ -85,6 +85,14 @@ def plot_curve(path: str, out: str) -> str | None:
     if not curve:
         return None
     it = [c["it"] for c in curve]
+    #  The TRUE baseline, re-measured: `curve[0]` is the mean policy AFTER the
+    #  first ES update, which on this run had already wandered off the track
+    #  (527 m), and drawing that as "the baseline" flatters the result and
+    #  wrecks the y scale. theta = 0 is the honest reference.
+    T = float(pol.meta.get("T", 70.0))
+    base_r = rollout(Policy(), str(pol.meta.get("track", "arena")),
+                     dt=float(pol.meta.get("dt_train", DT_TRAIN)), T=T,
+                     wing=str(pol.meta.get("wing", "plate"))).reward
     fig, ax = plt.subplots(2, 1, figsize=(7.5, 6.0), sharex=True,
                            gridspec_kw=dict(height_ratios=(2, 1)))
     ax[0].plot(it, [c["pop_best"] for c in curve], lw=0.9, color="#9aa0a6",
@@ -93,8 +101,14 @@ def plot_curve(path: str, out: str) -> str | None:
                label="population median")
     ax[0].plot(it, [c["mean"] for c in curve], lw=1.8, color="#4fa3ff",
                label="mean policy (the curve)")
-    ax[0].axhline(curve[0]["mean"], ls="--", lw=0.9, color="#ff8c2b",
-                  label=f"baseline, {curve[0]['mean']:.0f} m")
+    ax[0].axhline(base_r, ls="--", lw=1.1, color="#ff8c2b",
+                  label=f"hand-written baseline, {base_r:.0f} m")
+    #  clip the y range to the band that matters: the first iterate's crash
+    #  would otherwise compress the whole run into the top 10 % of the axis
+    fin = [c["mean"] for c in curve] + [base_r]
+    lo = min(min(fin), base_r) - 0.02 * abs(base_r)
+    ax[0].set_ylim(max(lo, 0.90 * min(base_r, min(fin))),
+                   1.02 * max(max(fin), max(c["pop_best"] for c in curve)))
     ax[0].set_ylabel(f"reward = m advanced in {pol.meta.get('T', 0):.0f} s")
     ax[0].legend(fontsize=8, loc="lower right")
     ax[0].grid(alpha=0.25)
