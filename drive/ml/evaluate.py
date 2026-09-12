@@ -175,8 +175,9 @@ def plot_curve(path: str, out: str) -> str | None:
         #  meaned, so the hand-written driver sits at exactly 1.0 and there is
         #  nothing to re-measure. Drawing it as metres would be a category
         #  error -- the two tracks do not have the same metres.
-        base_r, y_lab = 1.0, ("fitness = mean over tracks of "
-                              f"(m advanced in {T:.0f} s / baseline's m)")
+        #  keep this SHORT: at 7.5 in wide with two stacked axes a longer
+        #  label is clipped by tight_layout rather than shrinking the axes
+        base_r, y_lab = 1.0, f"fitness = mean(m / baseline m) in {T:.0f} s"
         b_lab = "hand-written baseline, 1.000 by construction"
     else:
         base_r = rollout(Policy(), str(tracks[0]),
