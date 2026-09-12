@@ -62,6 +62,14 @@ def _score(theta) -> tuple:
             ep.wing_outer_frac, ep.laps, ep.ended)
 
 
+def _save_atomic(theta, path: str, meta: dict) -> None:
+    """Write to a sibling temp file and rename: a kill mid-write must not be
+    able to leave a half-written checkpoint where a good one used to be."""
+    tmp = f"{path}.part"
+    Policy(np.asarray(theta, float).copy(), meta).save(tmp)
+    os.replace(tmp, path)
+
+
 def _rank_centre(x) -> np.ndarray:
     """Rewards -> centred ranks in [-0.5, +0.5]. Scale-free and outlier-proof,
     which is the point: see the module docstring on the -60 off-track cliff."""
@@ -74,7 +82,8 @@ def train(track: str = "arena", wing: str = "plate", iters: int = 60,
           pop: int = 24, sigma: float = 0.10, lr: float = 0.06,
           seed: int = 0, T: float = 60.0, workers: int | None = None,
           dt: float = DT_TRAIN, out: str | None = None,
-          init: str | None = None, verbose: bool = True) -> dict:
+          init: str | None = None, verbose: bool = True,
+          save_every: int = 1) -> dict:
     if pop % 2:
         pop += 1                      # mirrored sampling needs pairs
     rng = np.random.default_rng(seed)
@@ -109,6 +118,16 @@ def train(track: str = "arena", wing: str = "plate", iters: int = 60,
                               t=float(m[2]), v_mean=float(m[3]),
                               wing_frac=float(m[4]), wing_outer=float(m[5]),
                               laps=int(m[6]), ended=m[7]))
+            #  Checkpoint EVERY iteration, atomically. The first long run of
+            #  this trainer was killed at iteration 111 of 150 and lost 27
+            #  minutes of compute because the save was at the end; a run that
+            #  cannot be interrupted is a run that has to be repeated.
+            if out and save_every and (it % save_every == 0):
+                _save_atomic(theta if m[0] >= best[0] else best[1], out, dict(
+                    track=track, wing=wing, iters=iters, pop=pop, sigma=sigma,
+                    lr=lr, seed=seed, T=T, dt_train=dt, done=it + 1,
+                    secs=round(time.perf_counter() - t0, 1),
+                    reward=round(best[0], 2), curve=curve))
             if verbose:
                 print(f"  it {it:3d}  mean {m[0]:8.1f}  pop best {R.max():8.1f}  "
                       f"med {np.median(R):8.1f}  s {m[1]:7.1f} m  v {m[3]:5.2f}  "
@@ -145,6 +164,8 @@ def main(argv=None) -> int:
     ap.add_argument("--dt", type=float, default=DT_TRAIN)
     ap.add_argument("--init", default=None, help="warm-start from a checkpoint")
     ap.add_argument("--out", default="drive/ml/checkpoints/policy.json")
+    ap.add_argument("--save-every", type=int, default=1,
+                    help="iterations between checkpoints (0 = only at the end)")
     ap.add_argument("--eval", action="store_true",
                     help="after training, re-measure at DT_EVAL and print lap times")
     a = ap.parse_args(argv)
@@ -152,7 +173,8 @@ def main(argv=None) -> int:
           f"{a.iters} iters  dt {a.dt * 1e3:.0f} ms  T {a.duration:.0f} s  "
           f"workers {a.workers or os.cpu_count()}")
     r = train(a.track, a.wing, a.iters, a.pop, a.sigma, a.lr, a.seed,
-              a.duration, a.workers, a.dt, a.out, a.init)
+              a.duration, a.workers, a.dt, a.out, a.init,
+              save_every=a.save_every)
     if a.eval:
         print("\n  re-measured at DT_EVAL = 1 ms:")
         print("  ", json.dumps(lap_time(r["policy"], a.track, wing=a.wing,
