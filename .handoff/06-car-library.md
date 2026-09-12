@@ -489,3 +489,69 @@ with the 5-speed Corsa. Fix:
 n_up = {g: p.n_up_a + (p.n_up_k12 if g <= 2 else p.n_up_k34)
         for g in range(1, len(p.gear) + 1)}
 ```
+
+---
+
+# Wave 3: are these three genuinely different cars now?
+
+The wave-3 brief asked for "the car library to be genuinely three cars rather
+than one car with three labels". Everything below is measured, not asserted.
+
+| | drive | m | torque @ rpm | power @ rpm | cut | 0–100 | peak a_y | stop | lock margin | steer lock |
+|---|---|---|---|---|---|---|---|---|---|---|
+| corsa | **front** | 1010 | 110 @ 4000 | 55 kW @ 5600 | 6200 | 14.69 s | 8.608 | 36.53 m | +8 % | 32.62° |
+| mx5 | **rear** | 1140 | 168 @ 5000 | 109 kW @ 6500 | 7000 | 9.49 s | 9.022 | 36.03 m | +102 % | 31.20° |
+| 540i | **rear** | 1780 | 440 @ 3600 | 210 kW @ 5400 | 6400 | 6.35 s | 8.505 | 35.97 m | +94 % | 31.76° |
+
+| | gearbox | final | km/h per 1000 rpm in top | top-gear speed at the cut |
+|---|---|---|---|---|
+| corsa | 5-speed | 3.94 | 30.4 | 188.2 km/h |
+| mx5 | 5-speed | 4.30 | 30.1 | 210.7 km/h |
+| 540i | **6-speed** | 2.81 | **50.4** | 322.8 km/h |
+
+What is now genuinely per-car: the **driven axle**, the **torque curve** (both
+published points exact, own rev range, own idle, own cut, own shift schedule
+placed as a fraction of it), the **clutch capacity**, the **brakes** (own disc
+and drum geometry, own line pressure, own handbrake), the **steering lock**
+(physics, aid and HUD), the **tyre geometry**, mass, geometry, inertias, CoG,
+aero reference area and gearing — plus the ballast model on top of all of it.
+
+Three observations worth keeping:
+
+* **Braking distance converges** (36.53 / 36.03 / 35.97 m). That is not a bug
+  and it is not laziness: with brakes sized to the car, stopping distance is
+  **tyre**-limited, and all three run the same tyre coefficient set. The
+  spread is `mu_scale` and aero. The *locked-wheel* distances still separate
+  properly (49.86 / 50.32 / 48.08 m) because those measure the tyre under a
+  sliding wheel plus the mass being stopped.
+* **Peak lateral barely separates** (8.608 / 9.022 / 8.505 m/s²) and the 540i
+  is the *worst* despite the stickiest `mu_scale`. That is real: 1780 kg on
+  the same tyre curve is pure load sensitivity. Strip `mu_scale` out and the
+  540i is −6.4 % against the Corsa.
+* **The 540i's 6th gear is an overdrive** (50.4 km/h per 1000 rpm; 322.8 km/h
+  at the cut against a 250 km/h limiter), which is why its top speed is set by
+  the limiter and its power balance shows a surplus. Correct for the car.
+
+## What is STILL fiction, plainly
+
+1. **The torque-curve shape between the two published points.** The shape
+   family is the Corsa's own NA curve, re-anchored. Both published points are
+   exact and the rev range is right, but the MX-5's remaining ~0.8 s (9.49 s
+   against a real ~8.5 s) and the 540i's ~0.15 s live here, along with launch
+   and driveline losses. A real curve needs a dyno sheet; none of these have
+   one. **This is the largest remaining gap.**
+2. **The whole suspension block is `est` on all three** — as it is for the
+   Corsa, because nobody publishes it. The two new cars' roll gradients are
+   too soft and that is `Kphi_tot`, not the scaling.
+3. **`CdA` for the two new cars is `Cd × estimated A`** and has never been
+   validated against a top speed. The 540i's cannot be — its 250 km/h is a
+   limiter.
+4. **One tyre's worth of coefficient data.** All grip differences are a
+   labelled `mu_scale` calibration. This is the deepest limitation in the
+   library and no amount of work inside this repo fixes it.
+5. **Pad mu, drum C\*, piston diameters and pad height are `est`** — only the
+   disc and drum *diameters* are documented. They are estimated once, in the
+   BRAKE BLOCK, and shared by every car.
+6. **Inertias, CoG heights and axle splits are `est`** with stated bands.
+7. **`'awd'` is refused**, not implemented.
+8. Nobody has driven a non-Corsa interactively with a pad.
