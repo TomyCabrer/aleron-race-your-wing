@@ -1593,6 +1593,134 @@ def self_check(p: PowertrainParams | None = None, car: CorsaC | None = None,
          f"wot_torque(1e6) = {wot_torque(p, 1e6):.3f} = wot_torque(7000)",
          "clipped", wot_torque(p, 1e6) == wot_torque(p, 7000.0))
 
+    # ---------------- the automatic's shift map ----------------
+    # The two schedules used to be independent, and the ratio steps of this box
+    # are big enough that they OVERLAPPED, so the automatic hunted. See
+    # PowertrainParams.v_shift_hyst and .handoff/05-when-automatic.md for the
+    # measured numbers these five guard.
+
+    def _auto_hold(v_set, grade, T=20.0, ps_p=None, dt=1e-3):
+        """A speed-HOLDING driver (PI on speed error, the way a person cruises)
+        on a grade. This is the condition an automatic hunts in: the pedal is
+        whatever holding the speed needs, and where the two lines overlap there
+        the box cycles without limit. Counts the shifts in the SECOND HALF of
+        the window: one change early is the box leaving the gear the rig was
+        seeded in, but a settled box makes NONE. Returns (shifts, mean pedal)."""
+        pp = ps_p or p
+        g0 = 1
+        for g in range(1, len(pp.gear) + 1):
+            if rpm_at_speed(pp, g, v_set) > pp.n_dn_a + 0.3 * pp.n_dn_k:
+                g0 = g
+        r = _Rig(pp, car, gear=g0, v=v_set,
+                 rpm=max(rpm_at_speed(pp, g0, v_set), pp.n_idle))
+        r.s.t_since_shift = 99.0
+        i = PtInput(auto_gearbox=True, auto_clutch=True)
+        integ, last, n, thr_sum, k = 0.25, r.s.gear, 0, 0.0, 0
+        while r.t < T:
+            err = v_set - r.v
+            integ = min(max(integ + 0.35 * err * dt, 0.0), 1.0)
+            i.throttle = min(max(integ + 0.12 * err, 0.0), 1.0)
+            o = r.step(i, dt)
+            r.v -= G * math.sin(grade) * dt
+            thr_sum += i.throttle
+            k += 1
+            if o.gear != last and o.gear != 0:
+                if r.t > 0.5 * T:
+                    n += 1
+                last = o.gear
+        return n, thr_sum / k
+
+    n_h, thr_h = _auto_hold(6.0, 0.0)
+    note("auto_settles_flat_6ms",
+         f"{n_h} shifts in the last 10 s at {thr_h:.2f} pedal",
+         "0 (was 4: 1>2 2>1 for ever, 1.5 s apart)", n_h == 0)
+    n_h, thr_h = _auto_hold(6.0, 0.06)
+    note("auto_settles_6pc_grade_6ms",
+         f"{n_h} shifts in the last 10 s at {thr_h:.2f} pedal",
+         "0 (was 7)", n_h == 0)
+
+    # The structural statement, algebraically over the whole pedal range: the
+    # road speed the car is at the instant AFTER an upshift out of gear g is
+    # the upshift's own speed, so a downshift back into g must be refused
+    # there. This is the one that used to fail at EVERY pedal for 1-2.
+    bad = []
+    for g in range(1, len(p.gear)):
+        for j in range(0, 101):
+            thr = j / 100.0
+            v_up = speed_at_rpm(p, g, n_up_schedule(p, g, thr))
+            n_next = rpm_at_speed(p, g + 1, v_up)
+            st_t = PowertrainState(omega_e=n_next * RPS, gear=g + 1)
+            st_t.t_since_shift = 99.0
+            if _auto_target(p, st_t, PtInput(throttle=thr, auto_gearbox=True),
+                            v_up, n_next) == g:
+                bad.append((g, thr))
+    note("auto_upshift_never_reversed",
+         "no pedal in 0..1 asks for the gear back"
+         if not bad else f"{len(bad)} reversals, first gear {bad[0][0]+1}->"
+                         f"{bad[0][0]} at pedal {bad[0][1]:.2f}",
+         "never (1->2 used to reverse at EVERY pedal, 2->3 above 0.20)",
+         not bad)
+
+    # A box on the brakes must not change up. N_UP at a closed pedal is 2400
+    # and n_dn_brake is 2200, so corner entry used to give 4->5 at 3034 rpm
+    # and then three downshifts, with the first one in the wrong direction.
+    r = _Rig(p, car, gear=4, v=22.0, rpm=rpm_at_speed(p, 4, 22.0))
+    r.s.t_since_shift = 99.0
+    i = PtInput(throttle=0.0, brake=0.6, auto_gearbox=True, auto_clutch=True)
+    up, seq, last = 0, [], 4
+    while r.t < 6.0:
+        o = r.step(i, 1e-3)
+        if o.gear != last and o.gear != 0:
+            if o.gear > last:
+                up += 1
+            seq.append(f"{last}>{o.gear}")
+            last = o.gear
+    note("auto_no_upshift_on_the_brakes",
+         f"22 m/s in 4th, brake 0.6: {' '.join(seq)}, ends gear {r.s.gear}",
+         "all downward, reaches 1st", up == 0 and r.s.gear == 1)
+
+    # A throttle-demand downshift arrives in ONE gear change. Walking down took
+    # 3 x (t_declutch + t_gate + t_engage + t_shift_lockout) = 4.5 s from 5th
+    # and overshot into a gear the up-schedule undid at once.
+    r = _Rig(p, car, gear=5, v=16.9, rpm=rpm_at_speed(p, 5, 16.9))
+    r.s.t_since_shift = 99.0
+    i = PtInput(throttle=0.05, auto_gearbox=True, auto_clutch=True)
+    while r.t < 0.5:
+        r.step(i, 1e-3)
+    t0, i.throttle = r.t, 1.0
+    t_eng, g_eng = None, None
+    while r.t - t0 < 1.2:
+        o = r.step(i, 1e-3)
+        if o.gear != 5 and o.gear != 0 and t_eng is None:
+            t_eng, g_eng = r.t - t0, o.gear
+    note("auto_kickdown_one_shift",
+         f"5th at 16.9 m/s, pedal 0.05->1.00: gear {g_eng} engaged at "
+         f"{t_eng if t_eng else float('nan'):.3f} s",
+         f"2nd at {p.t_declutch + p.t_gate:.2f} s (was 4th, then 3rd, then 2nd)",
+         g_eng == 2 and t_eng is not None
+         and abs(t_eng - (p.t_declutch + p.t_gate)) < 0.02)
+
+    # An automatic sits in gear, not in neutral: it must creep off a closed
+    # pedal, and it must never put 1st in at a road speed 1st cannot take
+    # (`v_x > 0.5` alone used to, which is 14 800 rpm of input speed at 30 m/s).
+    r = _Rig(p, car, gear=0, v=0.0, rpm=p.n_idle)
+    i = PtInput(throttle=0.0, auto_gearbox=True, auto_clutch=True)
+    while r.t < 12.0:
+        o = r.step(i, 1e-3)
+    note("auto_creeps_from_rest",
+         f"{r.v:.2f} m/s ({r.v * 3.6:.1f} km/h) over {r.x:.1f} m in gear "
+         f"{r.s.gear} at {o.rpm:.0f} rpm, stalled={r.s.stalled}",
+         "creeps, gear 1, not stalled",
+         r.v > 0.5 and r.s.gear == 1 and not r.s.stalled)
+    st_n = PowertrainState(omega_e=p.n_idle * RPS, gear=0)
+    st_n.t_since_shift = 99.0
+    note("auto_neutral_to_1st_overrev_guard",
+         f"neutral at 30 m/s (1st would be "
+         f"{abs(rpm_at_speed(p, 1, 30.0)):.0f} rpm) -> "
+         f"{_auto_target(p, st_n, PtInput(auto_gearbox=True), 30.0, p.n_idle)}",
+         "None", _auto_target(p, st_n, PtInput(auto_gearbox=True),
+                              30.0, p.n_idle) is None)
+
     # ---------------- 0-100 km/h ----------------
     acc = accel_run(p, car, (60 / 3.6, 80 / 3.6, 100 / 3.6, 120 / 3.6, 26.8224),
                     launch_rpm=p.n_launch, t_shift=0.70)
