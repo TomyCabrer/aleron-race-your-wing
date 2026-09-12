@@ -722,7 +722,17 @@ def _auto_target(p: PowertrainParams, s: PowertrainState, inp: PtInput,
 
     # --- up: never on the brakes, unless the driveline is about to overrev --
     if s.gear < len(p.gear) and not (braking and n_e < p.n_overrev):
-        if n_e > n_up_schedule(p, s.gear, thr):
+        n_up = n_up_schedule(p, s.gear, thr)
+        # The ROAD has to agree with the engine. n_e alone is the wrong sensor:
+        # spinning wheels decouple it from the car, the line fires against no
+        # traction at all, and the box changes up at a walking pace -- measured
+        # on the full vehicle at power_scale 2.0 with TC off, 1>2 at 3.61 m/s
+        # on mu 0.45 (13.05 m/s is where it belongs) and a walk to FOURTH at
+        # 6.30 m/s on mu 0.30. The same v_shift_hyst band: locked, the two
+        # speeds agree to the driving kappa (1-2%, measured 12.75-12.91 m/s
+        # against the 13.05 the line asks for, so the bar at 11.25 is never
+        # near binding), and under spin they do not.
+        if n_e > n_up and abs(v_x) > speed_at_rpm(p, s.gear, n_up) - p.v_shift_hyst:
             return s.gear + 1
 
     # --- down --------------------------------------------------------------
@@ -1712,6 +1722,25 @@ def self_check(p: PowertrainParams | None = None, car: CorsaC | None = None,
          f"{r.s.gear} at {o.rpm:.0f} rpm, stalled={r.s.stalled}",
          "creeps, gear 1, not stalled",
          r.v > 0.5 and r.s.gear == 1 and not r.s.stalled)
+    # An upshift needs the ROAD, not just the engine: spinning wheels decouple
+    # n_e from the car. Measured on the full vehicle at power_scale 2.0 with TC
+    # off, this used to change up at 3.61 m/s on mu 0.45 and walk to FOURTH at
+    # 6.30 m/s on mu 0.30. (vehicle.py cannot be imported here -- it imports
+    # this module -- so the two speeds are handed to _auto_target directly.)
+    def _up_at(v):
+        n_ov = n_up_schedule(p, 1, 1.0) + 1.0      # a hair OVER the line
+        st_u = PowertrainState(omega_e=n_ov * RPS, gear=1)
+        st_u.t_since_shift = 99.0
+        return _auto_target(p, st_u, PtInput(throttle=1.0, auto_gearbox=True),
+                            v, n_ov)
+    v_up1 = speed_at_rpm(p, 1, n_up_schedule(p, 1, 1.0))
+    note("auto_upshift_needs_the_road",
+         f"6150 rpm in 1st at 3.6 m/s (wheels spinning) -> {_up_at(3.6)}, at "
+         f"{v_up1 - 0.1:.1f} m/s (locked) -> {_up_at(v_up1 - 0.1)}",
+         f"None / 2  (the line is {v_up1:.2f} m/s, the bar "
+         f"{v_up1 - p.v_shift_hyst:.2f})",
+         _up_at(3.6) is None and _up_at(v_up1 - 0.1) == 2)
+
     st_n = PowertrainState(omega_e=p.n_idle * RPS, gear=0)
     st_n.t_since_shift = 99.0
     note("auto_neutral_to_1st_overrev_guard",
