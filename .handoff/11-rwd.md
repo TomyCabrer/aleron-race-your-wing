@@ -50,15 +50,17 @@ being imposed. No second load-transfer path was added.
 
 ## Re-measured, all three cars
 
-0–100 km/h through the real integrator (`--script accel`):
+0–100 km/h through the real integrator (`--script accel`). **Superseded by
+wave 3 item 1 (per-car engine curves) — both columns kept:**
 
-| car | RWD implemented | stale FWD | real car |
-|---|---|---|---|
-| corsa (FWD) | **14.8024 s** | 14.80 s | 14.4 s (Opel), ~15.5 s commonly quoted |
-| mx5 (RWD) | **10.4167 s** | 10.90 s | ~8.5 s |
-| 540i (RWD) | **6.8138 s** | 7.845 s | ~6.2 s |
+| car | + per-car curve | RWD only | stale FWD | real car |
+|---|---|---|---|---|
+| corsa (FWD) | **14.8024 s** | 14.8024 s | 14.80 s | 14.4 s (Opel), ~15.5 s quoted |
+| mx5 (RWD) | **9.3117 s** | 10.4167 s | 10.90 s | ~8.5 s |
+| 540i (RWD) | **6.9047 s** | 6.8138 s | 7.845 s | ~6.2 s |
 
-Rigid rig (`accel_run`): corsa 14.686 s, mx5 10.400 s, 540i 6.292 s.
+Rigid rig (`accel_run`), with the per-car curve: corsa 14.686 s (unchanged),
+mx5 9.488 s, 540i 6.353 s.
 
 Open-loop ramp steer peak `a_y` (`peak_ay`, the reference truth per CONTRACT §4):
 corsa **8.6084**, mx5 **9.0225**, 540i **8.5046** m/s². Unchanged by this work —
@@ -69,14 +71,12 @@ Also unaffected: braking is on all four wheels on every car.
 
 ## What is still not right, and why
 
-* **The engine, not the driveline.** The MX-5 is still ~2 s slow (10.42 s
-  against ~8.5 s) because `engine_scale` scales the **Corsa's curve shape**:
-  19 breakpoints built once at import, peak torque at 4000 rpm, cut at 6200.
-  A BP-Z3 peaks at 5000 and revs to 7000; an M62TU V8 peaks at 3600. The
-  540i lands within 10 % almost by luck — its real peak is nearest the
-  Corsa's. Giving each car its own curve means a per-car `NM_BP`, which is
-  `powertrain.py` surgery and is not in this item. **I did not tune
-  `engine_scale` to make the numbers match**, which would have hidden this.
+* ~~**The engine, not the driveline.**~~ **FIXED in wave 3 item 1** —
+  `powertrain.engine_curve(car)` builds each engine's own curve from its own
+  anchors, and `engine_scale` is retired. The MX-5 went 10.42 → 9.31 s
+  (against a real ~8.5 s), so the remaining ~0.8 s is launch, driveline loss
+  and the still-estimated shape between the two published points, not the
+  rev range. The 540i is 6.90 s against a real ~6.2 s.
 * The brakes are the Corsa's on every car (`corsa_c.brakes` is `MISSING` and
   `CarSpec` has no brake fields).
 * `LOCK_RAD` / `DEV_DEADBAND` are still the Corsa's steering lock.

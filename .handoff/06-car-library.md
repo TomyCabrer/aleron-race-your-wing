@@ -347,14 +347,15 @@ WOT from rest, dry, TC off. **These numbers were re-measured after real
 rear-wheel drive landed (`.handoff/11-rwd.md`) and the stale FWD column is
 kept beside them, because it is what the first version of this note quoted:**
 
-| car | 0–100 km/h, RWD implemented | as shipped FWD (stale) | real car |
-|---|---|---|---|
-| corsa (FWD) | **14.8024 s** | 14.80 s | ~15.5 s quoted, 14.4 s Opel's own |
-| mx5 (RWD) | **10.4167 s** | 10.90 s | ~8.5 s |
-| 540i (RWD) | **6.8138 s** | 7.845 s | ~6.2 s |
+| car | now: RWD + own curve | RWD only | as shipped FWD (stale) | real car |
+|---|---|---|---|---|
+| corsa (FWD) | **14.8024 s** | 14.8024 s | 14.80 s | ~15.5 s quoted, 14.4 s Opel's own |
+| mx5 (RWD) | **9.3117 s** | 10.4167 s | 10.90 s | ~8.5 s |
+| 540i (RWD) | **6.9047 s** | 6.8138 s | 7.845 s | ~6.2 s |
 
-The 540i is now within 10 % of its real figure. The Corsa is unchanged to
-four decimals, as it must be — it was always FWD.
+The Corsa is unchanged to four decimals through both changes, as it must be.
+See `.handoff/11-rwd.md` for the driveline and this note's engine section for
+the curve.
 
 ### Which of these are still nonsense, plainly
 
@@ -368,10 +369,17 @@ four decimals, as it must be — it was always FWD.
   instead of unloading it (+765 N on the MX-5, +2058 N on the 540i, against
   −504 N on the Corsa). What remains off is the **engine**, below, not the
   driveline.
-* **The torque curve is the Corsa's shape, scaled.** 19 breakpoints built
-  once at import, peak at 4000 rpm, a 6200 rpm cut. The MX-5's BP-Z3 peaks at
-  5000 and revs to 7000; the M62TU peaks at 3600 and is nothing like a 1.2
-  four. `cars.py` labels `engine_scale` an approximation and it is.
+* ~~**The torque curve is the Corsa's shape, scaled.**~~ **FIXED (wave 3
+  item 1).** `powertrain.engine_curve(car)` builds each engine's own curve
+  from five anchors on the car plus its published `T_max` / `P_max`, and hits
+  **both** published points exactly (T 168.000 / 440.000 N·m, P 109.000 /
+  210.000 kW). The rev range is now the engine's own — MX-5 cut 7000, 540i
+  6400 — and the shift schedule is placed as a fraction of the cut, so the
+  MX-5 no longer short-shifts 950 rpm below its own power peak.
+  `engine_scale` is **retired and 1.0 on every car**; it would double-count.
+  What is still `est` is the curve SHAPE between the two published points
+  (the shape family is the Corsa's, re-anchored) — a real per-engine curve
+  needs a dyno sheet and none of these have one.
 * ~~**Closed-loop lap times do not transfer.**~~ **FIXED** — see
   `.handoff/12-lapdriver.md`. `LapDriver` now scales its planned grip (from an
   open-loop ramp steer of that car, cached), its path gains (by wheelbase),
@@ -395,7 +403,15 @@ four decimals, as it must be — it was always FWD.
   note above.
 * `CdA` for both is `Cd × A` with an estimated `A` and has never been
   validated against a top speed (the 540i's 250 km/h is a limiter).
-* **The brakes are the Corsa's on every car**, and cannot be otherwise:
+* ~~**The brakes are the Corsa's on every car**~~ — **FIXED (wave 3 item 2).**
+  `CarSpec` carries the documented hardware (MX-5 255 mm front / 251 mm rear
+  discs, 540i 325 / 320 mm vented discs, against the Corsa's 236 mm disc and
+  200 mm drum) and `powertrain.brake_coeffs` derives `kbf`/`kbr` with the
+  BRAKE BLOCK's own formulas. Locked-wheel 100–0: corsa 49.8614 m unchanged,
+  mx5 55.35 → 50.3193, 540i **64.00 → 48.0817**. Front still locks before
+  rear on every car, dry and wet, by a wider margin than the Corsa's.
+  Steering lock is per-car too (`vehicle.car_lock_rad`). The original text
+  follows for the record:
   `corsa_c.brakes` is `MISSING`, `CarSpec` has no brake fields, and
   `powertrain.brake_torques` holds `KBF = 1.6187e-4`, `KBR = 5.4154e-5`
   N·m/Pa as module constants. In practice it does not bite for these three,
