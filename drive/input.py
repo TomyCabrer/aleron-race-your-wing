@@ -563,8 +563,14 @@ class KeyboardInput:
 
     def __init__(self, steer_limit: bool = True, fine_key: int = pygame.K_LSHIFT,
                  auto_gearbox: bool = True, wing_on: bool = False,
-                 held_keys: dict | None = None, k_us_deg: float = K_US_DEG):
+                 held_keys: dict | None = None, k_us_deg: float = K_US_DEG,
+                 lock_deg: float = DELTA_LOCK_DEG):
         self.steer_limit = bool(steer_limit)
+        #: this car's ROAD-WHEEL lock. DELTA_LOCK_DEG (the Corsa's 32.625) is
+        #: the default, so every existing caller and every acceptance path is
+        #: bit-for-bit; the interactive session passes the selected car's,
+        #: from `vehicle.car_lock_rad`.
+        self.lock_deg = float(lock_deg)
         self.fine_key = int(fine_key)
         self.auto_gearbox = bool(auto_gearbox)
         self.auto_clutch = True
@@ -594,7 +600,7 @@ class KeyboardInput:
         self._pending_starter = False
 
         # Diagnostics for the HUD / telemetry.
-        self.delta_lim_deg = DELTA_LOCK_DEG
+        self.delta_lim_deg = self.lock_deg
         self.n_events = 0
         # The eased soft-lock bounds, one per direction (see update()). They
         # start CLOSED, not at lock: a bound only ever falls at the self-centring
@@ -756,9 +762,10 @@ class KeyboardInput:
         #     it back at exactly this rate.
         if self.steer_limit:
             lim_l, lim_r = steer_limit_pair_deg(V, beta_deg,
-                                                k_us_deg=self.k_us_deg)
+                                                k_us_deg=self.k_us_deg,
+                                                lock_deg=self.lock_deg)
         else:
-            lim_l = lim_r = DELTA_LOCK_DEG
+            lim_l = lim_r = self.lock_deg
         ease = w_ret * dt
         self._lim_l = lim_l if lim_l >= self._lim_l else max(lim_l, self._lim_l - ease)
         self._lim_r = lim_r if lim_r >= self._lim_r else max(lim_r, self._lim_r - ease)
@@ -791,7 +798,7 @@ class KeyboardInput:
         self._pending_gear = 0
         self._pending_starter = False
         self._lim_l = self._lim_r = 0.0        # see __init__: closed, not lock
-        self.delta_lim_deg = DELTA_LOCK_DEG
+        self.delta_lim_deg = self.lock_deg
 
 
 # ---------------------------------------------------------------------------
@@ -826,7 +833,8 @@ class GamepadInput:
 
     def __init__(self, index: int = 0, mapping: dict | None = None,
                  steer_limit: bool = True, joystick=None,
-                 k_us_deg: float = K_US_DEG, layout: str | None = None,
+                 k_us_deg: float = K_US_DEG, lock_deg: float = DELTA_LOCK_DEG,
+                 layout: str | None = None,
                  user_config: bool = True):
         if joystick is None:
             if not GamepadInput.available():
@@ -841,6 +849,7 @@ class GamepadInput:
         self.index = index
         self.steer_limit = bool(steer_limit)
         self.k_us_deg = float(k_us_deg)
+        self.lock_deg = float(lock_deg)   # this car's road-wheel lock
 
         n = self.joy.get_numaxes()
         self.layout = layout or detect_pad_layout(self.name)
@@ -1142,9 +1151,10 @@ class GamepadInput:
         # stick out of it means the catch.
         if self.steer_limit:
             lim_l, lim_r = steer_limit_pair_deg(V, beta_deg,
-                                                k_us_deg=self.k_us_deg)
+                                                k_us_deg=self.k_us_deg,
+                                                lock_deg=self.lock_deg)
         else:
-            lim_l = lim_r = DELTA_LOCK_DEG
+            lim_l = lim_r = self.lock_deg
         ease = _return_rate_deg(V) * dt
         self._lim_l = lim_l if lim_l >= self._lim_l else max(lim_l, self._lim_l - ease)
         self._lim_r = lim_r if lim_r >= self._lim_r else max(lim_r, self._lim_r - ease)

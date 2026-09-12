@@ -3648,11 +3648,18 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     if inp is None:
         try:
             from . import input as inp_mod
+            #  the SELECTED car's road-wheel lock, not the Corsa's on every
+            #  car. Exactly inp_mod.DELTA_LOCK_DEG for the Corsa, so the
+            #  default session is unchanged.
+            from .vehicle import car_lock_rad
+            lock_deg = math.degrees(car_lock_rad(car))
             kb = inp_mod.KeyboardInput(steer_limit=settings.steer_aid,
-                                       k_us_deg=inp_mod.K_US_DEG_MEASURED)
+                                       k_us_deg=inp_mod.K_US_DEG_MEASURED,
+                                       lock_deg=lock_deg)
             if pad is not None:
                 pad.steer_limit = kb.steer_limit
                 pad.k_us_deg = kb.k_us_deg
+                pad.lock_deg = kb.lock_deg
                 pad.delta_deg = 0.0
                 pad.seed_edges()           # the button that ended the last
                 pad.set_menu(False)        # session is not a press in this one
