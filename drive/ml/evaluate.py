@@ -369,6 +369,68 @@ def wing_timing(path, track: str = "arena", wing: str = "plate",
     return out
 
 
+def residual_safety(grids: dict, verbose: bool = True) -> dict:
+    """The property that makes a residual safe to ship, counted over grids.
+
+    `grids` is `{label: {(track, wing): (base, learn)}}`, i.e. whatever
+    `transfer` returned, one entry per (policy, car) pair. Wave 3 established
+    the guarantee on one car over 27 pairs: **worst regression -1.39 %, and it
+    never puts a car off the road that the baseline was keeping on.** Wave 4
+    has to re-establish it per car, because a guarantee measured on a 1010 kg
+    FWD hatch is not a guarantee about a 1780 kg RWD saloon.
+
+    Three classes, and only the third is a safety question:
+
+      BOTH LAP      a percentage means something. The worst one is the claim.
+      BASELINE ONLY the residual took a car the anchor was keeping on the road
+                    and lost it. This is the number that must be ZERO.
+      NEITHER LAPS  no lap time either way, so compare ground covered before
+                    the same failure. Less ground is a regression, not a
+                    danger -- the anchor was already failing there.
+    """
+    both, lost, won, neither = [], [], [], []
+    for lab, grid in grids.items():
+        for (tr, wg), (b, l) in grid.items():
+            if b["best"] and l["best"]:
+                both.append((lab, tr, wg, b, l,
+                             100.0 * (b["best"] - l["best"]) / b["best"]))
+            elif b["best"] and not l["best"]:
+                lost.append((lab, tr, wg, b, l))
+            elif l["best"] and not b["best"]:
+                won.append((lab, tr, wg, b, l))
+            else:
+                neither.append((lab, tr, wg, b, l, l["s"] - b["s"]))
+    both.sort(key=lambda r: r[5])
+    neither.sort(key=lambda r: r[5])
+    out = dict(n_pairs=len(both) + len(lost) + len(won) + len(neither),
+               both=both, lost=lost, won=won, neither=neither,
+               worst_pct=both[0][5] if both else None,
+               n_faster=sum(1 for r in both if r[5] > 0),
+               n_slower=sum(1 for r in both if r[5] <= 0),
+               n_shorter=sum(1 for r in neither if r[5] < 0))
+    if verbose:
+        print(f"\n  residual safety over {out['n_pairs']} (policy, cell) pairs")
+        print(f"  both lap:        {len(both):3d}  -- faster in {out['n_faster']}, "
+              f"slower in {out['n_slower']}")
+        if both:
+            lab, tr, wg, b, l, pc = both[0]
+            print(f"     worst regression {pc:+.2f} % : {lab} on {tr}/{wg}, "
+                  f"{l['best']:.3f} s against {b['best']:.3f} s, "
+                  f"{l['laps']} laps, ended '{l['ended']}'")
+        print(f"  learned rescues a cell the anchor cannot lap: {len(won):3d}")
+        print(f"  ** learned LOSES a cell the anchor CAN lap:   {len(lost):3d}"
+              f"   <- must be 0")
+        for lab, tr, wg, b, l in lost:
+            print(f"     {lab} on {tr}/{wg}: anchor {b['best']:.3f} s, "
+                  f"learned {l['s']:.1f} m then '{l['ended']}'")
+        print(f"  neither laps:    {len(neither):3d}  -- learned covered LESS "
+              f"ground in {out['n_shorter']}")
+        for lab, tr, wg, b, l, d in neither[:4]:
+            print(f"     {lab} on {tr}/{wg}: {l['s']:7.1f} m vs {b['s']:7.1f} m "
+                  f"({d:+.1f} m), {b['ended']}/{l['ended']}")
+    return out
+
+
 def plot_curve(path: str, out: str) -> str | None:
     """The learning curve out of the checkpoint's own metadata."""
     import matplotlib
@@ -446,6 +508,9 @@ def main(argv=None) -> int:
     ap.add_argument("--track", default=None, help="default: the one it trained on")
     ap.add_argument("--wing", default=None, choices=("off", "fin", "plate"))
     ap.add_argument("--duration", type=float, default=280.0)
+    ap.add_argument("--workers", type=int, default=None,
+                    help="pool size for the grids; lower it to share the box "
+                         "with a training run")
     ap.add_argument("--plot", default=None, help="write the learning curve here")
     ap.add_argument("--ablation", action="store_true", help="also run wing on/off")
     ap.add_argument("--transfer", action="store_true",
@@ -461,11 +526,23 @@ def main(argv=None) -> int:
     ap.add_argument("--wing-timing", action="store_true",
                     help="per-car flank-panel deployment BY CORNER PHASE, "
                          "anchor and learned, for every car")
+    ap.add_argument("--safety", action="store_true",
+                    help="the per-car residual-safety count: each per-car "
+                         "policy over its OWN car's full (track x wing) grid")
     a = ap.parse_args(argv)
-    if a.car_matrix or a.wing_timing:
+    if a.safety:
+        grids = {}
+        for cn in TRANSFER_CARS:
+            pth = CAR_CKPTS.get(cn)
+            if pth and os.path.exists(pth):
+                grids[f"{cn}_policy/{cn}"] = transfer(
+                    pth, T=a.duration, car=cn,
+                    verbose=True, workers=a.workers)
+        residual_safety(grids)
+    if a.car_matrix or a.wing_timing or a.safety:
         if a.car_matrix:
             car_transfer(track=a.track or "arena", wing=a.wing or "plate",
-                         T=a.duration)
+                         T=a.duration, workers=a.workers)
         if a.wing_timing:
             print(f"\n  flank-panel timing by corner phase, "
                   f"{a.track or 'arena'} / {a.wing or 'plate'} / dt 1 ms")
@@ -483,7 +560,7 @@ def main(argv=None) -> int:
     if not a.only_transfer:
         compare(a.checkpoint, track, wing, a.duration, car=a.car)
     if a.transfer or a.only_transfer:
-        transfer(a.checkpoint, T=a.duration, car=a.car)
+        transfer(a.checkpoint, T=a.duration, car=a.car, workers=a.workers)
     if a.ablation:
         aero_ablation(a.checkpoint, track, a.duration)
     if a.plot:
