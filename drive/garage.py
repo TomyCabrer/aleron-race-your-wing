@@ -50,7 +50,8 @@ from . import garage_ui as ui
 from .aero.library import Library
 from .aero.wing import (WingSpec, BOUNDS, V_REF, ROLES, design_point, spanwise,
                         wing_cl, wing_cd, re_bank_snap, design_bounds, design_x0,
-                        design_labels, apply_design, span_fit, format_design)
+                        design_labels, apply_design, span_fit, format_design,
+                        MOUNTS, MOUNT_PLATE_H, wing_mass)
 from .aero import optimize as opt
 from .vehicle import DevAero, TopAero
 
@@ -379,13 +380,15 @@ class CarBuild:
                    x_w_left=round(self.left.x, 4), x_w_right=round(self.right.x, 4),
                    dev_chord=(ref.chord if ref is not None else DEV_CHORD),
                    dev_span=(ref.span if ref is not None else DEV_SPAN),
-                   dev_plate=(ref.plate_h if ref is not None else 0.0),
+                   dev_plate=(ref.plate_h_flown if ref is not None else 0.0),
+                   dev_mount=(ref.mount if ref is not None else "none"),
                    wing_left_name=(wl.name if wl is not None else ""),
                    wing_right_name=(wr.name if wr is not None else ""),
                    top_on=wt is not None, top_x=round(self.top.x, 4),
                    top_span=(wt.span if wt is not None else 0.0),
                    top_chord=(wt.chord if wt is not None else 0.0),
-                   top_plate=(wt.plate_h if wt is not None else 0.0),
+                   top_plate=(wt.plate_h_flown if wt is not None else 0.0),
+                   top_mount=(wt.mount if wt is not None else "none"),
                    top_mode=self.top.mode,
                    wing_top_name=(wt.name if wt is not None else ""))
         return out
@@ -1125,6 +1128,16 @@ class Designer:
             self.update()
         return f
 
+    def _set_mount(self, v):
+        """The mount is a discrete choice like the section, so it cycles
+        rather than steps -- and it changes the LATTICE (an endplate mount
+        forces its structural plate height), so the wing has to be re-analysed
+        exactly as a planform change does."""
+        self.spec.mount = str(v) if str(v) in MOUNTS else "pylon"
+        self.spec.clamp()
+        self.dirty = True
+        self.update()
+
     def _span_band(self) -> tuple[float, float]:
         """The span band BOTH the page's row and the optimiser use, at the
         slot height the page is showing (`wing.span_fit`). One function, so
@@ -1169,6 +1182,12 @@ class Designer:
             P("plate", "end plates", lambda: self.spec.plate_h, self._set("plate_h", *b["plate_h"]),
               step=0.01, fine=0.002, lo=b["plate_h"][0], hi=b["plate_h"][1], unit="m",
               help="tip plates in the lattice: cut induced drag, add wetted area"),
+            P("mount", "mount", lambda: self.spec.mount, self._set_mount, kind="choice",
+              choices=list(MOUNTS),
+              help="pylon: two struts in the flow (mount drag + junction interference).  "
+                   "endplate: carried by its tip plates instead -- no struts, plates forced "
+                   f"to {MOUNT_PLATE_H.get(self.role, 0.06):.2f} m, less tip loss.  "
+                   "none: nothing charged, an idealisation"),
             P("mt", "MOUNT (this slot)", None, kind="label"),
             P("inc", "incidence", lambda: self.g.build.slot(self.key).inc_deg, self._slot_set("inc_deg"),
               step=0.5, fine=0.1, lo=b["inc_deg"][0], hi=b["inc_deg"][1], unit="deg", fmt="{:+.1f}",

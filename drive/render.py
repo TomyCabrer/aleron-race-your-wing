@@ -496,6 +496,7 @@ class HudData:
     dev_chord: float = DEV_CHORD
     dev_span: float = DEV_SPAN
     dev_plate: float = 0.0
+    dev_mount: str = 'pylon'      # 'pylon' | 'endplate' | 'none' (aero.wing.MOUNTS)
     wing_left_name: str = ''
     wing_right_name: str = ''
     # top wing
@@ -507,6 +508,7 @@ class HudData:
     top_span: float = 1.40
     top_chord: float = 0.30
     top_plate: float = 0.0
+    top_mount: str = 'pylon'      # how the top wing is carried; drawn, and in the HUD
     top_mode: str = 'fixed'
     wing_top_name: str = ''
     # --- the pause menu (drive/menu.py), drawn last when open; duck-typed ---
@@ -969,6 +971,7 @@ def wing_mesh3(aux):
     chord = float(getattr(aux, 'dev_chord', DEV_CHORD) or DEV_CHORD)
     span = float(getattr(aux, 'dev_span', DEV_SPAN) or DEV_SPAN)
     plate = float(getattr(aux, 'dev_plate', 0.0) or 0.0)
+    mount = str(getattr(aux, 'dev_mount', 'pylon') or 'pylon')
     h_w = float(getattr(aux, 'h_w', H_W) or H_W)
     inc = math.radians(float(getattr(aux, 'inc_deg', 0.0) or 0.0))
     loop = _section_loop3()
@@ -996,16 +999,20 @@ def wing_mesh3(aux):
                 pts.append((xw + dx * ct - dy * stt, yc + dx * stt + dy * ct, z))
             rings.append(np.array(pts))
         polys += _loft3(rings, col)
-        for dz in (-0.28 * span, 0.28 * span):     # struts to the sill
-            z = h_w + dz
-            polys += _box3(xw - 0.015, xw + 0.015,
-                           min(side * CAR_HALF_W, yc), max(side * CAR_HALF_W, yc),
-                           z - 0.012, z + 0.012, C_WING_OFF)
+        if mount == 'pylon':                   # two struts to the sill
+            for dz in (-0.28 * span, 0.28 * span):
+                z = h_w + dz
+                polys += _box3(xw - 0.015, xw + 0.015,
+                               min(side * CAR_HALF_W, yc), max(side * CAR_HALF_W, yc),
+                               z - 0.012, z + 0.012, C_WING_OFF)
         if plate > 0.0:
+            # an endplate MOUNT is what carries the panel, so its plates run
+            # all the way back to the body instead of standing at the tip
+            y0 = min(side * CAR_HALF_W, yc) if mount == 'endplate' else yc - 0.5 * plate
+            y1 = max(side * CAR_HALF_W, yc) if mount == 'endplate' else yc + 0.5 * plate
             for sgn in (-1.0, 1.0):
                 z = h_w + sgn * 0.5 * span
-                polys += _box3(xw - 0.6 * chord, xw + 0.6 * chord,
-                               yc - 0.5 * plate, yc + 0.5 * plate,
+                polys += _box3(xw - 0.6 * chord, xw + 0.6 * chord, y0, y1,
                                z - 0.006, z + 0.006, C_WING_ON)
 
     if getattr(aux, 'top_on', False):
@@ -1027,19 +1034,23 @@ def wing_mesh3(aux):
                    for xa, ya in loop]            # inverted: suction side down
             rings.append(np.array(pts))
         polys += _loft3(rings, col)
+        t_mount = str(getattr(aux, 'top_mount', 'pylon') or 'pylon')
         if float(aux.top_plate) > 0.0:
             for sgn in (-1.0, 1.0):
                 yq = sgn * (b2 + 0.008)
+                # endplate mount: the plates ARE the structure, so they run
+                # from the wing down to the deck and are drawn as the mount
+                z_lo = (deck_z3(xt) if t_mount == 'endplate'
+                        else zc - float(aux.top_plate) * dpt - 0.02)
                 polys += _box3(xt - 0.65 * ct_, xt + 0.65 * ct_,
-                               yq - 0.006, yq + 0.006,
-                               zc - float(aux.top_plate) * dpt - 0.02,
-                               zc + 0.03, C_WING_ON)
-        for sgn in (-1.0, 1.0):                   # pylons down to the deck
-            yq = sgn * 0.28 * 2.0 * b2
-            polys += _box3(xt - 0.15 * ct_, xt - 0.15 * ct_ + 0.06,
-                           yq - 0.012, yq + 0.012,
-                           deck_z3(xt), max(zc - 0.02 * ct_, deck_z3(xt) + 0.01),
-                           C_WING_OFF)
+                               yq - 0.006, yq + 0.006, z_lo, zc + 0.03, C_WING_ON)
+        if t_mount == 'pylon':
+            for sgn in (-1.0, 1.0):               # pylons down to the deck
+                yq = sgn * 0.28 * 2.0 * b2
+                polys += _box3(xt - 0.15 * ct_, xt - 0.15 * ct_ + 0.06,
+                               yq - 0.012, yq + 0.012,
+                               deck_z3(xt), max(zc - 0.02 * ct_, deck_z3(xt) + 0.01),
+                               C_WING_OFF)
     return polys
 
 
@@ -2398,7 +2409,12 @@ class Renderer:
             ft = int(round(float(aux.F_top) / 10.0) * 10)
             dt_ = int(round(float(aux.D_top)))
             mode = 'ACT' if getattr(aux, 'top_mode', 'fixed') == 'active' else 'FIX'
-            self._blit(f'TOP    {"v" if top_dep > 0.05 else "-"} {int(round(top_dep * 100)):3d}%  {mode}',
+            # the mount is an aero choice, not trim: it is already inside Fz
+            # and D through CZ / CD, so name it next to them
+            mnt = {'pylon': 'PYL', 'endplate': 'EPL', 'none': '--'}.get(
+                str(getattr(aux, 'top_mount', 'pylon') or 'pylon'), 'PYL')
+            self._blit(f'TOP  {"v" if top_dep > 0.05 else "-"} {int(round(top_dep * 100)):3d}% '
+                       f'{mode} {mnt}',
                        r.x + 10 * u, r.y + 64 * u, self.f_val, C_WING_ON if top_dep > 0.05 else C_HUD_DIM)
             self._blit(f'  Fz {ft:4d} N  D {dt_:3d} N  {100.0 * float(aux.F_top) / (_CAR.m * G):4.2f}%mg',
                        r.x + 10 * u, r.y + 86 * u, self.f_lbl,
@@ -2887,6 +2903,24 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     rndc.screenshot(shot6)
     rep('chase screenshots', os.path.exists(shot5) and os.path.exists(shot6),
         f'{shot5}, {shot6}')
+    # the top wing's MOUNT is visible: a pylon mount puts two struts on the
+    # deck, an endplate mount carries it on plates that reach the deck and has
+    # no struts at all. Counted off the mesh, so a silent revert fails it.
+    aux_c.top_plate = 0.12
+    n_py = _mount_polys3(aux_c, 'pylon')
+    n_ep = _mount_polys3(aux_c, 'endplate')
+    n_no = _mount_polys3(aux_c, 'none')
+    rep('chase: the top wing shows which mount it is on',
+        n_py['strut'] > 0 and n_ep['strut'] == 0 and n_no['strut'] == 0
+        and n_ep['plate_z'] > n_py['plate_z'] * 1.5,
+        f"pylon {n_py['strut']} strut polys, endplate 0 and its plates reach "
+        f"{n_ep['plate_z']:.2f} m down the deck against {n_py['plate_z']:.2f} m")
+    aux_c.top_mount = 'endplate'
+    rndc.draw_frame(st_c2, None, 0.0, _demo_ctl(), aux_c, SkidBuffer())
+    shot7 = os.path.join(os.path.abspath(screenshot_dir), 'render_chase3d_endplate.png')
+    rndc.screenshot(shot7)
+    rep('chase: endplate-mount screenshot', os.path.exists(shot7), shot7)
+    aux_c.top_mount = 'pylon'
 
     if verbose:
         print(f'  CAP_HITS {CAP_HITS}')
@@ -2896,6 +2930,30 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
         print(f'  {"PASS" if ok_all else "FAIL"}: '
               f'{sum(1 for _, p, _ in res if p)}/{len(res)} checks')
     return ok_all
+
+
+def _mount_polys3(aux, mount: str) -> dict:
+    """The top wing's mount, measured off the mesh: how many strut polygons it
+    puts in the flow and how far its tip plates reach below the wing.
+
+    Read from `wing_mesh3`, not from the flag that built it, so the check is
+    evidence rather than a restatement.
+    """
+    was = getattr(aux, 'top_mount', 'pylon')
+    aux.top_mount = mount
+    b2 = 0.5 * float(aux.top_span)
+    strut, z_lo, z_hi = 0, math.inf, -math.inf
+    for verts, col in wing_mesh3(aux):
+        v = np.asarray(verts)
+        ym = float(np.mean(np.abs(v[:, 1])))
+        if tuple(col) == C_WING_OFF and ym < 0.9 * b2 and ym > 0.2 * b2:
+            strut += 1                      # a deck strut: inboard, unlit
+        # the TOP wing's plates stand at exactly b2 + 0.008; the flank panels
+        # also sit outboard of b2, so the window has to be tight
+        if tuple(col) == C_WING_ON and abs(ym - (b2 + 0.008)) < 0.03:
+            z_lo, z_hi = min(z_lo, float(v[:, 2].min())), max(z_hi, float(v[:, 2].max()))
+    aux.top_mount = was
+    return dict(strut=strut, plate_z=(z_hi - z_lo) if z_hi > z_lo else 0.0)
 
 
 def _ribbon_px_width(rnd, tr, s: float) -> float:
