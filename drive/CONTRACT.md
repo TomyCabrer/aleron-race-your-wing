@@ -214,6 +214,27 @@ def self_check() -> None
   ~150 under 2400 (5.46 s). Narrower acts as a stiff damper on the engine DOF
   (`1.5·T_cap·√e / band`, 5.7 N·m·s/rad here) and couples into the 11.3 Hz
   driveline mode. The zero-throttle anti-stall band (550..850) is unchanged.
+* **Per-car brakes.** `brake_coeffs(car) -> (kbf, kbr, p_max_line, t_hb_max)`.
+  `corsa_c.brakes` still says MISSING and still is — nobody publishes pad mu
+  or a torque split — but the HARDWARE is documented, so `CarSpec` carries
+  disc/drum diameters, whether the rear is a disc or a drum, and the piston
+  diameters, and this turns them into N·m/Pa with **the same formulas the
+  BRAKE BLOCK uses** (`BRK_MU_PAD`, `BRK_CSTAR`, `BRK_PAD_H` stay estimated in
+  one place). A car matching the Corsa's geometry gets the BRAKE BLOCK's own
+  constants back, by identity. `p_max_line` is solved to hold
+  `BRK_AUTHORITY = 1.479/1.041` — the same 42 % lock-up over-authority on
+  every car, which is what the lock-order tests and the locked-wheel sled
+  depend on — and `t_hb_max` scales with the rear axle's own locking torque.
+  **Front still locks before rear on every car, dry and wet**, with a larger
+  margin than the Corsa's +7.7 % (MX-5 +102 % dry / +155 % wet, 540i +94 % /
+  +116 %).
+* **Per-car steering lock.** `vehicle.car_lock_rad(car)` =
+  `steer_turns * 180 / steer_ratio` in rad, and `Vehicle.lock_rad` /
+  `Vehicle.dev_deadband` (5 % of it) come from the car. The Corsa's documented
+  2.9 turns at 16.0:1 gives exactly `LOCK_RAD`, asserted at import in
+  `_check_reference` — so `LOCK_RAD` is a special case of the function, not a
+  rival truth. `input.py`'s `DELTA_LOCK_DEG` is unchanged: the input layer is
+  handed a lock by the caller and every validation path bypasses the aid.
 * **Per-car engine curve.** `engine_curve(car) -> (rpm_bp, nm_bp, orpm_bp,
   onm_bp)` builds THIS engine's WOT and overrun curves from five anchors on
   the car (`n_peak_torque`, `n_peak_power`, `n_idle`, `n_cut`,

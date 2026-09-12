@@ -132,6 +132,29 @@ class CarSpec:
     brakes: str = "MISSING - no disc/drum dia, pad mu or F/R torque split"
     dampers: str = "MISSING - no rates, no damping ratios"
 
+    # --- brakes: GEOMETRY, from which powertrain derives the torque ---------
+    #: `corsa_c.brakes` says MISSING and it still is -- no manufacturer
+    #: publishes pad mu or a torque split. What IS published, or at least
+    #: widely documented, is the HARDWARE: disc and drum diameters and whether
+    #: the rear is a disc or a drum. `powertrain.brake_coeffs(car)` turns that
+    #: into N.m/Pa with the same formulas the BRAKE BLOCK uses for the Corsa
+    #: (pad mu 0.38, two pad faces, drum C* 1.9), so what is estimated stays
+    #: estimated in exactly one place.
+    #:
+    #: `brk_r_eff` is the effective radius, taken as
+    #: (disc OD - pad height)/2 with a 40 mm pad, which reproduces the Corsa's
+    #: 0.093 m from its 236 mm disc.
+    brk_front_d: float = 0.236      # m  236 x 20 mm vented, documented
+    brk_rear_d: float = 0.200       # m  200 mm drum, documented
+    brk_rear_disc: bool = False     # False = drum (leading-trailing, C* 1.9)
+    brk_piston_d: float = 0.0540    # m  est, front caliper piston
+    brk_wc_d: float = 0.01905       # m  est, rear wheel cylinder (3/4 in)
+    #: hand-wheel lock-to-lock, turns. With `steer_ratio` this gives the
+    #: ROAD-WHEEL lock, which is what the physics and the steer aid use:
+    #: lock_deg = turns*360/2/steer_ratio. The Corsa's 2.9 turns at 16.0:1
+    #: reproduces the 32.625 deg the code has always used.
+    steer_turns: float = 2.900      # est +/-0.1 (derived with steer_ratio 16.0)
+
     # --- ADDITIONS beyond CorsaC ------------------------------------------
     #: `.tir` file to read. One coefficient set exists (see module docstring);
     #: the geometry below is what actually differs between cars.
@@ -271,6 +294,16 @@ MX5_NB = CarSpec(
                             # the Corsa's twist beam; 0.0 is the honest default
     rollcamber_r=0.6,       # est
 
+    #  NB2 Sport: 255 mm vented front discs, 251 mm solid rear DISCS (the
+    #  MX-5 has had four-wheel discs since the NA). Documented, widely.
+    brk_front_d=0.255,
+    brk_rear_d=0.251,
+    brk_rear_disc=True,
+    brk_piston_d=0.0540,    # est, same class of single-piston sliding caliper
+    brk_wc_d=0.0349,        # m  est: 34.9 mm rear caliper piston, not a
+                            #    wheel cylinder -- brake_coeffs reads it as the
+                            #    rear piston when brk_rear_disc is True
+    steer_turns=2.600,      # est +/-0.1; with steer_ratio 15.0 -> 31.2 deg
     tyre_file=TYRE_REF,
     tyre_R0=0.2880,         # 0.1905 rim radius + 0.195 * 0.50 section
     tyre_width=0.195,
@@ -355,6 +388,14 @@ E39_540I = CarSpec(
     rollsteer_r=0.0,        # multilink, deliberately toe-stable in roll
     rollcamber_r=0.5,       # est
 
+    #  E39 540i: 325 x 28 mm vented front, 320 x 20 mm vented rear discs --
+    #  the V8 car's own bigger brakes, documented for the 540i/M5 chassis.
+    brk_front_d=0.325,
+    brk_rear_d=0.320,
+    brk_rear_disc=True,
+    brk_piston_d=0.0600,    # est, band 0.057-0.064 for a 325 mm disc
+    brk_wc_d=0.0420,        # m  est, rear caliper piston
+    steer_turns=3.000,      # est +/-0.1; with steer_ratio 17.0 -> 31.8 deg
     tyre_file=TYRE_REF,
     tyre_R0=0.3217,         # 0.2159 rim radius + 0.235 * 0.45 section
     tyre_width=0.235,

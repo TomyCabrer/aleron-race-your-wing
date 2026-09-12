@@ -443,6 +443,9 @@ class PowertrainParams:
                       #  Corsa's 200 N.m is 1.82x its own peak, so hold that
                       #  ratio rather than slipping a V8 at half throttle
                       T_clutch_cap=T_CLUTCH_CAP_STOCK * float(car.T_max) / 110.0)
+        kbf, kbr, p_max, t_hb = brake_coeffs(car)
+        if kbf is not KBF:
+            kw.update(kbf=kbf, kbr=kbr, p_max_line=p_max, t_hb_max=t_hb)
         if k != 1.0:
             base = kw.get("nm_bp", NM_BP)
             cap = kw.get("T_clutch_cap", T_CLUTCH_CAP_STOCK)
@@ -781,6 +784,78 @@ def diff_split(p: PowertrainParams, T_axle: float, omega_l: float,
 # ====================================================================== #
 #  BRAKES                                                                #
 # ====================================================================== #
+
+#: The Corsa's own brake geometry. A car that matches it gets the BRAKE BLOCK's
+#: own constants back, so `kbf`/`kbr`/`p_max_line`/`t_hb_max` are identical to
+#: the last digit rather than re-derived and merely close.
+_REF_BRAKES = (0.236, 0.200, False, 0.0540, 0.01905)
+#: radial pad height, m. est. 0.050 is the value that reproduces the BRAKE
+#: BLOCK's 0.093 m effective radius from the documented 236 mm disc.
+BRK_PAD_H = 0.050
+#: what full pedal demands, as a multiple of the tyre's own longitudinal
+#: capacity. The Corsa's 110 bar demands 1.479 g against a 1.041 g tyre limit
+#: -- 42 % of lock-up authority, which is what makes the pedal able to lock a
+#: wheel at all (the lock-order tests and the locked-wheel sled both need it)
+#: and still leaves 69 % of travel modulating. Held constant across cars.
+BRK_AUTHORITY = 1.479 / 1.041
+
+
+def brake_coeffs(car) -> tuple:
+    """`(kbf, kbr, p_max_line, t_hb_max)` for THIS car's brakes.
+
+    `corsa_c.brakes` says MISSING and it still does: nobody publishes pad mu
+    or a torque split. What is documented is the HARDWARE -- disc and drum
+    diameters, and whether the rear is a disc or a drum -- so that is what
+    `CarSpec` carries, and this turns it into N.m/Pa with the SAME formulas
+    the BRAKE BLOCK uses for the Corsa. `BRK_MU_PAD`, `BRK_CSTAR` and
+    `BRK_PAD_H` stay estimated in exactly one place.
+
+    A 540i used to stop like a 1.2 Corsa because `kbf`/`kbr` were module
+    constants. It has 325 mm vented front and 320 mm vented rear discs
+    against the Corsa's 236 mm disc and 200 mm drum, and now it stops like it.
+
+    `p_max_line` is scaled to hold `BRK_AUTHORITY` -- the same 42 % over-
+    authority on every car -- because that, not the pedal pressure, is what
+    the lock-order tests and the locked-wheel sled actually depend on.
+    `t_hb_max` scales with the rear axle's own locking torque.
+    """
+    geo = (float(getattr(car, "brk_front_d", 0.236)),
+           float(getattr(car, "brk_rear_d", 0.200)),
+           bool(getattr(car, "brk_rear_disc", False)),
+           float(getattr(car, "brk_piston_d", 0.0540)),
+           float(getattr(car, "brk_wc_d", 0.01905)))
+    if geo == _REF_BRAKES:
+        return KBF, KBR, P_MAX_LINE, T_HB_MAX      # the module's own numbers
+    d_f, d_r, rear_disc, d_pist, d_wc = geo
+    r_eff_f = 0.5 * (d_f - BRK_PAD_H)
+    kbf = 2.0 * BRK_MU_PAD * (math.pi * d_pist ** 2 / 4.0) * r_eff_f
+    if rear_disc:
+        r_eff_r = 0.5 * (d_r - BRK_PAD_H)
+        kbr = 2.0 * BRK_MU_PAD * (math.pi * d_wc ** 2 / 4.0) * r_eff_r
+    else:
+        kbr = BRK_CSTAR * (math.pi * d_wc ** 2 / 4.0) * (0.5 * d_r)
+
+    #  hold the pedal's authority: demanded decel at full line pressure,
+    #  a = (2*kbf*P + 2*kbr*P_r)/(r_roll*m), against this tyre's own capacity
+    mu_x_ref = 1.041 * float(getattr(car, "mu_scale", 1.0))
+    m, r = float(car.m), float(car.r_roll)
+    # P_r follows the same proportioning knee, so solve for P with it folded in
+    def demand(P: float) -> float:
+        P_r = P if P <= P_KNEE else P_KNEE + S_PROP * (P - P_KNEE)
+        return (2.0 * kbf * P + 2.0 * kbr * P_r) / (r * m * G)
+    lo, hi = 1e5, 400e5
+    for _ in range(80):
+        mid = 0.5 * (lo + hi)
+        lo, hi = (mid, hi) if demand(mid) < BRK_AUTHORITY * mu_x_ref else (lo, mid)
+    p_max = 0.5 * (lo + hi)
+
+    #  the handbrake must still be able to lock the rears with no transfer
+    Fz_r_wheel = 0.5 * m * G * (1.0 - float(car.wdist_f))
+    t_lock = mu_x_ref * Fz_r_wheel * r
+    t_hb = t_lock * (T_HB_MAX / (1.041 * 0.5 * 1010.0 * G * (1.0 - 0.61) * 0.283))
+    return kbf, kbr, p_max, t_hb
+
+
 def line_pressure(p: PowertrainParams, brake: float) -> tuple[float, float]:
     """(P_line, P_rear) in Pa from the pedal fraction, through the valve."""
     f = (min(max(brake, 0.0), 1.0) - p.b_dead) / (1.0 - p.b_dead)

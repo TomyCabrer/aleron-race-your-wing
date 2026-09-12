@@ -96,10 +96,30 @@ KX_LIM = 1.5            # -   transient slip-ratio clamp   (CONTRACT section 4)
 KY_LIM = 3.0            # -   transient tan(slip angle) clamp
 
 LOCK_RAD = radians(32.625)   # rad at the road wheel = 522 deg / 16.0 steer ratio
+#                              The CORSA's; `car_lock_rad(car)` is per-car and
+#                              returns exactly this for the Corsa.
                              # (2.9 turns lock to lock).  Only used for the
                              # wing deadband, which the contract states as
                              # "5% of lock".
 DEV_DEADBAND = 0.05 * LOCK_RAD      # rad  = 1.631 deg at the road wheel
+
+
+def car_lock_rad(car) -> float:
+    """Road-wheel steering lock for THIS car, rad.
+
+    `steer_turns * 360 / 2 / steer_ratio`. The Corsa's documented 2.9 turns at
+    16.0:1 gives 32.625 deg, which is the number this module has always used,
+    and the identity is asserted in `validate()` -- so `LOCK_RAD` above is a
+    special case of this and not a separate truth.
+
+    The spread is small (MX-5 31.2 deg at 2.6 turns / 15.0, 540i 31.8 at 3.0 /
+    17.0), so this changes little; it is here because a car's steering lock is
+    a property of the car and had been the Corsa's on every car, which is the
+    same class of fiction as its brakes were.
+    """
+    turns = float(getattr(car, "steer_turns", 2.900))
+    ratio = float(getattr(car, "steer_ratio", 16.0))
+    return radians(turns * 180.0 / ratio)
 DEV_HOLD = 0.30                     # s    sign must persist this long
 DEV_DEP_LOCKOUT = 0.05              # -    no side change while dep > this
 TOP_HOLD = 0.80                     # s    an 'active' top wing stays out this
@@ -556,6 +576,11 @@ def _check_reference() -> CarDerived:
     # and the steady-state front share is untouched, to the last bit
     if (d.lltd_geo_f + d.lltd_roll_f) != cfg.roll_dist_f:
         raise RuntimeError("car_derived: the Corsa's roll_dist_f moved")
+    # the per-car steering lock is a generalisation of LOCK_RAD, not a rival
+    if car_lock_rad(CORSA_C) != LOCK_RAD or car_lock_rad(CorsaC()) != LOCK_RAD:
+        raise RuntimeError(
+            f"car_lock_rad(Corsa) = {car_lock_rad(CORSA_C)!r} != LOCK_RAD "
+            f"{LOCK_RAD!r}: the Corsa's steering lock moved")
     return d
 
 
@@ -812,6 +837,11 @@ class Vehicle:
                           - (c.m_s * self.h_r) ** 2)     # 225207.5, well cond.
 
         self.pt_p = ptm.PowertrainParams.from_car(c, power_scale=self.cfg.power_scale)
+        #  this car's own steering lock, and the device deadband that is 5 % of
+        #  it (CONTRACT section 4). Exactly LOCK_RAD / DEV_DEADBAND for the
+        #  Corsa -- asserted with == in validate().
+        self.lock_rad = car_lock_rad(c)
+        self.dev_deadband = 0.05 * self.lock_rad
         self.pt_s = ptm.PowertrainState()
         self._pt_in = ptm.PtInput()
 
@@ -991,9 +1021,9 @@ class Vehicle:
 
         # --- side selection: sign(steer), 5% deadband, 0.3 s hold -----
         want = 0
-        if ctl.delta > DEV_DEADBAND:
+        if ctl.delta > self.dev_deadband:
             want = 1
-        elif ctl.delta < -DEV_DEADBAND:
+        elif ctl.delta < -self.dev_deadband:
             want = -1
         if want != 0 and want != st.dev_side:
             st.dev_hold += dt
@@ -1009,7 +1039,7 @@ class Vehicle:
         if top is not None:
             if top.mode == "active":
                 want_t = bool(ctl.wing_on) and (ctl.brake > 0.05
-                                                or fabs(ctl.delta) > DEV_DEADBAND)
+                                                or fabs(ctl.delta) > self.dev_deadband)
                 if want_t:
                     st.top_hold = TOP_HOLD
                 elif st.top_hold > 0.0:
