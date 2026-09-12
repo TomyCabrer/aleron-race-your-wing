@@ -1365,8 +1365,8 @@ class Vehicle:
 
     def _tc(self, throttle: float, Fz, dt: float) -> float:
         """Engine-only traction control: returns a gain on the ENGINE LOAD
-        (PtInput.tc_scale), driven by the transient slip state of the driven
-        (front) axle: a proportional target (1 below TC_SLIP_RESTORE,
+        (PtInput.tc_scale), driven by the transient slip state of the DRIVEN
+        axle (front on the Corsa, rear on a `drive_layout='rwd'` car): a proportional target (1 below TC_SLIP_RESTORE,
         TC_GAIN_MIN at TC_SLIP_CUT) that the gain slews to, fast down and
         slower up. The driver's pedal itself is not touched: the shift
         scheduler and the launch assist keep reading the demand, and the
@@ -1379,7 +1379,7 @@ class Vehicle:
         (.handoff/08-steering.md, symptom b). The sensor is still
         max(kx[FL], kx[FR]) -- a genuinely spinning wheel must be seen -- but
         the old code gave that reading FULL authority, all the way down to
-        TC_GAIN_MIN. On a FWD car with an open diff the INSIDE front unloads in
+        TC_GAIN_MIN. On a car with an open diff the INSIDE driven wheel unloads in
         a corner and spins up against nothing, so full authority meant a 75%
         engine cut for a wheel carrying a sixth of the axle. Measured at
         power_scale 2.0, 15 m/s, 6 deg of steer, TC off:
@@ -1433,10 +1433,13 @@ class Vehicle:
             g = 1.0
             self.tc_active = False
         else:
-            i = 0 if st.kx[0] > st.kx[1] else 1
+            #  the DRIVEN pair, not the front pair: a rear-driven car lifts
+            #  its inside REAR wheel and it is the same failure mode
+            a0, a1 = ptm.driven_pair(self.pt_p)
+            i = a0 if st.kx[a0] > st.kx[a1] else a1
             kx = st.kx[i]
-            zf = Fz[0] + Fz[1]
-            share = (Fz[i] / zf) if zf > 1.0 else 0.5   # both fronts airborne
+            zf = Fz[a0] + Fz[a1]
+            share = (Fz[i] / zf) if zf > 1.0 else 0.5   # both driven airborne
             g_min = 1.0 - 2.0 * share
             if g_min < TC_GAIN_MIN:
                 g_min = TC_GAIN_MIN

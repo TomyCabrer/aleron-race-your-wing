@@ -268,6 +268,14 @@ class PowertrainParams:
     I_wf: float = 0.76      # est band 0.65-0.90  175/65R14 0.711 + 236 mm disc 0.041 + hub 0.010
     I_wr: float = 0.73      # est band 0.62-0.86  same wheel/tyre + 200 mm drum 0.029
 
+    #: WHICH AXLE IS DRIVEN, 'front' or 'rear'. The Corsa is 'front' and every
+    #: acceptance number is measured on it. `from_car` reads it off
+    #: `CarSpec.drive_layout`; 'awd' is REFUSED rather than silently behaving
+    #: as one of the two, because a centre-diff torque split is real physics
+    #: this driveline does not have and guessing one would be a lie in the
+    #: shape of a feature.
+    driven: str = "front"
+
     # --- clutch ------------------------------------------------------------
     T_clutch_cap: float = T_CLUTCH_CAP_STOCK  # est band 165-220 N.m (1.82x peak
     #                               torque; mu 0.30, 2 faces, r_eff 0.083 m,
@@ -415,7 +423,19 @@ class PowertrainParams:
         if k != 1.0:
             kw = dict(nm_bp=tuple(float(v) * k for v in NM_BP),
                       T_clutch_cap=T_CLUTCH_CAP_STOCK * k)
-        return cls(gear=tuple(car.gear),
+        layout = str(getattr(car, "drive_layout", "fwd")).lower()
+        if layout in ("fwd", "front"):
+            driven = "front"
+        elif layout in ("rwd", "rear"):
+            driven = "rear"
+        else:
+            raise ValueError(
+                f"drive_layout {layout!r} is not implemented: this driveline "
+                f"has one clutch, one gearbox and one open diff, so it can "
+                f"drive the front pair or the rear pair. 'awd' needs a centre "
+                f"differential and a torque split, which is new physics.")
+        return cls(driven=driven,
+                   gear=tuple(car.gear),
                    gear_rev=-abs(car.gear_rev),   # corsa_c stores it positive
                    finaldrive=car.finaldrive,
                    eta_drive=car.eta_drive,
@@ -521,15 +541,34 @@ def kmh_per_1000rpm(p: PowertrainParams, g: int) -> float:
     return abs(speed_at_rpm(p, g, 1000.0)) * 3.6
 
 
-def I_w_front(p: PowertrainParams, g: int) -> float:
-    """Front wheel inertia with the driveline reflected into it.
+def driven_pair(p: PowertrainParams) -> tuple[int, int]:
+    """Indices of the driven wheels in the FL,FR,RL,RR order (contract s0)."""
+    return (0, 1) if p.driven == "front" else (2, 3)
+
+
+def I_w_bare(p: PowertrainParams, driven: bool = True) -> float:
+    """One wheel's own rotational inertia, driven axle or the other one."""
+    if p.driven == "front":
+        return p.I_wf if driven else p.I_wr
+    return p.I_wr if driven else p.I_wf
+
+
+def I_w_driven(p: PowertrainParams, g: int) -> float:
+    """DRIVEN wheel inertia with the driveline reflected into it.
 
     Architecture (a): ONLY I_trans is reflected -- I_eng is a separate DOF.
-    Swings 0.76 (neutral) to 2.438 (1st), a factor of 3.2; hard-coding a
-    constant makes 1st-gear wheelspin instantaneous and unrecoverable.
+    On the Corsa it swings 0.76 (neutral) to 2.438 (1st), a factor of 3.2;
+    hard-coding a constant makes 1st-gear wheelspin instantaneous and
+    unrecoverable. A rear-driven car reflects into its 0.73 rear wheels
+    instead, so the whole curve shifts down by 0.03 kg m^2.
     """
     n_tot = gear_ratio(p, g)
-    return p.I_wf + 0.5 * p.I_trans * n_tot * n_tot * p.eta_drive
+    return I_w_bare(p) + 0.5 * p.I_trans * n_tot * n_tot * p.eta_drive
+
+
+#: historical name, kept because `specs/powertrain.txt` quotes it in its golden
+#: table (`reflected_inertia`, `I_w_front_eff`) and specs are not edited.
+I_w_front = I_w_driven
 
 
 def m_eff(p: PowertrainParams, g: int, m: float) -> float:
@@ -948,7 +987,8 @@ def step(p: PowertrainParams, s: PowertrainState, inp: PtInput, omega_w,
     # --- 3. clutch -------------------------------------------------------
     n_tot = gear_ratio(p, s.gear)
     s.n_tot = n_tot
-    omega_drv = 0.5 * (omega_w[0] + omega_w[1])       # FWD: the front pair
+    i0, i1 = driven_pair(p)                           # the DRIVEN pair
+    omega_drv = 0.5 * (omega_w[i0] + omega_w[i1])
     omega_in = omega_drv * n_tot
     T_c = clutch_torque(p, s, clutch_pedal, omega_in, dt)
 
@@ -969,7 +1009,7 @@ def step(p: PowertrainParams, s: PowertrainState, inp: PtInput, omega_w,
     T_axle = T_c * n_tot * eta_eff
 
     # --- 6. open differential --------------------------------------------
-    T_fl, T_fr = diff_split(p, T_axle, omega_w[0], omega_w[1])
+    T_a, T_b = diff_split(p, T_axle, omega_w[i0], omega_w[i1])
 
     # --- 7. brakes -------------------------------------------------------
     T_bf, T_br = brake_torques(p, inp.brake, inp.handbrake)
@@ -979,9 +1019,9 @@ def step(p: PowertrainParams, s: PowertrainState, inp: PtInput, omega_w,
     # of 3.2 between 1st and neutral and a discontinuity there is a torque
     # spike. Away from a shift it is snapped to the exact value, so a caller
     # that sets s.gear directly (validation scripts do) is never lied to.
-    tgt = I_w_front(p, s.gear)
+    tgt = I_w_driven(p, s.gear)
     if s.shift_phase != "none" or s.t_since_shift < p.t_engage:
-        lim = (I_w_front(p, 1) - p.I_wf) / p.t_gate * dt
+        lim = (I_w_driven(p, 1) - I_w_bare(p)) / p.t_gate * dt
         d = tgt - s.I_w_front_eff
         s.I_w_front_eff += min(max(d, -lim), lim)
     else:
@@ -989,9 +1029,12 @@ def step(p: PowertrainParams, s: PowertrainState, inp: PtInput, omega_w,
 
     P_wheel = T_axle * omega_drv
     return PowertrainOutput(
-        T_drive=(T_fl, T_fr, 0.0, 0.0),
+        T_drive=((T_a, T_b, 0.0, 0.0) if p.driven == "front"
+                 else (0.0, 0.0, T_a, T_b)),
         T_brake=(T_bf, T_bf, T_br, T_br),
-        I_w_eff=(s.I_w_front_eff, s.I_w_front_eff, p.I_wr, p.I_wr),
+        I_w_eff=((s.I_w_front_eff, s.I_w_front_eff, p.I_wr, p.I_wr)
+                 if p.driven == "front"
+                 else (p.I_wf, p.I_wf, s.I_w_front_eff, s.I_w_front_eff)),
         rpm=n_e,
         gear=s.gear,
         T_eng=T_eng,
@@ -1175,8 +1218,16 @@ def accel_run(p: PowertrainParams, car: CorsaC, v_targets=(100 / 3.6,),
                 continue
             F = wot_torque(p, n) * n_tot * p.eta_drive / r
             m_e = m_eff(p, gear, car.m)
-        Fzf = max(car.m * (G * car.wdist_f - a * car.h_cg / car.L), 0.0)
-        F = min(F, mu_x(0.5 * Fzf, mu_scale) * Fzf)
+        #  The driven axle's load under `a`. Acceleration transfers
+        #  m*a*h_cg/L rearward, so it UNLOADS a front-driven car and LOADS a
+        #  rear-driven one -- which is why a RWD car launches harder than its
+        #  static split suggests and a FWD car launches worse.
+        if p.driven == "front":
+            Fzd = car.m * (G * car.wdist_f - a * car.h_cg / car.L)
+        else:
+            Fzd = car.m * (G * (1.0 - car.wdist_f) + a * car.h_cg / car.L)
+        Fzd = max(Fzd, 0.0)
+        F = min(F, mu_x(0.5 * Fzd, mu_scale) * Fzd)
         a = (F - _road_load(car, v)) / m_e
         v += a * dt
         x += v * dt

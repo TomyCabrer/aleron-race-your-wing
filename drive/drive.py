@@ -1474,9 +1474,12 @@ class PathFollower:
     smoothly and looks like a physics bug.
     """
 
-    def __init__(self, V_tgt, wing_on=False, gains=(KP_N, KD_PSI, KI_N)):
+    def __init__(self, V_tgt, wing_on=False, gains=(KP_N, KD_PSI, KI_N),
+                 modulate=False, ay_plan=AY_MAX_DRY):
         self.V_tgt = V_tgt
         self.wing_on = wing_on
+        self.modulate = bool(modulate)
+        self.ay_plan = ay_plan         # the grip the driver plans to, m/s^2
         self.kp_n, self.kd, self.ki_n = gains
         self.I_n = 0.0
         self.pi = SpeedPI()
@@ -1488,6 +1491,30 @@ class PathFollower:
 
     def target(self, t, veh, tr, s, kt):
         return self.V_tgt
+
+    def throttle_cap(self, veh, V: float, kt: float) -> float:
+        """How much throttle the corner the driver can SEE will take.
+
+        The friction ellipse, but FEEDFORWARD on the path: the lateral demand
+        of the corner being driven is `a_y = V^2 * |kappa|`, so a car using
+        `u = a_y / ay_plan` of its grip sideways has `sqrt(1 - u^2)` of it
+        left for driving.
+
+        Feedforward and not feedback, which took a measurement to settle. The
+        first version read the DRIVEN axle's `util_r`, and on the 540i that
+        was a step too late every time -- `util_r` only rises once the rear is
+        already sliding, by which point a 210 kW car has gone. Reading the
+        corner instead means the throttle is already short before the rear
+        breaks away. Measured on the arena: `util_r` feedback left the 540i
+        1371 m off the track, this leaves it on it.
+
+        Only consulted when `self.modulate` is set, which
+        `POWER_GRIP_MODULATE` keeps off for the Corsa, so the acceptance lap
+        never reaches this code at all.
+        """
+        u = (V * V * abs(kt)) / max(self.ay_plan, 1e-6)
+        room = sqrt(max(0.0, 1.0 - min(u, 1.0) ** 2))
+        return max(room, THR_FLOOR)
 
     def steer(self, veh, tr, dt=0.001):
         s, n, kt, psi_c, _ = trk.project(tr, veh.x, veh.y)
@@ -1505,6 +1532,8 @@ class PathFollower:
         delta, s, n, kt = self.steer(veh, tr)
         V = hypot(veh.u, veh.v)
         thr, brk = self.pi(self.target(t, veh, tr, s, kt), V, 0.001)
+        if self.modulate:
+            thr = min(thr, self.throttle_cap(veh, V, kt))
 
         self.max_n = max(self.max_n, abs(n))
         self.max_beta = max(self.max_beta, abs(degrees(veh.beta)))
@@ -1549,9 +1578,72 @@ def car_ay_peak(car, mu_scale: float = 1.0, roll_dist_f: float = 0.74) -> float:
     return 0.5 * (lo + hi)
 
 
+_AY_MEAS_CACHE: dict = {}
+
+
+def car_ay_measured(car, mu_scale: float = 1.0) -> float:
+    """Peak a_y from an OPEN-LOOP RAMP STEER of this car, m/s^2, cached.
+
+    `car_ay_peak` above is a closed form and it is good to 0.3 % on the Corsa
+    and the MX-5 but **4.1 % HIGH on the 540i** (8.8534 est against 8.5046
+    measured) -- it omits the scrub-drag and yaw-balance terms `qss.max_ay`
+    carries, and those matter more on a heavy car. 4 % the wrong way means the
+    driver plans more grip than the car has, which is exactly how a lap ends
+    in the grass, so the planned grip comes from the real thing.
+
+    CONTRACT section 4: quantitative limits come from open-loop ramp steer,
+    never from a closed-loop controller. ~3.5 s of simulated time, once per
+    (car, mu_scale), at script setup -- never in the driver loop.
+    """
+    key = (id(car), round(float(mu_scale), 6))
+    if key not in _AY_MEAS_CACHE:
+        from .vehicle import ramp_steer as _ramp
+        _AY_MEAS_CACHE[key] = float(
+            _ramp(29.0875, car=car, cfg=VehicleConfig(mu_scale=mu_scale))["peak_ay"])
+    return _AY_MEAS_CACHE[key]
+
+
 #: the Corsa's own value, so every ratio below is exactly 1.0 for the Corsa
 AY_PEAK_REF = car_ay_peak(CorsaC())
 L_REF = CorsaC().L
+#: one Corsa object, so `car_ay_measured`'s cache has a stable key and the
+#: reference ramp steer is run once per process, not once per car
+_CORSA_REF = CorsaC()
+#: power per unit grip, (P_wheel/m)/ay_peak, normalised to the Corsa. Above
+#: this the scripted driver MODULATES the throttle on the way out of a corner
+#: instead of flooring it. Measured: corsa 1.00, mx5 1.71, 540i 2.16 -- so the
+#: trigger is a physical property of the car, and it is exactly inert on the
+#: Corsa, whose scripted lap is a frozen acceptance number measured with a
+#: driver that floors it. A 210 kW rear-driven saloon with the aids off (which
+#: is what reconciliation 9 mandates on every scripted path) simply spins: the
+#: 540i left the arena by 31 m and the MX-5 by 390 m with RWD and no
+#: modulation. Not flooring it mid-corner is a DRIVER model, like the launch
+#: assist and the rev-match blip, not an electronic aid.
+POWER_GRIP_MODULATE = 1.25
+#: the driver never shuts the throttle completely: below this it is coasting,
+#: and a coasting car on the exit of a corner is its own kind of unstable.
+THR_FLOOR = 0.15
+#: How fast the driver's planned margin fades as the car gets further outside
+#: the calibration it was tuned on: `margin * (1 - MARGIN_FADE*(pg - 1))`,
+#: where `pg` is `power_grip_ratio`. Exactly `margin` at pg = 1 (the Corsa),
+#: so the acceptance lap is bit-for-bit; 0.796 for the 540i at pg 2.16, which
+#: is the value a sweep found it needs.
+#:
+#: A counter-steer term (`delta += k*beta`) was tried FIRST and thrown away:
+#: swept over k_beta 0 / 0.5 / 1.0 / 1.5 / 2.5 / 4.0 on the 540i it never
+#: completed a lap and made `max |n|` WORSE at the margin that matters
+#: (2.74 m at k = 0 against 3.25 at k = 1 and 4.46 at k = 2). The 540i was
+#: not losing the lap to a slide it could have caught; it was entering the
+#: corner too fast in the first place, and the margin is the honest fix.
+MARGIN_FADE = 0.10
+MARGIN_MIN = 0.55
+
+def power_grip_ratio(car, mu_scale: float = 1.0) -> float:
+    """(P_wheel/m) / peak a_y, as a multiple of the Corsa's. Exactly 1.0 for
+    the Corsa, by construction."""
+    pg = (car.P_wheel / car.m) / car_ay_peak(car, mu_scale)
+    ref = (CorsaC().P_wheel / CorsaC().m) / AY_PEAK_REF
+    return pg / ref
 
 
 def driver_scaling(car, mu_scale: float = 1.0) -> dict:
@@ -1568,13 +1660,20 @@ def driver_scaling(car, mu_scale: float = 1.0) -> dict:
       braking distance, so the driver has to see the corner sooner. Measured
       100->0 km/h: corsa 49.86 m, mx5 55.35 m, 540i 64.00 m.
     """
-    ay_ratio = car_ay_peak(car, mu_scale) / AY_PEAK_REF
+    #  the ratio of MEASURED peaks, so it is exactly 1.0 for the Corsa
+    #  (the same call on the same object) and honest for everyone else
+    ay_ratio = (car_ay_measured(car, mu_scale)
+                / car_ay_measured(_CORSA_REF, 1.0))
     L_ratio = car.L / L_REF
+    pg = power_grip_ratio(car, mu_scale)
     return dict(ay=AY_MAX_DRY * ay_ratio,
                 kp_n=KP_N * L_ratio,
                 kd_psi=KD_PSI * L_ratio,
                 lookahead=12.0 / ay_ratio,
-                ay_ratio=ay_ratio, L_ratio=L_ratio)
+                ay_ratio=ay_ratio, L_ratio=L_ratio,
+                power_grip=pg, modulate=pg > POWER_GRIP_MODULATE,
+                margin_scale=min(max(1.0 - MARGIN_FADE * (pg - 1.0),
+                                     MARGIN_MIN), 1.0))
 
 
 def speed_profile(tr, margin=0.90, car=None, global_wet=1.0):
@@ -1656,8 +1755,14 @@ class LapDriver(PathFollower):
         sc = driver_scaling(car or CorsaC(),
                             getattr(car, "mu_scale", 1.0) if car else 1.0)
         super().__init__(0.0, wing_on=wing_on,
-                         gains=(sc["kp_n"], sc["kd_psi"], KI_N))
-        self.prof = speed_profile(tr, margin, car=car, global_wet=global_wet)
+                         gains=(sc["kp_n"], sc["kd_psi"], KI_N),
+                         modulate=sc["modulate"], ay_plan=sc["ay"])
+        #  a car this far outside the driver's calibration gets a more
+        #  careful driver, which is what a human does in an unfamiliar
+        #  overpowered car. Exactly `margin` for the Corsa.
+        self.margin = margin * sc["margin_scale"]
+        self.prof = speed_profile(tr, self.margin, car=car,
+                                  global_wet=global_wet)
         self.ds = tr.ds
         self.N = len(self.prof)
         self.lookahead = sc["lookahead"]  # m, so the driver brakes BEFORE the corner

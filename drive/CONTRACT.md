@@ -146,7 +146,10 @@ class PtInput:                     # named PtInput here, NOT DriverInput
                                    # `throttle` stays the driver's pedal
 @dataclass
 class PowertrainOutput:
-    T_drive: tuple    # (4,) N.m at the wheels, FL FR RL RR; RL=RR=0 (FWD)
+    T_drive: tuple    # (4,) N.m at the wheels, FL FR RL RR. The DRIVEN pair
+                      # carries it and the other pair is 0.0 -- front-driven
+                      # (RL=RR=0) on the Corsa and every acceptance number,
+                      # rear-driven (FL=FR=0) on a drive_layout='rwd' car.
     T_brake: tuple    # (4,) N.m MAGNITUDE, always >= 0
     I_w_eff: tuple    # (4,) kg m^2, gear-dependent on the front
     rpm: float; gear: int; T_eng: float; T_clutch: float
@@ -155,6 +158,9 @@ class PowertrainOutput:
 
 def step(p, s, inp: PtInput, omega_w, Fz, Fx, v_x, dt) -> PowertrainOutput
 def brake_torques(p, brake, handbrake) -> tuple[float, float]   # (front/wheel, rear/wheel)
+def driven_pair(p) -> tuple[int, int]        # (0,1) front | (2,3) rear
+def I_w_bare(p, driven=True) -> float        # one wheel's own inertia
+def I_w_driven(p, g) -> float                # ... with the driveline reflected
 def diff_split(p, T_axle, omega_l, omega_r) -> tuple[float, float]
 def wot_torque(p, n_e) -> float
 def wot_power(p, n_e) -> float
@@ -202,6 +208,24 @@ def self_check() -> None
   ~150 under 2400 (5.46 s). Narrower acts as a stiff damper on the engine DOF
   (`1.5·T_cap·√e / band`, 5.7 N·m·s/rad here) and couples into the 11.3 Hz
   driveline mode. The zero-throttle anti-stall band (550..850) is unchanged.
+* **The driven axle.** `PowertrainParams.driven` is `'front'` or `'rear'` and
+  `from_car` reads it off `CarSpec.drive_layout`. **`'awd'` is REFUSED with a
+  `ValueError`**, not silently treated as one of the two: this driveline has
+  one clutch, one gearbox and one open diff, and a centre differential with a
+  torque split is physics it does not have. Everything that pairs with the
+  torque follows the driven pair — `T_drive`, the reflected transmission
+  inertia (`I_w_driven`, which reflects into the 0.73 rear wheels instead of
+  the 0.76 fronts on a RWD car), the input speed `omega_drv`/`omega_in` the
+  clutch and the shift scheduler read, `P_wheel`, `I_w_eff`, and
+  `accel_run`'s traction cap. `diff_split` was already axle-agnostic.
+  `PowertrainState.I_w_front_eff` keeps its historical name (the spec's golden
+  table quotes it) and means the DRIVEN axle.
+  **The load transfer needs no new code**: `dFz_x_demand = (sum(Fxb_i)*h_cg)/L`
+  is already general, so acceleration transferring load rearward UNLOADS a
+  front-driven car and LOADS a rear-driven one on its own. Measured, WOT from
+  10 m/s: driven-axle load −504 N (Corsa, FWD), +765 N (MX-5), +2058 N (540i).
+  `Vehicle._tc` reads the DRIVEN pair's transient slip, with the same
+  open-diff `1 - 2*share` cut floor.
 * **`power_scale`** (`from_car(car, power_scale)`, the drive's Engine setting):
   `nm_bp` scaled as a whole and `T_clutch_cap = T_CLUTCH_CAP_STOCK ×
   power_scale` (a 2× engine on the stock 200 N·m clutch would slip at its own
