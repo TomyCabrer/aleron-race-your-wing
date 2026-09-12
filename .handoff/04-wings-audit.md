@@ -447,3 +447,91 @@ derivation. `vehicle.py`'s own `Y_f_expected` (`:1380`) uses the correct
 axle split stale. Nothing in the repo does that today (every call site builds
 a fresh `Vehicle(car, cfg)`), so it is a trap rather than a bug.
 
+---
+
+## HEADLINE NUMBERS
+
+Open-loop `steady_state_corner(R=100)` (the contract's mandated rig), aids
+OFF, `qss_parity=False` unless stated.
+
+| quantity | value |
+|---|---|
+| wing off, V / peak a_y | 29.296466 m/s / 0.874906 g |
+| **fin gain** | **+2.1540 %** (V 29.927499, a_y 0.913002 g) |
+| **plate gain** | **+3.8198 %** (V 30.415546, a_y 0.943023 g) |
+| plate gain, `qss_parity=True` | +2.2029 % (baseline 0.8539 g) |
+| designed build (flank-e423 x2, inc 4 deg) | +2.2380 % (F_dev 168.391 N) |
+| ... same build + rear-s1223 top wing at x_t = -1.30 | +1.1369 % (F_top 305.89 N, D_top 26.08 N) |
+| **left-vs-right symmetry** | `V_L - V_R = 0.000e+00` exactly, for off / fin / plate / designed; `F_dev(L)+F_dev(R) = 0`, `Mz_dev(L)+Mz_dev(R) = 0` |
+| wrong-flank counterfactual (fin / plate) | **-0.9644 % / -1.9374 %** |
+| panel on the wrong flank on a 90 s arena lap **as shipped** | **36.6 % of cornering time** |
+| ... after patch A / patch B | 2.9 % / 0.1 % |
+| flank drag at 40 m/s deployed | D_dev 126.01 N = +26.5 % of D_aero (475.23 N) |
+| mean D_dev over the arena lap, shipped -> patch B | 34.28 -> 20.99 N (-39 %) |
+| top wing coast-down cost (40->20 m/s, CD 0.1311) | 1767.85 -> 1638.40 m (-7.32 %), 4.676 s sooner |
+| top wing P_required cost at R=100 (validate W3) | 48.50 -> 52.22 kW |
+| **top-wing station**, peak a_y at 28.9 m/s (parity) | 0.8488 g @ x_t -1.6 < **0.8550 g none** < 0.8804 g @ +0.3 — the contract's recorded triple, exactly |
+| top station monotone range | -0.726 % @ x_t -1.6 ... +4.531 % @ x_t +0.97; break-even at share_f ~ +0.13 |
+| yaw sense, plate: Mz_dev / gain | x_w +0.97: +231.57 N.m, +3.8198 % (rear-limited) ; x_w 0: -59.48, +1.3476 % ; x_w -1.5195: -430.04, **-0.5058 %** |
+| roll sense, plate: phi / roll gradient | h_w 0.40: 4.899 deg, 5.2091 deg/g ; 0.90: 4.670, 4.9518 ; 1.20: 4.530, **4.7972** |
+| roll identity closure | `phi == (m_s h_r SFy/m - F_dev(h_w-h_ra))/Kphi` to 3e-5 .. 1.8e-4 deg |
+| Fz algebra vs the contract, 1499 steps | 4.547e-13 N |
+| top-wing split sums to F_top | 3.638e-12 N (of 193 N) |
+| F_top lag | exactly one step, bit-exact, 0.000e+00 at step 0 |
+| `SFy_tyre` purity | `dFz_tot_demand` == contract form to 0.00e+00; leaked form 8.1-8.8 % high |
+| drag charged once | `SFx` residual 2.842e-13 N; coast-down energy closure 0.999994 |
+| step() with all three wings | 48.0 us vs 45.9 us bare = +2.1 us (4.6 %), RTF 20.8 x; `_aero` 1.18-1.34 us |
+
+## Evidence files (under `runs/`, which is gitignored — they are on disk only)
+* `runs/wingaudit_summary.json` — gains, symmetry, wrong-flank counterfactual, `x_w` and `h_w` sweeps
+* `runs/wingaudit_top_station.json` — the eight-station top-wing sweep
+* `runs/wingaudit_coastdown.json` — coast-down drag isolation
+* `runs/wingaudit_lap_plate.csv`, `runs/wingaudit_lap_off.csv` — the 90 s arena laps behind the 36.6 % number
+* `runs/wingaudit_lap_plate_patch.csv`, `runs/wingaudit_lap_plate_shipped.csv` — the patch A/B comparison
+
+## Worth keeping as a repo script?
+**Yes, one thing**: a `validate.py` W-group check that the flank panel actually
+changes flanks. Two lines would have caught BUG 1:
+```python
+    veh = VE.Vehicle(CAR, VE.VehicleConfig(wing="plate")); veh.reset(V=30.0, gear=5)
+    veh._hold_V = 30.0; veh._free_roll = True
+    sides = set()
+    for k in range(6000):
+        t = k * 1e-3
+        d = 0.10 if t < 2.0 else (0.0 if t < 3.0 else -0.10)
+        veh.step(VE.Controls(delta=d, wing_on=True), (1.0,) * 4, (1.0,) * 4, 1e-3)
+        sides.add(veh.state.dev_side)
+    chk("W", "the flank panel follows the steering into the SECOND corner",
+        "dev_side reaches both -1 and +1 in a left-right chicane",
+        f"sides seen {sorted(sides)}", {-1, +1} <= sides, hard=True)
+```
+I did not add it (read-only audit). Everything else I wrote is throwaway and
+lives in the scratchpad.
+
+## What I could NOT verify, and why
+1. **The contract's exact "-2.14 % instead of +2.35 %" pair** (reconciliation
+   7). The sign flip and the ~2 % magnitude both reproduce (`+2.2029 %`
+   shipped in parity; `-0.96 %` fin / `-1.94 %` plate on the wrong flank), but
+   no combination of `wing` x `qss_parity` x R that I tried lands on that exact
+   pair, and the config behind those two numbers is not recorded anywhere in
+   the repo. The conclusion they support is confirmed; the two digits are not
+   reproducible from what is written down.
+2. **Whether "the panel stays out on the straight" was a deliberate choice.**
+   Nothing in `CONTRACT.md`, the code comments or `README.md` says either way,
+   and the owner is away. I have recommended patch B (stow on centre) on
+   physics grounds and shown patch A as the conservative alternative; the
+   *deadlock* half of BUG 1 is unambiguously a bug either way.
+3. **The renderer's three-wing drawing.** `render.py` is owned by another
+   task; I only ruled on `wing_side`'s meaning (FINDING 9) and did not audit
+   the wing geometry it draws.
+4. **A real-lap lap-time delta from BUG 1.** The scripted `lap` driver on the
+   arena completed 0 flying laps inside the 90 s window in both the wing-on and
+   wing-off runs, so I have the 36.6 % wrong-flank exposure but no lap-time
+   number. The per-corner cost is the measured -1.94 % vs +3.82 % swing.
+5. **`h_w`-sensitivity "doubling"**. The contract says leaking `F_dev` into
+   `SFy_tyre` "doubles the `h_w` sensitivity". Measured, the leak does NOT
+   change the `h_w` *slope* (shipped swing +0.249 pp over h_w 0.30-1.10 vs
+   leaked +0.245 pp); what it changes is the `F_dev` coefficient
+   (`2 h_cg - h_w` instead of `h_cg - h_w`), which shifts `dFz_tot` up 8.1-8.8 %
+   and the plate gain down a uniform ~0.167 pp. `vehicle.py:18-22`'s own
+   comment states it correctly; CONTRACT §4's one-line version is loose.
