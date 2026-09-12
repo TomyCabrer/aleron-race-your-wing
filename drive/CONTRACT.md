@@ -290,8 +290,17 @@ CL_dev  = clamp(CL0 + dCLda*alpha_dev, 0, 1.6)       # dCLda = 2.47 /rad; 0 in p
 dep     = smoothstepped deploy fraction over 0.45 s
 F_dev   = sgn_dev * dep * q * S_DEV * CL_dev         # +y = inward for a LEFT turn
 D_dev   = dep * q * S_DEV * CL_dev / 3.2
-Mz_dev  = F_dev*x_w - D_dev*y_dev*sgn_dev            # y_dev = -sgn_dev*0.72
+Mz_dev  = F_dev*x_w - sgn_dev*Y_DEV*D_dev            # Y_DEV = 0.72, y_dev = -sgn_dev*Y_DEV
 ```
+The old form `Mz_dev = F_dev*x_w - D_dev*y_dev*sgn_dev` squared the sign and
+gave `+0.72*D_dev` in BOTH directions — a term that does not mirror, so the
+car was not left/right symmetric on paper even though the code is. `Mz` from
+the panel is `x*Fy - y*Fx` with `Fx = -D_dev` at `y = -sgn_dev*Y_DEV`, i.e.
+`F_dev*x_w - sgn_dev*Y_DEV*D_dev`, which is what `vehicle.py` implements and
+has always logged as its own DEVIATION. Checked: left-turn fin
+`177.389*0.97 - 0.72*55.434 = 132.155` == the reported `Mz_dev`, and the drag
+term yaws the car OUT of the turn, which a force on the outer flank must.
+
 `S_DEV = 0.35 m²` is **one panel**. Exactly one panel is active at a time.
 
 **Public API**:
