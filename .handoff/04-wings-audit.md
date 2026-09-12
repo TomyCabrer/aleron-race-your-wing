@@ -328,3 +328,122 @@ the smaller behavioural delta.
   diagnostics dict (`dict(base, ...)` = two dicts a step); it is inside that
   1.3 us and matches the contract's "`tel` is rebuilt every step".
 
+---
+
+## Other findings (all smaller than BUG 1; each with its number)
+
+### BUG 2 (LOW, diagnostic mode only) — `qss_parity` is not path-independent at nonzero incidence
+`drive/vehicle.py:873` (designed path) vs `:884-885` (closed form):
+```python
+            CL = panel.cl(panel.inc if cfg.qss_parity else alpha_dev)   # designed
+...
+        CL = CL0 + cfg.dclda() * alpha_dev                              # closed form, dclda()=0 in parity
+```
+Zeroing `dCLda` kills the incidence term as well as the slip term, so in
+parity the closed form gives `CL = CL0`, while the designed path gives
+`CL = CL0 + CLa*inc`. Measured at R=100, plate, `inc_deg = 2.0`:
+
+| | closed form | `DevAero.legacy` | diff |
+|---|---|---|---|
+| `qss_parity=True`, inc 0 | CL 1.250000, V 29.580172 | CL 1.250000, V 29.580172 | **0.000e+00** |
+| `qss_parity=True`, inc 2 deg | CL 1.250000, V 29.580172 | CL **1.336219**, V 29.634061 | **+6.90 % CL, +0.054 m/s (+0.18 %)** |
+| `qss_parity=False`, inc 0 | V 30.415545740 | V 30.415545740 | 0.000e+00 |
+| `qss_parity=False`, inc 2 deg | V 30.426366748 | V 30.426366748 | **0.000e+00** |
+
+No acceptance number is affected (W2 uses `inc_deg = 0.0`), and `qss_parity`
+is a diagnostic. The contract's own wording ("`qss_parity` freezes its slip
+term exactly as it zeroes `dCLda`") is self-contradictory, because zeroing
+`dCLda` removes more than the slip term. **Either** change the contract to say
+the designed panel keeps its built-in incidence in parity (my preference — the
+incidence is geometry, not a slip term), **or** patch:
+```
+OLD:            CL = panel.cl(panel.inc if cfg.qss_parity else alpha_dev)
+NEW:            CL = panel.CL0 if cfg.qss_parity else panel.cl(alpha_dev)
+```
+(the second form also needs the `CL_min/CL_max` clamp if `CL0` can leave the
+band, which it cannot for anything `wing.analyse` produces).
+
+### BUG 3 (COSMETIC) — `VehicleConfig.h_aero` is dead
+`drive/vehicle.py:353` declares `h_aero: float = 0.55` with the comment
+"A 0.10 m error is 35 N of `dFz_x` at Vmax". It is **never read**:
+`demand_x` (`:1095`) puts `SFx_t` at `h_cg` and gives only `D_top` an explicit
+arm. Measured: `steady_state_corner(100, plate)` with `h_aero = 0.55` and
+`h_aero = 1.50` returns `V = 30.415545740036` both times,
+**dV = 0.000e+00**. Either wire it in or delete the field — as it stands it
+invites someone to "tune the drag height" and see nothing happen.
+
+### FINDING 4 (MODERATE, contract-level, not a wing bug) — `Fy_body` never enters the lateral load transfer
+`drive/vehicle.py:1091`:
+```python
+        demand = (SFy_tyre * c.h_cg + aer["F_dev"] * (c.h_cg - aer["h_w"])) / self.t_bar
+```
+and the comment above it claims this is "ALGEBRAICALLY IDENTICAL to qss's
+`(m*a_y*h_cg - F*h_w)/t`, because `m*a_y = SFy_tyre + F_dev + Fy_body`".
+Substituting that same identity shows the two differ by exactly
+`Fy_body*h_cg/t_bar`, which is not in the expression — i.e. the body side
+force is treated as acting at ground level, while `cfg.h_aero`'s comment says
+the body aero acts at `h_cg`. Measured at R=100:
+
+| wing | `Fy_body` | omitted transfer `Fy_body*h_cg/t` | as % of `dFz_tot_demand` |
+|---|---|---|---|
+| off | +172.33 N | +66.54 N | 2.03 % |
+| fin | +233.90 N | +90.31 N | 2.74 % |
+| plate | +408.41 N | +157.69 N | **4.85 %** |
+
+This is exactly what CONTRACT §4's load-transfer block prescribes, and
+`qss_parity` zeroes `Cs_psi` so the parity path is untouched, so **the code
+matches the contract** — but the comment's claim of identity is false and the
+modelling gap grows with `beta` (4.85 % at the plate limit, where
+beta = -9.53 deg). Owner's call; nothing to patch blindly.
+
+### FINDING 5 (MINOR, matches the contract) — `D_dev`'s pitch arm is dropped while `D_top`'s is carried
+`demand_x` carries `D_top*(h_t - h_cg)` but not `D_dev*(h_w - h_cg)`, and
+`h_w = 0.90` is 0.35 m above `h_cg`. At the R=100 plate limit
+`D_dev = 97.14 N` -> 34.0 N.m -> **13.65 N of `dFz_x`, 0.22 % of the front
+axle load** (fin: 7.79 N, 0.13 %). Consistent with the contract (which names
+only `D_top`'s arm) and with `qss`/`ledger`, so this is a contract-level
+omission, recorded for completeness.
+
+### FINDING 6 (MINOR) — no garage-built top wing ever has stowed drag
+`drive/vehicle.py:478`, `TopAero.from_aero(...)` hardcodes `CD_stowed=0.0`,
+and `garage._top_aero` is the only producer. The physics honours the field
+exactly (measured: `CD_stowed = 0.05` gives `D_top = 10.7808 N == q*S*0.05`
+with `dep_top = 0`), so `'active'` mode's drag saving is idealised — a stowed
+wing is aerodynamically free. Defensible if the stowed wing is considered part
+of `CdA = 0.66`; say so in a comment or plumb a value through.
+
+### FINDING 7 (COSMETIC) — dead ternary
+`drive/vehicle.py:1358`: `self.wing_side = aer["sgn_dev"] if aer["dep"] > 0.0
+else st.dev_side`. Both branches are the same value (`aer["sgn_dev"]` is
+`int(st.dev_side)` computed in the same call, `:846`/`:866`), so the condition
+never changes the answer.
+
+### FINDING 8 (COSMETIC) — an `'active'` top wing stays out after the driver disarms
+`drive/vehicle.py:823-830`: when `ctl.wing_on` goes False, `want_t` is False
+but `st.top_hold` is not cleared, so `cmd_t` stays 1.0 for up to
+`TOP_HOLD = 0.8 s`. Harmless; mention only because a driver-facing toggle
+that lags 0.8 s looks like a bug from the cockpit. One-line fix if wanted:
+clear `st.top_hold = 0.0` when `not ctl.wing_on`.
+
+### FINDING 9 (COSMETIC, documentation) — `wing_side` is documented backwards in two places
+CONTRACT §4's read-only list says "`wing_side`: -1 right, 0 none, +1 left" and
+`drive/telemetry.py:107` says "`+1 = panel on the LEFT, -1 = RIGHT`". The value
+is the **turn sign**, so `+1` means a LEFT TURN and the panel that is out is
+the RIGHT one. `render.py` reads it correctly. Suggested wording for both:
+> `wing_side`: the TURN sign (`sgn_dev`) — `+1` = left turn, so the **RIGHT**
+> panel is deployed; `-1` = right turn, so the **LEFT** panel is deployed;
+> `0` = never armed. It is NOT the flank index.
+
+### FINDING 10 (COSMETIC) — the `qss` §10 `Y_r` bug is replicated in the telemetry fixture
+`drive/telemetry.py:481`: `Y_r = (a_cg*m*ay + F_dev*x_w)/L`, the form CONTRACT
+§10 flags as wrong (`-F*(a - x_w)` is correct). It is a synthetic fixture, not
+physics, and the code labels it "the same moment balance qss uses", so it is
+deliberate. Flagging it only so it is not mistaken for a second, independent
+derivation. `vehicle.py`'s own `Y_f_expected` (`:1380`) uses the correct
+`-F_dev*(b + x_w)` form and closes to 0.000 % (group D).
+
+### FINDING 11 (LATENT) — `_top_share_f` is cached in `__init__`
+`drive/vehicle.py:626`. Replacing `cfg.top` on a live `Vehicle` leaves the
+axle split stale. Nothing in the repo does that today (every call site builds
+a fresh `Vehicle(car, cfg)`), so it is a trap rather than a bug.
+
