@@ -285,90 +285,6 @@ def _row_of(path: str, paths: dict) -> str:
 K_CORNER = 1.0 / 220.0
 
 
-def wing_timing(path, track: str = "arena", wing: str = "plate",
-                car: str = "corsa", T: float = 140.0, verbose: bool = True) -> dict:
-    """WHEN in the corner is the panel armed, not just how often.
-
-    `wing_frac` says the device is out 56 % of the time and says nothing about
-    whether that 56 % is the right 56 %. This splits every sampled step into
-    four phases of the circuit and reports the deployed fraction in each, plus
-    the median LEAD DISTANCE: how many metres before the corner's entry
-    station the panel first came out on each deployment.
-
-    Phases, from the track's own `kappa` array (so they are a property of the
-    circuit, not of the driver):
-
-        straight   |k| here < 1/220 and |k| 35 m ahead < 1/220
-        approach   |k| here < 1/220 but a corner is within 35 m
-        entry      in a corner, |k| still rising along s
-        exit       in a corner, |k| falling
-
-    A car that arms the device on the approach is using it to buy turn-in
-    grip; one that arms it at entry is using it mid-corner; one that carries
-    it down the straights is paying drag for nothing. That distinction is the
-    interesting per-car result and `wing_frac` cannot see it.
-    """
-    from .. import track as trk
-    pol = Policy() if path is None else Policy.load(path)
-    tr = trk.make_track(track)
-    coll: list = []
-    r = lap_time(pol, track, wing=wing, dt=DT_EVAL, T=T, car=_car_of(car),
-                 collect=coll)
-
-    #  corner-entry stations: |kappa| crossing K_CORNER upward along s
-    kap = np.abs(np.asarray(tr.kappa, float))
-    inc = kap >= K_CORNER
-    entries = [float(tr.s[i]) for i in range(1, len(kap))
-               if inc[i] and not inc[i - 1]]
-    if tr.closed and inc[0] and inc[-2]:
-        pass                              # a corner across the seam: no edge
-    L = float(tr.length)
-
-    def phase(s: float) -> str:
-        k_here = _kappa_at(tr, s)
-        k_ahead = _kappa_at(tr, (s + 35.0) % L if tr.closed else s + 35.0)
-        if abs(k_here) < K_CORNER:
-            return "approach" if abs(k_ahead) >= K_CORNER else "straight"
-        k_next = _kappa_at(tr, (s + 5.0) % L if tr.closed else s + 5.0)
-        return "entry" if abs(k_next) >= abs(k_here) else "exit"
-
-    cnt = {p: 0 for p in ("straight", "approach", "entry", "exit")}
-    dep = dict(cnt)
-    leads, armed_prev = [], False
-    for (_t, x, y, _psi, _u, wdep, _side) in coll:
-        s, _n, _k, _p, _i = trk.project(tr, x, y)
-        ph = phase(s)
-        cnt[ph] += 1
-        on = wdep > 0.05
-        if on:
-            dep[ph] += 1
-        if on and not armed_prev and entries:
-            #  distance to the next corner entry AHEAD, along s
-            d = min(((e - s) % L) for e in entries)
-            if d <= 120.0:               # a deployment 400 m from a corner is
-                leads.append(d)          # not "early", it is unrelated
-        armed_prev = on
-
-    out = dict(car=car, track=track, wing=wing, n=len(coll),
-               frac={p: (dep[p] / cnt[p] if cnt[p] else float("nan"))
-                     for p in cnt},
-               count=dict(cnt), arms=len(leads),
-               lead_med=float(np.median(leads)) if leads else float("nan"),
-               lead_mean=float(np.mean(leads)) if leads else float("nan"),
-               wing_frac=r["wing_frac"], wing_outer_frac=r["wing_outer_frac"],
-               best=r["best"], ended=r["ended"], s=r["s"])
-    if verbose:
-        f = out["frac"]
-        print(f"  {car:6s} {('anchor' if path is None else 'learned'):8s} "
-              f"deployed {100 * out['wing_frac']:5.1f} % "
-              f"(outer {100 * out['wing_outer_frac']:5.1f} %)   "
-              f"by phase: straight {100 * f['straight']:5.1f}  "
-              f"approach {100 * f['approach']:5.1f}  "
-              f"entry {100 * f['entry']:5.1f}  exit {100 * f['exit']:5.1f}   "
-              f"lead {out['lead_med']:5.1f} m median over {out['arms']} arms")
-    return out
-
-
 def residual_safety(grids: dict, verbose: bool = True) -> dict:
     """The property that makes a residual safe to ship, counted over grids.
 
@@ -428,6 +344,120 @@ def residual_safety(grids: dict, verbose: bool = True) -> dict:
         for lab, tr, wg, b, l, d in neither[:4]:
             print(f"     {lab} on {tr}/{wg}: {l['s']:7.1f} m vs {b['s']:7.1f} m "
                   f"({d:+.1f} m), {b['ended']}/{l['ended']}")
+    return out
+
+
+def wing_timing(path, track: str = "arena", wing: str = "plate",
+                car: str = "corsa", T: float = 140.0, verbose: bool = True) -> dict:
+    """WHEN in the corner is the panel armed, not just how often.
+
+    `wing_frac` says the device is out 56 % of the time and says nothing about
+    whether that is the right 56 %. Two measurements here, and the SECOND is
+    the one that answers "do different cars want different aero timing":
+
+    1. the deployed fraction in each of four phases of the circuit, taken from
+       the track's own `kappa` array so they are a property of the CIRCUIT and
+       not of the driver:
+
+           straight    not in a corner and none within 35 m
+           approach    not in a corner but one is within 35 m
+           corner A    in a corner, first half of it by arc length
+           corner B    in a corner, second half
+
+    2. **how many metres INTO each corner the panel came out.** Negative would
+       mean it was already out when the corner arrived.
+
+    A structural fact makes (2) the interesting one and it was found the hard
+    way here: the flank device cannot deploy until the driver is *steering*.
+    `sgn_dev` is derived from the sign of the steering command past a 5 %
+    deadband (CONTRACT section 4, reconciliation 7), so with the wheel
+    straight there is no side for the panel to deploy on and `armed` is False
+    however long `wing_on` has been true. Measured: the anchor's wing rule
+    commands the device on 35 m before the corner (its 35 m lookahead crosses
+    `KAPPA_ARM`) and the panel is nevertheless out at only 2 of 9 corner-entry
+    stations on an arena lap. **So "when does the device come out" is not a
+    lead time the driver chooses; it is a turn-in event**, and what a car can
+    vary is how far into the corner it happens and how long it lasts.
+    """
+    from .. import track as trk
+    pol = Policy() if path is None else Policy.load(path)
+    tr = trk.make_track(track)
+    coll: list = []
+    r = lap_time(pol, track, wing=wing, dt=DT_EVAL, T=T, car=_car_of(car),
+                 collect=coll)
+
+    #  corner intervals [entry, exit] in s, from |kappa| crossing K_CORNER
+    kap = np.abs(np.asarray(tr.kappa, float))
+    inc = kap >= K_CORNER
+    L = float(tr.length)
+    corners = []
+    i = 1
+    while i < len(inc):
+        if inc[i] and not inc[i - 1]:
+            j = i
+            while j + 1 < len(inc) and inc[j + 1]:
+                j += 1
+            corners.append((float(tr.s[i]), float(tr.s[j])))
+        i += 1
+
+    def phase(s: float) -> str:
+        for e, x in corners:
+            if e <= s <= x:
+                return "cornerA" if s - e <= 0.5 * (x - e) else "cornerB"
+        ahead = min(((e - s) % L) for e, _x in corners) if corners else 1e9
+        return "approach" if ahead <= 35.0 else "straight"
+
+    cnt = {p: 0 for p in ("straight", "approach", "cornerA", "cornerB")}
+    dep = dict(cnt)
+    ss, arm = [], []
+    for (_t, x, y, _psi, _u, wdep, _side) in coll:
+        s, _n, _k, _p, _i = trk.project(tr, x, y)
+        ph = phase(s)
+        cnt[ph] += 1
+        if wdep > 0.05:
+            dep[ph] += 1
+        ss.append(s)
+        arm.append(wdep > 0.05)
+
+    #  metres INTO each corner at which the panel came out. For every corner
+    #  the car actually reached, walk forward from 35 m before its entry to
+    #  its exit and take the first armed sample. An earlier version measured
+    #  every rising edge of `wing_deploy > 0.05` instead and its median was
+    #  garbage: the signal chatters (14 edges in a 90 s arena run, twice the
+    #  number of corners), so most edges were mid-straight flickers hundreds
+    #  of metres from anything.
+    intos = []
+    inwin = [False] * len(corners)
+    done = [False] * len(corners)
+    for k in range(len(ss)):
+        for c, (e, x) in enumerate(corners):
+            lo = (e - 35.0) % L
+            here = (lo <= ss[k] <= x) if lo <= x else (ss[k] >= lo or ss[k] <= x)
+            if here and not inwin[c]:
+                done[c] = False                 # a fresh traversal of it
+            inwin[c] = here
+            if here and arm[k] and not done[c]:
+                #  signed and wrapped, so a panel already out when the corner
+                #  arrives reads negative rather than as most of a lap
+                intos.append(((ss[k] - e) + 0.5 * L) % L - 0.5 * L)
+                done[c] = True
+    out = dict(car=car, track=track, wing=wing, n=len(coll),
+               frac={p: (dep[p] / cnt[p] if cnt[p] else float("nan"))
+                     for p in cnt},
+               count=dict(cnt), corners=len(intos), intos=intos,
+               into_med=float(np.median(intos)) if intos else float("nan"),
+               wing_frac=r["wing_frac"], wing_outer_frac=r["wing_outer_frac"],
+               best=r["best"], ended=r["ended"], s=r["s"])
+    if verbose:
+        f = out["frac"]
+        print(f"  {car:6s} {('anchor' if path is None else 'learned'):8s} "
+              f"out {100 * out['wing_frac']:5.1f} % "
+              f"(outer {100 * out['wing_outer_frac']:5.1f} %)  "
+              f"straight {100 * f['straight']:5.1f}  "
+              f"approach {100 * f['approach']:5.1f}  "
+              f"cnrA {100 * f['cornerA']:5.1f}  cnrB {100 * f['cornerB']:5.1f}  "
+              f"out {out['into_med']:+6.1f} m into the corner "
+              f"({out['corners']} corners)  {out['ended']}")
     return out
 
 
