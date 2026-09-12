@@ -502,8 +502,49 @@ the guard).
 | | before (commit `2e3ef24`) | after |
 |---|---|---|
 | `python3 -m drive.validate --quick` | 75/75, 0 HARD, 0 soft | 75/75, 0 HARD, 0 soft [61.7 s] |
-| `python3 -m drive.validate --modules` | 100/100, 0 HARD, 0 soft [231.0 s] | (recorded in the final report) |
+| `python3 -m drive.validate --modules` | 100/100, 0 HARD, 0 soft [231.0 s] | **99/100, 1 HARD, 0 soft [314.7 s]** — see below |
 | `python3 -m drive.powertrain` self-check | 82/82 | **90/90** (8 new, every one of which fails on the shipped scheduler) |
+
+**The one HARD failure is `drive/render.py`'s `V22 frame budget`, and it is not
+reachable from this work.**
+
+* The check is a wall clock: `mean <= 12.0 ms and p99 <= 16.0 ms` over 600
+  rendered frames. The failing runs report mean 5.38-6.02 ms (never close to
+  the 12.0 bar) and **p99 16.50-20.52 ms against the 16.0 bar** — over by
+  3-28%.
+* Standalone, it is **flaky right now**: 6 consecutive identical runs gave
+  `ok / FAIL / FAIL / ok / FAIL / FAIL`, p99 ranging 7.56 to 20.52 ms.
+* The machine is loaded: `ps` shows **six `python3` processes at 100% CPU**
+  (`multiprocessing.spawn` — the concurrent agent's work), and the whole suite
+  has gone from 231 s at baseline to 295-315 s, i.e. 27-36% slower, at 87%
+  CPU. The baseline 231 s run was on a quiet machine.
+* `drive/render.py` imports `math, os, time, collections, dataclasses, numpy,
+  pygame, qss, corsa_c, drive.track` — and **nothing else**. It does not import
+  `powertrain`, `vehicle` or `tyre`. A change to the shift scheduler cannot
+  influence a pygame blit time.
+
+Every other module subprocess is green, including
+`python3 -m drive.powertrain -> 90/90` and `python3 -m drive.drive
+--self-check -> ALL PASS`. `--quick` (which does not run the module
+subprocesses) is **75/75, 0 HARD, 0 soft [61.7 s]**.
+
+### The one acceptance number that moved
+
+| | before | after | band |
+|---|---|---|---|
+| scripted lap of CIRCUIT_ARENA | 61.10 s, max \|n\| 3.06 m | **60.84 s**, max \|n\| 3.21 m | 55-80 s, \|n\| < 6.0 m |
+| `accel_run` 0-100 km/h | 14.69 s | 14.69 s | 14.5-16.0 s |
+| open map perimeter lap | 96.85 s | 96.85 s | 90-110 s |
+| `drive.py` V27 auto / manual / clutch | `auto 20.0 m/s gear 2; manual 14.41 s; clutch 0.03 / 0.26 / 11.5` | identical | - |
+| `drive.py` V29 engine / TC | `stock 14.93 s kappa 0.08 TC 0.0 s; 2x raw kappa 1.50; 2x TC 8.42 s kappa 0.31` | identical | - |
+| `drive.py` accel run 0-100 | 14.802 s | 14.802 s | 14.5-16.0 s |
+| headless determinism sha | `04f4fa96253ac84d` | `04f4fa96253ac84d` | - |
+
+The lap is **0.26 s FASTER** (0.4%) and stays well inside its band. That is the
+expected direction: the box no longer throws a 0.70 s upshift away on every
+corner entry and no longer walks down three gears one at a time out of a
+kickdown. `accel_run`'s 0-100 cannot move by construction — it carries its own
+`n_up` dict and never calls `_auto_target`.
 
 No acceptance number moved: `gearbox modes` still reads `auto 20.0 m/s gear 2;
 manual 0-100 14.41 s; clutch stall 0.03 s, fire 0.26 s, launch 11.5 m/s`, and
