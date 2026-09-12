@@ -71,11 +71,71 @@ round.** The driver generalisation here is still correct and still needed — th
 planning a 1010 kg car's grip — but the lap numbers for the two new cars
 cannot be finished until their torque reaches the correct axle. Re-verify then.
 
+## RESOLVED — the final driver, after RWD landed
+
+Real rear-wheel drive (`.handoff/11-rwd.md`) removed the front-axle wheelspin,
+and then made the lap **worse**: the two cars stopped understeering off the
+track and started *spinning* off it instead (MX-5 390 m, 540i 1371 m). Three
+things were tried, in order, and only the third earned its place:
+
+1. **Throttle capped by the driven axle's measured `util_r`.** A step too late
+   every time — `util_r` only rises once the rear is already sliding, by which
+   point a 210 kW car has gone. MX-5 fixed, 540i still 1371 m off.
+2. **The same cap, feedforward on the corner the driver can SEE**
+   (`u = V²·|kappa| / ay_plan`, so `room = sqrt(1 - u²)`). This is what
+   shipped. MX-5 on the island; 540i still 963 m off.
+3. **A counter-steer term, `delta += k_beta·beta`.** Swept k_beta over
+   0 / 0.5 / 1.0 / 1.5 / 2.5 / 4.0 on the 540i: it never completed a lap, and
+   at the margin that actually works it made `max |n|` **worse** (2.74 m at
+   k = 0 against 3.25 at k = 1.0 and 4.46 at k = 2.0). **Deleted.** The 540i
+   was not losing the lap to a slide it could have caught — it was entering
+   the corner too fast.
+
+What was actually wrong was the entry speed, in two ways:
+
+* **`car_ay_peak` is 4.1 % HIGH on a heavy car** (8.8534 estimated against
+  8.5046 measured on the 540i; 0.1 % and 0.3 % on the Corsa and MX-5). It
+  omits the scrub-drag and yaw-balance terms `qss.max_ay` carries. So the
+  driver planned *more* grip than the car had. The planned grip now comes
+  from `car_ay_measured` — an **open-loop ramp steer of that car**, cached,
+  which is what CONTRACT §4 says quantitative limits must come from.
+  `car_ay_peak` survives only for `power_grip_ratio`, where 4 % is noise.
+* **A car far outside the driver's calibration needs a more careful driver.**
+  `margin` now fades as `margin * (1 - MARGIN_FADE*(pg - 1))` with
+  `MARGIN_FADE = 0.10` and `pg = power_grip_ratio`: exactly `margin` at
+  pg = 1 (the Corsa), 0.836 for the MX-5 at pg 1.71, 0.796 for the 540i at
+  pg 2.16 — and 0.80 is the value the sweep independently found the 540i
+  needs. This is what a human does in an unfamiliar overpowered car.
+
+`POWER_GRIP_MODULATE = 1.25` gates both the throttle cap and the margin fade
+on a **physical** property — power per unit grip, measured 1.00 / 1.71 / 2.16
+— so the Corsa is inert by physics rather than by a flag.
+
+### Final: `--script lap`, arena, 200 s, ribbon half-width 6.0 m
+
+| car | lap | `max_n` | margin | was (Corsa-tuned driver, FWD) |
+|---|---|---|---|---|
+| corsa | **60.8355 s** | **3.2148 m** | 0.900 | 60.836 s / 3.21 m |
+| mx5 | **60.2900 s** | **2.2577 m** | 0.836 | 65.527 s / 16.27 m |
+| 540i | **60.4886 s** | **2.6745 m** | 0.796 | 73.526 s / 42.30 m |
+
+All three inside the ribbon. The Corsa is bit-for-bit: `margin_scale == 1.0`,
+`ay == AY_MAX_DRY`, `kp_n == KP_N`, `modulate == False`, all with `==`.
+
+**Read these to compare a change to one car against itself, not to rank the
+three cars.** The two new cars are driven deliberately more conservatively, so
+their lap times are a property of the driver as much as the car.
+
+`validate` 82/82 and `--modules` 100/100, 0 HARD / 0 soft.
+
 ## Still open / not verified
 
-* Only the **arena** has been run for all three cars. `open` / `skidpad` /
-  `dragstrip` are pending the RWD work, since any number taken now would have
-  to be taken again.
+* Only the **arena** has been run for all three cars with the final driver.
+  `--script lap` is arena-only by construction (`lap_script` calls
+  `trk.make_arena`), and the other three tracks are exercised by the other
+  scripts, which are open-loop and were never Corsa-tuned: `skidpad_limit`
+  and `brake` run clean on all three cars (`ay_g_openloop_ref` 0.858363 on
+  every car, `t_stop` 18.314 / 14.346 / 11.412 s).
 * `SpeedPI`'s throttle/brake gains are still the Corsa's. They did not show up
   as the binding constraint (the excursions are lateral, not longitudinal), so
   I left them rather than tune something that is not broken.
