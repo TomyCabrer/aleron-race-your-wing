@@ -1514,6 +1514,69 @@ class PathFollower:
                         auto_gearbox=True, wing_on=self.wing_on)
 
 
+
+# --- generalising the scripted driver to a car that is not the Corsa -------
+#  `AY_MAX_DRY`, the steering gains and the lookahead were all calibrated on
+#  the Corsa, and on the two library cars the scripted lap left the island:
+#  arena max |n| 3.21 m (corsa) against 16.27 m (mx5) and 42.30 m (540i), on a
+#  6.0 m half-width. Everything below is expressed as a RATIO against the
+#  Corsa's own value, so for the Corsa the ratio is exactly 1.0 and
+#  `x * 1.0 == x` -- the acceptance lap is bit-for-bit, not merely close.
+def car_ay_peak(car, mu_scale: float = 1.0, roll_dist_f: float = 0.74) -> float:
+    """Peak sustainable a_y for THIS car, m/s^2, from `qss.fy_max`/`qss.TYRE`.
+
+    The same statement `qss.residuals` makes, minus the device and the yaw
+    split: both axles at capacity, total lateral transfer `m*a_y*h_cg/t`
+    divided 0.74/0.26, bisected on `a_y`. It is NOT a replacement for
+    `qss.max_ay` (which is the reference truth and is bound to the Corsa at
+    module scope) -- it exists only to form a ratio between two cars, and the
+    ratio is what is used. Contract sections 4 and 7 both require the tyre
+    reference to be `qss.fy_max` with `qss.TYRE`, and this obeys that.
+
+    Pure, deterministic, ~200 cheap iterations. Called once per script setup,
+    never from the 1 kHz driver loop.
+    """
+    W = car.m * G
+    Fz_f, Fz_r = W * car.wdist_f, W * (1.0 - car.wdist_f)
+    t_bar = car.t
+    lo, hi = 0.1, 30.0
+    for _ in range(200):
+        a = 0.5 * (lo + hi)
+        dFz = car.m * a * car.h_cg / t_bar
+        cap = (qss.axle_capacity(Fz_f, roll_dist_f * dFz, mu_scale)
+               + qss.axle_capacity(Fz_r, (1.0 - roll_dist_f) * dFz, mu_scale))
+        lo, hi = (a, hi) if car.m * a < cap else (lo, a)
+    return 0.5 * (lo + hi)
+
+
+#: the Corsa's own value, so every ratio below is exactly 1.0 for the Corsa
+AY_PEAK_REF = car_ay_peak(CorsaC())
+L_REF = CorsaC().L
+
+
+def driver_scaling(car, mu_scale: float = 1.0) -> dict:
+    """How to retune the scripted driver for `car`. All ratios, all 1.0 for
+    the Corsa.
+
+    * `ay` -- the grip the speed profile plans to. Scaled by the car's own
+      peak, because planning the Corsa's 8.46 m/s^2 on a 1780 kg saloon that
+      can only do 8.36 is what drove it off the track.
+    * `kp_n` / `kd_psi` -- the path-following gains, scaled by WHEELBASE.
+      `psi_dot = V*delta/L`, so a longer car yaws less per unit steer and
+      needs proportionally more of it to hold the same loop gain.
+    * `lookahead` -- scaled INVERSELY with grip: less grip is a longer
+      braking distance, so the driver has to see the corner sooner. Measured
+      100->0 km/h: corsa 49.86 m, mx5 55.35 m, 540i 64.00 m.
+    """
+    ay_ratio = car_ay_peak(car, mu_scale) / AY_PEAK_REF
+    L_ratio = car.L / L_REF
+    return dict(ay=AY_MAX_DRY * ay_ratio,
+                kp_n=KP_N * L_ratio,
+                kd_psi=KD_PSI * L_ratio,
+                lookahead=12.0 / ay_ratio,
+                ay_ratio=ay_ratio, L_ratio=L_ratio)
+
+
 def speed_profile(tr, margin=0.90, car=None, global_wet=1.0):
     """Quasi-steady target speed at every centreline sample (driver aid only).
 
@@ -1538,7 +1601,9 @@ def speed_profile(tr, margin=0.90, car=None, global_wet=1.0):
     N = len(k)
     mu = np.array([trk.surface_at(tr, float(x), float(y), global_wet)[0]
                    for x, y in tr.xy])
-    ay = margin * AY_MAX_DRY * mu
+    #  the car's OWN peak, not the Corsa's constant. Exactly AY_MAX_DRY when
+    #  the car IS the Corsa (driver_scaling's ratio is then exactly 1.0).
+    ay = margin * driver_scaling(car, getattr(car, "mu_scale", 1.0))["ay"] * mu
     V = np.where(k < 1e-6, car.Vmax, np.sqrt(ay / np.maximum(k, 1e-9)))
     V = np.minimum(V, car.Vmax)
     wraps = 2 if tr.closed else 1
@@ -1584,12 +1649,19 @@ class StraightDriver(PathFollower):
 class LapDriver(PathFollower):
     """PathFollower whose speed target comes from the quasi-steady profile."""
 
-    def __init__(self, tr, margin=0.90, wing_on=False, global_wet=1.0):
-        super().__init__(0.0, wing_on=wing_on)
-        self.prof = speed_profile(tr, margin, global_wet=global_wet)
+    def __init__(self, tr, margin=0.90, wing_on=False, global_wet=1.0, car=None):
+        #  `car=None` keeps the Corsa construction every acceptance number was
+        #  measured on. `speed_profile` was never handed the car, so a 540i lap
+        #  planned the Corsa's grip AND capped at the Corsa's Vmax.
+        sc = driver_scaling(car or CorsaC(),
+                            getattr(car, "mu_scale", 1.0) if car else 1.0)
+        super().__init__(0.0, wing_on=wing_on,
+                         gains=(sc["kp_n"], sc["kd_psi"], KI_N))
+        self.prof = speed_profile(tr, margin, car=car, global_wet=global_wet)
         self.ds = tr.ds
         self.N = len(self.prof)
-        self.lookahead = 12.0            # m, so the driver brakes BEFORE the corner
+        self.lookahead = sc["lookahead"]  # m, so the driver brakes BEFORE the corner
+        self.scaling = sc
 
     def target(self, t, veh, tr, s, kt):
         i = int((s + self.lookahead) / self.ds) % self.N
@@ -2103,7 +2175,8 @@ def ramp_probe_script(opts) -> dict:
 def lap_script(opts) -> dict:
     drv = LapDriver(trk.make_arena(surfaces=(opts.wet != "none")),
                     margin=opts.margin, wing_on=(opts.wing != "off"),
-                    global_wet=(MU_WET_SCALE if opts.wet == "all" else 1.0))
+                    global_wet=(MU_WET_SCALE if opts.wet == "all" else 1.0),
+                    car=_opts_car(opts))
     sim = _build("arena", wing=opts.wing, x_w=opts.wing_x, h_w=opts.wing_h,
                  wet=opts.wet, dt=opts.dt, telem_path=opts.telemetry,
                  telem_hz=opts.telem_hz, precision=opts.telem_precision,
