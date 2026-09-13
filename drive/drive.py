@@ -531,6 +531,7 @@ def _ml_input(path: str, tr, opts):
     try:
         from .ml.env import observe
         from .ml.policy import Policy
+        from .ml.baseline import driver_trim
         pol = Policy.load(path)
     except Exception as exc:
         print(f"--ml-drive {path}: {type(exc).__name__}: {exc}")
@@ -542,8 +543,23 @@ def _ml_input(path: str, tr, opts):
         print(f"  NOTE: trained on '{meta['track']}', driving '{tr.name}' -- "
               f"it has never seen this track")
 
+    #  The per-car trim the policy was MEASURED with. `env.rollout` passes the
+    #  car's lock, wheelbase and planned grip; this path did not, so
+    #  `--ml-drive` on an MX-5 drove it with the Corsa's numbers and the window
+    #  disagreed with every figure in .handoff/09-ml.md. Cached on the car
+    #  object's identity, not recomputed per step: `driver_trim` runs a ramp
+    #  steer the first time it sees a car.
+    _trim: dict = {}
+
     def fn(t, veh, track):
-        return pol.controls(observe(veh, track), Controls)
+        if _trim.get("car") is not veh.car:
+            _trim.clear()
+            _trim["car"] = veh.car
+            _trim["t"] = driver_trim(veh.car, float(veh.cfg.mu_scale))
+        tm = _trim["t"]
+        return pol.controls(observe(veh, track), Controls,
+                            lock_rad=tm["lock_rad"], wheelbase=tm["wheelbase"],
+                            ay_plan=tm["ay_plan"])
 
     return ScriptedInput(fn, vehicle=None, track=tr)
 
