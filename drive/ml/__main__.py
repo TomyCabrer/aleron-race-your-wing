@@ -140,6 +140,49 @@ def self_check(verbose: bool = True) -> bool:
          "v_mean " + ", ".join(f"{k} {e.v_mean:.3f}" for k, e in per_car.items())
          + "; mu_scale " + ", ".join(f"{k} {v:.2f}" for k, v in mus.items()))
 
+    # --- the observation carries the surface, and the anchor uses it ------
+    #  Wave 5's whole point. Through wave 4 the driver could not see the
+    #  arena's WET_T3 (s 455..585, full width, mu 0.632) and a blanket
+    #  MARGIN_FADE paid for that everywhere; now it plans around it. Two
+    #  things have to hold: the profile has to FIND the patch, and the speed
+    #  plan has to respond to it.
+    from .env import MU_HORIZON, mu_ahead
+    dry, wet = mu_ahead(tr, 100.0), mu_ahead(tr, 500.0)
+    _rep("the observation finds the arena's wet patch",
+         dry == 1.0 and wet < 0.7,
+         f"mu_ahead({MU_HORIZON:.0f} m) = {dry:.4f} at s = 100 m (dry) and "
+         f"{wet:.4f} at s = 500 m (inside WET_T3)")
+    o_dry = obs[0].copy()
+    #  R = 120 m at 28 m/s: fast enough that the DRY plan still wants
+    #  throttle (v_corner 29.7 m/s) and the wet one does not (23.6), so the
+    #  two are distinguishable. A tighter corner saturates both pedals at -1
+    #  and the check would pass or fail for the wrong reason.
+    o_dry[3] = o_dry[4] = 50.0 / 120.0
+    o_dry[5] = o_dry[6] = o_dry[7] = 0.0
+    o_dry[0] = 28.0 / 40.0
+    o_dry[15] = o_dry[16] = 1.0
+    o_wet = o_dry.copy()
+    o_wet[15] = o_wet[16] = 0.632
+    a_dry = baseline_action(o_dry, LOCK_RAD)
+    a_wet = baseline_action(o_wet, LOCK_RAD)
+    _rep("the speed plan slows for a wet corner",
+         a_wet[1] < a_dry[1] - 0.05,
+         f"pedal {a_dry[1]:+.3f} on mu 1.000 against {a_wet[1]:+.3f} on "
+         f"mu 0.632, same R = 120 m corner at 28 m/s")
+    #  and the 120 m station is what lets the 540i brake for open's corner
+    o_far = obs[0].copy()
+    o_far[0], o_far[3] = 41.0 / 40.0, 0.0
+    o_far[4] = o_far[5] = o_far[6] = 0.0
+    o_far[15] = o_far[16] = 1.0
+    o_near = o_far.copy()
+    o_far[7] = 50.0 / 45.0                     # R = 45 m, 120 m ahead
+    _rep("the 120 m station reaches a corner the 70 m one cannot",
+         baseline_action(o_far, LOCK_RAD)[1] < -0.5
+         and baseline_action(o_near, LOCK_RAD)[1] > 0.0,
+         f"at 41 m/s with an R = 45 m corner 120 m out the plan brakes "
+         f"({baseline_action(o_far, LOCK_RAD)[1]:+.3f}); with the same road "
+         f"empty it does not ({baseline_action(o_near, LOCK_RAD)[1]:+.3f})")
+
     # --- the training timestep is the one the docstring claims -----------
     e1 = rollout(p0, "arena", T=20.0, dt=DT_EVAL, tr=tr)
     e2 = rollout(p0, "arena", T=20.0, dt=DT_TRAIN, tr=tr)

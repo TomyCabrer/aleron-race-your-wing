@@ -25,10 +25,27 @@ from .policy import Policy, N_OBS   # noqa: F401  (re-exported for __main__)
 DT_TRAIN = 0.002
 DT_EVAL = 0.001
 
-#: Lookahead stations for the curvature the policy sees, m. 15 / 35 / 70 m is
+#: Lookahead stations for the curvature the policy sees, m. 15 / 35 / 70 m was
 #: roughly 0.5 / 1.2 / 2.5 s at 28 m/s -- a corner entry, a corner, and
 #: whether there is another one after it.
-LOOKAHEAD = (15.0, 35.0, 70.0)
+#:
+#: **120 m is new in wave 5 and it exists for one car.** The 540i reaches
+#: 41.25 m/s on `open`'s 420 m straight and the corner starts at s = 420.1 m;
+#: braking 41.2 -> 17 m/s at its measured 0.9 g needs ~80 m and a 70 m station
+#: cannot buy that at ANY planned speed, so anchor and policy alike went off
+#: at ~440 m in all six `open` cells of wave 4. 120 m is ~2.9 s at 41 m/s and
+#: is the first station that lets the plan start before the car is committed.
+LOOKAHEAD = (15.0, 35.0, 70.0, 120.0)
+
+#: How far ahead the speed plan looks for GRIP, m, and the other half of wave
+#: 5. Through wave 4 the observation carried no surface term at all, so
+#: neither the hand-written driver nor the network could see `WET_T3` (the
+#: arena's 130 m full-width mu = 0.632 patch at s = 455..585) coming; both RWD
+#: cars drove into it at ~22 m/s on a dry plan and the whole `MARGIN_FADE`
+#: apparatus existed to pay for that blindness EVERYWHERE, including on a dry
+#: skidpad. 90 m is the braking horizon of the fastest car in the library at
+#: the speeds these circuits reach, and it is swept in `.handoff/09-ml.md`.
+MU_HORIZON = 90.0
 
 #: Off-track is not a soft cost. At `MARGIN_OFF` metres beyond the ribbon edge
 #: the episode ENDS: a policy that learns to cut a corner across the grass is
@@ -69,8 +86,14 @@ class Episode:
     util_r_max: float = 0.0
 
 
-def observe(veh, tr, out=None) -> np.ndarray:
-    """The observation vector. Read-only in `veh`; allocates once if reused."""
+def observe(veh, tr, out=None, mu_here=None) -> np.ndarray:
+    """The observation vector. Read-only in `veh`; allocates once if reused.
+
+    `mu_here` is the surface scale under the car. `rollout` already calls
+    `trk.surface_at` every step to drive the physics and passes the answer in,
+    so the observation costs nothing there; any other caller may omit it and
+    pay for one extra lookup.
+    """
     o = np.empty(N_OBS) if out is None else out
     s, n, kappa, psi_c, _i = trk.project(tr, veh.x, veh.y)
     half = 0.5 * tr.width
@@ -81,14 +104,80 @@ def observe(veh, tr, out=None) -> np.ndarray:
     for j, d in enumerate(LOOKAHEAD):
         sj = (s + d) % tr.length if tr.closed else min(s + d, tr.length)
         o[4 + j] = _kappa_at(tr, sj) * 50.0
-    o[7] = veh.beta
-    o[8] = veh.r * 2.0
-    o[9] = veh.ay / G
-    o[10] = veh.util_f
-    o[11] = veh.util_r
-    o[12] = veh.wing_deploy
-    o[13] = 1.0 if abs(n) <= half else 0.0
+    o[8] = veh.beta
+    o[9] = veh.r * 2.0
+    o[10] = veh.ay / G
+    o[11] = veh.util_f
+    o[12] = veh.util_r
+    o[13] = veh.wing_deploy
+    o[14] = 1.0 if abs(n) <= half else 0.0
+    o[15] = (trk.surface_at(tr, veh.x, veh.y)[0] if mu_here is None
+             else float(mu_here))
+    o[16] = mu_ahead(tr, s)
     return o
+
+
+#: `{track fingerprint: (mu at each centreline sample, min over MU_HORIZON)}`.
+#: Keyed by geometry AND the surface list rather than by `id(tr)`: ids get
+#: recycled after a GC, and `make_arena(surfaces=False)` has the same name,
+#: length and sample count as the default arena with none of its patches --
+#: exactly the collision that would silently hand a policy the wrong grip.
+_MU_CACHE: dict = {}
+
+
+def _mu_key(tr):
+    return (tr.name, round(float(tr.length), 6), len(tr.s),
+            tuple(sorted((p.s0, p.s1, p.mu_scale) for p in tr.surfaces)),
+            len(tr.areas or ()))
+
+
+def _mu_profile(tr):
+    """(mu at each centreline sample, running min over the next MU_HORIZON).
+
+    Built ONCE per track per process, ~2500 `surface_at` calls and a 180-step
+    vectorised sliding minimum: about 15 ms, against ~70 000 steps in a
+    training rollout. Doing it per step instead would put six `track.project`
+    calls in the 500 Hz observation path for a number that cannot change.
+
+    Sampled ON THE CENTRELINE (n = 0). That is exact for `WET_T3`, which spans
+    the full 12 m width, and conservative-in-the-right-direction for
+    `DAMP_T5_EXIT` and `WET_T2_ENTRY`, which span n = -6..0 and so include the
+    centreline. A patch that touched only one edge of the road would be
+    invisible here; none of the four tracks has one.
+    """
+    key = _mu_key(tr)
+    hit = _MU_CACHE.get(key)
+    if hit is not None:
+        return hit
+    n = len(tr.s)
+    prof = np.array([trk.surface_at(tr, float(tr.xy[i][0]),
+                                    float(tr.xy[i][1]))[0] for i in range(n)])
+    w = max(1, int(round(MU_HORIZON / tr.ds)))
+    if tr.closed:
+        ext = np.concatenate([prof, prof[:w + 1]])
+    else:
+        ext = np.concatenate([prof, np.full(w + 1, prof[-1])])
+    run = ext[:n].copy()
+    for j in range(1, w + 1):
+        np.minimum(run, ext[j:n + j], out=run)
+    _MU_CACHE[key] = (prof, run)
+    return _MU_CACHE[key]
+
+
+def mu_ahead(tr, s: float) -> float:
+    """The WORST surface scale on the centreline in the next `MU_HORIZON` m.
+
+    A minimum and not a discounted average, because grip is not something you
+    can be a bit short of: you either arrive on the wet at a speed it will
+    hold or you do not. Curvature IS discounted with distance (`K70_PLAN`,
+    `K120_PLAN`) because a distant corner can still be braked for; a distant
+    wet patch cannot be braked for once you are on it.
+    """
+    _prof, run = _mu_profile(tr)
+    i = int(round(s / tr.ds))
+    n = (len(tr.s) - 1) if tr.closed else len(tr.s)
+    i = i % n if tr.closed else max(0, min(len(tr.s) - 1, i))
+    return float(run[i])
 
 
 def _kappa_at(tr, s: float) -> float:
@@ -154,14 +243,14 @@ def rollout(policy: Policy, track: str = "arena", *, dt: float = DT_TRAIN,
 
     for k in range(n_steps):
         t = k * dt                       # contract section 0: never accumulated
-        observe(veh, tr, obs)
+        m, c, _on = trk.surface_at(tr, veh.x, veh.y)
+        observe(veh, tr, obs, mu_here=m)
         #  this car's own lock and wheelbase, not the Corsa's (the constants
         #  in `policy`/`baseline` are only the defaults). Both are exactly the
         #  Corsa's values on the Corsa, so every committed checkpoint's
         #  measured numbers are unmoved by either change.
         ctl = policy.controls(obs, Controls, lock_rad=lock_rad,
                               wheelbase=wheelbase, ay_plan=ay_plan)
-        m, c, _on = trk.surface_at(tr, veh.x, veh.y)
         mu[0] = mu[1] = mu[2] = mu[3] = m
         crr[0] = crr[1] = crr[2] = crr[3] = c
         veh.step(ctl, mu, crr, dt)

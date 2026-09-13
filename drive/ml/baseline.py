@@ -106,6 +106,20 @@ K_V = 0.45           # pedal per m/s of speed error
 #: where c = 0.60 is at n = -6.1 m and gone. A slower driver ran wide; that
 #: was worth instrumenting rather than assuming.
 K70_PLAN = 0.45
+#: The same discount for the 120 m station, swept the same way -- see
+#: `.handoff/09-ml.md`. It exists because the 540i could not brake for
+#: `open`'s R = 45 m corner from 41.25 m/s with 70 m of warning at any planned
+#: speed, in either the anchor or any policy: off at ~440 m in all six wave-4
+#: `open` cells. At weight `c` the plan at 120 m out is `v_corner / sqrt(c)`.
+K120_PLAN = 0.30
+#: Floor on the `mu_ahead` the speed plan will believe. Purely defensive: the
+#: lowest real value on any centreline in the library is `WET_T3`'s 0.632 and
+#: the lowest reachable anywhere is `track.MU_OFF_TRACK`.
+MU_FLOOR = 0.05
+#: How many of the five speed-plan stations (here / 15 / 35 / 70 / 120 m) are
+#: planned on `mu_here` rather than on `mu_ahead`. Swept -- see the block at
+#: `baseline_action`'s speed plan and `.handoff/09-ml.md`.
+MU_NEAR_STATIONS = 1
 
 # --- driving a car these gains were never swept on ---------------------------
 #  Everything above is a 1010 kg front-driven hatch's driver: pure pursuit, a
@@ -154,34 +168,26 @@ K70_PLAN = 0.45
 #
 #  What survives is the entry speed, and only the entry speed.
 
-#: Power per unit grip, normalised to the Corsa, above which this driver plans
-#: to less grip than it would on the car its gains were swept on. Measured
-#: 1.0000 / 1.7936 / 2.3170, so the Corsa is inert BY PHYSICS and not by a
-#: flag: 1.0 is not greater than 1.25 and its margin is exactly 1.0.
-POWER_GRIP_MODULATE = 1.25
-#: How fast the planned grip fades with `power_grip_ratio`:
-#: `margin = clip(1 - MARGIN_FADE*(pg - 1), MARGIN_MIN, 1)`.
+#: Power per unit grip, (P_wheel/m) / peak a_y, as a multiple of the Corsa's.
+#: Measured 1.0000 / 1.7936 / 2.3170. **Wave 5 demoted this from a knob to a
+#: diagnostic.** Through wave 4 it gated a blanket `MARGIN_FADE` that took
+#: 45 % off the 540i's planned grip EVERYWHERE, because the driver could not
+#: see the arena's wet patch and had to be slow all the time to survive it.
+#: The observation now carries the grip, so the driver is slow where the water
+#: is and nowhere else, and **the fade is retired: `MARGIN_FADE` is gone, not
+#: set to zero.** It is reported in `driver_trim` because it is a real
+#: property of the car and the note cites it; nothing reads it.
 #:
-#: **0.40, not the 0.10 wave 2 shipped**, and the difference is the surface
-#: blindness above -- LapDriver plans around WET_T3 per sample and this driver
-#: cannot see it, so it has to be slower everywhere instead. Swept on the
-#: arena, baseline theta = 0, dt 1 ms, 280 s, both RWD cars:
+#: What retiring it is worth, anchor, dt 1 ms, 280 s, plate (wave 4 -> wave 5):
 #:
-#:      fade   mx5 (pg 1.79)                540i (pg 2.32)
-#:      0.10   margin 0.921   SPIN  490 m   margin 0.868  off  515 m
-#:      0.20   margin 0.841   off   528 m   margin 0.737  off  546 m
-#:      0.30   margin 0.762   off   549 m   margin 0.605  LAPS 68.636 s
-#:      0.40   margin 0.683   LAPS 66.602   margin 0.473  LAPS 74.837 s
-#:      0.55   margin 0.564   LAPS 71.306   margin 0.276  LAPS 88.753 s
+#:      corsa   arena  64.874 -> 65.943   open  72.182 -> 72.243   skid 17.055 -> 17.055
+#:      mx5     arena  66.339 -> 62.862   open  70.892 -> 65.889   skid 19.321 -> 16.567
+#:      540i    arena  74.022 -> 61.654   open  OFF 444 -> 63.464  skid 22.082 -> 16.712
 #:
-#: 0.40 is the first value at which BOTH cars lap, and past it both get
-#: monotonically slower, so it is the edge of the usable band rather than the
-#: middle of one -- there is no margin on the low side and that is stated as a
-#: limit, not hidden. `MARGIN_MIN` then floors the 540i at 0.55 instead of the
-#: 0.473 the law would give, which is inside the range the sweep shows lapping
-#: (0.473 and 0.605 both lap) and costs it 0.8 s a lap against 0.473.
-MARGIN_FADE = 0.40
-MARGIN_MIN = 0.55
+#: The 540i is **12.4 s a lap faster on the arena and 5.4 s on the skidpad**,
+#: and it drives `open` at all for the first time. The Corsa pays 1.07 s on
+#: the arena, which is the honest price of a driver that now slows for water
+#: it used to blast through and get away with.
 
 
 def _ay_peak(car, mu_scale: float = 1.0, roll_dist_f: float = 0.74) -> float:
@@ -229,23 +235,23 @@ def driver_trim(car, mu_scale: float = 1.0) -> dict:
 
     Three numbers, and they are the ONLY things the anchor takes from the car:
     its steering lock, its wheelbase, and the grip it plans to. `K_PSI`,
-    `K_N`, `K_V` and `KAPPA_ARM` are the same on every car on purpose -- what
-    the residual sits on has to be ONE driver evaluated on three machines, or
-    a cross-car comparison is comparing three different drivers.
+    `K_N`, `K_V`, `KAPPA_ARM`, `K70_PLAN`, `K120_PLAN` and
+    `MU_NEAR_STATIONS` are the same on every car on purpose -- what the
+    residual sits on has to be ONE driver evaluated on three machines, or a
+    cross-car comparison is comparing three different drivers.
 
-    Every field is exactly its Corsa value for the Corsa, so `theta = 0` there
-    is unchanged and every wave-4 item-1 number stands without a retrain:
-    `car_lock_rad` is 32.625 deg, `L` is 2.491 m, both ratios are a number
-    divided by itself, and `pg = 1.0` is not greater than 1.25.
+    `ay_plan` is now the car's own peak lateral capability and nothing else:
+    `AY_PLAN * ay_ratio`, a ratio of two closed-form grip estimates. It is
+    exactly `AY_PLAN` for the Corsa (a number divided by itself), as are the
+    lock and the wheelbase, so `theta = 0` on the Corsa is what it always was.
+    The per-car SPEED conservatism that used to live here is gone; the
+    observation carries the grip now.
     """
-    pg = power_grip_ratio(car, mu_scale)
-    margin = (min(max(1.0 - MARGIN_FADE * (pg - 1.0), MARGIN_MIN), 1.0)
-              if pg > POWER_GRIP_MODULATE else 1.0)
     ay_ratio = _ay_peak(car, mu_scale) / _AY_REF
     from ..vehicle import car_lock_rad          # lazy: keeps import-time pure
     return dict(lock_rad=float(car_lock_rad(car)), wheelbase=float(car.L),
-                ay_plan=AY_PLAN * ay_ratio * margin,
-                power_grip=pg, margin_scale=margin, ay_ratio=ay_ratio)
+                ay_plan=AY_PLAN * ay_ratio, ay_ratio=ay_ratio,
+                power_grip=power_grip_ratio(car, mu_scale))
 
 
 # --- the wing ---------------------------------------------------------------
@@ -274,8 +280,9 @@ def baseline_action(obs, lock_rad: float, wheelbase: float = WHEELBASE,
     u = obs[0] * 40.0
     n_norm = obs[1]
     psi_err = obs[2]
-    k0, k1, k2, k3 = (obs[3] / 50.0, obs[4] / 50.0,
-                      obs[5] / 50.0, obs[6] / 50.0)
+    k0, k1, k2, k3, k4 = (obs[3] / 50.0, obs[4] / 50.0, obs[5] / 50.0,
+                          obs[6] / 50.0, obs[7] / 50.0)
+    mu_here, mu_ahead = obs[15], obs[16]
 
     # -- steering: feedforward on the curvature just ahead, feedback on where
     #    we are. delta > 0 steers LEFT and kappa > 0 IS a left turn, so the
@@ -287,16 +294,46 @@ def baseline_action(obs, lock_rad: float, wheelbase: float = WHEELBASE,
     steer = delta / lock_rad
 
     # -- speed: plan for the tightest curvature in the lookahead window, so
-    #    the braking starts before the corner rather than in it
-    k_plan = max(abs(k0), abs(k1), 0.8 * abs(k2),
-                 K70_PLAN * abs(k3))
-    v_tgt = (math.sqrt(ay_plan / k_plan) if k_plan > 1e-6 else V_MAX_PLAN)
+    #    the braking starts before the corner rather than in it -- AND for the
+    #    grip it will have when it gets there.
+    #
+    #    Two bands, not one, and that detail is worth 1.7 s a lap on the
+    #    Corsa. The obvious version multiplies ONE planned grip by
+    #    `mu_ahead` (the worst surface in the next 90 m) and it is far too
+    #    pessimistic: approaching `WET_T3` on dry tarmac it plans wet-grip
+    #    cornering speed for the DRY corner it is still in. Pairing each
+    #    station's curvature with the grip that station will actually have
+    #    costs nothing and is what a driver does -- the wet only limits you
+    #    where the wet is.
+    #
+    #      near   here and 15 m   -> `mu_here`, the surface under the car
+    #      far    35 / 70 / 120 m -> `mu_ahead`, the worst in the next 90 m
+    #
+    #    With `mu_here == mu_ahead` this is EXACTLY the old single-band
+    #    `max()` form, so on a dry circuit nothing changed. The seam is the
+    #    15 m station, which is planned on the grip under the car rather than
+    #    the grip 15 m away: 0.6 s of error at 25 m/s, and the alternative
+    #    (a `mu` observation per station) is five more observations.
+    stn = ((abs(k0), abs(k1), 0.8 * abs(k2),
+            K70_PLAN * abs(k3), K120_PLAN * abs(k4)))
+    k_near = max(stn[:MU_NEAR_STATIONS]) if MU_NEAR_STATIONS else 0.0
+    k_far = max(stn[MU_NEAR_STATIONS:]) if MU_NEAR_STATIONS < 5 else 0.0
+    #  clamped, because these are the first observation entries whose value
+    #  can make the expression undefined rather than merely wrong: a negative
+    #  `mu` gives sqrt() of a negative number. `observe` can only ever produce
+    #  (0, 1], but the self-check feeds random normals through this function
+    #  on purpose, and a driver that raises on a nonsense input is worse than
+    #  one that saturates on it.
+    ay_near = ay_plan * min(max(mu_here, MU_FLOOR), 1.0)
+    ay_far = ay_plan * min(max(mu_ahead, MU_FLOOR), 1.0)
+    v_tgt = min(math.sqrt(ay_near / k_near) if k_near > 1e-6 else V_MAX_PLAN,
+                math.sqrt(ay_far / k_far) if k_far > 1e-6 else V_MAX_PLAN)
     v_tgt = min(max(v_tgt, V_MIN_PLAN), V_MAX_PLAN)
     pedal = K_V * (v_tgt - u)
 
     # -- the wing: arm it for the corner ahead, and keep it armed while the
     #    front axle is actually working (the device buys front grip)
-    wing = 1.0 if (max(abs(k1), abs(k2)) > KAPPA_ARM or obs[10] > 0.75) else -1.0
+    wing = 1.0 if (max(abs(k1), abs(k2)) > KAPPA_ARM or obs[11] > 0.75) else -1.0
 
     return np.array([_clip1(steer), _clip1(pedal), wing])
 

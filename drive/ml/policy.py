@@ -34,6 +34,7 @@ OBS_NAMES = (
     "kappa_1",       # ... 15 m ahead
     "kappa_2",       # ... 35 m ahead
     "kappa_3",       # ... 70 m ahead
+    "kappa_4",       # ... 120 m ahead          <- wave 5
     "beta",          # sideslip, rad
     "r_norm",        # yaw rate * 2
     "ay_norm",       # lateral acceleration / 9.81
@@ -41,7 +42,20 @@ OBS_NAMES = (
     "util_r",        # rear-axle ditto
     "wing_dep",      # the flank panel's deploy fraction, 0..1
     "on_track",      # 1.0 on tarmac, 0.0 off it
+    "mu_here",       # surface scale under the car, 1.0 = dry tarmac  <- wave 5
+    "mu_ahead",      # WORST surface scale in the next 90 m           <- wave 5
 )
+#: 14 through wave 4, 17 from wave 5. The three additions are the whole of
+#: wave 5 and they are not cosmetic: `kappa_4` is the only thing that lets the
+#: 540i brake for `open`'s corner from 41 m/s, and `mu_here` / `mu_ahead` are
+#: the first surface information this package has ever had. Through wave 4 the
+#: driver could not see the arena's `WET_T3` patch and a blanket
+#: `baseline.MARGIN_FADE` paid for that everywhere, including where the track
+#: was dry.
+#:
+#: Changing this INVALIDATES EVERY CHECKPOINT -- the parameter count moves with
+#: it (308 -> 356) and there is no meaningful way to carry weights across. See
+#: `Policy.load`, which refuses rather than reinterpreting.
 N_OBS = len(OBS_NAMES)
 
 #: The action, in order. `pedal` is ONE axis because a real driver has one
@@ -182,8 +196,21 @@ class Policy:
         with open(path) as fh:
             d = json.load(fh)
         if int(d.get("n_obs", N_OBS)) != N_OBS or int(d.get("n_hid", N_HID)) != N_HID:
-            raise ValueError(f"{path}: built for {d.get('n_obs')}x{d.get('n_hid')} "
-                             f"observations/hidden, this build is {N_OBS}x{N_HID}")
+            raise ValueError(
+                f"{path} was built for {d.get('n_obs')} observations x "
+                f"{d.get('n_hid')} hidden units; THIS BUILD OF drive.ml IS "
+                f"{N_OBS}x{N_HID}.\n"
+                f"  The observation changed, so this checkpoint's {len(d.get('theta', []))} "
+                f"parameters mean something else now and there is no honest way "
+                f"to reinterpret them -- the weights are indexed by observation "
+                f"and two of the new ones (mu_here, mu_ahead) did not exist when "
+                f"it was trained.\n"
+                f"  RETRAIN it:  python3 -m drive.ml.train --track "
+                f"{d.get('meta', {}).get('track', 'arena')} "
+                f"--car {d.get('meta', {}).get('car', 'corsa')} --iters 90 "
+                f"--pop 32 --sigma 0.08 --lr 0.05 --duration 70 --out {path}\n"
+                f"  (OBS_NAMES in drive/ml/policy.py records what changed and "
+                f"when; .handoff/09-ml.md records why.)")
         return cls(np.asarray(d["theta"], float), d.get("meta"),
                    residual=bool(d.get("residual", True)))
 
