@@ -6,9 +6,12 @@ which is the rollback point. 31 files, +9807 / −226.
 **The suite is green.** Measured on a quiet machine at the end:
 
 ```
-python3 -m drive.validate            ->  82/82  pass  0 HARD  0 soft  [113.5 s]
-python3 -m drive.validate --modules  -> 100/100 pass  0 HARD  0 soft  [238.2 s]
+python3 -m drive.validate            ->  82/82  pass  0 HARD  0 soft  [113.0 s]
+python3 -m drive.validate --modules  -> 100/100 pass  0 HARD  0 soft  [239.5 s]
 ```
+
+`--only` no longer lies: a filter that matches nothing prints what it matched
+against and exits 2, instead of `0/0 pass` after 324 s of work.
 
 identical to the baseline recorded in `00-baseline.md` before anything was
 touched. Module self-checks: `tyre` pass, `powertrain` **90/90** (was 82),
@@ -63,6 +66,33 @@ early on; it has been reviewed and applied, and is kept only as provenance.
 | `06-car-library.md` (engine + brake sections, and the new comparison table at the end) | **1, 2** | per-car engine curves and per-car brakes/steering lock — the library is now three cars, not one with three labels |
 | `11-rwd.md` | **1** | 0–100 corrected again: MX-5 10.42 → **9.31 s** |
 | `09-ml.md` | **3** | the ML claim **validated and narrowed**: 4.9–9.2 % a lap, and it transfers |
+
+### Wave 4
+
+| note | item | one line |
+|---|---|---|
+| `09-ml.md` | **1, 2** | anchor fixed and everything retrained (gain **4.9–9.2 % → 3.4–8.7 %**, deliberately); **one policy per car**, and the reason is safety |
+| `06-car-library.md` | **3** | suspension and `CdA` grounded in published springs and bars; neither new car's top speed can validate `CdA`, and why |
+
+## Wave 4 in one paragraph
+
+The ML anchor was fixed twice. First the 70 m lookahead it never read — which
+is why the hand-written driver drove off the open map — and the whole package
+was retrained against it, **shrinking the headline from 4.9–9.2 % to
+3.4–8.7 % on purpose**: a smaller gain over a driver that can drive is worth
+more than a large one over a broken one, and `arena_plate` now laps **9 cells
+of 9** where it managed 6. Then, extending to all three cars, the anchor
+spun both rear-driven cars — and the cause turned out **not** to be the driven
+axle (my hypothesis) but the arena's 130 m wet patch, which `baseline_action`
+cannot see because the observation carries no `mu` term. A throttle cap was
+implemented, measured, and **deleted**; an entry-speed margin was kept.
+The cross-car answer is **one policy per car, for safety not speed** — two
+off-diagonal cells lose the MX-5 on a circuit its own anchor laps — and the
+**wing timing genuinely differs per car, monotone in mass and power**: the
+540i arms the panel 33.3 m before turn-in and carries it *more*, the Corsa
+24.7 m before and *less*, and the MX-5 learns nothing about the device at all.
+Separately, the two new cars' suspension and `CdA` were grounded in published
+spring rates and bar diameters.
 
 ## Wave 3 in one paragraph
 
