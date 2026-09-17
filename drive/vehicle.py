@@ -280,15 +280,21 @@ class VehicleConfig:
     #: velocity is `v + r*x_w`, not `v`, and its local flow angle is therefore
     #: `atan2(v + r*x_w, u)` rather than the body's `beta`. See `_aero`.
     #:
-    #: DEFAULT FALSE, which is a documentation decision and not a physics one:
-    #: CONTRACT section 4 writes `alpha_dev = delta_dev_geom + sgn_dev*(-beta)`
-    #: and every W-group acceptance number is quoted against that published
-    #: closed form. True is the physically correct model; it is a few percent
-    #: of device force (fin -2.76 %, plate -1.88 % at the R=100 limit) and the
-    #: measurements are in `.handoff/13-curved-flow.md`. Same treatment as
-    #: `force_cos_delta` below, which is the existing precedent for a
-    #: correctness switch whose default is the study's own convention.
-    dev_curved_flow: bool = False
+    #: DEFAULT TRUE, i.e. the physically correct model, and False is the
+    #: diagnostic that degrades to `qss`'s. That is the direction this module's
+    #: own precedent runs in: `force_cos_delta` defaults True and INCLUDES a
+    #: projection qss omits, and the module docstring says outright "if this
+    #: model ever MATCHES qss, something has been reimplemented that should not
+    #: have been". Physics correct only behind a flag is a trap for the next
+    #: reader, so it is not behind one.
+    #:
+    #: It was briefly default False so the W-group numbers kept matching the
+    #: published closed form. Re-baselined deliberately instead: the bands
+    #: absorb it (W 13/13, D 9/9, suite 82/82 unchanged) and the ramp-steer
+    #: device gain is now fin +3.7412 % and plate +5.9449 %, against +3.8587
+    #: and +6.0473 uncorrected. `qss_parity` freezes it regardless, so the
+    #: parity comparison against qss is untouched.
+    dev_curved_flow: bool = True
     force_cos_delta: bool = True    # False removes the projection qss omits
     wing: str = "off"               # 'off' | 'fin' (CL0 0.70) | 'plate' (1.25)
     x_w: float = 0.97               # m, positive FORWARD of the CG

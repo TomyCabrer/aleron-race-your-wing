@@ -425,8 +425,8 @@ Fy_body = -q * A * Cs_psi * beta ; Mz_body = Fy_body * x_cp   # A=2.01, Cs_psi=2
 sgn_dev = sign of the STEERING COMMAND (deadband 5% of lock, 0.3 s hold)
           — NEVER sign(beta) and NEVER sign(v)
 alpha_dev = delta_dev_geom + sgn_dev*(-beta_dev)
-beta_dev  = beta                                     # cfg.dev_curved_flow False (DEFAULT)
-          = atan2(v + r*x_w, max(u, 1.0))            # True: the CURVED-FLOW term
+beta_dev  = atan2(v + r*x_w, max(u, 1.0))            # cfg.dev_curved_flow True (DEFAULT)
+          = beta                                     # False: degrade to qss's model
 CL_dev  = clamp(CL0 + dCLda*alpha_dev, 0, 1.6)       # dCLda = 2.47 /rad; 0 in parity mode
 dep     = smoothstepped deploy fraction over 0.45 s
 F_dev   = sgn_dev * dep * q * S_DEV * CL_dev         # +y = inward for a LEFT turn
@@ -451,10 +451,15 @@ in the angle. The sign is the opposite of the intuition: in a left turn
 reference point, `|beta|` falls, and **a forward-mounted panel sees LESS
 incidence in a corner, not more**.
 
-`cfg.dev_curved_flow` defaults **False**, which is a documentation decision and
-not a physics one: the formula above is what the study published and every
-W-group acceptance number is quoted against it. `True` is the physically
-correct model. Measured at the R = 100 limit, `x_w = 0.97`:
+`cfg.dev_curved_flow` defaults **True** — the physically correct model — and
+`False` is the diagnostic that degrades to `qss`'s. That is the direction
+`vehicle.py`'s own precedent runs in (`force_cos_delta` defaults True and
+includes a projection qss omits; the module docstring says "if this model ever
+MATCHES qss, something has been reimplemented that should not have been"), and
+physics that is only correct behind a flag is a trap. The acceptance numbers
+were **re-baselined deliberately**: the bands absorb it, W 13/13, D 9/9, suite
+82/82 and `--modules` 100/100 unchanged. Measured at the R = 100 limit,
+`x_w = 0.97`:
 
 | | beta -> beta_dev | CL | ramp-steer gain |
 |---|---|---|---|
