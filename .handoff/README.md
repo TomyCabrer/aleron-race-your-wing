@@ -6,8 +6,8 @@ which is the rollback point. 31 files, +9807 / −226.
 **The suite is green.** Measured on a quiet machine at the end:
 
 ```
-python3 -m drive.validate            ->  82/82  pass  0 HARD  0 soft  [113.0 s]
-python3 -m drive.validate --modules  -> 100/100 pass  0 HARD  0 soft  [239.5 s]
+python3 -m drive.validate            ->  82/82  pass  0 HARD  0 soft  [113.2 s]
+python3 -m drive.validate --modules  -> 100/100 pass  0 HARD  0 soft  [238.9 s]
 ```
 
 `--only` no longer lies: a filter that matches nothing prints what it matched
@@ -74,6 +74,29 @@ early on; it has been reviewed and applied, and is kept only as provenance.
 | `09-ml.md` | **1, 2** | anchor fixed and everything retrained (gain **4.9–9.2 % → 3.4–8.7 %**, deliberately); **one policy per car**, and the reason is safety |
 | `06-car-library.md` | **3** | suspension and `CdA` grounded in published springs and bars; neither new car's top speed can validate `CdA`, and why |
 
+### Waves 5 and 6
+
+| note | one line |
+|---|---|
+| `09-ml.md` (wave-5 sections) | the anchor is surface-aware (17 observations), **`MARGIN_FADE` retired by deletion**, the **540i drives `open`**, and the claim that the baseline cannot lap without the device is **withdrawn** |
+| `13-curved-flow-and-orientation.md` | the owner's two aero questions: the curved-flow AoA term (**halves the fin's lap benefit**), and why "suction side outwards" is **not answerable** by the current model |
+
+## Waves 5 and 6 in one paragraph
+
+Wave 5 made the ML anchor surface-aware — three new observations
+(`kappa_4`, `mu_here`, `mu_ahead`, 14 → 17) and a full retrain of all five
+checkpoints — which **retired `MARGIN_FADE` by deleting it** rather than
+setting it to zero, made the **540i lap the open map** (63.464 s anchor, where
+it used to go off at 443.7 m), and **withdrew a claim carried since wave 1**:
+the baseline does *not* fail without the device. Both failures were inside the
+arena's wet patch, and wing plate / fin / off now land within 3 ms of each
+other. Wave 6 answered the owner directly: the flank panel's angle of attack
+was missing its **curved-flow term** (`v + r·x_w`, and the sign is the opposite
+of the intuition — a forward-mounted panel sees *less* incidence), which
+**more than halves the fin's lap benefit**; and "suction side outwards" is
+**unanswerable by the current model**, because the flank panel is solved in
+free air with no image of the car body at all.
+
 ## Wave 4 in one paragraph
 
 The ML anchor was fixed twice. First the 70 m lookahead it never read — which
@@ -122,6 +145,25 @@ for the first time and **the device's lap-time effect changes sign**: it was a
 loss with the flank-latch bug present and is a gain without it. V22 no longer
 cries wolf under load, and the README and CONTRACT now document everything
 both waves added.
+
+## NUMBERS THAT MOVED MORE THAN ONCE — read this before the older notes
+
+Several figures were re-measured two or three times as the measurement got
+more honest. The **latest** value is always in the note named above for that
+wave; the older notes keep their superseded numbers beside the new ones on
+purpose, but if you read only one, read this list.
+
+| claim | where it ended up |
+|---|---|
+| ML gain over the hand-written driver | 9.22 % → 4.9–9.2 % → 3.4–8.7 % → **6.58 % arena / 3.57 % open / 7.40 % skidpad** (per-car 5.79–6.70 %) |
+| "the baseline cannot lap without the device" | **WITHDRAWN.** Both failures were the arena's wet patch. plate/fin/off within 3 ms |
+| the device's worth on a lap | +0.159 s (plate) → **+0.147 s** corrected; fin +0.058 → **+0.028 s** |
+| the device's per-corner gain | fin +3.86 % → **+3.74 %**, plate +6.05 % → **+5.94 %** corrected |
+| MX-5 0–100 km/h | 10.90 (FWD) → 10.42 (RWD) → **9.31 s** (own engine curve) |
+| 540i 0–100 km/h | 7.845 → 6.814 → **6.905 s** |
+| 540i on the open map | off at 443.7 m → **laps in 63.464 s** |
+| "the MX-5 learns nothing about the device" | **CORRECTED** — on the surface-aware anchor it arms the panel 13.1 m before turn-in |
+| MX-5 / 540i roll gradient | 5.75 / 6.01 → **5.02 / 5.69 °/g** |
 
 ## The three things most worth your attention
 
