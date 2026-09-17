@@ -6,8 +6,8 @@ which is the rollback point. 31 files, +9807 / −226.
 **The suite is green.** Measured on a quiet machine at the end:
 
 ```
-python3 -m drive.validate            ->  82/82  pass  0 HARD  0 soft  [113.2 s]
-python3 -m drive.validate --modules  -> 100/100 pass  0 HARD  0 soft  [238.9 s]
+python3 -m drive.validate            ->  82/82  pass  0 HARD  0 soft  [113.9 s]
+python3 -m drive.validate --modules  -> 100/100 pass  0 HARD  0 soft  [240.2 s]
 ```
 
 `--only` no longer lies: a filter that matches nothing prints what it matched
@@ -73,6 +73,16 @@ early on; it has been reviewed and applied, and is kept only as provenance.
 |---|---|---|
 | `09-ml.md` | **1, 2** | anchor fixed and everything retrained (gain **4.9–9.2 % → 3.4–8.7 %**, deliberately); **one policy per car**, and the reason is safety |
 | `06-car-library.md` | **3** | suspension and `CdA` grounded in published springs and bars; neither new car's top speed can validate `CdA`, and why |
+
+### Wave 7
+
+| note | one line |
+|---|---|
+| `13-curved-flow-and-orientation.md` | the flank panel gets the **car's body as a rigid-wall image** (+5.20 % lift, e 0.9996 → 1.0802), and the orientation question is **answered**: keep the suction side inboard, a 5.4 pp swing |
+| `09-ml.md` (wave-7 sections) | the 540i's skidpad regression characterised and the safety guarantee **narrowed**; the wing timing re-measured under the corrected AoA and **unchanged** |
+
+Also in wave 7: the corrected device AoA is now the **DEFAULT**, re-baselined
+deliberately — physics that is only correct behind a flag is a trap.
 
 ### Waves 5 and 6
 
@@ -164,6 +174,8 @@ purpose, but if you read only one, read this list.
 | 540i on the open map | off at 443.7 m → **laps in 63.464 s** |
 | "the MX-5 learns nothing about the device" | **CORRECTED** — on the surface-aware anchor it arms the panel 13.1 m before turn-in |
 | MX-5 / 540i roll gradient | 5.75 / 6.01 → **5.02 / 5.69 °/g** |
+| the device's per-corner gain, again | the **body image** raises the panel's lift 5.2 %; with it and the corrected AoA a designed flank panel is **+2.79 %** at R = 100 |
+| "it never puts a car off the road that the baseline was keeping on" | **narrowed** — false for the 540i on `skidpad`; the guarantee is conditional on a varying-radius circuit |
 
 ## The three things most worth your attention
 
