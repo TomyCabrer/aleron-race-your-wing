@@ -311,7 +311,15 @@ class WingSpec:
 # --------------------------------------------------------------------------- #
 #  analysis                                                                    #
 # --------------------------------------------------------------------------- #
-def build_lattice(spec: WingSpec, polar: Polar, ride_h: float | None = None) -> Lattice:
+#: Standoff from the car's flank to the deployed panel, m -- the gap the body
+#: image is placed across. `analyse`'s own `standoff` default, kept as a name
+#: so the lattice and `strut_cd` cannot disagree about the same gap.
+FLANK_STANDOFF = 0.45
+
+
+def build_lattice(spec: WingSpec, polar: Polar, ride_h: float | None = None,
+                  standoff: float = FLANK_STANDOFF,
+                  body_image: bool = True) -> Lattice:
     b = spec.span
     lam, c0 = spec.taper, spec.chord
     tw = math.radians(spec.twist_deg)
@@ -327,6 +335,20 @@ def build_lattice(spec: WingSpec, polar: Polar, ride_h: float | None = None) -> 
     if spec.role == "top" and ride_h is not None:
         image = float(ride_h)                  # the track, above, in the mirrored frame
         plate = min(plate, max(ride_h - 0.03 * b - 0.01, 0.0))
+    elif spec.role == "flank" and body_image and standoff > 0.0:
+        #  THE CAR'S FLANK, as a rigid wall. Exactly the top wing's ground
+        #  plane, one frame over: the panel's lift is the lattice's +z and the
+        #  body is on the lift side (the device's useful force is INBOARD,
+        #  toward the body), so the wall sits at +standoff and the tip plates
+        #  point towards it and are shortened to clear it -- the same three
+        #  lines the track gets.
+        #
+        #  It was FREE AIR before, which is why the sim could not answer the
+        #  owner's question about orientation: with no wall, mirroring the
+        #  section is exactly equivalent to negating CL, so the two
+        #  orientations were indistinguishable by construction.
+        image = float(standoff)
+        plate = min(plate, max(standoff - 0.03 * b - 0.01, 0.0))
     return Lattice(b, chord, twist, polar.a_lin, math.radians(polar.alpha_L0_deg),
                    N=spec.n_strips, plate_h=plate, n_plate=6, plate_a=TWO_PI, plate_L0=0.0,
                    image_z=image, image_sign=-1.0, V=1.0)
@@ -362,13 +384,15 @@ def wing_mass(spec: WingSpec, standoff: float = 0.45) -> float:
 
 
 def analyse(spec: WingSpec, polar: Polar, V: float | None = None, ride_h: float | None = None,
-            standoff: float = 0.45, rho: float = RHO) -> dict:
+            standoff: float = FLANK_STANDOFF, rho: float = RHO,
+            body_image: bool = True) -> dict:
     """The affine/quadratic laws the vehicle reads, plus a table for plots.
 
     Raises ValueError for a geometry the lattice refuses (e.g. plates into
     the track); the caller shows the reason and keeps the last good aero."""
     V = V_REF[spec.role] if V is None else float(V)
-    lat = build_lattice(spec, polar, ride_h)
+    lat = build_lattice(spec, polar, ride_h, standoff=standoff,
+                        body_image=body_image)
     S, AR = lat.S, lat.AR
     a_pos, a_neg = lat.stall_alpha(polar.alpha_valid[1], polar.alpha_valid[0])
     a_pos = min(a_pos, 40.0)
@@ -419,9 +443,17 @@ def analyse(spec: WingSpec, polar: Polar, V: float | None = None, ride_h: float 
     )
 
 
-def spanwise(spec: WingSpec, polar: Polar, inc_deg: float, ride_h: float | None = None) -> dict:
-    """Strip loading at one mount angle, for the designer's plot."""
-    lat = build_lattice(spec, polar, ride_h)
+def spanwise(spec: WingSpec, polar: Polar, inc_deg: float, ride_h: float | None = None,
+             standoff: float = FLANK_STANDOFF, body_image: bool = True) -> dict:
+    """Strip loading at one mount angle, for the designer's plot.
+
+    Takes `standoff` / `body_image` so it solves the SAME lattice `analyse`
+    did. It used to build its own with the defaults, which meant a caller
+    asking for free air got the imaged loading back and the plot silently
+    disagreed with the laws beside it.
+    """
+    lat = build_lattice(spec, polar, ride_h, standoff=standoff,
+                        body_image=body_image)
     r = lat.solve(inc_deg)
     m = ~r.is_plate
     return dict(y=r.y[m].tolist(), cl=r.cl[m].tolist(), aeff=r.alpha_eff_deg[m].tolist(),
