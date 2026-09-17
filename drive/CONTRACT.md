@@ -424,7 +424,9 @@ D_aero  = q * CdA                                    # CdA = 0.66, at h_aero = h
 Fy_body = -q * A * Cs_psi * beta ; Mz_body = Fy_body * x_cp   # A=2.01, Cs_psi=2.2, x_cp=+0.30
 sgn_dev = sign of the STEERING COMMAND (deadband 5% of lock, 0.3 s hold)
           — NEVER sign(beta) and NEVER sign(v)
-alpha_dev = delta_dev_geom + sgn_dev*(-beta)
+alpha_dev = delta_dev_geom + sgn_dev*(-beta_dev)
+beta_dev  = beta                                     # cfg.dev_curved_flow False (DEFAULT)
+          = atan2(v + r*x_w, max(u, 1.0))            # True: the CURVED-FLOW term
 CL_dev  = clamp(CL0 + dCLda*alpha_dev, 0, 1.6)       # dCLda = 2.47 /rad; 0 in parity mode
 dep     = smoothstepped deploy fraction over 0.45 s
 F_dev   = sgn_dev * dep * q * S_DEV * CL_dev         # +y = inward for a LEFT turn
@@ -439,6 +441,30 @@ the panel is `x*Fy - y*Fx` with `Fx = -D_dev` at `y = -sgn_dev*Y_DEV`, i.e.
 has always logged as its own DEVIATION. Checked: left-turn fin
 `177.389*0.97 - 0.72*55.434 = 132.155` == the reported `Mz_dev`, and the drag
 term yaws the car OUT of the turn, which a force on the outer flank must.
+
+**The curved-flow term.** A body-fixed point at `(x_w, y_dev)` moves at
+`V + omega x r`, and with `omega = (0,0,r)` that is `(u - r*y_dev, v + r*x_w)`,
+so the panel's OWN flow angle is `atan2(v + r*x_w, u)` and not the body's
+`beta`. The `y_dev` term only perturbs the axial component and is second order
+in the angle. The sign is the opposite of the intuition: in a left turn
+`r > 0` and `v < 0`, so `v + r*x_w` is LESS negative for a panel AHEAD of the
+reference point, `|beta|` falls, and **a forward-mounted panel sees LESS
+incidence in a corner, not more**.
+
+`cfg.dev_curved_flow` defaults **False**, which is a documentation decision and
+not a physics one: the formula above is what the study published and every
+W-group acceptance number is quoted against it. `True` is the physically
+correct model. Measured at the R = 100 limit, `x_w = 0.97`:
+
+| | beta -> beta_dev | CL | ramp-steer gain |
+|---|---|---|---|
+| fin | -5.807 -> -5.200 deg | 0.9503 -> 0.9215 (-2.76 %) | +3.8587 -> +3.7412 % |
+| plate | -7.631 -> -6.944 deg | 1.5789 -> 1.5448 (-1.88 %) | +6.0473 -> +5.9449 % |
+
+and on the scripted arena lap the device's worth falls +0.0582 -> **+0.0279 s**
+(fin, more than halved) and +0.1594 -> **+0.1472 s** (plate, -7.7 %). The sign
+of the benefit survives in both. `qss_parity` freezes it exactly as it zeroes
+`dCLda`, so the parity path is unaffected either way.
 
 `S_DEV = 0.35 m²` is **one panel**. Exactly one panel is active at a time.
 

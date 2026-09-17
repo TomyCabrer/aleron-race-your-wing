@@ -275,6 +275,20 @@ class VehicleConfig:
 
     # ---- the contract's eight ----------------------------------------
     qss_parity: bool = False        # Cs_psi = 0 and dCLda = 0
+    #: The flank panel's own angle of attack carries the CURVED-FLOW term:
+    #: the panel sits at `x_w` from the reference point, so its local lateral
+    #: velocity is `v + r*x_w`, not `v`, and its local flow angle is therefore
+    #: `atan2(v + r*x_w, u)` rather than the body's `beta`. See `_aero`.
+    #:
+    #: DEFAULT FALSE, which is a documentation decision and not a physics one:
+    #: CONTRACT section 4 writes `alpha_dev = delta_dev_geom + sgn_dev*(-beta)`
+    #: and every W-group acceptance number is quoted against that published
+    #: closed form. True is the physically correct model; it is a few percent
+    #: of device force (fin -2.76 %, plate -1.88 % at the R=100 limit) and the
+    #: measurements are in `.handoff/13-curved-flow.md`. Same treatment as
+    #: `force_cos_delta` below, which is the existing precedent for a
+    #: correctness switch whose default is the study's own convention.
+    dev_curved_flow: bool = False
     force_cos_delta: bool = True    # False removes the projection qss omits
     wing: str = "off"               # 'off' | 'fin' (CL0 0.70) | 'plate' (1.25)
     x_w: float = 0.97               # m, positive FORWARD of the CG
@@ -1097,7 +1111,24 @@ class Vehicle:
         if panel is not None:
             if dep <= 0.0 or sgn == 0.0:
                 return dict(base, F_dev=0.0, D_dev=0.0, Mz_dev=0.0, CL_dev=0.0, alpha_dev=0.0)
-            alpha_dev = panel.inc + sgn * (-beta)
+            #  CURVED FLOW. A body-fixed point at (x_w, y_dev) moves at
+            #  V + omega x r, and with omega = (0,0,r) that is
+            #  (u - r*y_dev, v + r*x_w), so the panel's own flow angle is
+            #  atan2(v + r*x_w, u) and NOT the body's beta. The y_dev term only
+            #  perturbs the axial component and is second order in the angle.
+            #
+            #  The SIGN is worth stating because it is the opposite of the
+            #  intuition: in a left turn r > 0 and v < 0, so v + r*x_w is LESS
+            #  negative than v for a panel AHEAD of the reference point, |beta|
+            #  falls, and a forward-mounted panel therefore sees LESS incidence
+            #  in a corner, not more. Measured at the R = 100 limit, x_w 0.97:
+            #  fin beta -5.807 -> -5.200 deg, CL 0.9503 -> 0.9242 (-2.76 %);
+            #  plate -7.631 -> -6.944 deg, CL 1.5790 -> 1.5494 (-1.88 %).
+            b_dev = beta
+            if cfg.dev_curved_flow:
+                b_dev = atan2(st.v + st.r * panel.x_w,
+                              st.u if st.u > 1.0 else 1.0)
+            alpha_dev = panel.inc + sgn * (-b_dev)
             # qss_parity freezes the slip dependence exactly as it zeroes
             # dCLda on the closed form (CONTRACT section 4)
             CL = panel.cl(panel.inc if cfg.qss_parity else alpha_dev)
@@ -1111,7 +1142,13 @@ class Vehicle:
         if dep <= 0.0 or CL0 <= 0.0 or sgn == 0.0:
             return dict(base, F_dev=0.0, D_dev=0.0, Mz_dev=0.0, CL_dev=0.0, alpha_dev=0.0)
 
-        alpha_dev = cfg.delta_dev_geom + sgn * (-beta)
+        #  the same curved-flow term as the designed-panel branch above; see
+        #  its comment for the derivation and the measured magnitudes
+        b_dev = beta
+        if cfg.dev_curved_flow:
+            b_dev = atan2(st.v + st.r * cfg.x_w,
+                          st.u if st.u > 1.0 else 1.0)
+        alpha_dev = cfg.delta_dev_geom + sgn * (-b_dev)
         CL = CL0 + cfg.dclda() * alpha_dev
         CL = 0.0 if CL < 0.0 else (CL_STALL if CL > CL_STALL else CL)
         F_dev = sgn * dep * q * S_DEV * CL
