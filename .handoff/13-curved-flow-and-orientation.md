@@ -116,10 +116,78 @@ the flank polars would need re-analysing. The legacy fin/plate closed form —
 and therefore every W-group acceptance number — is untouched, because it does
 not go through the lattice.
 
-**I stopped here deliberately** rather than half-build a body image and hand
-over a number I could not defend. Reading A is measured and answered; Reading
-B is scoped, costed, and honestly declared unanswerable by the current model.
-The default orientation is unchanged either way, as instructed.
+~~**I stopped here deliberately**~~ — **BUILT IN WAVE 7, and the question is
+now answered.** See below.
+
+## Wave 7 — the body image, and the answer
+
+`build_lattice` now gives the flank panel the car's flank as a **rigid-wall
+image**, the top wing's ground plane one frame over (commit `3702794`).
+Validated against free air in the distant-wall limit and monotone in between:
++5.20 % on the lift curve at the real 0.45 m standoff, +1.27 % at 0.90 m,
++0.30 % at 1.80 m, **+0.01 % at 12 m**. Span efficiency 0.9996 → **1.0802** —
+above 1, which is the signature of the image, induced drag falling below the
+free-air elliptic limit. The loading is **raised, not redistributed**
+(CL +5.2 % for CDi +2.4 %). Wave 3's endplate-beats-pylon conclusion
+**survives and strengthens**: the endplate's span-efficiency advantage grows
+from +16.9 % to +19.0 %.
+
+### With the wall present the two orientations are genuinely different
+
+They are no longer mirror images, which is exactly why the image was the
+blocker. Lattice at 5°, same panel:
+
+| configuration | CL | CDi | e |
+|---|---|---|---|
+| free air (no body) | 0.6030 | 0.06680 | 0.9996 |
+| **suction INBOARD** — wall on the lift side | **0.6344** | 0.06842 | 1.0802 |
+| **suction OUTBOARD** — wall on the pressure side | 0.6267 | **0.06677** | 1.0802 |
+
+So the interference genuinely differs in kind: with the suction surface facing
+the body the panel makes **more** lift for **more** induced drag; facing
+outboard it makes slightly less lift for essentially free-air induced drag.
+
+### But the answer is still: keep the suction side inboard
+
+**Lift points from the pressure surface to the suction surface.** That is
+geometry, not modelling, and it is what settles it: if the suction side faces
+outboard then the force points outboard, *away* from the turn centre, and the
+device subtracts from cornering instead of adding to it. There is no
+configuration in which the suction surface faces outboard and the useful force
+is still inboard. The body image changes the **magnitude** of each orientation;
+it cannot change that sign.
+
+Vehicle level, R = 100 open-loop ramp steer, both orientations analysed **with
+the image**, against 8.6084 m/s² wing-off:
+
+| orientation | CL_dev | F_dev | peak a_y | gain |
+|---|---|---|---|---|
+| suction inboard (as shipped) | +0.6272 | **+111.75 N** | 8.8489 | **+2.7948 %** |
+| suction outboard | −0.5619 | **−100.13 N** | 8.3835 | **−2.6116 %** |
+
+**A swing of 5.4 percentage points, and the default is the right way round.**
+
+### And I checked where it loses before calling it aerodynamics
+
+Three failures in this batch turned out to be the arena's surfaces wearing an
+aero costume, so: this is a **steady rig at a single radius with no surface
+patch in it**, the loser is front-limited exactly as the winner is
+(`util_f` 0.9918 against 0.9935, both `limiting = 'front'`), and the only thing
+that differs is the sign of `F_dev`. It is the aerodynamics, and it is
+geometric rather than subtle.
+
+**Default unchanged**, as instructed — and in this case unambiguously correct
+rather than merely conservative. A selectable flipped orientation was *not*
+added: an option whose only effect is to make the device work backwards is a
+footgun, not a feature, and the numbers above are the answer he asked for.
+
+### What would change this answer
+
+Only something that makes an outboard force useful — a car that is
+**rear**-limited in the corner where the device acts, so that unloading the
+front helps. This one is front-limited in every measured configuration
+(`limiting = 'front'` throughout), which is the whole premise of the study and
+is why the device points inboard.
 
 ## What a reader of the earlier notes would now be misled by
 
