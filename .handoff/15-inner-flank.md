@@ -20,9 +20,10 @@ He is right that it is the one cell nobody tested, and it is not obviously
 wrong. **The answer is: it is worth +0.02 to +0.48 percentage points of corner
 speed, every bit of it is the device's own DRAG yaw moment changing sign, it is
 paid for out of the rear axle's margin — the one quantity this whole study is
-bounded by — and on the crude published plate it puts the car on its roof in
-the arena's wet patch. Default unchanged, and it is now a selectable option so
-he can measure it himself.**
+bounded by — and on the crude published plate it spins the car at 25 m/s and
+six degrees of lock and gives away 0.083 s a lap inside the arena's wet patch.
+Default unchanged, and it is now a selectable option so he can measure it
+himself.**
 
 Confidence: **high** on the matrix and the mechanism (they are algebra plus a
 steady rig, and the mechanism is exact to machine precision). **Low** on
@@ -56,7 +57,7 @@ question, not an answer to it.
 
 There is **no packaging reason** either: the garage fits a panel to *both*
 flanks and `CarBuild.mass_points` charges *both* masses
-(`.handoff/07-weight.md`), the standoff is the same `FLANK_STANDOFF = 0.45` on
+(`.handoff/07-weight.md`), the standoff is the same `FLANK_STANDOFF` on
 each, and `cars.py:492` records that "each flank is symmetric, so the only
 y-offset that could exist cancels". The hardware is on both sides whichever one
 deploys. The choice is purely which one is commanded out.
@@ -240,6 +241,48 @@ Three things fall out of that table and all three matter:
    `sqrt(mu_r/mu_f) − 1` is only ever reachable by making the REAR axle the
    limiting one, and on a FWD hatch that is a spin, not a lap time."
 
+### The mechanism claim, tested directly at MATCHED a_y
+
+The premise offered with the question was that a front-limited car should
+benefit, because extra pro-turn yaw moment reduces the steer angle needed and
+so unloads the front tyres that are the actual limit. **That is exactly right,
+and here it is at a matched 0.85 g** (`ramp_steer(29.0, ay_target=0.85 g)`,
+parity, so `CL` is frozen and the two runs differ in nothing but `y_dev`):
+
+| config | delta (deg) | Y_f (N) | Y_r (N) | `y_dev·D_dev` | util_f | util_r |
+|---|---|---|---|---|---|---|
+| wing off | 6.810 | 5238.4 | 3181.0 | 0 | 0.9877 | 0.9324 |
+| fin outer (shipped) | 5.386 | 5106.3 | 3190.4 | −27.82 | 0.9655 | 0.9278 |
+| fin **inner + flipped** | **5.137** | **5082.4** | **3214.6** | **+27.82** | **0.9617** | **0.9337** |
+| plate outer | 4.860 | 5016.4 | 3183.9 | −49.67 | 0.9487 | 0.9232 |
+| plate **inner + flipped** | **4.535** | **4978.4** | **3222.0** | **+49.67** | **0.9424** | **0.9327** |
+
+At the same lateral acceleration the inner flank needs **0.25°** less lock
+(fin) or **0.33°** less (plate), takes **23.9 N** off the front axle and puts
+**24.2 N** on the rear, and `util_f` falls while `util_r` rises. The yaw
+balance says why, and the number is not a fit:
+
+```
+Y_f = [ b*m*a_y - F_dev*(b + x_w) - y_dev*D_dev ] / L
+```
+
+so moving the panel inboard relieves the front axle by
+`2*Y_DEV*D_dev/L`, which at these runs' own `D_dev` is
+`2*0.72*38.63/2.491` = **22.3 N** for the fin and **39.9 N** for the plate, and
+loads the rear by the same. **Measured 23.9 and 38.0 N** — the ±2 N residual is
+the load-transfer feedback, which that closed form does not carry (it is why
+the fin's comes out a little high and the plate's a little low).
+
+**So the mechanism is confirmed, and its ceiling is visible in the same
+table.** What the device buys is a *transfer of lateral-force demand from the
+front axle to the rear*, and the rear has `1 − 0.9324 = 6.8 %` of margin at
+0.85 g and less at the limit. That is `crossover.q3_gain`'s
+`sqrt(mu_r/mu_f) − 1` ceiling seen from the inside. At the LIMIT the relief is
+not kept as front margin at all — the ramp steer simply goes faster until the
+front saturates again, which is why the tables in §3 show `util_f` back at 0.99
+and `util_r` higher. The relief is spent as speed, and the currency is rear
+margin.
+
 ---
 
 ## 4. The mechanism, exact rather than inferred
@@ -366,7 +409,9 @@ reproduced — so this is the same lap, not a new one. And then the answer to
 "where":
 
 **The plate loses on the inner flank inside the wet patch, and it is the
-surface, not the aerodynamics.** Of the +0.0844 s it gives away, **+0.0746 s is
+surface, not the aerodynamics.** Of the +0.0844 s of accumulated delta-time
+(the lap clock says +0.0829 s; the difference is the 1 m interpolation grid the
+decomposition runs on), **+0.0746 s is
 `s4` (+0.0493) and `T4` (+0.0253)** — the 50 m straight out of T3 and the
 corner after it. The cause is one step earlier: the plate-inner run's `util_r`
 peaks at **0.9986 at s = 487.3, mu 0.6322 — inside `WET_T3`** — against 0.9906
@@ -439,7 +484,7 @@ more, not a logic difference. No regression.
   learns what a wall is — the orientation arrives inside a `DevAero`'s CL/CD
   laws, exactly as a mount does.
 * **The default is NOT changed**, and nothing in the garage UI selects the
-  inner flank. Two reasons. It wins by 0.07 pp on the panel anyone would
+  inner flank. Two reasons. It wins by 0.08 pp on the panel anyone would
   actually build; and it departs at ordinary steering inputs on the panel the
   study publishes. An option that is worth a rounding error when it is safe and
   spins the car when it is not does not belong on by default.
@@ -464,7 +509,7 @@ stated in general terms and it is **conditional on the flank**:
   flank**, which is a free choice, not a different car.
 * Its lattice table quotes `e = 1.0802` for *both* orientations, which cannot
   come from moving the wall (the induced-drag geometry changes with it: this
-  note measures 1.2862 against 1.2706 on `flank-e423`). It looks like the
+  note measures 1.2366 against 1.2291 on `flank-e423`). It looks like the
   section was mirrored with the wall left where it was. `wall_side` moves the
   **body**, which is what physically happens when the same panel is hung on the
   other flank, and it is validated against free air in the distant-wall limit.

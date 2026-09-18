@@ -132,7 +132,9 @@ now answered.** See below.
 `build_lattice` now gives the flank panel the car's flank as a **rigid-wall
 image**, the top wing's ground plane one frame over (commit `3702794`).
 Validated against free air in the distant-wall limit and monotone in between:
-+5.20 % on the lift curve at the real 0.45 m standoff, +1.27 % at 0.90 m,
++5.20 % on the lift curve at the 0.45 m standoff this note was written at
+(**[W8]** `14-urop-parity.md` later made the standoff a single 0.60 m, where
+the same figure is +3.50 %), +1.27 % at 0.90 m,
 +0.30 % at 1.80 m, **+0.01 % at 12 m**. Span efficiency 0.9996 → **1.0802** —
 above 1, which is the signature of the image, induced drag falling below the
 free-air elliptic limit. The loading is **raised, not redistributed**
@@ -158,8 +160,9 @@ blocker. Lattice at 5°, same panel:
 > `wing.build_lattice(..., wall_side=-1)` (wave 8) moves the **body** instead,
 > which is what physically happens when the same panel is hung on the other
 > flank, and it is validated against free air in the distant-wall limit. On
-> `flank-e423` at 5° it gives `e` 1.2862 (wall on the suction side) against
-> 1.2706 (pressure side) and CL 0.7988 against 0.7827 — the same qualitative
+> `flank-e423` at 5° (at the 0.60 m standoff `14-urop-parity.md` settled on) it
+> gives `e` 1.2366 (wall on the suction side) against 1.2291 (pressure side)
+> and CL 0.7783 against 0.7694 — the same qualitative
 > result, more lift for more induced drag with the body on the suction side, so
 > the conclusion above is unaffected.
 
