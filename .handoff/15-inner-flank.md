@@ -241,6 +241,24 @@ Three things fall out of that table and all three matter:
    `sqrt(mu_r/mu_f) − 1` is only ever reachable by making the REAR axle the
    limiting one, and on a FWD hatch that is a spin, not a lap time."
 
+### Is +0.02 pp above the rig's own resolution? Yes — checked
+
+The smallest number in that table is 3 mm/s of corner speed, so it is fair to
+ask whether it is the car or the integrator. Swept the two things that could
+manufacture it:
+
+| case | rate 0.5 | rate 1.0 | rate 2.2 | dt 0.5 ms | dt 1 ms | dt 2 ms |
+|---|---|---|---|---|---|---|
+| fin, R = 100 | +0.2519 | **+0.2682** | +0.2964 | +0.2682 | **+0.2682** | +0.2682 |
+| designed, R = 100 | +0.0770 | **+0.0778** | +0.0938 | +0.0778 | **+0.0778** | +0.0778 |
+| designed, R = 30 | +0.0214 | **+0.0214** | +0.0240 | +0.0214 | **+0.0214** | +0.0214 |
+
+**Timestep-independent to four decimals across a 4× range**, and stable
+between 0.5 and 1.0 deg/s of ramp rate to 0.0008 pp on the smallest case. The
+only sensitivity is at 2.2 deg/s, which `steady_state_corner`'s own docstring
+already says is not converged *for wing deltas* — which is precisely why it
+defaults to 1.0 there. The deltas are the car.
+
 ### The mechanism claim, tested directly at MATCHED a_y
 
 The premise offered with the question was that a front-limited car should
