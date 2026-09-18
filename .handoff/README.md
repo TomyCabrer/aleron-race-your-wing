@@ -80,6 +80,19 @@ early on; it has been reviewed and applied, and is kept only as provenance.
 | `09-ml.md` | **1, 2** | anchor fixed and everything retrained (gain **4.9–9.2 % → 3.4–8.7 %**, deliberately); **one policy per car**, and the reason is safety |
 | `06-car-library.md` | **3** | suspension and `CdA` grounded in published springs and bars; neither new car's top speed can validate `CdA`, and why |
 
+### Wave 8
+
+| note | one line |
+|---|---|
+| `14-urop-parity.md` | the wing design follows **AeroBO's procedure**: mission -> section -> wing, and AeroBO's own design vector (two twist rows, a ride-height row, area-and-span sizing, chord derived). The flank standoff had **three disagreeing values** (0.45 / 0.60 / 0.45) and is now one, the 0.60 the car deploys to: flank `CLa` **-2.5 to -6.1 %**, top wings and all geometry **bit-identical**, study **untouched** (82/82) |
+| `15-inner-flank.md` | the owner's fourth cell of the **(flank × section orientation)** matrix, which wave 7 never swept: panel on the **INNER** flank with the section turned over. The outer flank turns out never to have been *chosen* — `crossover`, `qss` and `ledger` contain no `y` at all, so the whole upstream study is blind to the one term that distinguishes the flanks. Cell 4 wins by **+0.02 pp (a designed panel) to +0.48 pp (the plate)**, every bit of it the drag yaw moment changing sign, **exactly zero** change in roll, and it is paid for out of the rear axle's margin: `util_r` rises in every pair, the plate departs at **25 m/s and 6° of lock**, and loses 0.083 s a lap inside `WET_T3`. `VehicleConfig.dev_flank` / `--dev-flank` and `wing.build_lattice(wall_side=)` added; **default unchanged** |
+
+Also in wave 8: `13-curved-flow-and-orientation.md` is **corrected in place** —
+its "keep the suction side inboard" conclusion is right but is conditional on
+the panel staying on the outer flank, and its "there is no configuration in
+which the suction surface faces outboard and the useful force is still inboard"
+is true of the two cells it swept and false of the two it did not.
+
 ### Wave 7
 
 | note | one line |
@@ -188,6 +201,8 @@ purpose, but if you read only one, read this list.
 | MX-5 / 540i roll gradient | 5.75 / 6.01 → **5.02 / 5.69 °/g** |
 | the device's per-corner gain, again | the **body image** raises the panel's lift 5.2 %; with it and the corrected AoA a designed flank panel is **+2.79 %** at R = 100 |
 | "it never puts a car off the road that the baseline was keeping on" | **narrowed** — false for the 540i on `skidpad`; the guarantee is conditional on a varying-radius circuit |
+| "keep the suction side inboard" (wave 7) | **narrowed** — true with the panel on the OUTER flank, which is the only flank wave 7 swept. On the inner flank outboard *is* toward the turn centre, and that cell wins on the rigid-wall model (`15-inner-flank.md`) |
+| the flank panel's lift from the body image | +5.20 % (wave 7, standoff 0.45) → **+3.50 %** (standoff 0.60, `14-urop-parity.md`), and **+2.31 %** with the body on the panel's pressure side |
 
 ## The three things most worth your attention
 

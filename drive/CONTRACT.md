@@ -490,7 +490,7 @@ surface faces OUTBOARD, away from the body — a different aerodynamic problem,
 which is why `wing.build_lattice` takes `wall_side` (§7). `vehicle.py` never
 learns what a wall is: the orientation reaches it inside a `DevAero`'s CL/CD
 laws, exactly as a mount does. Measured both ways in
-`.handoff/14-inner-flank.md`; **the default stays `'outer'`**.
+`.handoff/15-inner-flank.md`; **the default stays `'outer'`**.
 
 `S_DEV = 0.35 m²` is **one panel**. Exactly one panel is active at a time.
 
@@ -940,11 +940,12 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
   to deploy on the INNER flank and still point the side force at the turn
   centre (§4, `cfg.dev_flank`). Rotating the panel 180° about its span carries
   the tip plates with it and this lattice builds them on the lift (+z) side, so
-  they still point +z and now face away from the body: no clip. At the real
-  0.45 m standoff the clip does not bind on any library flank wing (0.416 m
-  against plates of 0.06–0.16 m), so the two orientations differ **only** in
-  which side of the panel the wall is on. Measured on `flank-e423` at 5°:
-  CL 0.7988 → 0.7827, CDi 0.08214 → 0.07984, e 1.2862 → 1.2706 — slightly
+  they still point +z and now face away from the body: no clip. At the standoff
+  the car deploys to the clip does not bind on any library flank wing (0.566 m
+  at `RIDE_H0['flank'] = 0.60`, against plates of 0.06–0.16 m), so the two
+  orientations differ **only** in which side of the panel the wall is on.
+  Measured on `flank-e423` at 5°:
+  CL 0.7783 → 0.7694, CDi 0.08111 → 0.07975, e 1.2366 → 1.2291 — slightly
   **less** lift for slightly **less** induced drag with the body on the
   pressure side, both above free air, and the free-air limit comes back
   monotonically as the wall is moved away. `analyse` and `spanwise` pass it

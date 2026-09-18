@@ -1,5 +1,13 @@
 # Wave 6 — the owner's two aero questions
 
+> **CORRECTED BY WAVE 8 — read `.handoff/15-inner-flank.md` alongside this.**
+> The orientation conclusion below ("keep the suction side inboard") is right
+> and stays, but it is stated in general terms and it is **conditional on the
+> panel staying on the OUTER flank**, which is the only flank this note swept.
+> On the inner flank "outboard" *is* toward the turn centre, and that fourth
+> cell is the best of the four on the rigid-wall model. The three places this
+> note needs reading with that in mind are marked **[W8]** below.
+
 > *"The side wings would be affected by the curve AoA. It might be better to
 > have the foils in the opposite side (suction side outwards)."*
 
@@ -143,6 +151,18 @@ blocker. Lattice at 5°, same panel:
 | **suction INBOARD** — wall on the lift side | **0.6344** | 0.06842 | 1.0802 |
 | **suction OUTBOARD** — wall on the pressure side | 0.6267 | **0.06677** | 1.0802 |
 
+> **[W8]** `e` is the same 1.0802 in both rows, which cannot come from moving
+> the wall — the induced-drag geometry moves with it. It looks as though the
+> **section** was mirrored and the wall left where it was, which leaves this
+> lattice's one-sided tip plates on the wrong side of the panel.
+> `wing.build_lattice(..., wall_side=-1)` (wave 8) moves the **body** instead,
+> which is what physically happens when the same panel is hung on the other
+> flank, and it is validated against free air in the distant-wall limit. On
+> `flank-e423` at 5° it gives `e` 1.2862 (wall on the suction side) against
+> 1.2706 (pressure side) and CL 0.7988 against 0.7827 — the same qualitative
+> result, more lift for more induced drag with the body on the suction side, so
+> the conclusion above is unaffected.
+
 So the interference genuinely differs in kind: with the suction surface facing
 the body the panel makes **more** lift for **more** induced drag; facing
 outboard it makes slightly less lift for essentially free-air induced drag.
@@ -156,6 +176,18 @@ device subtracts from cornering instead of adding to it. There is no
 configuration in which the suction surface faces outboard and the useful force
 is still inboard. The body image changes the **magnitude** of each orientation;
 it cannot change that sign.
+
+> **[W8] With the panel on the OUTER flank.** That qualifier was missing and it
+> is load-bearing: "outboard" means *away from the car body*, and on the INNER
+> flank away from the body is **toward the turn centre**. So the sentence
+> "there is no configuration in which the suction surface faces outboard and
+> the useful force is still inboard" is true of the two cells swept here and
+> false of the two that were not. The fourth cell — inner flank, suction
+> outboard — has the side force pointed at the turn centre AND the drag yaw
+> moment pro-turn, and measures +1.3329 % against this note's shipped
+> +1.2653 % at R = 100 in parity. It is still not recommended, for reasons
+> that have nothing to do with the sign of the force: see
+> `.handoff/15-inner-flank.md` §10.
 
 Vehicle level, R = 100 open-loop ramp steer, both orientations analysed **with
 the image**, against 8.6084 m/s² wing-off:
@@ -188,6 +220,24 @@ Only something that makes an outboard force useful — a car that is
 front helps. This one is front-limited in every measured configuration
 (`limiting = 'front'` throughout), which is the whole premise of the study and
 is why the device points inboard.
+
+> **[W8] Too narrow.** What actually changes it is not a different car but
+> **moving the panel to the other flank**, which is a free choice and which
+> this note held fixed. Doing that makes an outboard-facing suction surface
+> point *inboard* in the car's frame, and it also flips the drag's yaw moment
+> from anti-turn to pro-turn (+23 % of the device's yaw authority, recovered).
+> Measured in `.handoff/15-inner-flank.md`: cell 4 is the best of the four at
+> every radius on the rigid-wall model, by +0.02 pp (a panel with a fitted
+> polar) to +0.48 pp (the published plate). The default still does not move,
+> because the gain is bought out of the rear axle's margin and the plate on
+> the inner flank departs at 25 m/s and 6° of lock.
+
+> **[W8] And the "selectable flipped orientation was NOT added" decision above
+> stands as written** — an option whose only effect is to make the device work
+> backwards is still a footgun. What wave 8 added instead is
+> `VehicleConfig.dev_flank` / `--dev-flank`, which moves the **flank**; on the
+> inner flank the flipped section is the configuration that makes the device
+> work *forwards*, which is a different option with a different sign.
 
 ## What a reader of the earlier notes would now be misled by
 

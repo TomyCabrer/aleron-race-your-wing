@@ -482,11 +482,11 @@ def build_lattice(spec: WingSpec, polar: Polar, ride_h: float | None = None,
         #  section 4, `cfg.dev_flank`). Rotating the panel 180 deg about its
         #  span carries the tip plates with it, and this lattice builds them on
         #  the lift (+z) side, so they still point +z and now face AWAY from
-        #  the body: nothing to clear, hence no clip. At the real 0.45 m
-        #  standoff the clip does not bind on any library flank wing anyway
-        #  (0.416 m against plates of 0.06-0.16 m), so the two orientations
-        #  differ ONLY in which side of the panel the wall is on, which is
-        #  what makes them comparable.
+        #  the body: nothing to clear, hence no clip. At the standoff the car
+        #  deploys to the clip does not bind on any library flank wing anyway
+        #  (0.566 m at RIDE_H0['flank'] = 0.60, against plates of 0.06-0.16 m),
+        #  so the two orientations differ ONLY in which side of the panel the
+        #  wall is on, which is what makes them comparable.
         image = float(wall_side) * float(standoff)
         if wall_side > 0.0:
             plate = min(plate, max(standoff - 0.03 * b - 0.01, 0.0))

@@ -1,5 +1,17 @@
 # Wave 8 — the fourth cell: the panel on the INNER flank
 
+> **Two housekeeping facts a later reader needs.** (1) Every lattice number
+> here is at the flank standoff **`RIDE_H0['flank'] = 0.60 m`**, which
+> `14-urop-parity.md` made the single value in the same working tree as this
+> work; the vehicle-level numbers for the published `fin` / `plate` do not go
+> through the lattice and are standoff-independent. (2) A concurrent session
+> was editing this repo, and `git add -A` in commits `839be07`, `76816c7` and
+> `8302638` swept some of its wave-8 UROP-parity work (`drive/render.py`,
+> `drive/garage.py`, the `RIDE_H0` half of `drive/aero/wing.py`,
+> `14-urop-parity.md`) into commits whose messages describe only this work.
+> Nothing was lost and nothing was overwritten, but the commit boundaries are
+> not clean. Stage by path in a shared tree.
+
 > *"The previous study swept the section orientation with the flank held at the
 > outer flank. That only covers two cells of a two-by-two. What about the inner
 > flank with the section turned over?"*
@@ -118,14 +130,20 @@ it is worth nothing. `flank-e423` at 5°:
 | | CL | CDi | e | vs free air |
 |---|---|---|---|---|
 | free air (no body at all) | 0.7520 | 0.08040 | 1.1647 | — |
-| wall on the **suction** side (cells 1, 3) | 0.7988 | 0.08214 | 1.2862 | **+6.22 %** CL |
-| wall on the **pressure** side (cells 2, 4) | 0.7827 | 0.07984 | 1.2706 | **+4.08 %** CL |
+| wall on the **suction** side (cells 1, 3) | 0.7783 | 0.08111 | 1.2366 | **+3.50 %** CL |
+| wall on the **pressure** side (cells 2, 4) | 0.7694 | 0.07975 | 1.2291 | **+2.31 %** CL |
+
+and the free-air limit comes back monotonically as the wall is moved away,
+which is the validation the image itself was given. Pressure side:
+CL 0.7694 / 0.7596 / 0.7538 / 0.7525 / 0.7521 at 0.60 / 0.90 / 1.80 / 3.60 /
+12 m against free air's 0.7520. Suction side: 0.7783 / 0.7634 / 0.7547 /
+0.7527 / 0.7521.
 
 A thickened or separated leeward boundary layer makes the wall *softer and
 further away*, and the sweep is monotone in wall distance, so the whole
-possible error is the inner flank losing its 4.08 % back. **Note which way that
-cuts: the shipped outer-flank configuration leans on the image MORE (+6.22 %)
-than the inner one does (+4.08 %).** The image is not the inner flank's problem.
+possible error is the inner flank losing its 2.31 % back. **Note which way that
+cuts: the shipped outer-flank configuration leans on the image MORE (+3.50 %)
+than the inner one does (+2.31 %).** The image is not the inner flank's problem.
 
 **Not bounded — the panel working in a wake.** If the leeward flank at the
 panel's station is separated, the panel sees a reduced `q` and a distorted
@@ -168,16 +186,16 @@ Cells 2 and 3 are the same panel with its section mirrored, so `CL0`, `CLa` and
 
 | cell | flank | suction | CL | F_dev | D_dev | Mz_dev | = lift | + drag | gain | util_f | util_r | limiting |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **1** | outer | inboard | +0.749 | **+128.6** | 14.66 | **+114.2** | +124.7 | **−10.6** | **+1.2653 %** | 0.9936 | 0.9615 | front |
-| 2 | outer | outboard | −0.734 | −119.8 | 13.63 | −126.0 | −116.2 | −9.8 | **−1.2682 %** | 0.9916 | 0.9111 | front |
-| 3 | inner | inboard | −0.749 | −122.3 | 13.95 | −108.6 | −118.7 | +10.0 | **−1.2151 %** | 0.9917 | 0.9145 | front |
-| **4** | inner | outboard | +0.734 | **+126.1** | 14.35 | **+132.7** | +122.4 | **+10.3** | **+1.3329 %** | 0.9937 | 0.9658 | front |
+| **1** | outer | inboard | +0.730 | **+125.2** | 14.61 | **+110.9** | +121.4 | **−10.5** | **+1.2312 %** | 0.9936 | 0.9609 | front |
+| 2 | outer | outboard | −0.722 | −117.8 | 13.72 | −124.1 | −114.2 | −9.9 | **−1.2481 %** | 0.9917 | 0.9115 | front |
+| 3 | inner | inboard | −0.730 | −119.3 | 13.92 | −105.7 | −115.7 | +10.0 | **−1.1837 %** | 0.9918 | 0.9151 | front |
+| **4** | inner | outboard | +0.722 | **+123.9** | 14.44 | **+130.6** | +120.2 | **+10.4** | **+1.3090 %** | 0.9937 | 0.9652 | front |
 
-**Cell 4 is the best of the four, by +0.068 pp over the shipped cell 1.** Cells
+**Cell 4 is the best of the four, by +0.078 pp over the shipped cell 1.** Cells
 2 and 3 are the two losers and they lose by essentially the same amount, which
 is the point: *what makes them lose is the side force pointing away from the
-turn centre, not which flank they are on.* The flank is worth ±0.05 pp on top
-of a ±1.27 pp force-direction effect.
+turn centre, not which flank they are on.* The flank is worth ±0.06 pp on top
+of a ±1.25 pp force-direction effect.
 
 The same measurement on the published closed form, where the panel's drag is
 the study's crude `CL/3.2` rather than a fitted polar and is therefore much
@@ -196,22 +214,23 @@ cross-check that this measurement is on the same rig as the old ones.
 
 Parity, cell 4 minus cell 1, in percentage points of corner speed:
 
-| R (m) | fin | plate | designed | cell 4 steer change | cell 4 limiting |
+| R (m) | fin | plate | designed | cell 4 steer change | cell 4 limiting (fin / plate / designed) |
 |---|---|---|---|---|---|
-| 30 | +0.070 | +0.128 | +0.018 | −0.06 … −0.12° | front / front / front |
-| 50 | +0.118 | +0.222 | +0.030 | −0.12 … −0.41° | front / front / front |
-| 75 | +0.176 | +0.467 | +0.044 | −0.29 … −0.62° | front / front / front |
-| 100 | +0.268 | +0.473 | +0.068 | −0.40 … −0.84° | front / **rear** / front |
-| 130 | +0.482 | +0.107 | +0.141 | −0.17 … −1.26° | **rear/spin** / **rear/spin** / front |
-| 175 | +0.435 | −0.020 | +0.103 | −0.27 … −1.07° | **rear/spin** / **rear/spin** / **rear** |
+| 30 | +0.070 | +0.128 | +0.021 | −0.02 … −0.12° | front / front / front |
+| 50 | +0.118 | +0.222 | +0.036 | −0.04 … −0.41° | front / front / front |
+| 75 | +0.176 | +0.467 | +0.053 | −0.09 … −0.62° | front / front / front |
+| 100 | +0.268 | +0.473 | +0.078 | −0.42 … −0.84° | front / **rear** / front |
+| 130 | +0.482 | +0.107 | +0.157 | −0.20 … −1.26° | **rear/spin** / **rear/spin** / front |
+| 175 | +0.435 | −0.020 | +0.147 | −0.22 … −1.07° | **rear/spin** / **rear/spin** / **rear** |
 
 Three things fall out of that table and all three matter:
 
 1. **It grows with radius**, because the drag moment goes as `q` and the
    benefit is the drag moment.
 2. **It grows with the panel's DRAG, not its lift.** The fitted `flank-e423`
-   polar makes 14.7 N of drag where the published fin's assumed `L/D = 3.2`
-   makes 53.7 N, and the designed panel accordingly gains only +0.02 … +0.14 pp.
+   polar makes 14.6 N of drag (`L/D` 8.6) where the published fin's assumed
+   `L/D = 3.2` makes 39.4 N, and the designed panel accordingly gains only
+   +0.02 … +0.16 pp.
    **On a well-designed panel the whole effect is nearly nothing** — which is
    the practically relevant case.
 3. **Past R ≈ 100 the extra gain is the rear axle going limiting.** `util_r`
@@ -294,6 +313,39 @@ moment, with 60 % less of the drag term's damping to oppose it. On the outer
 flank the drag term is what damps that loop. Nobody designed it to; it is a
 by-product of the flank the study assumed.
 
+### The departure window, scanned — and a finding about the SHIPPED car
+
+Departure is **not monotone in steer angle** (past the front-axle saturation
+the car ploughs, the yaw rate never builds and `|beta|` stays small), so a
+bisection that assumes "holds below, departs above" reports a car that departs
+at 6° as safe to 16°. It was scanned instead: 2.00–16.00° at 0.25°, speed held,
+ramped in over 1 s and held 8 s, departure = `|beta| > 15°`. Open loop, so
+there is no driver correcting — a severe test, but the same test for every row.
+
+| V | wing off | fin outer | fin **inner** | plate outer | plate **inner** | designed outer | designed **inner** |
+|---|---|---|---|---|---|---|---|
+| 20 | none | none | none | none | none | none | none |
+| 25 | none | none | none | none | **5.25–10.50°** | none | none |
+| 30 | none | 5.50–7.75° | **4.50–12.50°** | 4.50–11.75° | **3.75–16.00°** | 5.00–9.25° | **4.75–11.50°** |
+| 35 | **none** | 4.00–15.00° | **3.50–16.00°** | 3.50–16.00° | **2.75–16.00°** | 3.75–16.00° | **3.50–16.00°** |
+
+Two things, and the second one is not about the inner flank at all:
+
+* **The inner flank widens every window and lowers its onset**, and at 25 m/s
+  the inner-flank plate is the *only* configuration in the table that departs
+  — the flank moves that panel's onset down by a full 5 m/s.
+* **REPORT UPWARD: the device destabilises the shipped car too.** With the wing
+  off this car does not depart at any scanned angle up to 35 m/s. With the panel
+  on the **outer** flank it departs from 30 m/s upward, over a window that is
+  4.00–15.00° of lock at 35 m/s. That is the `dMz_dev/dbeta_dev = −370 N·m/rad`
+  of §1 acting on a car with no yaw damping to spare, and it is a property of
+  the configuration that ships, not of this change. It is consistent with
+  `numerics.txt` T17's warning and with `ramp_steer`'s own `|beta| > 12°` abort
+  firing on the plate; nothing here contradicts an acceptance number
+  (every rig holds one steer sign and bisects on speed, not on lock). Worth a
+  look in its own right, at the very least as a note beside the device's
+  quoted gains.
+
 ---
 
 ## 6. On a lap — and WHERE, before anything is called aerodynamics
@@ -307,7 +359,7 @@ patches on, second lap (deterministic to 0.2 ms):
 |---|---|---|---|---|
 | fin | 60.8355 | 60.8076 (**+0.0279 s**) | 60.7477 (**+0.0878 s**) | **−0.0599 s** |
 | plate | 60.8355 | 60.6882 (**+0.1473 s**) | 60.7711 (**+0.0644 s**) | **+0.0829 s** |
-| designed | 60.8355 | 60.8890 (**−0.0535 s**) | 60.7241 (**+0.1114 s**) | **−0.1649 s** |
+| designed | 60.8355 | 60.8970 (**−0.0615 s**) | 60.7307 (**+0.1048 s**) | **−0.1663 s** |
 
 `+0.0279` and `+0.1473` are wave 7's own corrected fin and plate lap numbers,
 reproduced — so this is the same lap, not a new one. And then the answer to
@@ -327,9 +379,9 @@ margin is thinnest, and the extra oversteer moment is what tips it over** —
 which is `ledger.py`'s "the wet is this device's best case" seen from the other
 side.
 
-**The designed panel's −0.1649 s is the LapDriver, not the flank, and I am not
-claiming it.** −0.1651 s of accumulated delta, of which **T6 +0.0632, s7
-−0.0757, T7 −0.0884** and the start straight −0.0445. At s ≈ 1090 in T6 the two
+**The designed panel's −0.1663 s is the LapDriver, not the flank, and I am not
+claiming it.** −0.1659 s of accumulated delta, of which **T6 +0.0622, s7
+−0.0757, T7 −0.0873** and the start straight −0.0445. At s ≈ 1090 in T6 the two
 runs' paths diverge; from s = 1110 to the line the inner run is 0.6–0.8 m/s
 faster *with `util_f` and `util_r` between 0.2 and 0.4* — nothing is
 grip-limited anywhere in T7, which is the power-limited corner. The outer run
@@ -339,7 +391,7 @@ correcting. That is a closed-loop controller artefact of exactly the kind
 measured.
 
 **Conclusion on the lap: it cannot resolve this.** The differences are
-0.06–0.16 s on a 60.8 s lap (0.1–0.27 %) and the largest single contributions
+0.06–0.17 s on a 60.8 s lap (0.1–0.27 %) and the largest single contributions
 trace to one corner exit. Only the fin's −0.0599 s is distributed across
 corners in the direction the rig predicts. The open-loop per-corner rig stays
 the figure of merit, as it has been since `.handoff/10`.
@@ -432,7 +484,8 @@ wins everywhere in the dry — but because of what it costs and what the win is
 made of:
 
 1. **The win is small where it is safe.** On a panel with a fitted polar
-   (`flank-e423`, `L/D` ≈ 53) it is +0.02 to +0.14 pp of corner speed. The
+   (`flank-e423`, `L/D` 8.6 against the published fin's assumed 3.2) it is
+   +0.02 to +0.16 pp of corner speed. The
    effect *is* the drag moment, so designing the drag out of the panel — which
    is what the whole `drive/aero` half of this repo exists to do — designs the
    benefit out with it.
@@ -453,7 +506,7 @@ published fin and it does reduce the steer angle required, which is the
 mechanism you predicted and it is confirmed. But it buys that by spending rear
 margin, and rear margin is the thing this car has least of and the thing the
 study's own cap is written about. On the panel you would actually build it is
-worth 0.07 pp — inside the noise of the lap and below the 4 % of CL that the
+worth 0.08 pp — inside the noise of the lap and below the 2.3 % of CL that the
 body-image model is uncertain by.* It is a selectable option;
 `--dev-flank inner` and the numbers above are there to be re-run.
 
@@ -473,10 +526,12 @@ car.
 | the drag term's share of the device's yaw moment | **23.2 %** of the lift term (R = 100, fin) |
 | the flank's whole effect on `Mz_dev` | `2·Y_DEV·D_dev` = **+77.340 N·m** |
 | the flank's effect on `F_dev`, roll moment, load transfer | **exactly 0**, all three |
-| cell 4 minus cell 1, parity, R = 100 | fin **+0.268 pp**, plate **+0.473 pp**, designed **+0.068 pp** |
-| steer angle change, R = 100 | fin **−0.841°**, plate **−0.807°**, designed **−0.396°** |
+| cell 4 minus cell 1, parity, R = 100 | fin **+0.268 pp**, plate **+0.473 pp**, designed **+0.078 pp** |
+| steer angle change, R = 100 | fin **−0.841°**, plate **−0.807°**, designed **−0.415°** |
 | roll-gradient change | **+0.0002 deg/g** (0.004 %) |
 | `dMz_dev/dbeta_dev`, outer → inner | **−370.4 → −594.2** N·m/rad (fin) |
 | plate on the inner flank, 25 m/s, 6° lock | **departs**, beta −81.3°, r 2.82 rad/s |
+| departure onset, plate | 30 m/s outer, **25 m/s** inner |
+| departure with the wing OFF, up to 35 m/s and 16° | **never** |
 | \|beta\| while the panel is deployed on a lap | mean **1.21°**, max **4.21°**, 0.0 % above 5° |
-| body image, CL vs free air | **+6.22 %** suction side, **+4.08 %** pressure side |
+| body image, CL vs free air | **+3.50 %** suction side, **+2.31 %** pressure side (standoff 0.60 m) |
