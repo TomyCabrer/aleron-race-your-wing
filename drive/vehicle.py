@@ -295,6 +295,27 @@ class VehicleConfig:
     #: and +6.0473 uncorrected. `qss_parity` freezes it regardless, so the
     #: parity comparison against qss is untouched.
     dev_curved_flow: bool = True
+    #: WHICH FLANK the panel deploys on: 'outer' (the shipped default, the
+    #: flank away from the turn centre) or 'inner'.
+    #:
+    #: It changes exactly two things and it is worth naming both, because the
+    #: list is shorter than the intuition suggests. A pure LATERAL force has
+    #: no lateral moment arm: its yaw moment is `x_w*F_dev` and its roll
+    #: moment is `-F_dev*(h_w - h_ra)` wherever on the width of the car it
+    #: acts. So the flank reaches the physics ONLY through the panel's DRAG,
+    #: which sits at `y = -/+sgn_dev*Y_DEV` and yaws the car out of the corner
+    #: from the outer flank and INTO it from the inner one. The second thing
+    #: is bookkeeping: `dev_left` / `dev_right` swap roles.
+    #:
+    #: The side force does NOT flip with the flank. Keeping it pointed at the
+    #: turn centre from the inner flank means turning the section over, so
+    #: that the suction surface faces OUTBOARD -- away from the body -- which
+    #: is a different aerodynamic problem and is why `wing.build_lattice` grew
+    #: `wall_side`. `vehicle.py` never learns what a wall is: the orientation
+    #: reaches it inside a `DevAero`'s CL/CD laws, exactly as a mount does.
+    #:
+    #: DEFAULT 'outer' and it stays there. See `.handoff/14-inner-flank.md`.
+    dev_flank: str = "outer"        # 'outer' (shipped) | 'inner'
     force_cos_delta: bool = True    # False removes the projection qss omits
     wing: str = "off"               # 'off' | 'fin' (CL0 0.70) | 'plate' (1.25)
     x_w: float = 0.97               # m, positive FORWARD of the CG
@@ -445,6 +466,19 @@ class VehicleConfig:
 
     def has_designed(self) -> bool:
         return self.dev_left is not None or self.dev_right is not None or self.top is not None
+
+    def flank_sgn(self) -> float:
+        """+1 = the panel is on the OUTER flank, -1 = the INNER one.
+
+        The panel's signed lateral station is `-flank_sgn * sgn_dev * Y_DEV`,
+        so the outer flank is `y = -sgn_dev*Y_DEV` -- the right flank in a
+        left turn -- exactly as `Y_DEV`'s own comment states it.
+        """
+        if self.dev_flank == "inner":
+            return -1.0
+        if self.dev_flank != "outer":
+            raise ValueError(f"dev_flank must be 'outer' or 'inner', not {self.dev_flank!r}")
+        return 1.0
 
 
 # ==================================================================== #
@@ -1078,9 +1112,19 @@ class Vehicle:
 
         # --- the flank panel: the outer one, designed law or closed form --
         sgn = float(st.dev_side)
+        #  the panel's signed lateral station: -flank*sgn*Y_DEV, so the OUTER
+        #  flank (flank = +1) is the right one in a left turn.  The only term
+        #  it reaches is the drag's yaw moment -- a pure lateral force has no
+        #  lateral arm about either the yaw or the roll axis.
+        flank = cfg.flank_sgn()
+        y_dev = -flank * sgn * self.der.y_dev
         panel = None
         if cfg.dev_left is not None or cfg.dev_right is not None:
-            panel = cfg.dev_right if sgn > 0.0 else (cfg.dev_left if sgn < 0.0 else None)
+            #  which SLOT is on that flank: right in a left turn on the outer
+            #  flank, left in a left turn on the inner one
+            outer = cfg.dev_right if sgn > 0.0 else (cfg.dev_left if sgn < 0.0 else None)
+            inner = cfg.dev_left if sgn > 0.0 else (cfg.dev_right if sgn < 0.0 else None)
+            panel = outer if flank > 0.0 else inner
             has = panel is not None
             x_w = panel.x_w if has else cfg.x_w
             h_w = panel.h_w if has else cfg.h_w
@@ -1113,7 +1157,8 @@ class Vehicle:
 
         base = dict(D_aero=D_aero, Fy_body=Fy_body, Mz_body=Mz_body,
                     F_top=F_top, D_top=D_top, dep_top=dep_top, dz_top=dz_top,
-                    x_w=x_w, h_w=h_w, beta=beta, q=q, V=V, dep=dep, sgn_dev=int(sgn))
+                    x_w=x_w, h_w=h_w, beta=beta, q=q, V=V, dep=dep, sgn_dev=int(sgn),
+                    y_dev=y_dev)
         if panel is not None:
             if dep <= 0.0 or sgn == 0.0:
                 return dict(base, F_dev=0.0, D_dev=0.0, Mz_dev=0.0, CL_dev=0.0, alpha_dev=0.0)
@@ -1140,7 +1185,10 @@ class Vehicle:
             CL = panel.cl(panel.inc if cfg.qss_parity else alpha_dev)
             F_dev = sgn * dep * q * panel.S * CL
             D_dev = dep * q * panel.S * panel.cd(CL)
-            Mz_dev = F_dev * panel.x_w - sgn * self.der.y_dev * D_dev
+            #  Mz = x*Fy - y*Fx with Fx = -D_dev, so the drag term is
+            #  +y_dev*D_dev: out of the corner from the outer flank, INTO it
+            #  from the inner one.  DEVIATION 2 has the outer-flank algebra.
+            Mz_dev = F_dev * panel.x_w + y_dev * D_dev
             return dict(base, F_dev=F_dev, D_dev=D_dev, Mz_dev=Mz_dev, CL_dev=CL,
                         alpha_dev=alpha_dev)
 
@@ -1159,9 +1207,10 @@ class Vehicle:
         CL = 0.0 if CL < 0.0 else (CL_STALL if CL > CL_STALL else CL)
         F_dev = sgn * dep * q * S_DEV * CL
         D_dev = dep * q * S_DEV * CL / LD_DEV
-        # DEVIATION 2: the panel sits on the OUTER flank at y = -sgn*0.72, and
-        # its drag (-x) therefore yaws the car OUT of the corner.
-        Mz_dev = F_dev * cfg.x_w - sgn * self.der.y_dev * D_dev
+        # DEVIATION 2: on the OUTER flank the panel sits at y = -sgn*0.72 and
+        # its drag (-x) therefore yaws the car OUT of the corner.  On the INNER
+        # flank y flips and the same drag yaws it INTO the corner.
+        Mz_dev = F_dev * cfg.x_w + y_dev * D_dev
         return dict(base, F_dev=F_dev, D_dev=D_dev, Mz_dev=Mz_dev, CL_dev=CL,
                     alpha_dev=alpha_dev)
 
@@ -1662,7 +1711,7 @@ class Vehicle:
         Yf_full = (c.b * (SFy - aer["F_dev"] - aer["Fy_body"])
                    - aer["F_dev"] * aer["x_w"]
                    - M_arm - aer["Mz_body"]
-                   + aer["sgn_dev"] * self.der.y_dev * aer["D_dev"] + SMz) / c.L
+                   - aer["y_dev"] * aer["D_dev"] + SMz) / c.L
         V = aer["V"]
         coriolis = -c.m * st.v * st.r
         induced = Yf * sin(delta[0] if cfg.force_cos_delta else 0.0)
@@ -1686,6 +1735,10 @@ class Vehicle:
             dFz_tot_demand=demand, dFz_f=st.dFz_f, dFz_r=st.dFz_r,
             dFz_x=st.dFz_x, phi=st.phi, phi_deg=degrees(st.phi),
             F_dev=aer["F_dev"], D_dev=aer["D_dev"], Mz_dev=aer["Mz_dev"],
+            #  the panel's signed lateral station, so `Mz_dev` decomposes
+            #  without the reader having to know which flank it is on:
+            #  drag term = y_dev*D_dev, lift term = Mz_dev - y_dev*D_dev
+            y_dev=aer["y_dev"], x_w_dev=aer["x_w"],
             CL_dev=aer["CL_dev"], dep=aer["dep"], sgn_dev=aer["sgn_dev"],
             F_top=aer["F_top"], D_top=aer["D_top"], dep_top=aer["dep_top"],
             Fy_body=aer["Fy_body"], D_aero=aer["D_aero"],

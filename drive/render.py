@@ -192,6 +192,7 @@ C_SKID = (38, 40, 43)
 C_FY = (79, 163, 255)
 C_FX = (111, 208, 140)
 C_WING_ON = (255, 140, 43)
+C_WING_DRAG = (186, 99, 30)    # the device's DRAG arrow: same hue, darker
 C_WING_OFF = (107, 111, 117)
 C_HUD_BG = (16, 17, 20)
 C_HUD_TEXT = (232, 234, 238)
@@ -2151,9 +2152,17 @@ class Renderer:
                 base = self.world_to_screen(
                     self._body_to_world(x, y, psi, anchor_b))[0]
                 lat = np.array([-math.sin(psi), math.cos(psi)])
-                n_px = self._force_px(float(aux.F_wing))
-                w = (lat * n_px) @ self._Rm.T
-                self._arrow(base, (w[0], -w[1]), C_WING_ON)
+                fwd = np.array([math.cos(psi), math.sin(psi)])
+                # Two independent arrows off the one anchor: the side force
+                # the panel exists for, and the drag it costs.  Drag is drawn
+                # rearward by negating the px, never by flipping `fwd`, so the
+                # sign convention is the same one the tyre arrows use.  Both
+                # keep FORCE_PX_PER_N: the 3 px panel stays 3 px.
+                for n_px, vec, col in (
+                        (self._force_px(float(aux.F_wing)), lat, C_WING_ON),
+                        (self._force_px(-float(aux.D_wing)), fwd, C_WING_DRAG)):
+                    w = (vec * n_px) @ self._Rm.T
+                    self._arrow(base, (w[0], -w[1]), col)
 
         if getattr(aux, 'top_on', False):
             xt = float(aux.top_x)
@@ -2178,11 +2187,14 @@ class Renderer:
                 p = self._px(self._body_to_world(x, y, psi, np.array([(xt - 0.5 * ct, yp), (xt - 0.5 * ct - 0.10, yp)])))
                 pygame.draw.line(self.screen, C_WING_OFF, p[0], p[1], 1)
             if on and self.cfg.show_vectors and float(aux.D_top) > 0.0:
+                # Only the drag: the top wing's other component is VERTICAL and
+                # a plan projection has nowhere to put it.  It is drawn in the
+                # chase view, and the HUD's Fz reads it in both.
                 base = self.world_to_screen(self._body_to_world(x, y, psi, np.array([[xt, 0.0]])))[0]
                 fwd = np.array([math.cos(psi), math.sin(psi)])
                 n_px = self._force_px(-float(aux.D_top))
                 w = (fwd * n_px) @ self._Rm.T
-                self._arrow(base, (w[0], -w[1]), C_WING_ON)
+                self._arrow(base, (w[0], -w[1]), C_WING_DRAG)
 
     # ------------------------------------------------------------------ #
     #  THE CAR IN 3-D (mode 'chase')                                      #
@@ -2347,21 +2359,47 @@ class Renderer:
             base = np.array([x + b[0] * math.cos(psi) - b[1] * math.sin(psi),
                              y + b[0] * math.sin(psi) + b[1] * math.cos(psi),
                              b[2]])
-            n_px = self._force_px(float(aux.F_wing))
-            got = self._screen_dir(base, (-math.sin(psi), math.cos(psi), 0.0))
-            if got is not None and abs(n_px) >= 0.5:
-                self._arrow(got[0], (got[1][0] * n_px, got[1][1] * n_px),
-                            C_WING_ON)
-        if (getattr(aux, 'top_on', False) and float(aux.top_deploy) > 0.05
-                and float(aux.D_top) > 0.0):
+            for F, dv, col in (
+                    (float(aux.F_wing), (-math.sin(psi), math.cos(psi), 0.0),
+                     C_WING_ON),
+                    (-float(aux.D_wing), (math.cos(psi), math.sin(psi), 0.0),
+                     C_WING_DRAG)):
+                n_px = self._force_px(F)
+                got = self._screen_dir(base, dv)
+                if got is not None and abs(n_px) >= 0.5:
+                    self._arrow(got[0], (got[1][0] * n_px, got[1][1] * n_px),
+                                col)
+        if getattr(aux, 'top_on', False) and float(aux.top_deploy) > 0.05:
             xt = float(aux.top_x)
             zc = deck_z3(xt) + TOP_STOW_GAP + TOP_RISE * float(aux.top_deploy)
             base = np.array([x + xt * math.cos(psi), y + xt * math.sin(psi), zc])
-            n_px = self._force_px(-float(aux.D_top))
-            got = self._screen_dir(base, (math.cos(psi), math.sin(psi), 0.0))
-            if got is not None and abs(n_px) >= 0.5:
-                self._arrow(got[0], (got[1][0] * n_px, got[1][1] * n_px),
-                            C_WING_ON)
+            # The downforce is the one arrow in the sim that points along z,
+            # and it is the reason the chase view is where the top wing reads:
+            # F_top > 0 IS downforce (it is what gets added to the axle loads),
+            # so the px is negated against an UP direction rather than the
+            # direction being flipped.  Each component stands on its own gate,
+            # so a wing with drag and no lift still draws the drag.
+            #
+            # The drag is anchored a half-chord back instead of at the station.
+            # From behind, world-rearward and world-down both project to very
+            # nearly screen-down on the centreline, so sharing an anchor buries
+            # the 3 px drag inside the 11 px downforce.  The offset is free of
+            # any claim about the moment arm: the top wing's drag enters the
+            # axle split through dz_top (its HEIGHT) alone -- its x station is
+            # read nowhere in the physics -- so a trailing-edge anchor is the
+            # free-body convention and nothing more.
+            te = np.array([base[0] - 0.5 * float(aux.top_chord) * math.cos(psi),
+                           base[1] - 0.5 * float(aux.top_chord) * math.sin(psi),
+                           base[2]])
+            for F, dv, col, b3 in (
+                    (-float(aux.D_top), (math.cos(psi), math.sin(psi), 0.0),
+                     C_WING_DRAG, te),
+                    (-float(aux.F_top), (0.0, 0.0, 1.0), C_WING_ON, base)):
+                n_px = self._force_px(F)
+                got = self._screen_dir(b3, dv)
+                if got is not None and abs(n_px) >= 0.5:
+                    self._arrow(got[0], (got[1][0] * n_px, got[1][1] * n_px),
+                                col)
 
     # ------------------------------------------------------------------ #
     #  HUD                                                                #

@@ -431,7 +431,8 @@ CL_dev  = clamp(CL0 + dCLda*alpha_dev, 0, 1.6)       # dCLda = 2.47 /rad; 0 in p
 dep     = smoothstepped deploy fraction over 0.45 s
 F_dev   = sgn_dev * dep * q * S_DEV * CL_dev         # +y = inward for a LEFT turn
 D_dev   = dep * q * S_DEV * CL_dev / 3.2
-Mz_dev  = F_dev*x_w - sgn_dev*Y_DEV*D_dev            # Y_DEV = 0.72, y_dev = -sgn_dev*Y_DEV
+y_dev   = -flank*sgn_dev*Y_DEV                       # Y_DEV = 0.72; flank = +1 OUTER (default), -1 INNER
+Mz_dev  = F_dev*x_w + y_dev*D_dev                    # = F_dev*x_w - sgn_dev*Y_DEV*D_dev on the outer flank
 ```
 The old form `Mz_dev = F_dev*x_w - D_dev*y_dev*sgn_dev` squared the sign and
 gave `+0.72*D_dev` in BOTH directions — a term that does not mirror, so the
@@ -471,6 +472,26 @@ and on the scripted arena lap the device's worth falls +0.0582 -> **+0.0279 s**
 of the benefit survives in both. `qss_parity` freezes it exactly as it zeroes
 `dCLda`, so the parity path is unaffected either way.
 
+**The flank the panel deploys on** (`cfg.dev_flank`, `'outer'` the DEFAULT |
+`'inner'`). The flank reaches the physics through **one term only**, and the
+shortness of that list is the point: a pure LATERAL force has no lateral moment
+arm, so `F_dev`'s yaw moment is `x_w*F_dev` and its roll moment is
+`-F_dev*(h_w - h_ra)` wherever across the width of the car it acts, and the
+lateral load transfer reads `F_dev*(h_cg - h_w)` with no `y` in it either. What
+the flank changes is the **drag's** yaw moment, `y_dev*D_dev`: out of the corner
+from the outer flank (−40 N·m against +172 from the lift at the R = 100 limit,
+i.e. 23 % of the device's yaw authority), into it from the inner one. Everything
+else is bookkeeping — `dev_left` / `dev_right` swap roles, since the slot that is
+outer in a left turn is the inner one on the other setting.
+
+The side force does **not** flip with the flank. Keeping it pointed at the turn
+centre from the inner flank means turning the section over so the suction
+surface faces OUTBOARD, away from the body — a different aerodynamic problem,
+which is why `wing.build_lattice` takes `wall_side` (§7). `vehicle.py` never
+learns what a wall is: the orientation reaches it inside a `DevAero`'s CL/CD
+laws, exactly as a mount does. Measured both ways in
+`.handoff/14-inner-flank.md`; **the default stays `'outer'`**.
+
 `S_DEV = 0.35 m²` is **one panel**. Exactly one panel is active at a time.
 
 **Public API**:
@@ -493,6 +514,7 @@ class VehicleConfig:
                                     # projection qss omits (0.855 g -> 0.861 g)
     wing: str = 'off'               # 'off' | 'fin' (CL0 0.70) | 'plate' (CL0 1.25)
     x_w: float = 0.97; h_w: float = 0.90
+    dev_flank: str = 'outer'        # 'outer' (shipped) | 'inner'; see above
     mu_scale: float = 1.0
     guards: bool = True
     power_scale: float = 1.0        # the Engine setting -> powertrain.from_car; 1.0 in every rig
