@@ -1796,7 +1796,8 @@ class LapDriver(PathFollower):
 def _build(track_name="arena", radius=50.0, cw=False, wing="off",
            x_w=0.97, h_w=0.90, wet="patch", dt=DT_PHYS, telem_path=None,
            telem_hz=TELEM_HZ, precision="6g", driver=None, mu_scale=None,
-           cmdline=None, start_V=0.0, gear=1, tag="", start_s=None, car=None):
+           cmdline=None, start_V=0.0, gear=1, tag="", start_s=None, car=None,
+           dev_flank="outer"):
     """One place that assembles a headless Sim, so every script agrees.
 
     `car=None` is `CorsaC()` -- not an equal copy, the same construction
@@ -1815,7 +1816,7 @@ def _build(track_name="arena", radius=50.0, cw=False, wing="off",
     # `p_scale = car.engine_scale` is gone -- it would double-count.
     p_scale = 1.0
     cfg = VehicleConfig(wing=wing, x_w=x_w, h_w=h_w, mu_scale=mu_scale,
-                        power_scale=p_scale)
+                        power_scale=p_scale, dev_flank=dev_flank)
     veh = Vehicle(CorsaC() if car is None else car, cfg)
     # Stage OPEN tracks 2.5 m past the line. track.surface_at() rejects a
     # longitudinal overshoot on an open track, so a car parked exactly at s = 0
@@ -1833,7 +1834,7 @@ def _build(track_name="arena", radius=50.0, cw=False, wing="off",
     if telem_path:
         meta = dict(dt=dt, track=tr.name, car=veh.car,
                     tyre_file=tlm.DEFAULT_TYRE_FILE,
-                    wing=dict(wing=wing, x_w=x_w, h_w=h_w),
+                    wing=dict(wing=wing, x_w=x_w, h_w=h_w, dev_flank=dev_flank),
                     harness=dict(DT_PHYS=dt, FPS=FPS, MAX_SUBSTEPS=MAX_SUBSTEPS,
                                  MAX_FRAME_DT=MAX_FRAME_DT,
                                  SURFACE_LOOKUP_HZ=SURFACE_LOOKUP_HZ,
@@ -1962,13 +1963,15 @@ def brake_script(opts) -> dict:
 # ---- skidpad limit -------------------------------------------------------
 def _skidpad_attempt(V_tgt, radius, wing, x_w, h_w, wet, dt, cw=False,
                      window=8.0, telem_path=None, telem_hz=TELEM_HZ,
-                     precision="6g", mu_scale=None, car=None):
+                     precision="6g", mu_scale=None, car=None,
+                     dev_flank="outer"):
     """One 8 s constant-speed window. Returns (held, diagnostics)."""
     drv = PathFollower(V_tgt, wing_on=(wing != "off"))
     sim = _build("skidpad", radius=radius, cw=cw, wing=wing, x_w=x_w, h_w=h_w,
                  wet=wet, dt=dt, telem_path=telem_path, telem_hz=telem_hz,
                  precision=precision, driver=drv, mu_scale=mu_scale,
-                 start_V=V_tgt, gear=3, tag=f"skid{radius:g}", car=car)
+                 start_V=V_tgt, gear=3, tag=f"skid{radius:g}", car=car,
+                 dev_flank=dev_flank)
     n = int(round(window / dt))
     sim._log(0)
     held = True
@@ -2028,7 +2031,8 @@ def skidpad_limit_script(opts, wing=None, telem_path=None) -> dict:
     diag_lo = {}
     for _ in range(6):
         held, d = _skidpad_attempt(lo, R, wing, opts.wing_x, opts.wing_h,
-                                   opts.wet, opts.dt, opts.cw, car=_car)
+                                   opts.wet, opts.dt, opts.cw, car=_car,
+                                   dev_flank=getattr(opts, "dev_flank", "outer"))
         if held:
             ok_lo, diag_lo = True, d
             break
@@ -2039,7 +2043,8 @@ def skidpad_limit_script(opts, wing=None, telem_path=None) -> dict:
     for _ in range(12):                       # 12 bisections -> ~5 mm/s
         mid = 0.5 * (lo + hi)
         held, d = _skidpad_attempt(mid, R, wing, opts.wing_x, opts.wing_h,
-                                   opts.wet, opts.dt, opts.cw, car=_car)
+                                   opts.wet, opts.dt, opts.cw, car=_car,
+                                   dev_flank=getattr(opts, "dev_flank", "outer"))
         if held:
             lo, diag_lo = mid, d
         else:
@@ -2049,13 +2054,15 @@ def skidpad_limit_script(opts, wing=None, telem_path=None) -> dict:
     held, diag = _skidpad_attempt(lo, R, wing, opts.wing_x, opts.wing_h,
                                   opts.wet, opts.dt, opts.cw,
                                   telem_path=tp, telem_hz=opts.telem_hz,
-                                  precision=opts.telem_precision, car=_car)
+                                  precision=opts.telem_precision, car=_car,
+                                  dev_flank=getattr(opts, "dev_flank", "outer"))
     out = dict(script="skidpad_limit", radius=R, wing=wing, V_limit=lo,
                csv=tp, **diag)
     try:
         from .vehicle import steady_state_corner
-        ref = steady_state_corner(R, cfg=VehicleConfig(wing=wing, x_w=opts.wing_x,
-                                                       h_w=opts.wing_h))
+        ref = steady_state_corner(R, cfg=VehicleConfig(
+            wing=wing, x_w=opts.wing_x, h_w=opts.wing_h,
+            dev_flank=getattr(opts, "dev_flank", "outer")))
         out["V_openloop_ref"] = ref["V"]
         out["ay_g_openloop_ref"] = ref["ay_g"]
         out["limited_by_openloop"] = ref["limiting"].upper()
@@ -2107,7 +2114,7 @@ def wing_ab_script(opts) -> dict:
 
     def _ol(wing, parity, dclda=None):
         cfg = VehicleConfig(qss_parity=parity, wing=wing, x_w=xw, h_w=hw,
-                            mu_scale=mu)
+                            mu_scale=mu, dev_flank=getattr(opts, "dev_flank", "outer"))
         if dclda is not None:
             cfg.dCLda = dclda
         return steady_state_corner(R, cfg=cfg)
@@ -2151,7 +2158,8 @@ def wing_ab_script(opts) -> dict:
                                    telem_path=f"{stem}_{tag}{ext}",
                                    telem_hz=opts.telem_hz,
                                    precision=opts.telem_precision,
-                                   mu_scale=mu, car=_opts_car(opts))
+                                   mu_scale=mu, car=_opts_car(opts),
+                                   dev_flank=getattr(opts, "dev_flank", "outer"))
         matched[tag] = dict(held=held, **d)
 
     kf = 0.5 * RHO * 0.35 * {"off": 0.0, "fin": 0.70, "plate": 1.25}[on_wing]
@@ -2301,7 +2309,7 @@ def lap_script(opts) -> dict:
                  wet=opts.wet, dt=opts.dt, telem_path=opts.telemetry,
                  telem_hz=opts.telem_hz, precision=opts.telem_precision,
                  driver=drv, start_V=25.0, gear=3, tag="lap",
-                 car=_opts_car(opts))
+                 car=_opts_car(opts), dev_flank=getattr(opts, "dev_flank", "outer"))
     sim.run_headless(opts.duration)
     if sim.telem:
         sim.telem.close()
@@ -2696,7 +2704,8 @@ class _Opts:
 
     def __init__(self, **kw):
         d = dict(track="arena", radius=50.0, cw=False, wet="patch", wing="off",
-                 wing_x=0.97, wing_h=0.90, wing_inc=0.0, dt=DT_PHYS, duration=60.0,
+                 wing_x=0.97, wing_h=0.90, wing_inc=0.0, dev_flank="outer",
+                 dt=DT_PHYS, duration=60.0,
                  telemetry=None, telem_hz=TELEM_HZ, telem_precision="6g",
                  margin=0.90, gearbox="auto", auto_gearbox=True, abs=False,
                  steer_limit=True, camera="car_up", engine="stock", tc=False,
@@ -3325,6 +3334,12 @@ def build_parser():
     p.add_argument("--wing-h", dest="wing_h", type=float, default=0.90)
     p.add_argument("--wing-inc", dest="wing_inc", type=float, default=0.0,
                    help="panel built-in incidence, deg (VehicleConfig.delta_dev_geom)")
+    p.add_argument("--dev-flank", dest="dev_flank", default="outer",
+                   choices=("outer", "inner"),
+                   help="which flank the panel deploys on (VehicleConfig.dev_flank). "
+                        "'outer' is the study's configuration; 'inner' is the "
+                        "measurement in .handoff/14-inner-flank.md and needs a panel "
+                        "whose section is turned over to keep the force inboard")
     p.add_argument("--build", default=None,
                    help="drive a car saved in the garage library (runs/library/builds/NAME.json)")
     p.add_argument("--ml-drive", default=None, metavar="CHECKPOINT",
@@ -3631,7 +3646,8 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     global_wet = MU_WET_SCALE if opts.wet == "all" else 1.0
 
     aero_kw = dict(wing=opts.wing, x_w=opts.wing_x, h_w=opts.wing_h,
-                   delta_dev_geom=radians(getattr(opts, "wing_inc", 0.0)))
+                   delta_dev_geom=radians(getattr(opts, "wing_inc", 0.0)),
+                   dev_flank=getattr(opts, "dev_flank", "outer"))
     if getattr(opts, "wing_cfg", None):
         aero_kw.update(opts.wing_cfg)      # the garage build's three wings
     # The car: the Car setting, plus the ballast, plus the mass of the three

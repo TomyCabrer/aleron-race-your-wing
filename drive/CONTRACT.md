@@ -985,7 +985,8 @@ python3 -m drive.drive [--track arena|open|skidpad|dragstrip] [--radius 50] [--c
   [--telemetry PATH] [--telem-hz 100] [--telem-precision 6g|full]
   [--no-steer-limit] [--gearbox auto|manual|clutch] [--manual] [--auto-gearbox]
   [--abs|--no-abs] [--tc|--no-tc] [--engine stock|tuned|sport]
-  [--sound off|low|mid|high] [--wing-inc 0.0] [--garage] [--build NAME]
+  [--sound off|low|mid|high] [--wing-inc 0.0] [--dev-flank outer|inner]
+  [--garage] [--build NAME]
   [--ml-drive CHECKPOINT]
 ```
 `--script drive_probe` is the one scripted entry that deliberately switches
