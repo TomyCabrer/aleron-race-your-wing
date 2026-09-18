@@ -332,6 +332,33 @@ the car is going faster (4.515 → 4.539° at 0.8740 → 0.8786 g for the fin).
 
 ## 5. Directional stability — where this stops being a bookkeeping change
 
+### The yaw sweep
+
+There is no rig in the repo called a yaw sweep, so this is the device's own
+forces and moment against the panel's local flow angle at a frozen R = 100
+state (`u` 29.76, `r` 0.29788, `dep` 1, left turn). It is what the two-point
+derivative in §1 is a slope of:
+
+| beta_dev | CL | F_dev | D_dev | Mz **outer** | Mz **inner** | inner − outer |
+|---|---|---|---|---|---|---|
+| 0° | 0.700 | 130.20 | 40.69 | **+97.00** | **+155.59** | +58.59 |
+| −2° | 0.786 | 146.52 | 45.79 | +109.16 | +175.09 | +65.93 |
+| −4° | 0.872 | 163.29 | 51.03 | +121.65 | +195.13 | +73.48 |
+| −6° | 0.959 | 180.65 | 56.45 | +134.58 | +215.88 | +81.29 |
+| −8° | 1.045 | 198.72 | 62.10 | +148.05 | +237.47 | +89.42 |
+| −10° | 1.131 | 217.65 | 68.02 | +162.15 | +260.09 | +97.94 |
+| −12° | 1.217 | 237.59 | 74.25 | +177.01 | +283.92 | +106.92 |
+
+(fin; the drag term is `∓Y_DEV·D_dev`, i.e. −29.30 → −53.46 N·m on the outer
+flank and the mirror of that on the inner one.) Both curves rise with slip,
+which is the destabilising part; the inner one rises **60 % faster**, and the
+gap between them roughly doubles across the range. The plate's version
+saturates past −8° because `CL` hits `CL_STALL = 1.6` (232.65 against 373.18
+N·m at −12°), which is the only thing that bounds its gradient at all — the
+stall clamp, not the car.
+
+### The matched-steer trim
+
 MATCHED-STEER trim on the rigs' own `_rig` (speed held, wheels free-rolling),
 25 m/s, road wheel ramped to 6° over 1 s and held 8 s. Same input, so the
 difference is the car:
