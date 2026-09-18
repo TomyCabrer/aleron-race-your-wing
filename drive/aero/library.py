@@ -31,7 +31,7 @@ import numpy as np
 
 from .airfoil import AirfoilSpec, bundled_dat_files, load_dat, DATA_DIR
 from .polar import Polar, estimate_polar
-from .wing import WingSpec, re_bank_snap, V_REF, analyse
+from .wing import WingSpec, re_bank_snap, V_REF, TOP_PYLON_L, analyse
 from . import xfoil
 
 ROOT_DEFAULT = os.path.join("runs", "library")
@@ -267,14 +267,20 @@ class Library:
 
     # ---------------------------------------------------------- analysis ----
     def analyse_wing(self, w: WingSpec, ride_h: float | None = None, V: float | None = None,
-                     standoff: float = 0.45, wall_side: float = +1.0) -> dict:
+                     standoff: float | None = None, wall_side: float = +1.0) -> dict:
         """Re-run the lattice on `w` with the best polar available and store
         the result on the spec. Legacy wings keep their closed form and get
         a display-only aero."""
         V = V_REF[w.role] if V is None else V
         pol = self.polar(w.airfoil, w.reynolds(V))
+        #  the wall's distance is the spec's own design row (`ride_h`); this
+        #  used to carry a THIRD default for it (a 0.45 standoff and a 1.30
+        #  ride height), pass it explicitly, and so silently overrule whatever
+        #  the wing was designed at.
         if w.role == "top" and ride_h is None:
-            ride_h = float(w.aero.get("ride_h") or 1.30)
+            ride_h = w.ride_h_flown
+        if standoff is None:
+            standoff = w.ride_h_flown if w.role == "flank" else TOP_PYLON_L
         try:
             aero = analyse(w, pol, V=V, ride_h=ride_h if w.role == "top" else None,
                            standoff=standoff, wall_side=wall_side)

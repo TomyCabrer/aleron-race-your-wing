@@ -1143,6 +1143,16 @@ class Designer:
             self.origin = base.name
             self.dirty = False
         self.objective = OBJECTIVES[self.role][0]
+        #  THE MISSION, stated before the section or the planform. AeroBO's
+        #  cartrack.py makes the argument: "maximise a downforce coefficient
+        #  against CD_budget" is a calibration, not a requirement -- measured
+        #  there, the budget admitted 1857 of 1857 feasible draws, so it
+        #  decided nothing, while a two-point requirement pair admitted 5.
+        #  The speed and the pair below ARE that requirement, and they are the
+        #  first three rows of the page for the same reason they are the first
+        #  thing AeroBO asks: a section and a planform cannot be judged until
+        #  someone says what the wing is for.
+        self.V_design = V_REF[self.role]
         self.drag_cap = 80.0 if self.role == "flank" else 60.0
         self.force_floor = 150.0 if self.role == "flank" else 300.0
         self.budget = 32
@@ -1190,6 +1200,24 @@ class Designer:
         lo = BOUNDS[self.role]["span"][0]
         return lo, span_fit(self.role, self.g.build.slot(self.key).h)
 
+    def _set_ride(self, v):
+        """The ride-height row. For a TOP wing the slot's height IS the gap to
+        the track, so the row writes both and the slot keeps no second opinion;
+        for a FLANK panel it is the deployed standoff to the car's own side,
+        which is the wing's alone -- the slot's h is a packaging number there
+        and the image plane never sees it."""
+        lo, hi = BOUNDS[self.role]["ride_h"]
+        v = min(max(float(v), lo), hi)
+        self.spec.ride_h = v
+        self.spec.clamp()
+        if self.role == "top":
+            slot = self.g.build.slot(self.key)
+            slot.h = v
+            self.g.build.clamp(self.lib)
+            self.g.build.sync_mirror(self.key)
+        self.dirty = True
+        self.update()
+
     def _slot_set(self, attr):
         def f(v):
             slot = self.g.build.slot(self.key)
@@ -1205,26 +1233,76 @@ class Designer:
         names = sorted(self.lib.airfoils)
         P = ui.Param
         rows = [
+            #  MISSION -> SECTION -> PLANFORM, AeroBO's order: the mission
+            #  layer states the task, the section is designed in 2-D where a
+            #  candidate costs milliseconds, and the wing is asked afterwards
+            #  whether the winner helped it.
+            P("ms", "MISSION  (what the wing is for)", None, kind="label"),
+            P("vdes", "design speed", lambda: self.V_design, self._set_attr("V_design"),
+              step=1.0, fine=0.25, lo=10.0, hi=80.0, unit="m/s", fmt="{:.1f}",
+              help="the flank panel's default is the R = 100 m limit speed, the top "
+                   "wing's a fast straight. Every coefficient on this page is read at it"),
+            P("floor", "force floor", lambda: self.force_floor, self._set_attr("force_floor"),
+              step=10.0, fine=2.0, lo=10.0, hi=2000.0, unit="N", fmt="{:.0f}",
+              help="the force the wing is BOUGHT for, at the design speed -- half of the "
+                   "requirement pair. A candidate below it fails the mission"),
+            P("cap", "drag cap", lambda: self.drag_cap, self._set_attr("drag_cap"),
+              step=5.0, fine=1.0, lo=5.0, hi=400.0, unit="N", fmt="{:.0f}",
+              help="what that force may cost, at the design speed -- the other half. "
+                   "A cap that refuses nothing is a constant, not a budget"),
             P("sec", "SECTION", None, kind="label"),
             P("airfoil", "airfoil", lambda: self.spec.airfoil, self._set("airfoil"), kind="choice",
               choices=names, help="LEFT/RIGHT cycles the section library; A opens it with the polar plots"),
             P("browse", "browse the airfoil library  (A)", None, lambda _: self.g.open_airfoils(), kind="action"),
-            P("pf", "PLANFORM", None, kind="label"),
+            #  THE DESIGN VECTOR, in AeroBO's `evaluate_car_wing` order --
+            #  taper, root twist, tip twist, incidence, end plates, ride, span.
+            #  The order is not cosmetic: `wing.design_table` is the one table
+            #  the optimiser's bounds, start vector, decode and write-back all
+            #  walk, so the page and the search cannot drift apart. The slot's
+            #  INCIDENCE sits in the middle of the planform rows because that
+            #  is where AeroBO's `alpha_deg` sits; it is still the slot's.
+            P("pf", "PLANFORM  (the design vector, in order)", None, kind="label"),
+            P("taper", "taper (tip/root)", lambda: self.spec.taper, self._set("taper", *b["taper"]),
+              step=0.05, fine=0.01, lo=b["taper"][0], hi=b["taper"][1], fmt="{:.2f}"),
+            P("twistr", "root twist", lambda: self.spec.twist_root_deg,
+              self._set("twist_root_deg", *b["twist_root_deg"]),
+              step=0.5, fine=0.1, lo=b["twist_root_deg"][0], hi=b["twist_root_deg"][1],
+              unit="deg", fmt="{:+.1f}",
+              help="the second twist row AeroBO carries: the lattice's twist is "
+                   "linear root -> tip, so root 0 is the single-row wing"),
+            P("twist", "tip twist", lambda: self.spec.twist_deg, self._set("twist_deg", *b["twist_deg"]),
+              step=0.5, fine=0.1, lo=b["twist_deg"][0], hi=b["twist_deg"][1], unit="deg", fmt="{:+.1f}",
+              help="washout (tip below root) unloads the tip: e up, stall margin up"),
+            P("inc", "incidence", lambda: self.g.build.slot(self.key).inc_deg, self._slot_set("inc_deg"),
+              step=0.5, fine=0.1, lo=b["inc_deg"][0], hi=b["inc_deg"][1], unit="deg", fmt="{:+.1f}",
+              help="AeroBO's alpha row: the angle the wing is bolted on at. It belongs "
+                   "to the SLOT, not the wing, and the optimiser moves it too"),
+            P("plate", "end plates", lambda: self.spec.plate_h, self._set("plate_h", *b["plate_h"]),
+              step=0.01, fine=0.002, lo=b["plate_h"][0], hi=b["plate_h"][1], unit="m",
+              help="tip plates in the lattice: cut induced drag, add wetted area"),
+            P("ride", "ride height" if self.role == "top" else "standoff",
+              lambda: self.spec.ride_h_flown, self._set_ride,
+              step=0.05, fine=0.01, lo=b["ride_h"][0], hi=b["ride_h"][1], unit="m",
+              help="AeroBO's ride_height row: the gap to the wall the wing is imaged in, "
+                   "which is what ground effect is a function of. The TRACK for a top wing; "
+                   "the car's own flank for a flank panel, where it is the deployed standoff"),
             P("span", "span" if self.role == "top" else "span (vertical)", lambda: self.spec.span,
               self._set("span", *b["span"], cap=self._span_band),
               step=0.02, fine=0.005, lo=b["span"][0], hi=b["span"][1], unit="m",
               help="the lattice's first-order variable: at fixed area span IS aspect ratio; "
                    "a flank panel is also capped by the sill/roof fit at this slot height"),
-            P("chord", "root chord", lambda: self.spec.chord, self._set("chord", *b["chord"]),
-              step=0.02, fine=0.005, lo=b["chord"][0], hi=b["chord"][1], unit="m"),
-            P("taper", "taper (tip/root)", lambda: self.spec.taper, self._set("taper", *b["taper"]),
-              step=0.05, fine=0.01, lo=b["taper"][0], hi=b["taper"][1], fmt="{:.2f}"),
-            P("twist", "tip twist", lambda: self.spec.twist_deg, self._set("twist_deg", *b["twist_deg"]),
-              step=0.5, fine=0.1, lo=b["twist_deg"][0], hi=b["twist_deg"][1], unit="deg", fmt="{:+.1f}",
-              help="washout (negative) unloads the tip: e up, stall margin up"),
-            P("plate", "end plates", lambda: self.spec.plate_h, self._set("plate_h", *b["plate_h"]),
-              step=0.01, fine=0.002, lo=b["plate_h"][0], hi=b["plate_h"][1], unit="m",
-              help="tip plates in the lattice: cut induced drag, add wetted area"),
+            #  DERIVED, not a row. AeroBO sizes by area and span and lets the
+            #  chord fall out; carrying a free chord alongside both would let a
+            #  candidate be scored against an area it does not have.
+            P("chord", "root chord  = 2S / b(1+taper)", lambda: self.spec.chord, None,
+              lo=None, hi=None, unit="m", enabled=False,
+              help="derived from the reference area, the span and the taper -- "
+                   "move the span and watch it follow"),
+            P("area", "reference area S", lambda: self.spec.S, None,
+              lo=None, hi=None, unit="m2", fmt="{:.3f}", enabled=False,
+              help="fixed: the coefficients beside it are quoted against it, so two "
+                   "candidates share a reference. AeroBO makes it a row only when a "
+                   "band is declared, and then the score has to be read in forces"),
             P("mount", "mount", lambda: self.spec.mount, self._set_mount, kind="choice",
               choices=list(MOUNTS),
               help="pylon: two struts in the flow (mount drag + junction interference).  "
@@ -1232,17 +1310,18 @@ class Designer:
                    f"to {MOUNT_PLATE_H.get(self.role, 0.06):.2f} m, less tip loss.  "
                    "none: nothing charged, an idealisation"),
             P("mt", "MOUNT (this slot)", None, kind="label"),
-            P("inc", "incidence", lambda: self.g.build.slot(self.key).inc_deg, self._slot_set("inc_deg"),
-              step=0.5, fine=0.1, lo=b["inc_deg"][0], hi=b["inc_deg"][1], unit="deg", fmt="{:+.1f}",
-              help="the angle the wing is bolted on at; the optimiser moves it too"),
             P("x", "station x", lambda: self.g.build.slot(self.key).x, self._slot_set("x"),
               step=0.05, fine=0.01, lo=CAR_X_REAR, hi=CAR_X_FRONT, unit="m", fmt="{:+.2f}",
               help="forward of the CG: (x + b)/b multiplies the flank gain; a top wing behind the rear axle unloads the front"),
-            P("h", "height h", lambda: self.g.build.slot(self.key).h, self._slot_set("h"),
-              step=0.05, fine=0.01, lo=H_W_MIN if self.role == "flank" else 0.9,
-              hi=H_W_MAX if self.role == "flank" else TOP_H_MAX, unit="m",
-              help="a top wing's ride height sets its ground effect; the flank's h sets the roll arm"),
         ]
+        if self.role == "flank":
+            #  the top wing's height IS its ride height and is edited by that
+            #  row above; the flank's h is a packaging number (the roll arm and
+            #  the sill/roof span fit), which the image plane never sees.
+            rows.append(
+                P("h", "height h", lambda: self.g.build.slot(self.key).h, self._slot_set("h"),
+                  step=0.05, fine=0.01, lo=H_W_MIN, hi=H_W_MAX, unit="m",
+                  help="the flank panel's roll arm, and what its span fit is measured from"))
         if self.role == "top":
             rows.append(P("mode", "deploys", lambda: self.g.build.slot(self.key).mode, self._slot_set("mode"),
                           kind="choice", choices=["active", "fixed"],
@@ -1250,11 +1329,8 @@ class Designer:
         rows += [
             P("op", "OPTIMISER (GP Bayesian, AeroBO)", None, kind="label"),
             P("obj", "objective", lambda: self.objective, self._set_attr("objective"), kind="choice",
-              choices=list(OBJECTIVES[self.role])),
-            P("cap", "drag cap", lambda: self.drag_cap, self._set_attr("drag_cap"), step=5.0, fine=1.0,
-              lo=5.0, hi=400.0, unit="N", fmt="{:.0f}", help="at the design speed"),
-            P("floor", "force floor", lambda: self.force_floor, self._set_attr("force_floor"), step=10.0, fine=2.0,
-              lo=10.0, hi=2000.0, unit="N", fmt="{:.0f}"),
+              choices=list(OBJECTIVES[self.role]),
+              help="scored against the MISSION rows at the top of the page"),
             P("budget", "evaluations", lambda: self.budget, self._set_attr("budget"), kind="int", lo=12, hi=96),
             P("run", "run the optimiser  (O)", None, lambda _: self.optimise(), kind="action"),
             P("sv", "SAVE", None, kind="label"),
@@ -1278,7 +1354,7 @@ class Designer:
     def update(self) -> None:
         slot = self.slot
         ride = slot.h if self.role == "top" else None
-        aero = self.lib.analyse_wing(self.spec, ride_h=ride, standoff=DEV_OUT0 + DEV_OUT1)
+        aero = self.lib.analyse_wing(self.spec, ride_h=ride, V=self.V_design)
         self.err = aero.get("error", "")
         self.polar = self.lib.wing_polar(self.spec)
         self.dp = design_point(self.spec, slot.inc_deg, x_w=slot.x) if "CLa" in aero else {}
@@ -1352,7 +1428,7 @@ class Designer:
         labels = design_labels(role)
         bounds = design_bounds(role, span=self._span_band())
         x0 = design_x0(self.spec, slot.inc_deg)
-        V = V_REF[role]
+        V = self.V_design          # the MISSION row, not a module constant
 
         def f(x):
             sp = self.spec.copy()
@@ -1360,7 +1436,7 @@ class Designer:
             if role == "flank" and (slot.x + 0.5 * sp.chord > CAR_X_FRONT or slot.x - 0.5 * sp.chord < CAR_X_REAR):
                 return -math.inf
             try:
-                sp.aero = _analyse(sp, polar, V=V, ride_h=ride, standoff=DEV_OUT0 + DEV_OUT1)
+                sp.aero = _analyse(sp, polar, V=V, ride_h=ride)
             except ValueError:
                 return -math.inf
             dp = design_point(sp, inc, V=V, x_w=slot.x)

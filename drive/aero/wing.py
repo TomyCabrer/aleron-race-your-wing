@@ -52,18 +52,49 @@ ROLES = ("flank", "top")
 #: slot and not to the wing (one library wing can be bolted on at any angle).
 #: Bands are (lo, hi) in m / deg, per role.
 DESIGN_VARS = (
-    #  attr          owner   label           unit   flank band      top band
-    ("span",        "spec", "span",         "m",   (0.35, 1.05),  (0.70, 1.64)),
-    ("chord",       "spec", "root chord",   "m",   (0.20, 0.70),  (0.12, 0.50)),
-    ("taper",       "spec", "taper",        "",    (0.35, 1.0),   (0.35, 1.0)),
-    ("twist_deg",   "spec", "tip twist",    "deg", (-6.0, 6.0),   (-6.0, 6.0)),
-    ("plate_h",     "spec", "end plates",   "m",   (0.0, 0.16),   (0.0, 0.30)),
-    ("inc_deg",     "slot", "incidence",    "deg", (-6.0, 14.0),  (-2.0, 16.0)),
+    #  attr             owner   label          unit   flank band      top band
+    ("taper",          "spec", "taper",        "",    (0.35, 1.0),   (0.35, 1.0)),
+    ("twist_root_deg", "spec", "root twist",   "deg", (-6.0, 6.0),   (-6.0, 6.0)),
+    ("twist_deg",      "spec", "tip twist",    "deg", (-6.0, 6.0),   (-6.0, 6.0)),
+    ("inc_deg",        "slot", "incidence",    "deg", (-6.0, 14.0),  (-2.0, 16.0)),
+    ("plate_h",        "spec", "end plates",   "m",   (0.0, 0.16),   (0.0, 0.30)),
+    #  the top's band is the garage's own TOP_H_MAX; the flank's spans a panel
+    #  hugging the sill (DEV_OUT0) to one well clear of it
+    ("ride_h",         "spec", "standoff",     "m",   (0.25, 0.70),  (0.90, 1.85)),
+    ("span",           "spec", "span",         "m",   (0.35, 1.05),  (0.70, 1.64)),
 )
+
+#: The AREA row, present only when the caller declares an area band -- the
+#: `(S_m2,)` of AeroBO's `CarWingProblem` vector, and in its place: ONE ROW
+#: AHEAD OF THE SPAN. With it absent the reference area is FIXED and the span
+#: row IS the aspect ratio, which is the convention every coefficient in this
+#: module is quoted against; with it present the score has to be read in
+#: FORCES, because two candidates no longer share a reference.
+AREA_VAR = ("area", "spec", "reference area", "m2", (0.15, 0.55), (0.10, 0.60))
+
+
+def design_table(role: str = "flank", area: bool = False) -> tuple:
+    """The rows a designer may move, in AeroBO's `evaluate_car_wing` order:
+
+        taper, root twist, tip twist, incidence, end plates, standoff,
+        (reference area,) span
+
+    ROOT CHORD IS NOT A ROW, and that is the procedural change, not an
+    omission. AeroBO sizes a wing by its AREA and its SPAN and lets the chord
+    fall out of the two (`chord = 2S / (b (1 + taper))`); carrying a free root
+    chord AND a free span alongside a reference area would let a candidate be
+    scored against an area it does not have.  `apply_design` derives it.
+    """
+    rows = DESIGN_VARS
+    if area:
+        i = next(k for k, v in enumerate(rows) if v[0] == "span")
+        rows = rows[:i] + (AREA_VAR,) + rows[i:]
+    return rows
 
 # packaging bands the designer / optimiser stay inside (m, deg). Keyed role ->
 # variable; the inner dict's order IS the page order, by construction.
-BOUNDS = {role: {v[0]: v[4 + i] for v in DESIGN_VARS} for i, role in enumerate(ROLES)}
+BOUNDS = {role: {v[0]: v[4 + i] for v in DESIGN_VARS + (AREA_VAR,)}
+          for i, role in enumerate(ROLES)}
 #  How the wing is carried into the body. This is a REAL aerodynamic choice,
 #  not a label: each option changes the lattice the wing is solved on and/or
 #  which terms of the drag build-up are charged.
@@ -105,6 +136,19 @@ SKIN_KG_M2 = 4.17
 PYLON_KG_M = 1.6             # est: 6 mm x 100 mm 2024-T3 bar, 2780 kg/m^3
 
 V_REF = {"flank": 29.0875, "top": 40.0}      # m/s: R = 100 m limit speed / a fast straight
+#: Default distance to the imaged wall, m -- what `ride_h = 0.0` resolves to.
+#: The flank's is the DEPLOYED standoff the car actually reaches, which is the
+#: garage's and the renderer's DEV_OUT0 + DEV_OUT1 = 0.25 + 0.35; the top's is
+#: the garage's default top slot height.
+#:
+#: These two disagreed before the ride row existed. `FLANK_STANDOFF` was 0.45
+#: and was this module's default, while `garage._analyse` passed 0.60 for every
+#: wing it designed -- so a panel's published lattice numbers depended on which
+#: door it came through. A design ROW cannot carry two defaults, so they are
+#: one number now, and it is the one the car deploys to.
+#: The top's is the height `library.analyse_wing` fell back to before the row
+#: existed, so a top wing with nothing stored is flown exactly where it was.
+RIDE_H0 = {"flank": 0.60, "top": 1.30}
 RE_BANK = (1e5, 1.5e5, 2e5, 3e5, 5e5, 7e5, 1e6, 1.5e6, 2e6, 3e6)
 
 
@@ -122,33 +166,39 @@ def re_bank_snap(re: float) -> float:
 #  .handoff/task2-optimiser-order.md -- but nothing held them to it. These
 #  five functions are that hold: all of them walk DESIGN_VARS, so the only way
 #  to reorder the optimiser is to reorder the page's table.
-def design_vars(role: str = "flank", owner: str | None = None) -> tuple[str, ...]:
+def design_vars(role: str = "flank", owner: str | None = None,
+                area: bool = False) -> tuple[str, ...]:
     """The design vector's coordinate names, in the page's row order.
     `owner='spec'` gives just the WingSpec fields, `'slot'` the mount angle."""
-    return tuple(v[0] for v in DESIGN_VARS if owner is None or v[1] == owner)
+    return tuple(v[0] for v in design_table(role, area)
+                 if owner is None or v[1] == owner)
 
 
-def design_labels(role: str = "flank", unit: bool = False) -> list[str]:
+def design_labels(role: str = "flank", unit: bool = False,
+                  area: bool = False) -> list[str]:
     """The page's own row labels, in the page's order. The flank panel stands
     on its side, so the page calls its span 'span (vertical)' -- the label
     lives here so a read-out and a row cannot end up naming a coordinate
     differently."""
     out = []
-    for attr, _owner, label, u, *_bands in DESIGN_VARS:
+    for attr, _owner, label, u, *_bands in design_table(role, area):
         if attr == "span" and role != "top":
             label = "span (vertical)"
+        if attr == "ride_h" and role == "top":
+            label = "ride height"          # the track is the wall up there
         out.append(f"{label} [{u}]" if unit and u else label)
     return out
 
 
-def design_bounds(role: str = "flank", **override) -> list[tuple[float, float]]:
+def design_bounds(role: str = "flank", area: bool = False,
+                  **override) -> list[tuple[float, float]]:
     """`[(lo, hi), ...]` for `optimize.maximise`, in the page's order.
 
     Keyword overrides narrow one band without touching the order -- the garage
     passes `span=` to keep a flank panel between sill and roof. An unknown
     keyword raises rather than being silently dropped: a typo there would
     quietly hand the optimiser the full packaging band."""
-    names = design_vars(role)
+    names = design_vars(role, area=area)
     bad = set(override) - set(names)
     if bad:
         raise ValueError(f"not design variables: {sorted(bad)}")
@@ -160,28 +210,46 @@ def design_bounds(role: str = "flank", **override) -> list[tuple[float, float]]:
     return out
 
 
-def design_x0(spec: "WingSpec", inc_deg: float) -> list[float]:
+def design_x0(spec: "WingSpec", inc_deg: float, area: bool = False) -> list[float]:
     """The design vector of a wing as it stands, in the page's order: the
     optimiser's starting point and the value its result is judged against."""
-    return [float(inc_deg) if v[1] == "slot" else float(getattr(spec, v[0]))
-            for v in DESIGN_VARS]
+    #  the RESOLVED values, not the raw fields: `ride_h` and `area` carry 0.0
+    #  for "take the role's default", and a start vector holding the sentinel
+    #  would not survive its own decode (apply_design resolves it), which is
+    #  exactly the round-trip the self-check pins.
+    def val(attr):
+        if attr == "ride_h":
+            return spec.ride_h_flown
+        if attr == "area":
+            return spec.area if spec.area > 0.0 else spec.S
+        return getattr(spec, attr)
+    return [float(inc_deg) if v[1] == "slot" else float(val(v[0]))
+            for v in design_table(spec.role, area)]
 
 
-def apply_design(spec: "WingSpec", x, *, clamp: bool = True) -> float:
+def apply_design(spec: "WingSpec", x, *, clamp: bool = True,
+                 area: bool = False) -> float:
     """Decode a design vector onto `spec` in the page's order and return the
     mount angle for the slot to take. The exact inverse of `design_x0`, which
     is the point: the objective's decode and the write-back after the run are
     now the same three lines of code, not two hand-kept lists."""
     xa = np.asarray(x, float).ravel()
-    if xa.size != len(DESIGN_VARS):
+    rows = design_table(spec.role, area)
+    if xa.size != len(rows):
         raise ValueError(f"design vector has {xa.size} coordinates, "
-                         f"expected {len(DESIGN_VARS)} ({', '.join(design_vars())})")
+                         f"expected {len(rows)} "
+                         f"({', '.join(design_vars(spec.role, area=area))})")
     inc = 0.0
-    for v, xi in zip(DESIGN_VARS, xa):
+    for v, xi in zip(rows, xa):
         if v[1] == "spec":
             setattr(spec, v[0], float(xi))
         else:
             inc = float(xi)
+    #  the chord FOLLOWS the area and the span, it is not carried alongside
+    #  them: S = b c (1 + taper) / 2  ->  c = 2S / (b (1 + taper)). With no
+    #  area row `spec.area` is the area the wing already had, so a decode that
+    #  moves nothing writes the chord back unchanged.
+    spec.chord = 2.0 * spec.area / max(spec.span * (1.0 + spec.taper), 1e-9)
     if clamp:
         spec.clamp()
     return inc
@@ -210,13 +278,14 @@ def span_fit(role: str, h: float) -> float:
     return max(min(hi, 2.0 * min(h - SILL_Z, ROOF_Z - h)), lo + 0.05)
 
 
-def format_design(x, role: str = "flank") -> str:
+def format_design(x, role: str = "flank", area: bool = False) -> str:
     """One line naming every coordinate, in the page's order, for a read-out
     or a log. Degrees carry a sign because the sign is the design decision
     (washout vs wash-in, nose-down vs nose-up)."""
     xa = np.asarray(x, float).ravel()
     bits = []
-    for v, lab, xi in zip(DESIGN_VARS, design_labels(role), xa):
+    for v, lab, xi in zip(design_table(role, area),
+                          design_labels(role, area=area), xa):
         u = v[3]
         bits.append(f"{lab} {xi:+.1f}{' ' + u}" if u == "deg" else
                     f"{lab} {xi:.3f}" + (f" {u}" if u else ""))
@@ -231,8 +300,22 @@ class WingSpec:
     span: float = 0.78
     chord: float = 0.45
     taper: float = 1.0
-    twist_deg: float = 0.0
+    #: AeroBO carries TWO twist rows. The lattice's twist law is linear
+    #: between them, so the old single-row wing is exactly twist_root_deg = 0.
+    twist_root_deg: float = 0.0
+    twist_deg: float = 0.0            # the TIP twist
     plate_h: float = 0.0
+    #: Distance to the wall the wing is imaged in: the car's flank for a flank
+    #: panel (its standoff), the track for a top wing (its ride height). It is
+    #: AeroBO's `ride_height_m` row -- the SAME quantity in the same role, the
+    #: gap ground effect is a function of -- and not the slot's mount height,
+    #: which is a packaging number the image plane never sees. 0.0 = take the
+    #: role's default, which is what every wing saved before this row did.
+    ride_h: float = 0.0
+    #: The reference area coefficients are quoted against. 0.0 = take the
+    #: planform's own b c (1 + taper) / 2, so a wing saved before this row
+    #: decodes to exactly the area it was analysed at.
+    area: float = 0.0
     #: how the wing is attached to the body -- see MOUNTS. 'pylon' is the
     #: default because it is what every wing in the library was analysed with.
     mount: str = "pylon"
@@ -264,6 +347,11 @@ class WingSpec:
         return self.chord * (1.0 - (1.0 - self.taper) * np.asarray(eta, float))
 
     @property
+    def ride_h_flown(self) -> float:
+        """The imaged wall's distance, with 0.0 resolved to the role default."""
+        return self.ride_h if self.ride_h > 0.0 else RIDE_H0[self.role]
+
+    @property
     def plate_h_flown(self) -> float:
         """The tip-plate height the LATTICE sees: an endplate mount forces a
         structural minimum, because that is what the wing hangs from."""
@@ -276,8 +364,12 @@ class WingSpec:
             self.role = "flank"
         if self.mount not in MOUNTS:
             self.mount = "pylon"
+        if self.area <= 0.0:
+            self.area = self.span * self.chord * 0.5 * (1.0 + self.taper)
+        if self.ride_h <= 0.0:
+            self.ride_h = RIDE_H0[self.role]
         b = BOUNDS[self.role]
-        for k in design_vars(self.role, owner="spec"):     # the page's order
+        for k in design_vars(self.role, owner="spec", area=True):  # page order
             lo, hi = b[k]
             setattr(self, k, float(min(max(getattr(self, k), lo), hi)))
         self.n_strips = int(min(max(self.n_strips, 8), 48))
@@ -298,7 +390,17 @@ class WingSpec:
         return cls(name=str(d.get("name", "wing")), role=str(d.get("role", "flank")),
                    airfoil=str(d.get("airfoil", "naca2412")), span=float(d.get("span", 0.78)),
                    chord=float(d.get("chord", 0.45)), taper=float(d.get("taper", 1.0)),
+                   twist_root_deg=float(d.get("twist_root_deg", 0.0)),
                    twist_deg=float(d.get("twist_deg", 0.0)), plate_h=float(d.get("plate_h", 0.0)),
+                   #  A wing saved before the ride row existed recorded the
+                   #  height it was flown at under `aero['ride_h']`. Seed the
+                   #  row from it, or `clamp` fills the role default instead
+                   #  and the wing is silently re-flown somewhere else: the
+                   #  library's own `rear-new` sits at 1.85 m, and the default
+                   #  would have moved it to 1.30 and handed it 1.05 % of CLa
+                   #  it had not earned.
+                   ride_h=float(d.get("ride_h") or (d.get("aero") or {}).get("ride_h") or 0.0),
+                   area=float(d.get("area", 0.0)),
                    mount=str(d.get("mount", "pylon")),
                    n_strips=int(d.get("n_strips", 24)), notes=str(d.get("notes", "")),
                    builtin=bool(d.get("builtin", False)), legacy=d.get("legacy"),
@@ -314,21 +416,47 @@ class WingSpec:
 #: Standoff from the car's flank to the deployed panel, m -- the gap the body
 #: image is placed across. `analyse`'s own `standoff` default, kept as a name
 #: so the lattice and `strut_cd` cannot disagree about the same gap.
-FLANK_STANDOFF = 0.45
+FLANK_STANDOFF = RIDE_H0["flank"]
+
+#: A TOP wing's pylon length, m. It is NOT the flank standoff, and the two only
+#: ever shared a number because `analyse`'s `standoff` argument had one default
+#: for both roles: `strut_cd` and `wing_mass` charge a pylon of this length,
+#: while the lattice's wall distance for a top wing is its RIDE HEIGHT and
+#: never reads this at all. Held at the 0.45 the whole library was analysed
+#: with, so making the flank's standoff a design row moves no top wing.
+#:
+#: UNMODELLED, and stated as such: a real pylon reaches from the deck to the
+#: wing, so its length is `ride_h - deck_z(x)` and it shortens as the wing
+#: comes down. AeroBO carries that in `carwing.MountSpec`; this module has no
+#: deck to measure against -- it may not import the car mesh -- and charges a
+#: constant instead. Fixing it is a separate change with its own numbers.
+TOP_PYLON_L = 0.45
 
 
 def build_lattice(spec: WingSpec, polar: Polar, ride_h: float | None = None,
-                  standoff: float = FLANK_STANDOFF,
+                  standoff: float | None = None,
                   body_image: bool = True, wall_side: float = +1.0) -> Lattice:
+    #  The distance to the imaged wall is the spec's OWN design row now
+    #  (AeroBO's `ride_height_m`), so an explicit argument is an override --
+    #  the garage still passes the slot's height for a top wing -- and None
+    #  means "fly the wing as designed".
+    if ride_h is None and spec.role == "top":
+        ride_h = spec.ride_h_flown
+    if standoff is None:
+        standoff = spec.ride_h_flown if spec.role == "flank" else TOP_PYLON_L
     b = spec.span
     lam, c0 = spec.taper, spec.chord
-    tw = math.radians(spec.twist_deg)
+    tw_r = math.radians(spec.twist_root_deg)
+    tw_t = math.radians(spec.twist_deg)
 
     def chord(y):
         return c0 * (1.0 - (1.0 - lam) * np.abs(np.asarray(y, float)) / (0.5 * b))
 
     def twist(y):
-        return tw * np.abs(np.asarray(y, float)) / (0.5 * b)
+        #  linear root -> tip, AeroBO's two-row law. twist_root_deg = 0 gives
+        #  back the single-row law this module carried before, exactly.
+        eta = np.abs(np.asarray(y, float)) / (0.5 * b)
+        return tw_r + (tw_t - tw_r) * eta
 
     image = None
     plate = spec.plate_h_flown          # an endplate mount forces its minimum
@@ -397,13 +525,15 @@ def wing_mass(spec: WingSpec, standoff: float = 0.45) -> float:
 
 
 def analyse(spec: WingSpec, polar: Polar, V: float | None = None, ride_h: float | None = None,
-            standoff: float = FLANK_STANDOFF, rho: float = RHO,
+            standoff: float | None = None, rho: float = RHO,
             body_image: bool = True, wall_side: float = +1.0) -> dict:
     """The affine/quadratic laws the vehicle reads, plus a table for plots.
 
     Raises ValueError for a geometry the lattice refuses (e.g. plates into
     the track); the caller shows the reason and keeps the last good aero."""
     V = V_REF[spec.role] if V is None else float(V)
+    if standoff is None:
+        standoff = spec.ride_h_flown if spec.role == "flank" else TOP_PYLON_L
     lat = build_lattice(spec, polar, ride_h, standoff=standoff,
                         body_image=body_image, wall_side=wall_side)
     S, AR = lat.S, lat.AR
@@ -458,7 +588,7 @@ def analyse(spec: WingSpec, polar: Polar, V: float | None = None, ride_h: float 
 
 
 def spanwise(spec: WingSpec, polar: Polar, inc_deg: float, ride_h: float | None = None,
-             standoff: float = FLANK_STANDOFF, body_image: bool = True,
+             standoff: float | None = None, body_image: bool = True,
              wall_side: float = +1.0) -> dict:
     """Strip loading at one mount angle, for the designer's plot.
 
@@ -541,12 +671,19 @@ def self_check(verbose: bool = True) -> bool:
             print(f"  [{'ok' if passed else 'FAIL'}] {tag}: {msg}")
 
     # -- the design vector is the DESIGNER page's row order ----------------- #
-    #  CONTRACT section 7 lists the page as "section, span, chord, taper,
-    #  twist, end plates, the slot's mount". The section is a discrete library
-    #  choice, so the vector is the other six, in that order.
-    page_order = ("span", "chord", "taper", "twist_deg", "plate_h", "inc_deg")
-    rep("design vector is the DESIGNER page's row order (CONTRACT section 7)",
+    #  The order is AeroBO's `evaluate_car_wing` vector, which the DESIGNER
+    #  page now lists in the same sequence (CONTRACT section 7):
+    #      x = [taper, twist_root, twist_tip, alpha, endplate_h, ride, (S,) b]
+    #  Root chord is NOT a row -- it follows from the area and the span, see
+    #  `design_table` -- and the area row appears only when one is declared.
+    page_order = ("taper", "twist_root_deg", "twist_deg", "inc_deg",
+                  "plate_h", "ride_h", "span")
+    rep("design vector is AeroBO's evaluate_car_wing order (CONTRACT section 7)",
         design_vars() == page_order, " -> ".join(design_vars()))
+    rep("the AREA row sits one ahead of the span, and only when declared",
+        design_vars(area=True) == page_order[:-1] + ("area", "span")
+        and "area" not in design_vars(),
+        " -> ".join(design_vars(area=True)))
     for role in ROLES:
         bl = design_bounds(role)
         labs = design_labels(role)
@@ -554,8 +691,11 @@ def self_check(verbose: bool = True) -> bool:
             len(bl) == len(labs) == len(DESIGN_VARS)
             and all(bl[i] == BOUNDS[role][a] for i, a in enumerate(design_vars(role))),
             f"{len(bl)} vars: {', '.join(labs)}")
+    #  clamped, so `ride_h` and `area` carry their resolved values rather than
+    #  the 0.0 sentinel: a decode fills them, and an unresolved start vector
+    #  would read as a coordinate that moved on its own.
     sp0 = WingSpec("order", "flank", "naca2412", span=0.60, chord=0.40, taper=0.70,
-                   twist_deg=-2.0, plate_h=0.04)
+                   twist_root_deg=1.0, twist_deg=-2.0, plate_h=0.04).clamp()
     x_ref = design_x0(sp0, 3.0)
     sp1 = sp0.copy()
     inc1 = apply_design(sp1, x_ref)
@@ -584,10 +724,13 @@ def self_check(verbose: bool = True) -> bool:
     except ValueError as exc:
         rep("an unknown bound override raises rather than being dropped", True, str(exc))
     capped = design_bounds("flank", span=(0.35, span_fit("flank", 0.90)))
+    i_b = design_vars("flank").index("span")
+    plain = design_bounds("flank")
     rep("an override narrows one band and leaves the order alone",
-        capped[0][0] == 0.35 and abs(capped[0][1] - 0.88) < 1e-12
-        and capped[1:] == design_bounds("flank")[1:],
-        f"span capped to {capped[0][1]:.3f} m by the sill/roof fit, the other five untouched")
+        capped[i_b][0] == 0.35 and abs(capped[i_b][1] - 0.88) < 1e-12
+        and capped[:i_b] == plain[:i_b] and capped[i_b + 1:] == plain[i_b + 1:],
+        f"span capped to {capped[i_b][1]:.3f} m by the sill/roof fit, "
+        f"the other {len(plain) - 1} untouched")
     #  the garage's optimiser has always used this fit; reproduce its two
     #  literals exactly so adopting span_fit cannot move any bound
     rep("span_fit reproduces the optimiser's sill/roof fit",
