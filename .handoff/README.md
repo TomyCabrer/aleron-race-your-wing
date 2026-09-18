@@ -1,7 +1,7 @@
 # Feature batch of 2026-09-12 — read this first
 
-54 commits on `main` from `048716a` ("baseline: carsim before feature batch"),
-which is the rollback point. 31 files, +9807 / −226.
+**125 commits** on `main` from `048716a` ("baseline: carsim before feature batch"),
+which is the rollback point. Waves 1-7. 41 files, +19.8k lines.
 
 **The suite is green.** Measured on a quiet machine at the end:
 
@@ -15,8 +15,14 @@ against and exits 2, instead of `0/0 pass` after 324 s of work.
 
 identical to the baseline recorded in `00-baseline.md` before anything was
 touched. Module self-checks: `tyre` pass, `powertrain` **90/90** (was 82),
-`vehicle` **33/33** (was 32), `input` pass, `render` **26/26** (was 19),
-`garage` pass, `aero.wing` **27/27** (was 21), `cars` pass, `ml` **11/11**.
+`vehicle` **33/33** (was 32), `input` pass, `render` **27/27** (was 19),
+`garage` pass, `aero.wing` **27/27** (was 21), `cars` pass, `ml` **17/17**
+(was 11), `drive --self-check` pass.
+
+The Corsa C is **bit-for-bit unchanged, by identity**: `engine_curve`,
+`brake_coeffs` and `tyre_for` return the module constants *themselves*, and
+`car_lock_rad(Corsa) == LOCK_RAD` raises at import if that ever stops being
+true. 0-100 km/h is still 14.8024 s.
 
 > **All eight wall-clock checks are now load-normalised** (`render.py`'s V22,
 > the two open-map frames, the menu overlay and the chase budget; the garage's
@@ -141,6 +147,12 @@ is +4.86 % on an arena it has never seen**, which settles the memorisation
 question, and the residual design is measurably safe: across 27
 (policy, cell) pairs the worst regression is −1.39 % and it never puts a car
 off the road that the baseline was keeping on.
+
+> **Superseded, twice.** These are wave-3 numbers, measured on the Corsa only
+> and correct for it. The worst regression later improved to −1.20 % and then
+> −1.08 %, and the "never puts a car off the road" half is **now false for one
+> (car, track) pair** — the 540i on `skidpad`. See the table in *NUMBERS THAT
+> MOVED MORE THAN ONCE* below, and the wave-7 sections of `09-ml.md`.
 
 ## Wave 2 in one paragraph
 
