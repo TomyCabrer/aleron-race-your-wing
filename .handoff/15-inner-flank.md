@@ -539,6 +539,22 @@ more, not a logic difference. No regression.
   for that panel. For a designed panel, build it with
   `wing.analyse(..., wall_side=-1)`. The CLI help says so.
 
+### The suite
+
+```
+python3 -m drive.validate            ->  82/82  pass  0 HARD  0 soft  [114.4 s]
+python3 -m drive.validate --modules  -> 100/100 pass  0 HARD  0 soft  [239.8 s]
+```
+
+identical to the batch baseline, measured with the concurrent session's
+`14-urop-parity.md` work in the same tree. Module self-checks: `vehicle`
+**33/33**, `aero.wing` ALL PASS, `aero.library` ALL PASS, `garage` ALL PASS,
+`render` **27/27**, `drive --self-check` ALL PASS with V20 determinism
+byte-identical and 0–100 km/h still **14.802 s**. The stock Corsa C is
+untouched: with `dev_flank` at its default the two `Mz_dev` branches are
+`- sgn_dev*Y_DEV*D_dev` term for term, and R = 100 with the fin reads
+V 29.903451 m/s, F_dev 171.9138 N, Mz_dev 128.0758 N·m as it did before.
+
 ## 9. What this changes in the earlier notes
 
 **`.handoff/13-curved-flow-and-orientation.md` is corrected in place**, not
