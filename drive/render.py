@@ -2380,16 +2380,20 @@ class Renderer:
             # direction being flipped.  Each component stands on its own gate,
             # so a wing with drag and no lift still draws the drag.
             #
-            # The drag is anchored a half-chord back instead of at the station.
-            # From behind, world-rearward and world-down both project to very
-            # nearly screen-down on the centreline, so sharing an anchor buries
-            # the 3 px drag inside the 11 px downforce.  The offset is free of
-            # any claim about the moment arm: the top wing's drag enters the
-            # axle split through dz_top (its HEIGHT) alone -- its x station is
-            # read nowhere in the physics -- so a trailing-edge anchor is the
-            # free-body convention and nothing more.
-            te = np.array([base[0] - 0.5 * float(aux.top_chord) * math.cos(psi),
-                           base[1] - 0.5 * float(aux.top_chord) * math.sin(psi),
+            # The drag is anchored at quarter-span rather than on the
+            # centreline.  Seen from behind, world-REARWARD and world-DOWN both
+            # project to within a degree of screen-down, so a shared anchor
+            # buries the whole drag arrow inside the downforce one (measured:
+            # bases 1.5 px apart, drag 4.6 px, downforce 16.2 px, collinear).
+            # A chord-wise offset does not help -- moving the base toward the
+            # camera also projects downward.  A LATERAL one does, and it claims
+            # nothing: the top wing's drag enters the axle split through dz_top
+            # (its HEIGHT) alone and contributes no yaw moment, so its y is
+            # read nowhere in the physics, and quarter-span is a point the wing
+            # actually occupies.  The drag of a real wing is spanwise anyway.
+            yq = 0.25 * float(aux.top_span)
+            te = np.array([base[0] - yq * math.sin(psi),
+                           base[1] + yq * math.cos(psi),
                            base[2]])
             for F, dv, col, b3 in (
                     (-float(aux.D_top), (math.cos(psi), math.sin(psi), 0.0),

@@ -319,7 +319,7 @@ FLANK_STANDOFF = 0.45
 
 def build_lattice(spec: WingSpec, polar: Polar, ride_h: float | None = None,
                   standoff: float = FLANK_STANDOFF,
-                  body_image: bool = True) -> Lattice:
+                  body_image: bool = True, wall_side: float = +1.0) -> Lattice:
     b = spec.span
     lam, c0 = spec.taper, spec.chord
     tw = math.radians(spec.twist_deg)
@@ -337,18 +337,31 @@ def build_lattice(spec: WingSpec, polar: Polar, ride_h: float | None = None,
         plate = min(plate, max(ride_h - 0.03 * b - 0.01, 0.0))
     elif spec.role == "flank" and body_image and standoff > 0.0:
         #  THE CAR'S FLANK, as a rigid wall. Exactly the top wing's ground
-        #  plane, one frame over: the panel's lift is the lattice's +z and the
-        #  body is on the lift side (the device's useful force is INBOARD,
-        #  toward the body), so the wall sits at +standoff and the tip plates
-        #  point towards it and are shortened to clear it -- the same three
-        #  lines the track gets.
+        #  plane, one frame over: the panel's lift is the lattice's +z and on
+        #  the OUTER flank the body is on the lift side (the device's useful
+        #  force is INBOARD, toward the body), so the wall sits at +standoff
+        #  and the tip plates point towards it and are shortened to clear it --
+        #  the same three lines the track gets.
         #
         #  It was FREE AIR before, which is why the sim could not answer the
         #  owner's question about orientation: with no wall, mirroring the
         #  section is exactly equivalent to negating CL, so the two
         #  orientations were indistinguishable by construction.
-        image = float(standoff)
-        plate = min(plate, max(standoff - 0.03 * b - 0.01, 0.0))
+        #
+        #  `wall_side` = -1 puts the body on the PRESSURE side instead. That is
+        #  the SAME PANEL turned over -- what it takes to deploy on the INNER
+        #  flank and still point the side force at the turn centre (CONTRACT
+        #  section 4, `cfg.dev_flank`). Rotating the panel 180 deg about its
+        #  span carries the tip plates with it, and this lattice builds them on
+        #  the lift (+z) side, so they still point +z and now face AWAY from
+        #  the body: nothing to clear, hence no clip. At the real 0.45 m
+        #  standoff the clip does not bind on any library flank wing anyway
+        #  (0.416 m against plates of 0.06-0.16 m), so the two orientations
+        #  differ ONLY in which side of the panel the wall is on, which is
+        #  what makes them comparable.
+        image = float(wall_side) * float(standoff)
+        if wall_side > 0.0:
+            plate = min(plate, max(standoff - 0.03 * b - 0.01, 0.0))
     return Lattice(b, chord, twist, polar.a_lin, math.radians(polar.alpha_L0_deg),
                    N=spec.n_strips, plate_h=plate, n_plate=6, plate_a=TWO_PI, plate_L0=0.0,
                    image_z=image, image_sign=-1.0, V=1.0)
@@ -385,14 +398,14 @@ def wing_mass(spec: WingSpec, standoff: float = 0.45) -> float:
 
 def analyse(spec: WingSpec, polar: Polar, V: float | None = None, ride_h: float | None = None,
             standoff: float = FLANK_STANDOFF, rho: float = RHO,
-            body_image: bool = True) -> dict:
+            body_image: bool = True, wall_side: float = +1.0) -> dict:
     """The affine/quadratic laws the vehicle reads, plus a table for plots.
 
     Raises ValueError for a geometry the lattice refuses (e.g. plates into
     the track); the caller shows the reason and keeps the last good aero."""
     V = V_REF[spec.role] if V is None else float(V)
     lat = build_lattice(spec, polar, ride_h, standoff=standoff,
-                        body_image=body_image)
+                        body_image=body_image, wall_side=wall_side)
     S, AR = lat.S, lat.AR
     a_pos, a_neg = lat.stall_alpha(polar.alpha_valid[1], polar.alpha_valid[0])
     a_pos = min(a_pos, 40.0)
@@ -436,6 +449,7 @@ def analyse(spec: WingSpec, polar: Polar, V: float | None = None, ride_h: float 
         cd0=float(cd0), cd1=float(cd1), cd2=float(cd2), cd_fit_err=fit_err,
         cd_strut=float(cd_strut), CDp_min=float(np.min(CDps)),
         mount=str(spec.mount), mass=float(wing_mass(spec, standoff)),
+        wall_side=float(wall_side),
         y_cp=float(r_mid.y_cp),
         table=dict(alpha=[round(float(v), 3) for v in alphas], CL=[round(float(v), 4) for v in CLs],
                    CD=[round(float(v), 5) for v in CDs], CDi=[round(float(v), 5) for v in CDis],
@@ -444,7 +458,8 @@ def analyse(spec: WingSpec, polar: Polar, V: float | None = None, ride_h: float 
 
 
 def spanwise(spec: WingSpec, polar: Polar, inc_deg: float, ride_h: float | None = None,
-             standoff: float = FLANK_STANDOFF, body_image: bool = True) -> dict:
+             standoff: float = FLANK_STANDOFF, body_image: bool = True,
+             wall_side: float = +1.0) -> dict:
     """Strip loading at one mount angle, for the designer's plot.
 
     Takes `standoff` / `body_image` so it solves the SAME lattice `analyse`
@@ -453,7 +468,7 @@ def spanwise(spec: WingSpec, polar: Polar, inc_deg: float, ride_h: float | None 
     disagreed with the laws beside it.
     """
     lat = build_lattice(spec, polar, ride_h, standoff=standoff,
-                        body_image=body_image)
+                        body_image=body_image, wall_side=wall_side)
     r = lat.solve(inc_deg)
     m = ~r.is_plate
     return dict(y=r.y[m].tolist(), cl=r.cl[m].tolist(), aeff=r.alpha_eff_deg[m].tolist(),

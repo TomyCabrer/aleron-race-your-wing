@@ -267,7 +267,7 @@ class Library:
 
     # ---------------------------------------------------------- analysis ----
     def analyse_wing(self, w: WingSpec, ride_h: float | None = None, V: float | None = None,
-                     standoff: float = 0.45) -> dict:
+                     standoff: float = 0.45, wall_side: float = +1.0) -> dict:
         """Re-run the lattice on `w` with the best polar available and store
         the result on the spec. Legacy wings keep their closed form and get
         a display-only aero."""
@@ -276,7 +276,8 @@ class Library:
         if w.role == "top" and ride_h is None:
             ride_h = float(w.aero.get("ride_h") or 1.30)
         try:
-            aero = analyse(w, pol, V=V, ride_h=ride_h if w.role == "top" else None, standoff=standoff)
+            aero = analyse(w, pol, V=V, ride_h=ride_h if w.role == "top" else None,
+                           standoff=standoff, wall_side=wall_side)
         except ValueError as exc:
             aero = dict(w.aero)
             aero["error"] = str(exc)

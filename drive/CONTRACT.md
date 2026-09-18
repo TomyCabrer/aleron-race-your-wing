@@ -933,6 +933,24 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
   * `'none'` -- nothing charged. The idealisation to compare against, and the
     parity setting for a legacy panel whose published L/D already includes
     its mounts.
+  **`build_lattice(..., wall_side=+1)`** is which side of the panel the body
+  wall is on: `+1` (the default) the SUCTION side, which is where the body is
+  when the suction surface faces inboard and the panel is on the OUTER flank;
+  `-1` the PRESSURE side, which is the same panel turned over — what it takes
+  to deploy on the INNER flank and still point the side force at the turn
+  centre (§4, `cfg.dev_flank`). Rotating the panel 180° about its span carries
+  the tip plates with it and this lattice builds them on the lift (+z) side, so
+  they still point +z and now face away from the body: no clip. At the real
+  0.45 m standoff the clip does not bind on any library flank wing (0.416 m
+  against plates of 0.06–0.16 m), so the two orientations differ **only** in
+  which side of the panel the wall is on. Measured on `flank-e423` at 5°:
+  CL 0.7988 → 0.7827, CDi 0.08214 → 0.07984, e 1.2862 → 1.2706 — slightly
+  **less** lift for slightly **less** induced drag with the body on the
+  pressure side, both above free air, and the free-air limit comes back
+  monotonically as the wall is moved away. `analyse` and `spanwise` pass it
+  through and `analyse` returns it, so a stored aero says which orientation it
+  was flown in.
+
   `analyse()` returns `mount` and `mass`; `wing_mass(spec, standoff)` is a
   bottom-up floor (two skins + two plates at `SKIN_KG_M2 = 4.17`, 1.5 mm
   2024-T3, plus `PYLON_KG_M` when pylon-mounted) and is what the garage
