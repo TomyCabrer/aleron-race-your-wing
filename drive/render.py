@@ -2147,6 +2147,12 @@ class Renderer:
             if len(pts) >= 3:
                 pygame.draw.polygon(self.screen, col, pts)
                 pygame.draw.polygon(self.screen, C_CAR_OUTLINE, pts, 1)
+                if len(g) > 4 and g[4]:    # a named ghost (the race's bot)
+                    top = min(p[1] for p in pts)
+                    cx_s = sum(p[0] for p in pts) / len(pts)
+                    lbl = self.f_lbl.render(str(g[4]), True, col)
+                    self.screen.blit(lbl, (int(cx_s - lbl.get_width() / 2),
+                                           int(top - lbl.get_height() - 2 * self.ui)))
 
     def _draw_overlay(self, lines) -> None:
         """A free-text panel, top-left, over everything but the menu."""

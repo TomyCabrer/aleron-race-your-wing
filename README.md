@@ -28,6 +28,7 @@ python3 -m drive.drive --ballast 200 --ballast-at boot
 python3 -m drive.drive --camera chase           # the 3D view from behind
 python3 -m drive.drive --garage                 # start in the 3D garage
 python3 -m drive.drive --ml-drive drive/ml/checkpoints/arena_plate.json
+python3 -m drive.drive --race best              # race the newest swarm checkpoint on a copy of your car
 python3 -m drive.drive --swarm 32 --swarm-seed latest   # a learning swarm, bred from your lap
 ```
 
@@ -47,7 +48,7 @@ python3 -m drive.drive --swarm 32 --swarm-seed latest   # a learning swarm, bred
 
 `ESC` (or `OPTIONS` on the pad) pauses and opens the menu: every keyboard and
 pad control on screen, plus *Resume*, *Settings*, *Reset to last sector line*,
-*Full reset*, *Garage*, *Deploy swarm* and *Quit*. `↑` `↓` / d-pad move, `←` `→` / d-pad
+*Full reset*, *Garage*, *Deploy swarm*, *Race vs bot* and *Quit*. `↑` `↓` / d-pad move, `←` `→` / d-pad
 change a value on the settings page, `ENTER` / `✕`
 select, `ESC` / `○` / `OPTIONS` resume; `R`, `SHIFT+R` and `BACKSPACE` work as
 hotkeys inside it. The car does not move and the pad does not rumble while it
@@ -483,6 +484,21 @@ when not to carry the drag. The baseline cannot lap at all without the device;
 it had come to depend on the front grip its own wing rule was buying. It is
 trained on one track with one aero configuration, so it is a fast lap on a
 memorised circuit, not a general driver.
+
+### Race the bot
+
+From the game: `ESC` → **Race vs bot**. `←` `→` picks the bot: the built-in
+driver (the anchor the swarm breeds from) or any checkpoint in
+`drive/ml/checkpoints` (the ones `K` saved in a swarm). *Start* puts both cars
+on the line, the bot 2 m to your left, standing start. It is the same car as
+yours with the ML driver at the wheel, drawn as an orange ghost with its name
+over it — you drive through it, so the race is against its lap, not its
+bumper. The HUD's bottom line shows the gap (`+` you are behind, `-` ahead)
+in seconds along the track and in metres, and the bot's lap count, last and
+best. `R` or `SHIFT+R` restarts the race from the line; if the bot leaves the
+map or spins it rejoins at its last sector line after 2.5 s. From the
+terminal, `--race anchor`, `--race best` (the newest swarm checkpoint) or
+`--race PATH`.
 
 ### Deploy a swarm, and breed the best
 

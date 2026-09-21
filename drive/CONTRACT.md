@@ -983,7 +983,9 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
   chase mode too) after the skid layer and BEFORE the car; `HudData.overlay`
   (default `[]`, strings; a leading `!` draws the line in the warning
   colour) is a top-left text panel drawn after the HUD and before the menu.
-  Both are for `drive.drive --swarm`; empty, nothing is drawn and every other
+  A ghost tuple may carry a fifth element, a label string, drawn above the
+  silhouette in its colour. Ghosts are the swarm's replay and the race's bot
+  (`Sim.rival`, one tuple per frame); empty, nothing is drawn and every other
   session's frame is bit-identical.
 * `HudData.menu` (default None) is drawn LAST by `draw_frame` when
   `menu.open`, duck-typed (`render.py` does not import `menu.py`).
@@ -1177,7 +1179,7 @@ python3 -m drive.drive [--track arena|open|skidpad|dragstrip] [--radius 50] [--c
   [--abs|--no-abs] [--tc|--no-tc] [--engine stock|tuned|sport]
   [--sound off|low|mid|high] [--wing-inc 0.0] [--dev-flank outer|inner]
   [--garage] [--build NAME]
-  [--ml-drive CHECKPOINT] [--seed-lap]
+  [--ml-drive CHECKPOINT] [--seed-lap] [--race anchor|best|CHECKPOINT]
   [--swarm N] [--swarm-seed none|latest|FILE] [--swarm-gens G] [--swarm-T S]
   [--swarm-name NAME] [--swarm-resume STATE]
 ```
@@ -1329,8 +1331,32 @@ instead of the keyboard/pad, through the SAME local `ScriptedInput` closure the
 acceptance scripts use — so no new code reaches the physics path. `drive/ml` is
 an OPTIONAL sub-package: **nothing imports it unless this flag is given**, and
 a missing checkpoint, a missing numpy or a shape mismatch prints why and hands
-the session back to the keyboard rather than stopping it. It is the only hook
-`drive/ml` has, and `drive/ml` never imports `pygame`.
+the session back to the keyboard rather than stopping it. `drive/ml` never
+imports `pygame`.
+
+`--race BOT` (and the pause menu's RACE VS BOT page: `Sim.race_opts['bot']`,
+`start_race` / `stop_race`) puts the ML driver in a SECOND car -- `Sim.rival`,
+a `Rival`: its own `Vehicle` built from the session's car and `VehicleConfig`,
+its own per-wheel surface sample, its own `LapTimer`, the policy through the
+same `observe -> Policy.controls` call `--ml-drive` uses. It is stepped ONCE
+per physics step, in `Sim.step_physics` AFTER the user's car and reading
+nothing of it, at the session's `dt`; the user's `Vehicle` is bit-identical
+with and without a rival (V30 asserts it). There is no collision: the renderer
+draws it as a labelled `HudData.ghosts` entry. `bot` is `'none'`, `'anchor'`
+(`Policy()`, theta = 0 -- the hand-written driver, needs only numpy), `'best'`
+(the newest `swarm_*.json`, command line only) or a checkpoint path; the same
+lazy try/except as `--ml-drive` -- a bot that cannot be loaded prints why and
+the session runs without one. It lines up `RACE_START_OFFSET_M` LEFT of the
+line, standing start in 1st like the user; off the map or spun for
+`RACE_RESPAWN_S` it rejoins at its last sector line. Any reset (R, SHIFT+R,
+the page's Start) restarts the race from the line for both. The HUD's `msg`
+carries the gap: `Rival.gap_to` reads the leader's `(progress, t)` trail
+(`RACE_GAP_HZ`, unwrapped centreline metres, jumps > 10 m ignored) at the
+follower's progress, so `+` is the user behind, in seconds and metres, plus
+the bot's lap count / last / best. `opts.race_menu` carries the choice and
+whether a race was on across a restart (a map change keeps racing). Adding the
+rival costs one more `Vehicle.step` and one `observe` per physics step; V21's
+RTF is measured without one.
 
 exactly as `--wing` does, and `--build NAME` loads a car saved in the garage
 library (`runs/library/builds/NAME.json`) instead of the last one built.
