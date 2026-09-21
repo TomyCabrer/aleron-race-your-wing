@@ -42,9 +42,9 @@ from the repo root.
 | `drive/render.py` | pygame drawing + HUD | `track`, `qss`, pygame |
 | `drive/telemetry.py` | CSV logging | csv |
 | `drive/plots.py` | matplotlib post-run plots (Agg) | matplotlib, numpy |
-| `drive/garage.py` | 3D garage: `CarBuild` (three wing slots) -> `VehicleConfig` kwargs and the fitted wings' mass; designer / airfoil / library pages | `corsa_c`, `cars`, `crossover`, `input`, `menu`, `garage_ui`, `aero`, `vehicle` (the two aero dataclasses only), pygame |
+| `drive/garage.py` | 3D garage: `CarBuild` (three wing slots) -> `VehicleConfig` kwargs and the fitted wings' mass; the MISSION page and the DESIGN navigator (`DESIGN_TREE`: airfoil / endplate / wing / results, four stages each -- the criterion WEIGHTS are asked on the screening step, and the design box is a BAND table). The navigator GATES: a step whose predecessor is unfinished cannot be selected at all, by key or by click, and the refusal quotes the reason. Every page takes the MOUSE as well as the keyboard. Plus the airfoil and library pages | `corsa_c`, `cars`, `crossover`, `input`, `menu`, `garage_ui`, `aero`, `track` (`make_track`, for the mission's circuit), `vehicle` (the two aero dataclasses only), pygame |
 | `drive/garage_ui.py` | widget kit for the garage pages (params, lists, plots, prompt) | pygame, numpy |
-| `drive/aero/` | wing-design physics: sections, panel method, polars (XFOIL / estimate), vortex lattice, GP-BO, the library | numpy, scipy, the `xfoil` binary if present |
+| `drive/aero/` | wing-design physics: sections, panel method, polars (XFOIL / estimate), vortex lattice, GP-BO, the library, and the three-step design procedure -- `mission.py` (the lap a wing is for), `screen.py` (the seven weighted criteria the library is ranked on), `section.py` (the aerofoil designed in 2-D against it), `wing.py` (the planform), `blend.py` (how the wing and its end plates meet) | numpy, scipy, the `xfoil` binary if present; `mission.py` alone also imports `corsa_c` and `qss` |
 | `drive/menu.py` | pause / help menu overlay (ESC, OPTIONS); pure UI | pygame only |
 | `drive/audio.py` | procedural car sound: `Synth` (numpy) + `CarSound` (one pygame.mixer channel); a render-loop consumer of `HudData`, never an input | numpy, pygame |
 | `drive/drive.py` | main loop, CLI, scripted runs | everything |
@@ -55,6 +55,148 @@ from the repo root.
 against the machine's current speed rather than reimplementing the
 normaliser. No cycle (`render` never imports `garage`) and nothing on the
 interactive or acceptance path reaches it.
+
+**The END PLATE carries a section.** `vlm.Lattice` has always taken `plate_a`
+and `plate_L0` and `wing.build_lattice` hardcoded them to a flat plate;
+`WingSpec.plate_airfoil` (`""` = flat) now names a library section and
+`build_lattice` / `analyse` / `spanwise` take `plate_polar=`. `plate_polar=None`
+is **bit-identical** to the path every shipped wing was analysed on, and a wing
+saved before the row decodes to `""`, so nothing published moves. Anything that
+solves the lattice for a DESIGNED wing must pass it: `library.analyse_wing`
+does, and the garage's wing optimiser does -- it did not, and the search flew
+flat plates while the page drew cambered ones.
+
+The SEARCH DEFAULTS are AeroBO's measured ones, not hand-picked numbers.
+`drive/aero/optimize.py` carries its frozen `data/search_budget.json` payload:
+the budget law `evals = 9.61 + 3.08 d` at the 95 % convergence target (with
+its 10.7-evaluation residual RMS, because a law with that spread is a sizing
+rule and not a prediction) and its two companions at 90 % and 99 %; and the
+Sobol split `n_init = clamp(round(0.5 d), 4, 16)`, which that study ranks
+first against 1x, 2x and 4x the dimension over 15 cases. `budget_for`,
+`n_init_for` and `split_for` are what both the section and the wing pages
+size themselves with. The STOP RULE is not ported: the payload gives the wing
+class `patience 40, tol 0.002` and records that the airfoil class ships none.
+The CONSTRAINED seed rule is not used either, and that is measured: a uniform
+draw over carsim's section box is refused 42 % of the time on the top role and
+36 % on the flank, where the study's constrained arm was written for a box in
+which 4.7 % of draws fly.
+
+THE DEFAULT CRITERION WEIGHTS DIVERGE FROM AeroBO's, with the reason measured.
+Its `gdp-sweep` preset weights |cm| at 0.20; |cm| is lower-better, so it
+rewards REFLEX -- AeroBO's own argument, which is why its `wing-trimmed` job
+moves that weight for a surface whose moment something else carries. A car
+wing's MOUNT carries it. Measured over the 39 shipped sections on all three
+circuits, |cm| alone ranks the library backwards (Spearman -0.97 against the
+lap), and removing it halves the lap cost of the section the screen picks.
+The END PLATE's preset is keyed on the ROLE, because |camber| correlates
++0.96 with the lap on a flank plate and -0.96 on a top one; and |cm| is NOT
+retired on a carsim plate, unlike AeroBO's, because carsim's plates are
+lifting panels and may be cambered. The screening lift itself is AeroBO's
+`REFERENCE_CL = 1.0`, a plain editable reference: reading it off the wing
+instead censored 30 of the 39 sections.
+
+`drive/garage_ui.py`'s `Nav` is a GATE, not a mark. `state(key)` returns
+`done | ready | blocked | locked`, and `select()` REFUSES the last two and
+keeps the reason -- which is what `gui/v3/app.py`'s own `select()` does
+("a greyed-out node with no explanation is the thing this shell exists to
+avoid"). `blocked` is *not yet* and opens when the step before it is
+finished; `locked` is *not here* and no upstream work opens it. A section
+group is finished by FITTING its section to the wing, never by optimising:
+AeroBO's stage 2 docstring says the search is optional, and the endplate
+group carries an explicit "fly FLAT plates" answer so that no gate makes a
+design decision compulsory.
+
+`Nav`, `ParamList` and `ListBox` record the geometry they drew and hit-test
+it, so every page is driven by the mouse as well as the keyboard, and the
+mouse does the same things: a click on the left or right half of a `< value >`
+is a LEFT or a RIGHT, an action row selects on the first click and fires on
+the second, the wheel moves the selection, and the navigator's gate refuses a
+click exactly as it refuses an arrow key.
+
+`drive/aero/screen.py` is AeroBO's `airfoil_select.score_candidates` in
+carsim's units, and it owns the one thing the garage was asking in the wrong
+place. The seven criterion weights (`ldcr`, `clmax`, `cm`, `ldmax`, `cdcr`,
+`thick`, `astall`) are the LIBRARY SCREEN's question, not the shape
+optimiser's: a designer has no opinion about a CST weight before a search has
+run. The screen measures a FROZEN 0-100 band over the sections that survived
+its gates, and the three composite objectives -- `composite`,
+`composite, none below the seed`, `lift the weakest criterion` -- maximise the
+same number the shortlist was chosen on. A composite run is refused until the
+screen has produced that band, because a live min-max would move with the
+population and the score would not be a fixed function of the shape.
+
+THE GATES ARE carsim's OWN NUMBERS and are OFF by default. AeroBO screens an
+aircraft library at `t/c >= 0.15`, `|cm| <= 0.08`; measured over carsim's 34
+race sections that pair admits ONE, and the |cm| ceiling deletes exactly the
+high-lift sections a downforce wing exists for (S1223 0.348, S1210 0.306,
+CH10 0.275, E423 0.247). The values a gate comes back ON at are this library's
+own quartiles.
+
+`drive/aero/blend.py` is how the WING AND THE END PLATE MEET, ported from
+urop-bo-aero's `geometry.winglet_turn_angle` / `winglet_path`,
+`vlm.transition_ramp` and `junction.py`, and reproducing their geometry TO THE
+BIT (`blend.self_check` pins twelve of AeroBO's own tip positions, three turn
+laws by four blends). `vlm.Lattice` used to bolt the plates on at a right
+angle and change everything about the surface in ONE STEP at the junction
+panel -- the wing's cambered `alpha_L0` on one side of an edge and the plate's
+on the other, the wing's tip twist likewise. A blend spends `plate_blend` of
+the plate's arc turning out of the wing plane, and the plate's section and toe
+ramp on `psi/phi`, the turn angle normalised by the cant, so the surface
+finishes becoming the plate exactly where it finishes turning into it.
+
+ARC LENGTH IS THE INVARIANT: every (blend, shape) plate of the same `plate_h`
+has the same developed length and the same wetted area, so the row compares
+SHAPE and not size. What a blend trades is TIP HEIGHT for OUTBOARD REACH, and
+THE WING PAYS FOR THAT REACH OUT OF ITS OWN SPAN (`wing.plate_flown`): the
+span row is what the car is allowed to be wide -- a flank panel's span is its
+vertical extent between sill and roof, a top wing's is the car's width -- and
+a plate that leans out of it has to come from somewhere. That accounting is
+load-bearing, not bookkeeping. Without it CZ/CD climbs monotonically to full
+blend against a junction credit that saturated at about 0.1, so nothing in the
+model opposes curling the plate into a quarter-round winglet; measured here,
+the unpaid variant reads -0.032 s at full blend and the paid one +0.022 s.
+
+`blend.junction_report` is the other half, and it is an ADD-ON that is OFF by
+default. A lifting-surface method values a corner only through the wake line
+it draws, so the interference drag of two surfaces meeting at an angle -- the
+whole reason to blend -- is invisible to it. Hoerner's unfilleted-junction
+correlation is charged at the two corners with a fillet credit for the blend
+radius; the credit is a CALIBRATED SHAPE and not a measurement, which is why
+it is a row, why it is reported beside the uncredited number, and why raising
+the blend off zero is what switches it on. The junction member is the PLATE,
+so a plate with no section is bare sheet, below the correlation's own root,
+and charges nothing rather than being extrapolated.
+
+MEASURED, 2 roles x 3 circuits x 3 shapes x 6 blends: on this car a blend
+never pays at equal car width. The curve does turn over inside the range --
+the credit saturates near blend 0.1, which is where the cost is least (+0.0013
+s on the flank) -- but the span it costs is worth more than the corner it
+smooths, and it reaches +0.022 s at full blend. That is an answer about this
+car at these plate depths, not a defect: the same rows on AeroBO's 3x-chord
+endplate turn over below zero, because its junction charge is far larger.
+
+NOT PORTED, and stated: the WING-SIDE ARC (AeroBO can start the turn inboard
+of the tip and bend the wing's own panels into it). The law takes the
+argument, `vlm.Lattice` passes 0. AeroBO wants one because a device-side blend
+has R <= h/cant, "a fraction of a tip chord", so its fillet credit saturates
+immediately -- but that is about ITS scale: a carsim flank plate at h 0.12 m
+and blend 0.6 already has R/c 0.102, past `FILLET_FULL_R_OVER_C`, so there is
+nothing for a wing-side arc to buy. Also not ported: a variable or signed
+CANT (carsim's plates stand normal to the wing), and AeroBO's chord ramp
+(carsim's plate carries the wing's tip chord, so there is no chord step to
+ramp over).
+
+`drive/aero/mission.py` imports `corsa_c` and `qss` at module level, and
+nothing else from the simulator. That is the one widening of the aero
+package's import rule and it is deliberate: the mission is a lap of THIS car,
+so the car's parameters and the published cornering model are the thing being
+extended, and at zero downforce `mission.residuals` and `mission.max_ay`
+reproduce `qss`'s bit for bit (`mission.self_check`). The package still never
+imports `drive.track`: a circuit reaches it as a `TrackProfile` built from a
+`Track`'s own `Seg` list, and the only `from .. import track` is deferred
+inside `mission.self_check` and `section.reference_problem`, neither of which
+is on the interactive or acceptance path. `drive/aero` still NEVER imports
+pygame.
 
 `vehicle.py` NEVER imports `track`, `render`, `input`, `aero` or pygame: the
 designed wings reach it as two frozen dataclasses of numbers (`DevAero`,
@@ -506,6 +648,9 @@ class Controls:
     auto_clutch: bool = True  # see section 3: launch assist, blip, restart
     wing_on: bool = False     # driver's toggle; the actuator lag lives in vehicle
     starter: bool = False
+    wing_cmd: tuple | None = None   # FREE WINGS: (left, right, top) bools, gated by
+                                    # wing_on; None (every published caller) = the
+                                    # automatic law below. Both flanks = air brake.
 
 @dataclass
 class VehicleConfig:
@@ -556,6 +701,20 @@ from the lattice; `qss_parity` freezes its slip term exactly as it zeroes
 `dCLda`. With both sides `None` the code path is the published one, and the
 suite holds it bit-for-bit.
 
+**Free wings** (`Controls.wing_cmd`, additive). With a 3-tuple the flank
+panels are commanded DIRECTLY: each flank has its own deploy state
+(`dep_raw_l / dep_raw_r`, the same `t_ext / t_ret`), the panel on flank f
+(+1 left) is the one the automatic law deploys there, so its force law is
+the branch above with `sgn = -f * flank_sgn` and `y_dev = f * Y_DEV`; two
+panels out sum (side forces cancel, drags add: the air brake). The roll and
+load-transfer terms read one `F_dev` at the force-weighted `h_w`. A `None`
+top entry leaves the top wing on its own law. `wing_cmd is None` is the
+published path bit-for-bit (the suite, 33/33, is unmoved). Users reach it
+with `G` (auto / left / right / both); `drive.ml`'s free-wings policy head
+(5 outputs: steer, pedal, wing_l, wing_r, wing_top; 373 parameters) emits
+it, and is what `--swarm` breeds by default. 4-output checkpoints load and
+drive unchanged.
+
 The TOP wing is new physics, all of it exactly 0.0 when `top is None`:
 
 ```
@@ -589,6 +748,10 @@ HUD and telemetry depend on the exact names):
 x y psi u v r ax ay phi p beta          floats  (ax, ay body-frame at the CG)
 Fz Fx Fy alpha kappa delta_wheel omega  (4,) numpy float arrays, FL FR RL RR
 rpm gear engaged stalled on_limiter
+wing_deploy_l wing_deploy_r             (per FLANK, +y left / -y right; both > 0
+                                         only under `wing_cmd`; the renderer's
+                                         `flank_deps()` reads them, falling back
+                                         to the pair below when absent)
 F_wing D_wing wing_deploy wing_side     (wing_side is the TURN sign = sgn_dev:
                                          +1 left turn, so the RIGHT panel is
                                          deployed; -1 right turn, so the LEFT
@@ -772,9 +935,10 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
   `stop_reason = 'garage'` and `run_garage_cli` re-enters the editor.
 * **Pause menu.** `ESC` / OPTIONS / START -> `'menu'`. `set_menu(True)` puts
   every input in menu mode: the keyboard emits only `MENU_KEYS`
-  (`nav_up`/`nav_down`/`select`/`menu`/`reset`/`full_reset`/`garage`) and
-  reads all held keys as released; the pad emits `MENU_PAD_NAMES` edges plus
-  left-stick up/down through `menu.StickNav`. Entering menu mode SEEDS the
+  (`nav_up`/`nav_down`/`nav_left`/`nav_right`/`select`/`menu`/`reset`/
+  `full_reset`/`garage`) and reads all held keys as released; the pad emits
+  `MENU_PAD_NAMES` edges plus left-stick up/down (and left/right) through
+  `menu.StickNav`. Entering menu mode SEEDS the
   pad's edge state from the live buttons (the OPTIONS press that opened the
   menu must not close it), and menu mode keeps refreshing the driving edge
   state silently (a circle held across the close must not toggle the wing).
@@ -814,6 +978,13 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
 * `HudData` carries `x_w, h_w, wing_type, inc_deg` (defaults 0.97 / 0.90 /
   '' / 0): the plan-view panel is drawn at `aux.x_w`, not at a constant, so a
   garage-built car shows its panel where the physics has it.
+* `HudData.ghosts` (default `[]`, tuples `(x, y, psi, (r, g, b))`) are other
+  cars drawn as flat GROUND silhouettes (`_gpoly`, so they lie on the road in
+  chase mode too) after the skid layer and BEFORE the car; `HudData.overlay`
+  (default `[]`, strings; a leading `!` draws the line in the warning
+  colour) is a top-left text panel drawn after the HUD and before the menu.
+  Both are for `drive.drive --swarm`; empty, nothing is drawn and every other
+  session's frame is bit-identical.
 * `HudData.menu` (default None) is drawn LAST by `draw_frame` when
   `menu.open`, duck-typed (`render.py` does not import `menu.py`).
   `HudData.gearbox` (`'AUTO' | 'MAN' | 'MAN+CL'`), `abs_active` and
@@ -850,7 +1021,15 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
   take windows. Measured 2.1–2.4 ms a frame.
 * `drive/menu.py`: `Menu(title, items, sections)` with `show / hide /
   handle(cmd) -> action / draw(screen)`. Items are `(label, action)`;
-  `select` returns the action and closes, `back`/`menu` return `'resume'`.
+  `select` returns the action and closes, `back`/`menu` return `'resume'`,
+  `nav_left`/`nav_right` return `'prev:<action>'`/`'next:<action>'` and keep
+  it open. On the drive's settings page these step the row's value:
+  `Sim.preview_setting(key, d)` applies a live setting at once but only
+  BROWSES a `RESTART_KEYS` one (`track`, `wet`, `car`, `ballast`,
+  `ballast_at`), holding the running value in `Sim._pending` so ESC
+  (`revert_pending`) restores it and a save meanwhile writes the running
+  value, not the preview; `select` on a browsed row is `commit_pending` +
+  restart.
   `show(..., title=, idx=, columns=)`: `idx` keeps the cursor when a page
   re-shows itself, `columns=1` stacks every help section (and the note) in
   one column to the right of the items, and the highlight / column origin
@@ -884,11 +1063,17 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
   `WingDesign` file upgrades to the same panel on both flanks. Pages: CAR
   (the 3-D view, three slots, `1 2 3` / TAB select, arrows place, `W` cycles
   the slot's library wing, `M` mirror, `T` top mode, `SPACE` deploy preview,
-  `ENTER` drive), DESIGNER (`D`: one wing for one slot -- section, span,
-  chord, taper, twist, end plates, the slot's mount, a GP-BO optimiser with a
-  random-search twin at the same budget; live lattice, spanwise cl, polar,
-  the affine/quadratic laws; `S` saves to the library under a NEW name when
-  the origin is built-in), AIRFOIL (`A`: the section library ranked by the
+  `ENTER` drive), MISSION (`D` / `L3` / the pause menu, for the selected
+  slot: circuit and surface rows, the lap of the car as it stands against the
+  bare car, `ENTER` STATES it -- `Garage.open_section` refuses until it is
+  stated), DESIGN (`Nav` over `DESIGN_TREE`: AIRFOIL / ENDPLATE / WING /
+  RESULTS, four steps each; `TAB` steps / rows, `ENTER` does the step, `L`
+  screens, `O` optimises the selected group with a random-search twin at the
+  same budget, `K` continues, `F` fits the section to the wing and advances,
+  `S` saves to the library under a NEW name when the origin is built-in, `X`
+  queues XFOIL, `N` renames, `A` the airfoil page; `ESC` steps back to the
+  mission, then the car; live lattice, spanwise cl, polar, the
+  affine/quadratic laws), AIRFOIL (`A`: the section library ranked by the
   AeroBO screen weights at the design cl / Re, section + polar plots, `X`
   queues XFOIL in a worker thread, `N` a NACA-4 code), LIBRARY (`L`: wings and
   builds; ENTER puts a wing in the selected slot if its role matches, or
@@ -900,7 +1085,11 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
   (Hess-Smith, validated: NACA 0012 a = 6.91/rad, 4412 alpha_L0 = -4.26 deg),
   `polar` (`Polar` table; `estimate_polar` = panel slope + friction/form-
   factor drag + camber/thickness stall correlation, LABELLED estimate),
-  `xfoil` (subprocess + JSON cache, split sweep from 0), `vlm` (horseshoe
+  `xfoil` (subprocess + JSON cache, split sweep from 0), `blend` (the
+  wing/plate transition: three turn laws, the ramp the plate's section and
+  toe meet the wing on, and Hoerner's junction charge -- AeroBO's geometry to
+  the bit, and `plate_blend = 0` is the published right-angle corner),
+  `vlm` (horseshoe
   lattice, cosine edges / interlaced stations, tip plates, rigid-wall image,
   Trefftz CDi -- reproduces `aerobo.vlm.VLM` to 1e-12: CL_alpha
   4.55942959749662, e 0.9742625474419787 on the AR 8 rectangle), `wing`
@@ -988,7 +1177,9 @@ python3 -m drive.drive [--track arena|open|skidpad|dragstrip] [--radius 50] [--c
   [--abs|--no-abs] [--tc|--no-tc] [--engine stock|tuned|sport]
   [--sound off|low|mid|high] [--wing-inc 0.0] [--dev-flank outer|inner]
   [--garage] [--build NAME]
-  [--ml-drive CHECKPOINT]
+  [--ml-drive CHECKPOINT] [--seed-lap]
+  [--swarm N] [--swarm-seed none|latest|FILE] [--swarm-gens G] [--swarm-T S]
+  [--swarm-name NAME] [--swarm-resume STATE]
 ```
 `--script drive_probe` is the one scripted entry that deliberately switches
 the driver aids ON, because it exists to measure them (section 9 item 9 is
@@ -1082,6 +1273,57 @@ four legacy fields plus `opts.wing_cfg` = `CarBuild.cfg_kwargs(lib)` and
 `opts.hud_cfg` = `CarBuild.hud_kwargs(lib)`). The session builds
 `VehicleConfig(**legacy, **wing_cfg)`, hands `hud_cfg` to `Sim.hud_cfg`
 (merged into `hud_data()`), starts a designed build ARMED (`wing_on = True`)
+The pause menu has a third page, `'swarm'` (**Deploy swarm**): rows
+`set:sw_pop` / `set:sw_seed` / `set:sw_gens` / `set:sw_T` cycle
+`Sim.swarm_opts` through `SWARM_MENU_CHOICES` (LEFT / RIGHT or ENTER),
+`swarm_arm` toggles `seed_armed`, `swarm_go` closes the menu, copies the page
+to `Sim.swarm_launch`, sets `stop_reason = "swarm"` and quits the session.
+`run_interactive_cli` routes that to `run_swarm_cli(opts, settings=,
+embedded=True)` -- no `pygame.init` / `quit`, the settings object it already
+has, the same `_session_car` -- and then starts a new drive session with the
+page's values kept on `opts.swarm_menu`. Nothing on the swarm page restarts
+or rebuilds anything until Deploy.
+
+`--swarm N` (and `--swarm-resume STATE`) hands the launch to `run_swarm_cli`
+instead of a session: a `drive.ml.swarm.Swarm` -- a genetic algorithm over
+`Policy` genomes, N per generation, elites kept, the rest bred by crossover and
+mutation, fitness = `env.rollout`'s reward then lap time -- on the SAME track,
+car and `VehicleConfig` a session would drive (`_session_car` is the one place
+that assembles those, and both paths call it). The window is a REPLAY: the pool
+scores a generation and returns each car's `(t, x, y, psi, u, deploy, side)`
+trace; the viewer draws them as `HudData.ghosts` at playback time while the
+next generation is already computing. No `Vehicle` is stepped in the window
+and no physics runs in the render loop. `--swarm-seed` is `none` (the anchor),
+a seed lap, or a `Policy` checkpoint; the seed is individual 0 of generation 0,
+unmutated. `K` / ESC prompt for the bot's name (empty = the swarm's; letters,
+digits, `-` `_`; `meta['name']`) and save the best as a plain `Policy` checkpoint
+(`drive/ml/checkpoints/swarm_<name>.json`, lap re-measured at DT_EVAL) that
+`--ml-drive` drives and a later swarm seeds from. `drive.ml` is imported
+inside `run_swarm_cli` only; the import-guard check in `drive.ml.__main__`
+(import `drive.drive`, assert no `drive.ml` module loaded) still holds.
+
+**The seed lap** (`K`, the swarm page's *Seed lap*, or `--seed-lap`) is the
+user deciding BEFORE a lap that it is the swarm's base. `K` sets
+`Sim.seed_armed`; at the next `start`/`lap` event a recording opens
+(`_seed_open`). The page's *Seed lap* does a full `reset()` to the line and
+opens the recording there, from the standing start. Every `SEED_LAP_HZ`
+(100 Hz) step appends the published state `(t, x, y, psi, u, v, r, beta, ay,
+util_f, util_r, wing_deploy)` and the controls `(delta, throttle, brake,
+wing_on)`; a step with all four wheels off clears `_seed_valid`. The next
+line crossing (`start` or `lap`, more than 5 s after the opening) closes it:
+valid (and `LapTimer.lap_valid` for a `lap`) → with a window the
+`garage_ui.TextPrompt` asks the lap's name (`KeyboardInput.key_sink` takes
+the keys, the sim pauses); ENTER writes
+`runs/swarm/seed_<track>_<car>_<name>.json` (`name` = letters, digits, `-`
+`_`, empty = a time stamp; also in the file), sets the page's seed to
+`latest` and re-opens it on *Deploy*; ESC discards. Headless, the stamp is
+used. `latest` is the newest file on this map by mtime. An invalid lap or a
+`reset()` discards the rows; `K`'s arm stays. The sim writes plain JSON and
+imports nothing from `drive.ml`; `drive/ml/clone.py` reads it, rebuilds the
+observation from the rows with `env.observe` on a stand-in object and the
+track, and fits the residual net to `clip((user - baseline) / RESID_GAIN)`.
+`drive.ml.__main__` asserts the two column lists agree by name.
+
 `--ml-drive CHECKPOINT` puts a trained `drive.ml` policy in the driver's seat
 instead of the keyboard/pad, through the SAME local `ScriptedInput` closure the
 acceptance scripts use — so no new code reaches the physics path. `drive/ml` is
@@ -1112,10 +1354,10 @@ circuit and `trk.on_tarmac` on a track with areas.
 
 Keys: `↑` throttle, `↓` brake, `←/→` steer, `LSHIFT` fine, `Z` clutch,
 `SPACE` handbrake, `S` starter, `E`/`Q` shift up/down, `F` flank wing, `G`
-wing side, `R` reset, `SHIFT+R` full reset, `P` pause, `O` single step,
+wing side (auto / left / right / both), `R` reset, `SHIFT+R` full reset, `P` pause, `O` single step,
 `[`/`]` slow-mo, `C` camera, `-`/`=`/`0` zoom, `H` HUD, `V` vectors, `B` g-g,
-`N`/`X` skid, `T` wet, `M` marker, `L` record, `TAB` next map, `BACKSPACE`
-garage, `ESC` pause menu / settings. PS5 pad map: section 6.
+`N`/`X` skid, `T` wet, `M` marker, `L` record, `K` arm a seed lap, `TAB` next
+map, `BACKSPACE` garage, `ESC` pause menu / settings. PS5 pad map: section 6.
 
 ## 9. Reconciliations (where the subsystem specs disagreed)
 

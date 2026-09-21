@@ -34,6 +34,10 @@ Entry points
     python3 -m drive.ml                     self-check (fast, deterministic)
     python3 -m drive.drive --ml-drive drive/ml/checkpoints/<name>.json
                                             watch it drive, with a window
+    python3 -m drive.ml.swarm --help        the swarm: a GA, the best reproduce
+    python3 -m drive.drive --swarm 32 [--swarm-seed latest]
+                                            the same with a window; `latest` is
+                                            the last seed lap the USER drove (K)
 
 Checkpoints live in `drive/ml/checkpoints/` and NOT in `runs/`, because
 `runs/` is gitignored and a trained policy is a deliverable.

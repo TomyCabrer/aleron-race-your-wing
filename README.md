@@ -28,12 +28,13 @@ python3 -m drive.drive --ballast 200 --ballast-at boot
 python3 -m drive.drive --camera chase           # the 3D view from behind
 python3 -m drive.drive --garage                 # start in the 3D garage
 python3 -m drive.drive --ml-drive drive/ml/checkpoints/arena_plate.json
+python3 -m drive.drive --swarm 32 --swarm-seed latest   # a learning swarm, bred from your lap
 ```
 
 | key | | key | |
 |---|---|---|---|
 | `↑` `↓` | throttle / brake | `F` | flank wing toggle |
-| `←` `→` | steer | `G` | wing side (auto / L / R) |
+| `←` `→` | steer | `G` | wing side (auto / L / R / both = air brake) |
 | `LSHIFT` | fine (half rates, 50% pedal) | `T` | wet toggle |
 | `Z` | clutch | `R` / `SHIFT+R` | reset / full reset |
 | `SPACE` | handbrake | `P` / `O` | pause / single step |
@@ -41,11 +42,13 @@ python3 -m drive.drive --ml-drive drive/ml/checkpoints/arena_plate.json
 | `S` | starter | `C` | camera |
 | `H` `V` `B` `N` `X` | HUD / vectors / g-g / skid / clear | `-` `=` `0` | zoom |
 | `M` `L` | telemetry marker / record | `TAB` | next map |
+| `K` | arm a seed lap for the swarm (named and saved at the line) | | |
 | `BACKSPACE` | garage (3D panel editor) | `ESC` | pause menu / settings |
 
 `ESC` (or `OPTIONS` on the pad) pauses and opens the menu: every keyboard and
 pad control on screen, plus *Resume*, *Settings*, *Reset to last sector line*,
-*Full reset*, *Garage* and *Quit*. `↑` `↓` / d-pad move, `ENTER` / `✕`
+*Full reset*, *Garage*, *Deploy swarm* and *Quit*. `↑` `↓` / d-pad move, `←` `→` / d-pad
+change a value on the settings page, `ENTER` / `✕`
 select, `ESC` / `○` / `OPTIONS` resume; `R`, `SHIFT+R` and `BACKSPACE` work as
 hotkeys inside it. The car does not move and the pad does not rumble while it
 is up. `P` is still the plain pause for `O` single-stepping.
@@ -53,7 +56,12 @@ is up. `P` is still the plain pause for `O` single-stepping.
 ## Settings
 
 *Settings* on the pause menu is a second page; `ENTER` / `✕` cycles a value,
-`ESC` / `○` goes back. Everything on it is saved to `runs/settings.json` the
+`←` `→` (d-pad or left stick) step it back and forth, `ESC` / `○` goes back.
+The rows that restart the session (map, surface, car, ballast) only *browse*
+under `←` `→`: the row shows the option and `ENTER applies` next to it, nothing
+is rebuilt and nothing is saved until `ENTER` / `✕` on that row. `ESC` drops the
+browse and puts the row back to what is running. `ENTER` on an unbrowsed row
+cycles and applies at once, as before. Everything on it is saved to `runs/settings.json` the
 moment it changes and reloaded at the next launch, so the sim starts the way it
 was left; a command-line flag overrides the file for that launch (and is then
 saved). Scripted and headless runs never read the file.
@@ -172,7 +180,7 @@ otherwise.
 | `←` `→` | station `x` (SHIFT: 1 cm) | `↑` `↓` | height `h` |
 | `[` `]` | incidence ±1° | `W` / `SHIFT+W` | next / previous library wing in the slot |
 | `M` | mirror left ↔ right | `T` | top wing: fixed / active (brake + steer) |
-| `SPACE` | deploy preview (0.45 s actuator) | `D` `A` `L` | designer / airfoils / library |
+| `SPACE` | deploy preview (0.45 s actuator) | `D` `A` `L` | design a wing (mission first) / airfoils / library |
 | `R` / `C` | car defaults / reset camera | `ENTER` | drive it |
 | `ESC` | menu | | |
 
@@ -184,47 +192,104 @@ runs the closed-form device exactly as before (the suite asserts the
 
 ## Design the wings
 
-The designer (`D`) is a port of the car-wing physics of the AeroBO design
-tool (`~/dev/urop-bo-aero`) into the game, numpy only, running live:
+The designer (`D`, `L3` on the pad, or *Design the … wing* on the garage's
+pause menu) is a port of the car-wing procedure of the AeroBO design tool
+(`~/dev/urop-bo-aero`) into the game, numpy only, running live, in AeroBO's
+order: **state the mission, then design the section, then the wing**. The
+order is enforced, not suggested. `ESC` steps back up the chain rather than
+dropping to the car.
 
-* **section** — the library holds 39 sections (NACA 4-digit, and UIUC .dat
-  files bundled in `drive/aero/data/airfoils`: S1223, E423, CH10, FX 74,
-  Clark Y, MH 32 …) plus any NACA code you type (`N`) and any CST shape the
-  optimiser produces. A section's polar comes from **XFOIL** when the binary
-  is on the machine (`/opt/homebrew/bin/xfoil` here: a sweep takes ~1.6 s in
-  a worker thread and is cached under `runs/library/polars`), otherwise from
-  a labelled **estimate** (Hess-Smith panel method for the lift slope and
-  zero-lift angle, a friction + form-factor + camber/thickness correlation for
-  drag and stall). Every read-out says which one it is looking at.
-* **planform** — span, chord, taper, tip twist, end plates, and how the wing
-  is **mounted**. A horseshoe
-  vortex lattice (cosine edges, interlaced stations, tip plates, and for the
-  top wing the track's rigid-wall image: ground effect) flies the section at
-  each strip's effective angle, reads the polar for profile drag, and finds
-  the stall by the critical-section rule. It reproduces the AeroBO lattice
-  to 1e-12. What the 1 kHz physics gets is small: `CL = CL0 + CLα·α` clamped
-  at the two stalls, `CD = cd0 + cd1·CL + cd2·CL²`, `S`.
-* **mount** — `pylon`, `endplate` or `none`, and it is a real aerodynamic
-  choice rather than a label. A *pylon* mount stands the wing off on two
-  struts and pays for their wetted area plus a 1.3 form factor for the
-  junction interference (Hoerner ch. 8). An *endplate* mount carries the wing
-  on its tip plates instead: no strut in the flow, but the plates are forced
-  to a structural minimum (0.12 m on the top wing) and the reduced tip loss
-  then falls straight out of the lattice, not out of a correlation. *none* is
-  the mountless idealisation to compare against. Measured on the 1.40 × 0.30 m
-  S1223 top wing at h = 0.45 m: the endplate mount is **lower drag and higher
-  lift and lighter** than two pylons (CLα 4.131 → 4.595, e 1.199 → 1.505,
-  cd0 363 → 340 counts, 4.96 → 3.52 kg) — the pylons' 23 counts buy nothing,
-  the plates' 13 counts buy 11 % of lift slope.
-* **optimiser** — `O` runs a Gaussian-process Bayesian optimiser (Matérn 5/2,
-  expected improvement, Sobol start; ~1 s for 32 evaluations) over span,
-  chord, taper, twist, plates and incidence, against *corner-speed gain at a
-  drag cap*, *force / drag at a force floor* or *max force at a drag cap*
-  (downforce equivalents for the top wing), and shows the best-so-far trace
-  against a random search of the same budget so you can see what BO bought.
-* **library** — `S` saves a wing; the LIBRARY page (`L`) puts any saved wing
-  in a slot of the matching role and saves or loads whole builds, so a wing
-  designed for one car goes on the next.
+**Step 1, MISSION** (`drive/aero/mission.py`). What the wing is for is a
+**lap** of one of carsim's own circuits — arena, open or skidpad, on a dry,
+damp or wet surface — integrated quasi-steadily over the arcs and straights
+`drive/track.py` defines the track with. The page shows the lap of the car as
+it stands, its delta against the car with no wings, the mean and fastest
+speed and how much of the lap is corners against straights: the exchange rate
+between downforce and drag nobody has to state. `ENTER` (*state this mission*)
+is what opens step 2; a mission nobody confirmed is a default. At zero
+downforce the lap's cornering model is `qss.py` bit for bit.
+
+**Step 2, DESIGN**, a navigator of four groups of four steps in the left
+column, `TAB` between the steps and the selected step's own rows:
+
+| group | steps |
+|---|---|
+| AIRFOIL (the wing's own section) | library screening · ranking · section · shape optimisation |
+| ENDPLATE (the tip panels' section) | library screening · ranking · section · shape optimisation |
+| WING | wing type · design box · solver · convergence |
+| RESULTS | summary · geometry · loading · evaluations |
+
+The mark in the margin is the gate: `+` done, `>` ready, `-` **blocked** (not
+yet: finish the step before it), `x` **locked** (not here: the end plates at
+zero height have no surface to give a section to, and nothing upstream opens
+it). A blocked step cannot be selected at all, by key or by click, and the
+refusal says why under `NOT YET`. The two section groups are a procedure
+(screen → take a winner from the ranking → section → optimise, the search
+optional); the WING's and RESULTS' four steps are views of one problem and
+open together. A section group is **finished by fitting** its section to the
+wing (`F`), never by optimising; the ENDPLATE group also takes *fly FLAT
+plates* as an explicit answer, so no gate makes a design decision
+compulsory. Group to group: AIRFOIL → ENDPLATE on a fit, ENDPLATE → WING on a
+fit or on *flat*, WING → RESULTS once the lattice has solved this wing.
+
+* **section** (`drive/aero/section.py`, `screen.py`) — the aerofoil is
+  **designed**, not picked: ten rows, `x = [w_upper(4), w_lower(4), t/c,
+  alpha]` (nine for a plate, which has no incidence of its own), inside a box
+  padded 15 % around the library's own hull, so every shipped section is
+  reproducible and a corner no section occupies is refused. The library
+  screen ranks the 39 shipped sections (NACA 4-digit and UIUC .dat files in
+  `drive/aero/data/airfoils`, plus any NACA code typed with `N` on the
+  AIRFOIL page) on the same objective the optimiser will use — the lap, or a
+  weighted composite of seven criteria whose weights are the screen's rows —
+  and seeds the section from the winner. Every candidate is scored on the
+  labelled **estimate** polar (Hess-Smith slope, friction + form factor +
+  camber/thickness correlation, 3 ms); the wing then flies **XFOIL** wherever
+  the binary is on the machine (`/opt/homebrew/bin/xfoil`, ~1.6 s in a worker
+  thread, cached under `runs/library/polars`; `X` queues it). Every read-out
+  says which one it is looking at.
+* **end plate** — the tip panels carry a section of their own, chosen by the
+  same four steps, and the wing and plate **meet** (`drive/aero/blend.py`,
+  AeroBO's geometry to the bit): *plate blend* spends a fraction of the
+  plate's arc turning out of the wing plane on an `arc`, `smooth` or
+  `spiral` law, the plate's section and toe ramp on the turn, and the reach
+  is paid for out of the span row. *Junction interference* (Hoerner) is an
+  add-on, off by default. Blend 0 is the published right-angle corner.
+* **wing** — the design box is a table of **bands**: span, taper, tip
+  twist, plate height, incidence and ride height, with the chord derived
+  from area, span and taper. A horseshoe vortex lattice (cosine edges,
+  interlaced stations, tip plates, and for the top wing the track's
+  rigid-wall image: ground effect) flies the section at each strip's
+  effective angle, reads the polar for profile drag, and finds the stall by
+  the critical-section rule; it reproduces the AeroBO lattice to 1e-12. What
+  the 1 kHz physics gets is small: `CL = CL0 + CLα·α` clamped at the two
+  stalls, `CD = cd0 + cd1·CL + cd2·CL²`, `S`.
+* **mount** — `pylon` or `endplate`, and it is a real aerodynamic choice
+  rather than a label. A *pylon* mount stands the wing off on two struts and
+  pays for their wetted area plus a 1.3 form factor for the junction
+  interference (Hoerner ch. 8). An *endplate* mount carries the wing on its
+  tip plates instead: no strut in the flow, but the plates are forced to a
+  structural minimum (0.12 m on the top wing) and the reduced tip loss then
+  falls straight out of the lattice, not out of a correlation. Measured on
+  the 1.40 × 0.30 m S1223 top wing at h = 0.45 m: the endplate mount is
+  **lower drag and higher lift and lighter** than two pylons (CLα 4.131 →
+  4.595, e 1.199 → 1.505, cd0 363 → 340 counts, 4.96 → 3.52 kg).
+* **optimiser** — `O` runs a Gaussian-process Bayesian optimiser (Matérn
+  5/2, expected improvement, Sobol start; `K` continues the last run) on the
+  selected group, against the lap or, for a section, one of three composite
+  objectives. The budget is AeroBO's measured law, `evals = 9.61 + 3.08 d` at
+  the *balanced* effort (quick / balanced / thorough), with a Sobol seed of
+  `0.5 d` clamped to [4, 16]; both are rows. The convergence step shows the
+  best-so-far trace against a random search of the same budget so you can
+  see what BO bought.
+* **library** — `S` saves a wing; the LIBRARY page (`L` from the car) puts
+  any saved wing in a slot of the matching role and saves or loads whole
+  builds, so a wing designed for one car goes on the next.
+
+The mouse does on every page what the keyboard does: a click on a navigator
+step selects it (and is refused by the same gate), a click on the left or
+right half of a `< value >` is a `←` or a `→`, an action row selects on the
+first click and fires on the second, the wheel moves the selection and hover
+lights the row.
 
 Physics of the top wing, measured on this front-limited car: a rear wing
 mounted behind the rear axle *unloads* the front and costs corner speed
@@ -418,6 +483,69 @@ when not to carry the drag. The baseline cannot lap at all without the device;
 it had come to depend on the front grip its own wing rule was buying. It is
 trained on one track with one aero configuration, so it is a fast lap on a
 memorised circuit, not a general driver.
+
+### Deploy a swarm, and breed the best
+
+From the game: `ESC` → **Deploy swarm**. The page has *Cars* (8–64), *Seed*
+(none / your last seed lap / best saved swarm), *Generations*, *Sim time*,
+*Seed lap* and *Deploy*. *Seed lap* puts you on the start line, recording from
+the standing start; when you cross the line again a prompt asks the lap's name
+(ENTER saves `runs/swarm/seed_<map>_<car>_<name>.json`, ESC discards) and the
+page comes back with that lap as the seed, cursor on *Deploy*. `K` while
+driving does the same from the next line crossing. The swarm runs on the map,
+car and settings you are driving, in the same window; `ESC` in the swarm
+brings you back to the car. From the terminal:
+
+```
+python3 -m drive.drive --swarm 32                       # 32 cars, bred from the anchor driver
+python3 -m drive.drive --swarm 32 --swarm-seed latest   # ... from the last seed lap YOU drove
+python3 -m drive.drive --swarm 32 --swarm-seed drive/ml/checkpoints/swarm_arena.json
+python3 -m drive.drive --swarm-resume runs/swarm/<name>_state.json
+python3 -m drive.ml.swarm --pop 32 --gens 20 --seed runs/swarm/seed_arena_*.json --save   # headless
+```
+
+`--swarm N` is a **genetic algorithm** over a **free-wings** genome
+(`drive/ml/swarm.py`, 373 parameters): the same net with five outputs — steer,
+pedal and *one per wing* (left flank, right flank, top), so every car decides
+for itself which panel to run and may run both flanks at once as an air
+brake for a braking zone (`Controls.wing_cmd`; the physics path with it unset
+is bit-for-bit the published one). N cars on the map and car you were
+driving; every generation the top 15 % survive untouched and the rest are
+bred from tournament-picked parents by BLX crossover and gaussian mutation.
+Each genome carries its **own mutation step** (self-adaptive, log-normally
+inherited) and generation 0 is spread wide on purpose, so lineages diverge
+from the centreline instead of collapsing on the anchor's line. Fitness is
+the rollout reward above, then lap time as the tiebreak. A 4-output
+checkpoint from `train.py` seeds a swarm too (widened, so it starts by doing
+what it did); `--legacy-wings` on the headless CLI breeds the old head. The window **replays** each scored generation
+as ghost cars — green to red by rank, grey where a car went off, the best one
+drawn as the car with the camera on it — while the pool is already computing
+the next one (measured: 14.4 s a generation for 32 cars × 70 s on twelve
+cores, 2.5–2.9 s for 8 cars × 40 s). `SPACE`
+toggles auto-run, `ENTER` jumps to the next generation, `[` `]` change the
+playback speed, `C` the camera, `ESC` quits. `--swarm-gens G` stops after G
+generations; the whole population is saved to `runs/swarm/<name>_state.json`
+after every one and `--swarm-resume` continues it.
+
+**The user's lap as the base.** You decide *before* the lap: press `K` while
+driving (or launch with `--seed-lap`), and the next complete, valid lap from
+the start line is written to `runs/swarm/seed_<map>_<car>_<stamp>.json` — a
+100 Hz table of the car's published state and your controls, in the sim's own
+words and with no import of `drive.ml`. An invalid lap or a reset discards it
+and leaves the recorder armed; `K` again disarms. `--swarm-seed <that file>`
+(or `latest`) fits the residual net to your lap by behavioural cloning
+(`drive/ml/clone.py`) and makes that genome individual 0 of generation 0,
+unmutated, with the rest of the population its mutants; your lap also drives
+alongside the swarm in cyan. A seed is never assumed: `--swarm-seed none`
+(the default) breeds from the hand-written anchor, and a `Policy` checkpoint
+— from `train.py` or from an earlier swarm — seeds the same way.
+
+**Saving the best.** `K` in the swarm window (or `ESC`, if nothing was saved
+yet) first asks for the bot's name, then writes `drive/ml/checkpoints/swarm_<name>.json`: a plain `Policy`
+checkpoint with the swarm's lineage in its `meta` and the best lap
+**re-measured at 1 ms**. `--ml-drive` drives it, and the next swarm can
+`--swarm-seed` from it, so a base carries over from one iteration — or one car
+— to the next.
 
 ## Check it
 

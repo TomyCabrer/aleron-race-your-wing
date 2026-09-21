@@ -50,6 +50,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -84,6 +85,42 @@ SLOWMO_SCALE = 0.25          # -   the '[' key; multiplies dt_wall, NEVER DT_PHY
 
 LAP_WRAP_WINDOW = 20.0       # m   the wrap case of eq.17
 LAP_LOCKOUT_S = 3.0          # s   minimum lap; kills the double-fire
+#: The seed lap (K): the schema drive.ml.clone reads. `SEED_LAP_COLS` must
+#: match `drive/ml/clone.py`'s SEED_COLS by name; the self-check asserts it.
+SEED_LAP_KIND = "carsim-seed-lap-1"
+SEED_LAP_HZ = 100
+SEED_LAP_DIR = os.path.join("runs", "swarm")
+SEED_LAP_COLS = ("t", "x", "y", "psi", "u", "v", "r", "beta", "ay", "util_f",
+                 "util_r", "wing_deploy", "delta", "throttle", "brake", "wing_on")
+
+#: The pause menu's DEPLOY SWARM page: its rows, their choices and defaults.
+#: `seed`: 'none' = the anchor driver, 'latest' = the newest seed lap the
+#: user recorded with K, 'best' = the newest swarm checkpoint saved. `gens`
+#: 0 = keep breeding until ESC.
+SWARM_MENU_DEFAULTS = dict(pop=24, seed="none", gens=0, T=70.0)
+SWARM_MENU_CHOICES = dict(pop=(8, 12, 16, 24, 32, 48, 64),
+                          seed=("none", "latest", "best"),
+                          gens=(0, 3, 5, 10, 20, 50),
+                          T=(40.0, 55.0, 70.0, 90.0, 120.0))
+SWARM_SEED_LABELS = {"none": "None (the built-in driver)",
+                     "latest": "Your last seed lap",
+                     "best": "Best saved swarm"}
+SWARM_HELP = [("DEPLOY SWARM", [
+    ("Cars", "how many cars in each generation"),
+    ("Seed", "what generation 0 is bred from: nothing, the last seed lap"),
+    ("", "you drove, or the last swarm you saved"),
+    ("Generations", "0 = keep going until ESC"),
+    ("Sim time", "seconds each car gets per generation"),
+    ("Seed lap", "puts you on the line and records; at the line again"),
+    ("", "you name the lap and it is saved as the seed"),
+    ("Deploy", "runs the swarm in this window; ESC there comes back here"),
+])]
+SWARM_NOTE = ("The swarm is a genetic algorithm over the ML driver: every generation "
+              "the best cars are kept and the rest are bred from them. The window "
+              "replays each generation as ghost cars while the next is computed. "
+              "K in the swarm window saves the best as a checkpoint you can drive "
+              "with --ml-drive or breed from again.")
+
 DELTA_LOCK_DEG = 32.625      # deg road wheel = 522 deg at the wheel / 16.0
 MU_WET_SCALE = 0.632183908   # published, qss.sweep: 0.55/0.87
 AY_MAX_DRY = 8.4608          # m/s^2  derived: qss.max_ay(V) with k = 0
@@ -373,49 +410,61 @@ class Settings:
         opts.auto_gearbox = (self.gearbox == "auto")
         return self
 
-    def cycle(self, key: str) -> None:
-        """Advance one setting to its next value (the menu's ENTER)."""
+    def cycle(self, key: str, d: int = +1) -> None:
+        """Step one setting to its next (d=+1, the menu's ENTER / RIGHT) or
+        previous (d=-1, LEFT) value. Lists wrap; booleans toggle."""
+        d = +1 if d >= 0 else -1
+
+        def step(order, cur):
+            return order[(order.index(cur) + d) % len(order)]
+
         if key == "track":
-            order = trk.TRACK_ORDER
-            self.track = order[(order.index(self.track) + 1) % len(order)]
+            self.track = step(trk.TRACK_ORDER, self.track)
         elif key == "car":
-            self.car = CAR_MODES[(CAR_MODES.index(self.car) + 1) % len(CAR_MODES)]
+            self.car = step(CAR_MODES, self.car)
         elif key == "ballast":
-            # snap onto the ladder first: --ballast 137 then ENTER goes to 150,
-            # not to 137+25, so the row always shows a value from the list
-            nxt = next((v for v in BALLAST_STEPS if v > self.ballast + 1e-9),
-                       BALLAST_STEPS[0])
-            self.ballast = nxt
+            # snap onto the ladder first: --ballast 137 then ENTER goes to 150
+            # (LEFT to 100), not to 137+-25, so the row always shows a value
+            # from the list
+            if d > 0:
+                self.ballast = next((v for v in BALLAST_STEPS
+                                     if v > self.ballast + 1e-9), BALLAST_STEPS[0])
+            else:
+                self.ballast = next((v for v in reversed(BALLAST_STEPS)
+                                     if v < self.ballast - 1e-9), BALLAST_STEPS[-1])
         elif key == "ballast_at":
-            o = cars.BALLAST_STATIONS
-            self.ballast_at = o[(o.index(self.ballast_at) + 1) % len(o)]
+            self.ballast_at = step(cars.BALLAST_STATIONS, self.ballast_at)
         elif key == "engine":
-            self.engine = ENGINE_MODES[(ENGINE_MODES.index(self.engine) + 1)
-                                       % len(ENGINE_MODES)]
+            self.engine = step(ENGINE_MODES, self.engine)
         elif key == "tc":
             self.tc = not self.tc
         elif key == "sound":
-            self.sound = SOUND_MODES[(SOUND_MODES.index(self.sound) + 1)
-                                     % len(SOUND_MODES)]
+            self.sound = step(SOUND_MODES, self.sound)
         elif key == "gearbox":
-            self.gearbox = GEARBOX_MODES[(GEARBOX_MODES.index(self.gearbox) + 1)
-                                         % len(GEARBOX_MODES)]
+            self.gearbox = step(GEARBOX_MODES, self.gearbox)
         elif key == "abs":
             self.abs = not self.abs
         elif key == "steer_aid":
             self.steer_aid = not self.steer_aid
         elif key == "wet":
-            self.wet = SURFACE_MODES[(SURFACE_MODES.index(self.wet) + 1)
-                                     % len(SURFACE_MODES)]
+            self.wet = step(SURFACE_MODES, self.wet)
         elif key == "camera":
-            self.camera = CAMERA_MODES[(CAMERA_MODES.index(self.camera) + 1)
-                                       % len(CAMERA_MODES)]
+            self.camera = step(CAMERA_MODES, self.camera)
+
+
+# The settings whose change is a new session (a new map, or a new CarSpec:
+# tyre, wheel stations, static loads, roll block, powertrain). On the page
+# these are BROWSED with LEFT / RIGHT and applied with ENTER, so the driver
+# can read every option before committing to a rebuild.
+RESTART_KEYS = ("track", "wet", "car", "ballast", "ballast_at")
 
 
 SETTINGS_HELP = [
     ("SETTINGS", [
-        ("ENTER / CROSS", "cycle the value"),
-        ("ESC / CIRCLE", "back to the pause menu"),
+        ("LEFT / RIGHT", "step the value; map, surface, car and ballast"),
+        ("", "only preview here - ENTER / CROSS applies them"),
+        ("ENTER / CROSS", "cycle the value (apply a previewed one)"),
+        ("ESC / CIRCLE", "back to the pause menu (drops a preview)"),
         ("TAB", "next map (while driving)"),
         ("BACKSPACE", "garage (while driving; touchpad on the pad)"),
     ]),
@@ -457,8 +506,9 @@ SETTINGS_HELP = [
     ]),
 ]
 SETTINGS_NOTE = ("Map, surface, car and ballast changes restart the session - a "
-                 "different CarSpec is a different tyre, roll block and gearbox; "
-                 "the rest apply at once. Saved to runs/settings.json.")
+                 "different CarSpec is a different tyre, roll block and gearbox - "
+                 "so LEFT / RIGHT only browse them and ENTER applies; the rest "
+                 "apply at once. Saved to runs/settings.json.")
 
 
 # ==================================================================== #
@@ -537,7 +587,8 @@ def _ml_input(path: str, tr, opts):
         print(f"--ml-drive {path}: {type(exc).__name__}: {exc}")
         print("  falling back to the keyboard")
         return None
-    meta = {k: v for k, v in pol.meta.items() if k != "curve"}
+    #  minus the ES's learning curve and a swarm's per-generation history
+    meta = {k: v for k, v in pol.meta.items() if k not in ("curve", "history")}
     print(f"--ml-drive {path}\n  {meta}")
     if meta.get("track") and meta["track"] != getattr(tr, "name", None):
         print(f"  NOTE: trained on '{meta['track']}', driving '{tr.name}' -- "
@@ -734,6 +785,8 @@ class Sim:
         # and never saves them; the interactive session hands in the loaded
         # file and every change is written back.
         self.settings = settings if settings is not None else Settings(path="")
+        self._pending: dict = {}   # RESTART_KEYS browsed on the page but not
+        #                            applied: key -> the value the session runs
         self.gearbox = self.settings.gearbox
         self.audio = None          # audio.CarSound; only a windowed session
         self.sound_enabled = False # set by _interactive_session: the one place
@@ -783,7 +836,32 @@ class Sim:
         self._rtf_sim = 0.0
 
         self.wing_on = (wing != "off")
-        self.wing_side_mode = 0            # 0 auto, +1 force left, -1 force right
+
+        # --- the SEED LAP (K): the user decides BEFORE a lap that it is the
+        # one the swarm breeds from. Armed -> from the next start-line
+        # crossing every 100 Hz row of published state + controls is kept;
+        # a complete, VALID lap is written to runs/swarm/seed_*.json and the
+        # arm drops. An invalid lap (off track) or a reset discards the rows
+        # and keeps the arm. Plain JSON, written here with no import of
+        # drive.ml (CONTRACT: drive/ never imports it); drive.ml.clone reads it.
+        self.seed_armed = False
+        self.seed_rows = None          # None = not recording
+        self.seed_stride = max(1, int(round(1.0 / (SEED_LAP_HZ * self.dt))))
+        self.seed_saved: str | None = None
+        self._seed_msg = ""
+        self._seed_msg_until = -1
+        self._seed_t0 = 0.0            # sim time the recording opened
+        self._seed_valid = True        # no all-wheels-off step since it opened
+        #: the finished lap waits here for its name: (rows, lap_s). With a
+        #: window the TextPrompt asks; headless it is saved under a stamp.
+        self._seed_pending = None
+        self._seed_prompt = None
+        self._ui_text = None
+        self._prompt_was_paused = False
+        #: the G key: 0 auto (the car picks the outer flank), +1 left panel,
+        #: -1 right panel, 2 BOTH (air brake). Non-zero goes to the physics as
+        #: `Controls.wing_cmd` with the top wing left on its own law.
+        self.wing_side_mode = 0
         self.pose_prev = (self.veh.x, self.veh.y, self.veh.psi)
         self.events_log: list = []
         self.stop_reason = ""
@@ -794,7 +872,9 @@ class Sim:
         self.has_garage = False            # set by the interactive session
         self.hud_cfg = None                # the garage build's HudData fields
         self._menu_was_paused = False
-        self._menu_page = "main"           # 'main' | 'settings'
+        self._menu_page = "main"           # 'main' | 'settings' | 'swarm'
+        self.swarm_opts = dict(SWARM_MENU_DEFAULTS)   # the Deploy-swarm page
+        self.swarm_launch = None           # set when the page fires 'Deploy'
 
         self._bind_input()
         self._sample_surfaces()
@@ -860,6 +940,9 @@ class Sim:
         ctl = self.inp.update(dt, V, beta_deg, veh.rpm, veh.gear)
         if self.wing_on and not ctl.wing_on:
             ctl.wing_on = True             # the harness's F toggle, OR'd in
+        if self.wing_side_mode and ctl.wing_cmd is None:
+            ctl.wing_cmd = {1: (True, False, None), -1: (False, True, None),
+                            2: (True, True, None)}[self.wing_side_mode]
         self.ctl = ctl
 
         self.pose_prev = (veh.x, veh.y, veh.psi)
@@ -883,7 +966,14 @@ class Sim:
                 self.events_log.append(e)
                 if self.telem is not None and e[0] in ("lap", "sector"):
                     self.telem.mark(f"{e[0]}{e[1]}")
+                if e[0] in ("start", "lap"):
+                    self._seed_line(e)
         self._s_prev = s
+        if self.seed_rows is not None:
+            if not any(self.on_track4):
+                self._seed_valid = False
+            if self.n % self.seed_stride == 0:
+                self._seed_row()
 
         if self.n % self.skid_stride == 0:
             self._emit_skid()
@@ -1009,6 +1099,10 @@ class Sim:
         if not to_checkpoint:
             self.lap.reset()
             self.skid.clear()
+        if self.seed_rows is not None:
+            self.seed_rows = None          # a reset is not a lap; stays armed
+            self._seed_note("seed lap: discarded (reset)"
+                            + (" - still armed" if self.seed_armed else ""), 3.0)
 
     def unpause(self):
         self.paused = False
@@ -1072,6 +1166,8 @@ class Sim:
                 self.renderer.draw_frame(self.veh, self.pose_prev,
                                          self.alpha_render, self.ctl,
                                          hud, self.skid)
+                if self._seed_prompt is not None and self._seed_prompt.open:
+                    self._seed_prompt.draw(self.renderer.screen, self._ui_text)
                 self.renderer.present()
                 fb = getattr(self.inp, "feedback", None)
                 if fb is not None:
@@ -1148,13 +1244,13 @@ class Sim:
         v.pt_s.shift_phase, v.pt_s.clutch_auto = "none", 0.0
         v.gear = 0
 
-    def apply_setting(self, key: str) -> bool:
+    def apply_setting(self, key: str, d: int = +1) -> bool:
         """Cycle one setting, apply it live, save. Returns True when the
         session has to be rebuilt (a new map or a new surface set)."""
         s = self.settings
-        s.cycle(key)
+        s.cycle(key, d)
         restart = False
-        if key in ("track", "wet", "car", "ballast", "ballast_at"):
+        if key in RESTART_KEYS:
             # A different car, or different ballast, is a different CarSpec:
             # the tyre model, the wheel stations, the static loads, the
             # derived roll block and the powertrain params are all built in
@@ -1179,9 +1275,60 @@ class Sim:
         elif key == "camera":
             if self.renderer is not None:
                 self.renderer.cfg.mode = s.camera
-        if s.path:
-            s.save()
+        if restart:
+            self._pending.clear()      # this value IS the next session's
+        self._save_settings()
         return restart
+
+    def preview_setting(self, key: str, d: int) -> bool:
+        """LEFT / RIGHT on the settings page. A live setting is applied as
+        ENTER would; a RESTART_KEYS setting only changes the row, and the
+        first value it left is remembered so ESC can put it back and a
+        save in between does not write the preview. Returns True when the
+        row now shows a value the session is not running."""
+        s = self.settings
+        if key not in RESTART_KEYS:
+            self.apply_setting(key, d)
+            return False
+        orig = self._pending.get(key, getattr(s, key))
+        s.cycle(key, d)
+        if getattr(s, key) == orig:
+            self._pending.pop(key, None)
+        else:
+            self._pending[key] = orig
+        return bool(self._pending)
+
+    def commit_pending(self) -> bool:
+        """ENTER on a previewed row: the browsed values become the settings
+        (saved), and the session restarts on them. False if none pending."""
+        if not self._pending:
+            return False
+        self._pending.clear()
+        self._save_settings()
+        return True
+
+    def revert_pending(self) -> None:
+        """Leaving the page without ENTER: every browsed row goes back to
+        what the session runs."""
+        for key, val in self._pending.items():
+            setattr(self.settings, key, val)
+        self._pending.clear()
+
+    def _save_settings(self) -> None:
+        """Save what the session runs, never a preview: the file is what the
+        next launch builds."""
+        s = self.settings
+        if not s.path:
+            return
+        if not self._pending:
+            s.save()
+            return
+        shown = {k: getattr(s, k) for k in self._pending}
+        for k, v in self._pending.items():
+            setattr(s, k, v)
+        s.save()
+        for k, v in shown.items():
+            setattr(s, k, v)
 
     def restart(self) -> None:
         """End this session so the outer loop builds a new one from the
@@ -1192,6 +1339,10 @@ class Sim:
     # ---------------------------------------------------------------- #
     def handle_event(self, ev: str) -> None:
         """Discrete commands from poll_events(). Unknown strings are ignored."""
+        if self._seed_prompt is not None and self._seed_prompt.open:
+            if ev == "quit":               # window close; the keys go to the prompt
+                self.quit = True
+            return
         if self.menu is not None and self.menu.open:
             self._menu_event(ev)
             return
@@ -1223,13 +1374,20 @@ class Sim:
         elif ev == "wing":
             self.wing_on = not self.wing_on
         elif ev == "wing_side":
-            self.wing_side_mode = {0: +1, +1: -1, -1: 0}[self.wing_side_mode]
+            self.wing_side_mode = {0: +1, +1: -1, -1: 2, 2: 0}[self.wing_side_mode]
         elif ev == "wet":
             self.global_wet = (MU_WET_SCALE if self.global_wet == 1.0 else 1.0)
             self._sample_surfaces()
         elif ev == "marker":
             if self.telem is not None:
                 self.telem.mark("marker")
+        elif ev == "seed_lap":
+            self.seed_armed = not self.seed_armed
+            if not self.seed_armed:
+                self.seed_rows = None
+                self._seed_note("seed lap: disarmed", 3.0)
+            else:
+                self._seed_note("SEED LAP ARMED - recording starts at the line", 4.0)
         elif ev == "clear_skid":
             self.skid.clear()
         elif ev == "garage":
@@ -1263,6 +1421,7 @@ class Sim:
                  ("Full reset (skid marks + timing)", "full_reset")]
         if self.has_garage:
             items.append(("Garage: build the flank panel (3D)", "garage"))
+        items.append(("Deploy swarm: learning cars that breed", "swarm"))
         items.append(("Quit", "quit"))
         layout = getattr(self.inp, "layout", None)
         try:
@@ -1274,25 +1433,29 @@ class Sim:
         foot = "ESC / OPTIONS resume   R reset   SHIFT+R full reset   TAB next map"
         if self.has_garage:
             foot += "   BACKSPACE garage"
+        self.revert_pending()
         self.menu.show(items=items, sections=sections, subtitle=self._menu_subtitle(),
                        note=note, footer=foot, title="PAUSED", idx=idx, columns=2)
         self._menu_page = "main"
 
     def _settings_items(self) -> list:
         s = self.settings
-        rows = [(f"{'Map':<11s}{trk.TRACK_TITLES.get(s.track, s.track)}", "set:track"),
+        p = self._pending
+        mark = {k: ("  <- ENTER applies" if k in p else "") for k in RESTART_KEYS}
+        rows = [(f"{'Map':<11s}{trk.TRACK_TITLES.get(s.track, s.track)}"
+                 f"{mark['track']}", "set:track"),
                 (f"{'Car':<11s}{cars.car_name(s.car)}  "
-                 f"{s.car_base.m:.0f} kg", "set:car"),
-                (f"{'Ballast':<11s}{s.ballast_text()}", "set:ballast"),
-                (f"{'Ballast at':<11s}{cars.BALLAST_LABELS[s.ballast_at]}",
-                 "set:ballast_at"),
+                 f"{s.car_base.m:.0f} kg{mark['car']}", "set:car"),
+                (f"{'Ballast':<11s}{s.ballast_text()}{mark['ballast']}", "set:ballast"),
+                (f"{'Ballast at':<11s}{cars.BALLAST_LABELS[s.ballast_at]}"
+                 f"{mark['ballast_at']}", "set:ballast_at"),
                 (f"{'Engine':<11s}"
                  f"{engine_label(s.engine, self.veh.car)}", "set:engine"),
                 (f"{'Gearbox':<11s}{GEARBOX_LABELS[s.gearbox]}", "set:gearbox"),
                 (f"{'ABS':<11s}{'On' if s.abs else 'Off'}", "set:abs"),
                 (f"{'TC':<11s}{'On' if s.tc else 'Off'}", "set:tc"),
                 (f"{'Steer aid':<11s}{'On' if s.steer_aid else 'Off'}", "set:steer_aid"),
-                (f"{'Surface':<11s}{SURFACE_LABELS[s.wet]}", "set:wet"),
+                (f"{'Surface':<11s}{SURFACE_LABELS[s.wet]}{mark['wet']}", "set:wet"),
                 (f"{'Camera':<11s}{CAMERA_LABELS[s.camera]}", "set:camera"),
                 (f"{'Sound':<11s}{SOUND_LABELS[s.sound]}", "set:sound")]
         if self.has_garage:
@@ -1303,10 +1466,62 @@ class Sim:
     def _menu_show_settings(self, idx: int = 0) -> None:
         self.menu.show(items=self._settings_items(), sections=SETTINGS_HELP,
                        subtitle=self._menu_subtitle(), note=SETTINGS_NOTE,
-                       footer="ENTER / CROSS cycle   ESC / CIRCLE back   "
-                              "BACKSPACE garage", title="SETTINGS", idx=idx,
+                       footer="LEFT / RIGHT browse   ENTER / CROSS cycle, apply   "
+                              "ESC / CIRCLE back   BACKSPACE garage",
+                       title="SETTINGS", idx=idx,
                        columns=1)
         self._menu_page = "settings"
+
+    def _swarm_seed_available(self, key: str) -> str:
+        """What the seed choice would actually use, for the row's label."""
+        import glob
+        if key == "latest":
+            c = sorted(glob.glob(os.path.join(SEED_LAP_DIR, "seed_*.json")),
+                       key=os.path.getmtime)
+            mine = [p for p in c if f"seed_{self.track.name}_" in os.path.basename(p)]
+            return os.path.basename(mine[-1])[5:-5] if mine else "none recorded on this map"
+        if key == "best":
+            c = sorted(glob.glob(os.path.join("drive", "ml", "checkpoints", "swarm_*.json")),
+                       key=os.path.getmtime)
+            return os.path.basename(c[-1])[6:-5] if c else "none saved yet"
+        return ""
+
+    def _swarm_items(self) -> list:
+        o = self.swarm_opts
+        avail = self._swarm_seed_available(o["seed"])
+        seed = SWARM_SEED_LABELS[o["seed"]] + (f"  [{avail}]" if avail else "")
+        armed = ("recording now" if self.seed_rows is not None
+                 else "armed (K)" if self.seed_armed else "drive one now")
+        cfg = self.veh.cfg
+        if getattr(cfg, "has_designed", lambda: False)():
+            aero = "garage build"
+        elif cfg.wing != "off":
+            aero = f"{cfg.wing} flank panel"
+        else:                              # the swarm breeds THIS car: no wing,
+            aero = "NONE - fit one (garage / Aero)"   # nothing to deploy
+        return [(f"{'Aero':<13s}{aero}", "swarm_aero"),
+                (f"{'Cars':<13s}{o['pop']}", "set:sw_pop"),
+                (f"{'Seed':<13s}{seed}", "set:sw_seed"),
+                (f"{'Generations':<13s}{'until ESC' if not o['gens'] else o['gens']}",
+                 "set:sw_gens"),
+                (f"{'Sim time':<13s}{o['T']:.0f} s per car", "set:sw_T"),
+                (f"{'Seed lap':<13s}{armed}", "swarm_arm"),
+                ("Deploy the swarm", "swarm_go"),
+                ("Back", "swarm_back")]
+
+    def _menu_show_swarm(self, idx: int = 0) -> None:
+        self.menu.show(items=self._swarm_items(), sections=SWARM_HELP,
+                       subtitle=self._menu_subtitle(), note=SWARM_NOTE,
+                       footer="LEFT / RIGHT change   ENTER / CROSS cycle, select   "
+                              "ESC / CIRCLE back",
+                       title="DEPLOY SWARM", idx=idx, columns=1)
+        self._menu_page = "swarm"
+
+    def _swarm_step(self, key: str, d: int) -> None:
+        ch = SWARM_MENU_CHOICES[key]
+        cur = self.swarm_opts[key]
+        i = ch.index(cur) if cur in ch else 0
+        self.swarm_opts[key] = ch[(i + d) % len(ch)]
 
     def _menu_open(self) -> None:
         """ESC / OPTIONS. Pauses the accumulator and hands the inputs to the
@@ -1329,6 +1544,7 @@ class Sim:
             sm(True)
 
     def _menu_close(self) -> None:
+        self.revert_pending()
         self.menu.hide()
         self._menu_page = "main"
         sm = getattr(self.inp, "set_menu", None)
@@ -1356,15 +1572,67 @@ class Sim:
             if action in ("resume", "settings_back"):
                 self._menu_show_main(idx=1)
                 return
+            if action.startswith(("prev:", "next:")):
+                # LEFT / RIGHT: browse the row; nothing restarts here
+                if action[5:].startswith("set:"):
+                    self.preview_setting(action[9:], -1 if action[0] == "p" else +1)
+                    self._menu_show_settings(idx=idx)
+                return
             if action.startswith("set:"):
-                if self.apply_setting(action[4:]):
+                key = action[4:]
+                if key in self._pending:
+                    self.commit_pending()  # ENTER on a browsed row: apply it
+                    self._menu_close()
+                    self.restart()
+                elif self.apply_setting(key):
                     self._menu_close()
                     self.restart()
                 else:
                     self._menu_show_settings(idx=idx)
                 return
+        if self._menu_page == "swarm":
+            idx = self.menu.idx
+            if action in ("resume", "swarm_back"):
+                self._menu_show_main()
+                self.menu.idx = len(self.menu.items) - 2      # the Deploy row
+                return
+            if action.startswith(("prev:", "next:")):
+                if action[5:].startswith("set:sw_"):
+                    self._swarm_step(action[12:], -1 if action[0] == "p" else +1)
+                    self._menu_show_swarm(idx=idx)
+                return
+            if action.startswith("set:sw_"):
+                self._swarm_step(action[7:], +1)
+                self._menu_show_swarm(idx=idx)
+                return
+            if action == "swarm_arm":
+                # the seed lap, now: back to the line, recording from the
+                # standing start; the lap closes at the line and asks its name
+                self._menu_close()
+                self.seed_armed = False
+                self.reset(to_checkpoint=False)
+                self._seed_open()
+                self._seed_note("SEED LAP: GO - recording from the line; "
+                                "cross it again to finish", 5.0)
+                return
+            if action == "swarm_go":
+                self._menu_close()
+                self.swarm_launch = dict(self.swarm_opts)
+                self.stop_reason = "swarm"
+                self.quit = True
+                return
+            if action in ("reset", "full_reset", "garage"):
+                pass                       # the hotkeys fall through below
+            else:
+                self._menu_show_swarm(idx=idx)
+                return
+        elif action.startswith(("prev:", "next:")):
+            return                         # LEFT / RIGHT mean nothing on the pause page
         elif action == "settings":
             self._menu_show_settings()
+            return
+        elif action == "swarm":
+            self._menu_show_swarm()
             return
         self._menu_close()
         if action == "reset":
@@ -1400,6 +1668,135 @@ class Sim:
             cfg.show_skid = not cfg.show_skid
 
     # ---------------------------------------------------------------- #
+    #  THE SEED LAP                                                    #
+    # ---------------------------------------------------------------- #
+    def _seed_note(self, msg: str, secs: float) -> None:
+        self._seed_msg = msg
+        self._seed_msg_until = self.n + int(round(secs / self.dt))
+        print(msg)
+
+    def _seed_hud(self) -> str:
+        if self.n < self._seed_msg_until and self._seed_msg:
+            return self._seed_msg
+        if self.seed_rows is not None:
+            return f"SEED LAP recording  {self.lap.lap_time:6.2f} s"
+        if self.seed_armed:
+            return "SEED LAP armed"
+        return ""
+
+    def _seed_open(self) -> None:
+        self.seed_rows = []
+        self._seed_t0 = self.t
+        self._seed_valid = True
+        self._seed_row()
+
+    def _seed_line(self, e) -> None:
+        """A start-line crossing: close a recording lap, open a new one.
+
+        A recording opened at the line (K) closes at the next `lap` event; one
+        opened at a standing start on the line (the menu's Drive seed lap)
+        closes at the next crossing of any kind, which the timer calls
+        `start`. Either way the lap is the rows between, and its time the
+        crossing minus the opening."""
+        if self.seed_rows is not None and e[0] in ("start", "lap"):
+            lap_s = float(e[2]) - self._seed_t0
+            if lap_s < 5.0:
+                return                     # the crossing that opened it
+            valid = self._seed_valid and (e[0] != "lap" or self.lap.lap_valid)
+            rows = self.seed_rows
+            self.seed_rows = None
+            if valid and len(rows) > 10:
+                self.seed_armed = False
+                self._seed_finish(rows, lap_s)
+                return
+            self._seed_note("seed lap: invalid (off track) - discarded"
+                            + (", still armed" if self.seed_armed else ""), 4.0)
+        if self.seed_armed and self.seed_rows is None:
+            self._seed_open()
+
+    def _seed_row(self) -> None:
+        v, c = self.veh, self.ctl
+        self.seed_rows.append([
+            self.t, v.x, v.y, v.psi, v.u, v.v, v.r, v.beta, v.ay,
+            v.util_f, v.util_r, v.wing_deploy,
+            c.delta, c.throttle, c.brake, 1.0 if self.wing_on else 0.0])
+
+    @staticmethod
+    def _seed_safe_name(name: str) -> str:
+        return re.sub(r"[^A-Za-z0-9_-]+", "_", name or "").strip("_")[:40]
+
+    def _seed_finish(self, rows: list, lap_s: float) -> None:
+        """The lap is complete and valid: ask its name (window), or save it
+        under a time stamp (headless / no keyboard to type on)."""
+        kb = getattr(self.inp, "kb", self.inp)
+        if self.renderer is None or not hasattr(kb, "key_sink"):
+            path = self._seed_save(lap_s, rows)
+            self._seed_note(f"SEED LAP SAVED {lap_s:.2f} s -> {path}", 8.0)
+            return
+        try:
+            from . import garage_ui as _gui
+            if self._seed_prompt is None:
+                self._seed_prompt = _gui.TextPrompt()
+                self._ui_text = _gui.Text(_gui.Fonts(1.0))
+        except Exception as exc:           # noqa: BLE001
+            print(f"seed lap: no name prompt ({type(exc).__name__}: {exc})")
+            path = self._seed_save(lap_s, rows)
+            self._seed_note(f"SEED LAP SAVED {lap_s:.2f} s -> {path}", 8.0)
+            return
+        self._seed_pending = (rows, lap_s)
+        self._seed_prompt.show(f"SEED LAP {lap_s:.2f} s  -  name it", "",
+                               "ENTER save (empty = date stamp)   ESC discard")
+        self._prompt_was_paused = self.paused
+        self.paused = True
+        sm = getattr(self.inp, "set_menu", None)
+        if sm is not None:
+            sm(True)                       # pedals off while typing
+        kb.key_sink = self._seed_prompt_key
+
+    def _seed_prompt_key(self, ev) -> None:
+        r = self._seed_prompt.handle(ev)
+        if r is None:
+            return
+        kb = getattr(self.inp, "kb", self.inp)
+        kb.key_sink = None
+        sm = getattr(self.inp, "set_menu", None)
+        if sm is not None:
+            sm(False)
+        if not self._prompt_was_paused:
+            self.unpause()
+        rows, lap_s = self._seed_pending
+        self._seed_pending = None
+        if r != "ok":
+            self._seed_note("seed lap: discarded", 3.0)
+            return
+        path = self._seed_save(lap_s, rows, self._seed_prompt.value)
+        self._seed_note(f"SEED LAP SAVED {lap_s:.2f} s -> {path}", 8.0)
+        # straight to the swarm page with this lap as the seed: Deploy is one press
+        if self.renderer is not None:
+            self.swarm_opts["seed"] = "latest"
+            self._menu_open()
+            self._menu_show_swarm()
+            self.menu.idx = len(self.menu.items) - 2
+
+    def _seed_save(self, lap_s: float, rows: list, name: str = "") -> str:
+        os.makedirs(SEED_LAP_DIR, exist_ok=True)
+        name = self._seed_safe_name(name) or time.strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(SEED_LAP_DIR,
+                            f"seed_{self.track.name}_{self.settings.car}_{name}.json")
+        d = dict(kind=SEED_LAP_KIND, track=self.track.name, car=self.settings.car,
+                 name=name, wing=self.wing, lap_time=lap_s, hz=SEED_LAP_HZ, dt=self.dt,
+                 lock_rad=float(getattr(self.veh, "lock_rad", 0.0)),
+                 mu_scale=float(self.veh.cfg.mu_scale), global_wet=self.global_wet,
+                 settings=self.settings.as_dict(),
+                 cols=list(SEED_LAP_COLS), rows=rows)
+        tmp = path + ".part"
+        with open(tmp, "w") as fh:
+            json.dump(d, fh)
+        os.replace(tmp, path)
+        self.seed_saved = path
+        return path
+
+    # ---------------------------------------------------------------- #
     def hud_data(self):
         """Everything the HUD shows, assembled once per frame.
 
@@ -1417,6 +1814,8 @@ class Sim:
             Fz=np.asarray(v.Fz), mu=np.asarray(self.mu),
             wing_on=self.wing_on, wing_deploy=v.wing_deploy,
             wing_side=v.wing_side, F_wing=v.F_wing, D_wing=v.D_wing,
+            wing_deploy_l=getattr(v, "wing_deploy_l", None),
+            wing_deploy_r=getattr(v, "wing_deploy_r", None),
             lap=self.lap.lap, lap_time=self.lap.lap_time,
             last_lap=self.lap.last_lap, best_lap=self.lap.best_lap,
             sector=self.lap.sector, sector_times=list(self.lap.sector_times),
@@ -1441,6 +1840,7 @@ class Sim:
             car_name=cars.car_name(self.settings.car), mass_kg=v.car.m,
             F_top=float(getattr(v, "F_top", 0.0)), D_top=float(getattr(v, "D_top", 0.0)),
             top_deploy=float(getattr(v, "top_deploy", 0.0)),
+            msg=self._seed_hud(),
         )
         if self.hud_cfg:
             d.update(self.hud_cfg)          # the garage build's wing geometry
@@ -2963,6 +3363,7 @@ def _v26_settings_and_menu(tmp, verbose=True):
         added -- which is how a settings test stops testing settings. Look
         the row up instead."""
         tgt = [a for _, a in sim._settings_items()].index(action)
+        assert sim.menu.open and sim._menu_page == "settings", "not on the page"
         while sim.menu.idx < tgt:
             ev("nav_down")
         while sim.menu.idx > tgt:
@@ -3043,6 +3444,42 @@ def _v26_settings_and_menu(tmp, verbose=True):
     ev("track_next")                                # TAB: open -> skidpad
     tab_ok = sim.stop_reason == "restart" and st.track == "skidpad"
     sim.quit, sim.stop_reason = False, ""
+    # browse before committing: LEFT / RIGHT on a restart row only change the
+    # row (and what the file says stays the running value); ESC drops the
+    # browse; ENTER on a browsed row applies it and restarts
+    ev("menu"); ev("nav_down"); ev("select")        # settings
+    goto("set:track")
+    ev("nav_right")                                 # skidpad -> dragstrip, preview
+    prev_ok = (st.track == "dragstrip" and not sim.quit and sim.menu.open
+               and sim._pending == {"track": "skidpad"}
+               and "ENTER applies" in sim._settings_items()[sim.menu.idx][0])
+    goto("set:abs")
+    ev("select")                                    # a live change saves: not the preview
+    prev_ok = prev_ok and Settings.load(path).track == "skidpad" and st.track == "dragstrip"
+    goto("set:track")
+    ev("nav_left")                                  # back where it was: nothing pending
+    prev_ok = prev_ok and st.track == "skidpad" and not sim._pending
+    ev("nav_right"); ev("nav_right")                # dragstrip -> arena (wraps)
+    goto("set:car")
+    ev("nav_left")                                  # corsa -> 540i (wraps back)
+    ev("menu")                                      # ESC: the browse is dropped
+    prev_ok = (prev_ok and st.track == "skidpad" and st.car == CAR_DEFAULT
+               and not sim._pending and sim._menu_page == "main" and not sim.quit)
+    ev("select"); goto("set:track")                 # the cursor is on Settings
+    ev("nav_right"); ev("nav_left"); ev("nav_left")  # -> open
+    ev("select")                                    # ENTER applies -> restart
+    prev_ok = (prev_ok and st.track == "open" and sim.quit
+               and sim.stop_reason == "restart" and not sim.menu.open
+               and not sim._pending and Settings.load(path).track == "open")
+    goto_back = st.track
+    sim.quit, sim.stop_reason = False, ""
+    ev("menu"); ev("nav_down"); ev("select"); goto("set:gearbox")
+    ev("nav_left")                                  # LEFT on a live row: manual -> auto
+    prev_ok = prev_ok and st.gearbox == "auto" and sim.gearbox == "auto" and sim.menu.open
+    ev("nav_right")                                 # and back
+    prev_ok = prev_ok and st.gearbox == "manual" and goto_back == "open"
+    ev("menu"); ev("menu")
+    sim.quit, sim.stop_reason = False, ""
     ev("garage")
     gar_ok = sim.stop_reason == "garage" and sim.quit
     sim.quit, sim.stop_reason = False, ""
@@ -3054,14 +3491,16 @@ def _v26_settings_and_menu(tmp, verbose=True):
     gar2_ok = sim.stop_reason == "garage" and sim.quit and not sim.menu.open
     ok = all((rt_ok, clamp_ok, cli_ok, cycle_ok, car_ok, m_open, page_ok,
               eng_ok, gb_ok, abs_ok, tc_ok, aid_ok, cam_ok, snd_ok, row_ok,
-              saved_ok, back_ok, closed_ok, map_ok, tab_ok, gar_ok, gar2_ok))
+              saved_ok, back_ok, closed_ok, map_ok, tab_ok, prev_ok, gar_ok,
+              gar2_ok))
     if verbose:
         print(f"  V26 settings    : round-trip {rt_ok}, clamp {clamp_ok}, cli {cli_ok}, "
               f"cycle {cycle_ok}; menu open {m_open}, settings page {page_ok}, "
               f"engine {eng_ok}, gearbox {gb_ok}, abs {abs_ok}, tc {tc_ok}, aid {aid_ok}, "
               f"camera {cam_ok}, sound {snd_ok}, saved {saved_ok}, back {back_ok}, "
               f"closed {closed_ok}, map restart {map_ok}, TAB {tab_ok}, "
-              f"garage {gar_ok}/{gar2_ok}; car/ballast {car_ok}, rows {row_ok}")
+              f"browse {prev_ok}, garage {gar_ok}/{gar2_ok}; car/ballast {car_ok}, "
+              f"rows {row_ok}")
     return ok, dict(round_trip=rt_ok, cli=cli_ok, car=car_ok and row_ok,
                     menu=m_open and page_ok and eng_ok and gb_ok and tc_ok and snd_ok,
                     map_restart=map_ok, garage=gar_ok and gar2_ok)
@@ -3295,11 +3734,11 @@ def self_check(verbose=True) -> bool:
 KEYS_HELP = """\
 ARROW UP throttle | ARROW DOWN brake | ARROW LEFT/RIGHT steer | LSHIFT fine
 Z clutch | SPACE handbrake | S starter | E shift up | Q shift down
-F flank-wing toggle | G cycle wing side (auto / left / right)
+F flank-wing toggle | G cycle wing side (auto / left / right / both = air brake)
 R reset to last sector line | SHIFT+R full reset
 P pause | O single physics step | [ ] slow-mo 0.25x / 1.0x
 C camera | - / = zoom | 0 auto zoom | H HUD | V vectors | B g-g | N skid | X clear
-T toggle wet | M telemetry marker | L toggle recording | TAB next map
+T toggle wet | M telemetry marker | L toggle recording | K arm a SEED LAP for the swarm | TAB next map
 BACKSPACE garage (3D panel editor) | ESC menu: settings (map, engine, gearbox, ABS, TC, aids, sound), reset, quit
 PS5 pad: R2 throttle | L2 brake | L-stick steer | R1/L1 shift | CROSS handbrake | SQUARE clutch
          CIRCLE wing | TRIANGLE wing side | OPTIONS menu | CREATE reset | TOUCHPAD garage
@@ -3349,6 +3788,25 @@ def build_parser():
     p.add_argument("--garage", action="store_true",
                    help="open the 3D editor first; ENTER / cross drives the "
                         "car you built, BACKSPACE / touchpad comes back")
+    p.add_argument("--seed-lap", dest="seed_lap", action="store_true",
+                   help="start with the seed-lap recorder ARMED (the K key): the "
+                        "next complete valid lap is saved to runs/swarm/ for --swarm-seed")
+    p.add_argument("--swarm", type=int, default=None, metavar="N",
+                   help="deploy a swarm of N learning cars on this map and car "
+                        "(drive.ml.swarm, a genetic algorithm); the window replays "
+                        "each generation while the next one is computed")
+    p.add_argument("--swarm-seed", dest="swarm_seed", default="none",
+                   help="'none' (the anchor driver), a seed lap the user drove "
+                        "(runs/swarm/seed_*.json), or a Policy checkpoint to breed from")
+    p.add_argument("--swarm-gens", dest="swarm_gens", type=int, default=0,
+                   help="stop auto-running after this many generations (0 = until ESC)")
+    p.add_argument("--swarm-T", dest="swarm_T", type=float, default=70.0,
+                   help="s of sim per car per generation")
+    p.add_argument("--swarm-name", dest="swarm_name", default=None,
+                   help="name of the run (runs/swarm/<name>_state.json, "
+                        "drive/ml/checkpoints/swarm_<name>.json)")
+    p.add_argument("--swarm-resume", dest="swarm_resume", default=None,
+                   help="continue a swarm from its runs/swarm/*_state.json")
     p.add_argument("--tyre", default=tlm.DEFAULT_TYRE_FILE)
     p.add_argument("--dt", type=float, default=DT_PHYS)
     p.add_argument("--fps", type=int, default=FPS)
@@ -3510,6 +3968,10 @@ def main(argv=None) -> int:
               f"best={sim.lap.best_lap:.3f} s, csv={opts.telemetry}")
         return 0
 
+    # ---- the swarm ------------------------------------------------
+    if opts.swarm is not None or opts.swarm_resume:
+        return run_swarm_cli(opts)
+
     # ---- interactive ----------------------------------------------
     return run_interactive_cli(opts)
 
@@ -3577,7 +4039,493 @@ def run_interactive_cli(opts) -> int:
     settings = Settings.load().apply_cli(opts)
     settings.save()
     w, h = (int(v) for v in opts.size.lower().split("x"))
+    grg, design, lib = _resolve_design(opts)
 
+    mode = "garage" if (opts.garage and grg is not None) else "drive"
+    pad = None
+    try:
+        while True:
+            if mode == "garage":
+                g = grg.Garage((w, h), design, pad=pad, lib=lib)
+                action = g.run()
+                design, pad = g.build, g.pad
+                if action != "drive":
+                    break
+                design.save()
+                _apply_design(opts, design, lib)
+                print(f"garage -> drive: {design.summary(lib)}")
+                mode = "drive"
+            sim = _interactive_session(opts, pad=pad, settings=settings,
+                                       garage=(grg is not None))
+            pad = getattr(sim.inp, "pad", pad)
+            if sim.stop_reason == "garage" and grg is not None:
+                mode = "garage"
+                continue
+            if sim.stop_reason == "swarm":
+                # the pause menu's Deploy: the swarm runs in THIS window on
+                # this session's car and map, then ESC brings a new session
+                # back here with the same settings
+                launch = sim.swarm_launch or dict(SWARM_MENU_DEFAULTS)
+                opts.swarm = int(launch["pop"])
+                opts.swarm_seed = launch["seed"]
+                opts.swarm_gens = int(launch["gens"])
+                opts.swarm_T = float(launch["T"])
+                opts.swarm_resume = None
+                opts.swarm_name = None
+                try:
+                    run_swarm_cli(opts, settings=settings, embedded=True)
+                except Exception as exc:
+                    print(f"swarm: {type(exc).__name__}: {exc}")
+                opts.swarm = None
+                opts.swarm_menu = dict(launch)     # the page remembers its values
+                continue
+            if sim.stop_reason == "restart":
+                continue
+            break
+    finally:
+        pygame.quit()
+    return 0
+
+
+# ==================================================================== #
+#  THE SWARM  (drive.ml.swarm behind a window)                          #
+# ==================================================================== #
+#: playback speeds the [ ] keys step through
+SWARM_SPEEDS = (0.5, 1.0, 2.0, 4.0, 8.0)
+#: ghost colours: the ranked population from best (green) to worst (red),
+#: a crashed car's last pose (grey), the user's own seed lap (cyan)
+C_SWARM_BEST = (90, 200, 110)
+C_SWARM_WORST = (200, 80, 70)
+C_SWARM_DEAD = (95, 95, 95)
+C_SWARM_USER = (80, 200, 230)
+
+
+def _lerp3(a, b, t):
+    t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+    return (int(a[0] + (b[0] - a[0]) * t), int(a[1] + (b[1] - a[1]) * t),
+            int(a[2] + (b[2] - a[2]) * t))
+
+
+class _Replay:
+    """One car's rollout trace, (t, x, y, psi, u, wing_deploy, wing_side)
+    every 20 training steps, interpolated at any playback time."""
+
+    __slots__ = ("arr", "t_end", "alive_to_end", "colour", "label")
+
+    def __init__(self, trace, colour, alive_to_end: bool, label: str = ""):
+        a = np.asarray(trace, dtype=np.float64)
+        if a.ndim != 2 or len(a) == 0:
+            a = np.zeros((1, 7))
+        self.arr = a
+        self.t_end = float(a[-1, 0])
+        self.alive_to_end = bool(alive_to_end)
+        self.colour = colour
+        self.label = label
+
+    def pose(self, tau: float):
+        """(x, y, psi, u, wing_deploy, wing_side, alive) at playback time tau."""
+        a = self.arr
+        if tau >= self.t_end:
+            r = a[-1]
+            return r[1], r[2], r[3], r[4], r[5], int(r[6]), self.alive_to_end
+        i = int(np.searchsorted(a[:, 0], tau, side="right"))
+        if i <= 0:
+            r = a[0]
+            return r[1], r[2], r[3], r[4], r[5], int(r[6]), True
+        r0, r1 = a[i - 1], a[i]
+        f = (tau - r0[0]) / max(r1[0] - r0[0], 1e-9)
+        psi = r0[3] + _wrap_pi(r1[3] - r0[3]) * f
+        return (r0[1] + (r1[1] - r0[1]) * f, r0[2] + (r1[2] - r0[2]) * f, psi,
+                r0[4] + (r1[4] - r0[4]) * f, r0[5] + (r1[5] - r0[5]) * f,
+                int(r1[6]), True)
+
+
+def _swarm_seed_spec(spec: str | None) -> str:
+    """'none' | a path that exists | 'none' with a note. ('latest' and
+    'best' are resolved to a path by `run_swarm_cli` before this.)"""
+    if not spec or spec == "none":
+        return "none"
+    if not os.path.exists(spec):
+        print(f"--swarm-seed {spec}: not found; breeding from the anchor driver")
+        return "none"
+    return spec
+
+
+def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
+    """`--swarm N`: a population of N learning cars on the session's map and
+    car. The window REPLAYS a scored generation as ghost cars (the best one is
+    drawn as the car and carries the camera) while the pool is already
+    computing the next; the user's own seed lap, if one was given, drives
+    alongside in cyan. Keys:
+
+        SPACE  auto-run on / off        ENTER  next generation now
+        K      name + save the best   [ ]    playback speed
+        C      camera                   - = 0  zoom          ESC  quit
+
+    `K` (and ESC, if nothing was saved) writes `drive/ml/checkpoints/
+    swarm_<name>.json` -- a plain `Policy` that `--ml-drive` drives and that a
+    later `--swarm-seed` breeds from -- with the best lap RE-MEASURED at the
+    contract's 1 ms step. The whole population is saved to `runs/swarm/
+    <name>_state.json` after every generation and `--swarm-resume` continues
+    it. drive.ml is imported HERE and nowhere else on this path.
+    """
+    try:
+        import pygame
+    except Exception as exc:
+        print(f"pygame unavailable ({exc}); use `python3 -m drive.ml.swarm` headless")
+        return 1
+    try:
+        from .ml.swarm import Swarm
+        from .ml import clone as ml_clone
+    except Exception as exc:
+        print(f"--swarm: drive.ml unavailable ({type(exc).__name__}: {exc})")
+        return 1
+    from types import SimpleNamespace
+
+    if not embedded:
+        pygame.init()
+        settings = Settings.load().apply_cli(opts)
+        settings.save()
+        _resolve_design(opts)
+    w, h = (int(v) for v in opts.size.lower().split("x"))
+    tr, car, cfg_kwargs, global_wet = _session_car(opts, settings)
+    if global_wet != 1.0:
+        #  the rollout has no global wet; the same physics reached through
+        #  the config's grip scale (vehicle.py: mu[i] * cfg.mu_scale)
+        cfg_kwargs = dict(cfg_kwargs, mu_scale=cfg_kwargs["mu_scale"] * global_wet)
+    track_kw = dict(radius=opts.radius, cw=opts.cw, surfaces=(opts.wet != "none"))
+    car_name = settings.car
+
+    user_replay = None
+    user_lap = None
+    if opts.swarm_seed == "best":
+        import glob
+        c = sorted(glob.glob(os.path.join("drive", "ml", "checkpoints", "swarm_*.json")),
+                   key=os.path.getmtime)
+        opts.swarm_seed = c[-1] if c else "none"
+        if not c:
+            print("swarm seed 'best': no swarm checkpoint saved yet; breeding from the anchor")
+    if opts.swarm_seed == "latest":
+        #  the newest seed lap ON THIS MAP: a lap from another circuit would
+        #  be refused by the clone anyway, and the menu labels it the same way
+        import glob
+        c = sorted((p for p in glob.glob(os.path.join(SEED_LAP_DIR, "seed_*.json"))
+                    if f"seed_{tr.name}_" in os.path.basename(p)), key=os.path.getmtime)
+        opts.swarm_seed = c[-1] if c else "none"
+        if not c:
+            print(f"swarm seed 'latest': no seed lap recorded on {tr.name} "
+                  f"(ESC > Deploy swarm > Drive seed lap); breeding from the anchor driver")
+    if opts.swarm_resume:
+        sw = Swarm.load_state(opts.swarm_resume, car=car, cfg_kwargs=cfg_kwargs)
+        print(f"swarm: resumed {sw.name} at generation {sw.gen} "
+              f"({len(sw.history)} scored)")
+        if sw.seed_source.startswith("lap:"):
+            cand = os.path.join(SEED_LAP_DIR, sw.seed_source[4:])
+            if os.path.exists(cand):
+                seed = ml_clone.load_seed_lap(cand)
+                user_replay = _Replay(ml_clone.seed_lap_trace(seed), C_SWARM_USER, True, "you")
+                user_lap = seed.get("lap_time")
+    else:
+        spec = _swarm_seed_spec(opts.swarm_seed)
+        sw = Swarm(pop=int(opts.swarm), track=tr.name, wing=opts.wing, car=car,
+                   cfg_kwargs=cfg_kwargs, T=opts.swarm_T, name=opts.swarm_name,
+                   track_kw=track_kw, car_name=car_name)
+        try:
+            sw.seed_from(spec, tr)
+        except Exception as exc:
+            print(f"--swarm-seed {spec}: {type(exc).__name__}: {exc}; "
+                  f"breeding from the anchor driver")
+            sw.seed_from("none", tr)
+        if sw.seed_source.startswith("lap:"):
+            seed = ml_clone.load_seed_lap(spec)
+            user_replay = _Replay(ml_clone.seed_lap_trace(seed), C_SWARM_USER, True, "you")
+            user_lap = seed.get("lap_time")
+        print(f"swarm {sw.name}: {sw.pop} cars, seed {sw.seed_source}, "
+              f"{tr.title or tr.name}, {cars.car_name(car_name)} {car.m:.0f} kg, "
+              f"wing {opts.wing}, T {sw.T:.0f} s, {sw.workers} workers")
+
+    from . import render as rnd
+    rnd.set_car(car)
+    cfgv = rnd.ViewConfig(size=(w, h), fps=opts.fps, mode=settings.camera or "car_up")
+    cfgv.hud = "off"
+    cfgv.show_vectors = False
+    cfgv.show_gg = False
+    renderer = rnd.Renderer(cfgv, tr, headless=(opts.render == "offscreen"))
+    print("swarm: SPACE auto-run | ENTER next generation | K name + save best | [ ] speed | "
+          "C camera | - = 0 zoom | ESC quit")
+
+    replays: list = []
+    shown = None                    # the history row of the generation on screen
+    tau = 0.0
+    speed_i = 1
+    autorun = True
+    saved_path = None
+    saved_measured = None
+    note, note_until = "", 0.0
+    measuring = None                # (AsyncResult, pool) while re-measuring the best
+    gens_target = int(opts.swarm_gens or 0)
+    gens_done_at_start = len(sw.history)
+    clock = pygame.time.Clock()
+    running = True
+    want_next = False
+    closing = False                 # ESC pressed: saving, then out
+    t_shown = time.perf_counter()
+    bot_name = sw.name              # what the checkpoint is called; the prompt sets it
+    prompt = None                   # the name prompt (garage_ui.TextPrompt), when open
+    prompt_then = None              # 'save' (K) or 'close' (ESC): what follows ENTER
+    ui_text = None
+    try:
+        from . import garage_ui as _gui
+        ui_text = _gui.Text(_gui.Fonts(1.0))
+    except Exception as exc:        # no prompt widget: save under the swarm's name
+        print(f"swarm: name prompt unavailable ({type(exc).__name__}: {exc})")
+
+    def _ask_name(then: str):
+        """Open the name prompt; ENTER runs `then`. Without the widget, run it now."""
+        nonlocal prompt, prompt_then
+        if ui_text is None:
+            return False
+        prompt = _gui.TextPrompt()
+        prompt.show("name this bot", "",
+                    f"ENTER save (empty = {bot_name})   ESC "
+                    + ("save under the swarm's name" if then == "close" else "cancel"))
+        prompt_then = then
+        return True
+
+    def _begin_close():
+        nonlocal closing, autorun, measuring, note, note_until
+        closing = True
+        autorun = False
+        sw.stop()          # the breeding pool goes; the CPUs are the measurement's
+        if sw.best is not None and saved_path is None:
+            if measuring is None:
+                measuring = sw.measure_best_async()
+            note = (f"!saving {bot_name}: measuring its lap at 1 ms ... "
+                    "(ESC again = save it now, unmeasured)")
+            note_until = time.perf_counter() + 600.0
+            return True
+        return measuring is not None
+
+    def _save_now(measured=None):
+        nonlocal saved_path, saved_measured, note, note_until
+        try:
+            saved_path, saved_measured = sw.save_best(measured=measured, measure=False,
+                                                      name=bot_name)
+            lb = (measured or {}).get("best")
+            note = (f"!SAVED {saved_path}   "
+                    + (f"lap at 1 ms: {lb:.2f} s" if lb else
+                       ("lap at 1 ms: no flying lap" if measured else "not re-measured"))
+                    + "   drive it: --ml-drive")
+            print(note.lstrip("!"), "|", json.dumps(measured or {}, default=str))
+        except Exception as exc:
+            note = f"!save failed: {type(exc).__name__}: {exc}"
+            print(note)
+        note_until = time.perf_counter() + 10.0
+
+    try:
+        sw.start_evaluation()
+        while running:
+            dt_wall = clock.tick_busy_loop(opts.fps) / 1000.0
+            now = time.perf_counter()
+            for ev in pygame.event.get():
+                if ev.type == pygame.QUIT:
+                    running = False
+                elif ev.type == pygame.KEYDOWN and prompt is not None:
+                    #  the name prompt owns the keyboard while it is open
+                    res = prompt.handle(ev)
+                    if res is None:
+                        continue
+                    value = prompt.value
+                    prompt = None
+                    if res == "ok" and value.strip():
+                        bot_name = value.strip()
+                    if prompt_then == "save":
+                        if res == "ok" and sw.best is not None and measuring is None:
+                            measuring = sw.measure_best_async()
+                            note, note_until = f"!measuring {bot_name} at 1 ms ...", now + 60.0
+                    elif prompt_then == "close":
+                        if not _begin_close():
+                            running = False
+                    prompt_then = None
+                elif ev.type == pygame.KEYDOWN:
+                    k = ev.key
+                    if k == pygame.K_ESCAPE:
+                        if closing:
+                            #  second ESC: keep the best as it is, no 1 ms lap
+                            if measuring is not None:
+                                measuring[1].terminate()
+                                measuring = None
+                            if sw.best is not None and saved_path is None:
+                                _save_now()
+                            running = False
+                        elif sw.best is not None and saved_path is None and _ask_name("close"):
+                            pass           # ENTER / ESC in the prompt continues the close
+                        elif not _begin_close():
+                            running = False
+                    elif k == pygame.K_SPACE:
+                        autorun = not autorun
+                    elif k == pygame.K_RETURN:
+                        want_next = True
+                    elif k == pygame.K_k:
+                        if sw.best is not None and measuring is None:
+                            if not _ask_name("save"):
+                                measuring = sw.measure_best_async()
+                                note, note_until = "!measuring the best at 1 ms ...", now + 60.0
+                    elif k == pygame.K_LEFTBRACKET:
+                        speed_i = max(0, speed_i - 1)
+                    elif k == pygame.K_RIGHTBRACKET:
+                        speed_i = min(len(SWARM_SPEEDS) - 1, speed_i + 1)
+                    elif k == pygame.K_c:
+                        order = ("car_up", "chase", "world_up")
+                        cfgv.mode = order[(order.index(cfgv.mode) + 1) % 3] if cfgv.mode in order else "car_up"
+                    elif k == pygame.K_EQUALS:
+                        renderer.set_zoom(renderer.zoom_manual * 1.25)
+                    elif k == pygame.K_MINUS:
+                        renderer.set_zoom(renderer.zoom_manual / 1.25)
+                    elif k == pygame.K_0:
+                        renderer.set_zoom(1.0)
+
+            # --- the save, when its measurement lands --------------------
+            if measuring is not None and measuring[0].ready():
+                try:
+                    m = measuring[0].get()
+                except Exception as exc:
+                    m = None
+                    print(f"swarm: 1 ms measurement failed: {type(exc).__name__}: {exc}")
+                _save_now(m)
+                measuring[1].terminate()
+                measuring = None
+                if closing:
+                    running = False
+
+            # --- a scored generation becomes the replay -------------------
+            playback_done = (shown is None) or all(
+                tau >= r.t_end for r in replays)
+            allowed = gens_target <= 0 or (len(sw.history) - gens_done_at_start) < gens_target
+            take = (shown is None) or want_next or (autorun and playback_done)
+            if take and not closing and sw.poll():
+                want_next = False
+                shown = sw.history[-1]
+                pop = sw.population
+                n = max(len(pop) - 1, 1)
+                replays = []
+                for rank, ind in enumerate(pop):
+                    col = _lerp3(C_SWARM_BEST, C_SWARM_WORST, rank / n)
+                    replays.append(_Replay(ind.get("trace") or [], col,
+                                           ind.get("ended") == "time",
+                                           f"#{ind['id']}"))
+                tau = 0.0
+                t_shown = time.perf_counter()
+                sw.save_state()
+                if allowed:
+                    sw.reproduce()
+                    sw.start_evaluation()
+                lb = shown["lap_best"]
+                print(f"  gen {shown['gen']:3d}  best {shown['best']:8.1f} m  "
+                      f"mean {shown['mean']:8.1f}  lap "
+                      + (f"{lb:6.2f} s" if lb else "  --   ")
+                      + f"  lapped {shown['n_lapped']}/{sw.pop}  sigma {shown['sigma']:.3f}  "
+                      f"{shown['ended']}  [{shown['secs']} s]", flush=True)
+
+            # --- playback ------------------------------------------------
+            spd = SWARM_SPEEDS[speed_i]
+            if shown is not None and not playback_done:
+                tau += dt_wall * spd
+            ghosts = []
+            hero_st = None
+            hud = rnd.HudData()
+            if replays:
+                for i, r in enumerate(replays):
+                    x, y, psi, u, wd, ws, alive = r.pose(tau)
+                    if i == 0:
+                        hero_st = SimpleNamespace(x=x, y=y, psi=psi, u=u, v=0.0)
+                        hud.wing_deploy, hud.wing_side = float(wd), int(ws)
+                        hud.wing_on = wd > 0.05
+                        if wd > 0.0 and int(ws) == 0:      # both flanks: the air brake
+                            hud.wing_deploy_l = hud.wing_deploy_r = float(wd)
+                        hud.V, hud.V_kmh = u, u * 3.6
+                        continue
+                    ghosts.append((x, y, psi, r.colour if alive else C_SWARM_DEAD))
+            if user_replay is not None:
+                x, y, psi, u, wd, ws, alive = user_replay.pose(tau)
+                if tau <= user_replay.t_end:
+                    ghosts.append((x, y, psi, C_SWARM_USER))
+            if hero_st is None:
+                x0, y0, psi0 = trk.start_pose(tr)
+                hero_st = SimpleNamespace(x=x0, y=y0, psi=psi0, u=0.0, v=0.0)
+            hud.ghosts = ghosts
+            hc = getattr(opts, "hud_cfg", None)
+            if hc:
+                for kk, vv in hc.items():          # the garage build's wing geometry
+                    setattr(hud, kk, vv)
+            hud.x_w = cfg_kwargs.get("x_w", hud.x_w)
+            hud.h_w = cfg_kwargs.get("h_w", hud.h_w)
+            hud.wing_type = opts.wing
+
+            # --- overlay -------------------------------------------------
+            lines = [f"SWARM {sw.name}   {sw.pop} cars   seed {sw.seed_source}   "
+                     f"{tr.title or tr.name} / {cars.car_name(car_name)} / wing {opts.wing}"]
+            if shown is not None:
+                lb = shown["lap_best"]
+                lines.append(f"generation {shown['gen']}:  best {shown['best']:.0f} m   "
+                             f"mean {shown['mean']:.0f} m   lapped {shown['n_lapped']}/{sw.pop}   "
+                             + (f"best lap {lb:.2f} s" if lb else "no full lap yet"))
+                lines.append(f"  {', '.join(f'{k} {v}' for k, v in shown['ended'].items())}"
+                             f"   sigma {shown['sigma']:.3f}   computed in {shown['secs']} s")
+            if sw.best is not None:
+                b = sw.best
+                lines.append(f"all-time best: gen {b.get('gen', 0)} car #{b['id']}   "
+                             f"{b['reward']:.0f} m   "
+                             + (f"lap {b['lap_best']:.2f} s" if b.get("lap_best") else "no lap"))
+            if user_lap:
+                lines.append(f"your seed lap: {user_lap:.2f} s  (cyan car)")
+            nxt = ("ready" if sw.ready() else "computing ...") if sw._pending is not None else (
+                "closing" if closing else ("stopped (--swarm-gens reached)" if not allowed else "-"))
+            lines.append(f"next generation: {nxt}   auto-run {'ON' if autorun else 'off'}   "
+                         f"t {tau:5.1f} / {sw.T:.0f} s   x{spd:g}")
+            lines.append("SPACE auto | ENTER next | K name + save best | [ ] speed | C camera | - = 0 zoom | "
+                         + ("ESC back to driving" if embedded else "ESC quit"))
+            if saved_path and (not note or now >= note_until):
+                lines.append(f"saved: {saved_path}")
+            if note and now < note_until:
+                lines.append(note)
+            hud.overlay = lines
+
+            renderer.update_camera(hero_st, dt_wall)
+            renderer.draw_frame(hero_st, None, 0.0, None, hud, None)
+            if prompt is not None:
+                prompt.draw(renderer.screen, ui_text)
+            renderer.present()
+            if opts.render == "offscreen" and shown is not None and now - t_shown > 1.5:
+                running = False    # offscreen = a smoke test: one generation replayed, then out
+    finally:
+        try:
+            if sw.scored() or sw.history:
+                sw.save_state()
+                print(f"swarm state: {sw.state_path()}  (--swarm-resume to continue)")
+            if sw.best is not None and saved_path is None and sw.history:
+                #  the window closed some other way: keep the best, unmeasured
+                #  (the blocking 1 ms measurement is what froze the window)
+                path, _m = sw.save_best(measure=False, name=bot_name)
+                print(f"swarm: saved the best genome (not re-measured) to {path}")
+                print(f"  drive it:      python3 -m drive.drive --ml-drive {path}")
+                print(f"  breed from it: python3 -m drive.drive --swarm {sw.pop} --swarm-seed {path}")
+            elif saved_path:
+                print(f"  drive it:      python3 -m drive.drive --ml-drive {saved_path}")
+                print(f"  breed from it: python3 -m drive.drive --swarm {sw.pop} --swarm-seed {saved_path}")
+        finally:
+            if measuring is not None:
+                measuring[1].terminate()
+            sw.close()
+            if not embedded:
+                pygame.quit()
+    return 0
+
+
+def _resolve_design(opts):
+    """The garage's car for this launch -> opts. (garage module, design, lib);
+    the module is None when the garage cannot import, and the launch then
+    drives the --wing flags as they are."""
     grg = None
     design = None
     lib = None
@@ -3603,43 +4551,14 @@ def run_interactive_cli(opts) -> int:
     except Exception as exc:
         print(f"garage unavailable ({exc})")
         grg = None
-
-    mode = "garage" if (opts.garage and grg is not None) else "drive"
-    pad = None
-    try:
-        while True:
-            if mode == "garage":
-                g = grg.Garage((w, h), design, pad=pad, lib=lib)
-                action = g.run()
-                design, pad = g.build, g.pad
-                if action != "drive":
-                    break
-                design.save()
-                _apply_design(opts, design, lib)
-                print(f"garage -> drive: {design.summary(lib)}")
-                mode = "drive"
-            sim = _interactive_session(opts, pad=pad, settings=settings,
-                                       garage=(grg is not None))
-            pad = getattr(sim.inp, "pad", pad)
-            if sim.stop_reason == "garage" and grg is not None:
-                mode = "garage"
-                continue
-            if sim.stop_reason == "restart":
-                continue
-            break
-    finally:
-        pygame.quit()
-    return 0
+    return grg, design, lib
 
 
-def _interactive_session(opts, pad=None, garage=False, settings=None):
-    """One windowed session. Returns the Sim (stop_reason says why it ended).
-    pygame is initialised by the caller and NOT quit here, so the garage and
-    the settings page can run several sessions in one window."""
-    global _HELP_PRINTED
-
-    if settings is None:
-        settings = Settings(path="").apply_cli(opts)
+def _session_car(opts, settings):
+    """The track, the car and the VehicleConfig kwargs ONE session drives --
+    shared by the interactive session and the swarm, so the swarm's cars are
+    exactly the car the user was driving. Returns (tr, car, cfg_kwargs,
+    global_wet); `VehicleConfig(**cfg_kwargs)` is the session's config."""
     settings.to_opts(opts)                 # the settings are the truth; opts
     tr = trk.make_track(opts.track, opts.radius, opts.cw,   # is the carrier
                         surfaces=(opts.wet != "none"))
@@ -3650,16 +4569,30 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
                    dev_flank=getattr(opts, "dev_flank", "outer"))
     if getattr(opts, "wing_cfg", None):
         aero_kw.update(opts.wing_cfg)      # the garage build's three wings
+    car = settings.car_spec(getattr(opts, "mass_points", ()) or ())
+    cfg_kwargs = dict(aero_kw,
+                      abs_on=bool(settings.abs), tc_on=bool(settings.tc),
+                      power_scale=settings.power_scale,
+                      mu_scale=car.mu_scale)
+    return tr, car, cfg_kwargs, global_wet
+
+
+def _interactive_session(opts, pad=None, garage=False, settings=None):
+    """One windowed session. Returns the Sim (stop_reason says why it ended).
+    pygame is initialised by the caller and NOT quit here, so the garage and
+    the settings page can run several sessions in one window."""
+    global _HELP_PRINTED
+
+    if settings is None:
+        settings = Settings(path="").apply_cli(opts)
     # The car: the Car setting, plus the ballast, plus the mass of the three
     # wings the garage fitted at their own stations (`drive/aero/wing.
     # wing_mass` -> `CarBuild.mass_points`). With the stock car, no ballast
     # and no wings this is `cars.CORSA_C` itself and `car.mu_scale` is 1.0,
-    # so the session is the car every rig measures.
-    car = settings.car_spec(getattr(opts, "mass_points", ()) or ())
-    cfg = VehicleConfig(**aero_kw,
-                        abs_on=bool(settings.abs), tc_on=bool(settings.tc),
-                        power_scale=settings.power_scale,
-                        mu_scale=car.mu_scale)
+    # so the session is the car every rig measures. `_session_car` is the one
+    # place this is assembled, so the swarm breeds exactly this car.
+    tr, car, cfg_kwargs, global_wet = _session_car(opts, settings)
+    cfg = VehicleConfig(**cfg_kwargs)
     veh = Vehicle(car, cfg)
     x, y, psi = trk.start_pose(tr, 0.0)
     veh.reset(x, y, psi, V=0.0, gear=0 if settings.gearbox == "clutch" else 1)
@@ -3735,6 +4668,11 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     sim = Sim(veh, tr, inp, renderer=renderer, telem=telem, dt=opts.dt,
               wing=opts.wing, global_wet=global_wet, settings=settings)
     sim.has_garage = bool(garage)          # the menu offers the garage
+    if getattr(opts, "seed_lap", False):
+        sim.seed_armed = True              # --seed-lap: K already pressed
+        opts.seed_lap = False              # once; a restart is a fresh choice
+    if getattr(opts, "swarm_menu", None):
+        sim.swarm_opts.update(opts.swarm_menu)
     sim.hud_cfg = getattr(opts, "hud_cfg", None)   # the build's wing geometry
     if cfg.has_designed():
         sim.wing_on = True                 # a garage build starts armed, as --wing does

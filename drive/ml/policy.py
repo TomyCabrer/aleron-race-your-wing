@@ -1,14 +1,15 @@
-"""The policy: a 14 -> 16 -> 4 tanh net, and the observation it reads.
+"""The policy: a 17 -> 16 -> 4 (or 5) tanh net, and the observation it reads.
 
-Deliberately small. 308 parameters is enough for a feedback controller on
-physical states (this is not pixels), it keeps the ES population cheap, and it
-is small enough to read out of a JSON file and check by eye.
+Deliberately small. 356 parameters (373 with the free-wings head) is enough
+for a feedback controller on physical states (this is not pixels), it keeps
+an ES population or a swarm cheap, and it is small enough to read out of a
+JSON file and check by eye.
 
 Everything here is pure numpy and pure in its inputs. `act()` allocates one
-(16,) and one (4,) array per call; at dt = 2 ms that is 500 calls a second of
-simulated time, which measures as under 4 % of a physics step. It is never
-called from `Vehicle.step` — it sits in the driver's seat, outside the
-integrator, exactly where `ScriptedInput`'s closure sits.
+(16,) and one (4,) or (5,) array per call; at dt = 2 ms that is 500 calls a
+second of simulated time, which measures as under 4 % of a physics step. It
+is never called from `Vehicle.step` — it sits in the driver's seat, outside
+the integrator, exactly where `ScriptedInput`'s closure sits.
 """
 
 from __future__ import annotations
@@ -65,6 +66,24 @@ N_OBS = len(OBS_NAMES)
 ACT_NAMES = ("steer", "pedal", "wing", "spare")
 N_ACT = len(ACT_NAMES)
 
+#: FREE WINGS (the swarm's head). Five outputs: the two the driver has, then
+#: ONE PER WING -- left flank, right flank, top -- each a tanh threshold on
+#: `Controls.wing_cmd`, so the car decides for itself which panel to run and
+#: may run both flanks at once as an air brake. `Policy` reads its head off
+#: `theta.size`, so a 4-output checkpoint (every ES checkpoint in
+#: `checkpoints/`) still loads and drives exactly as before; `Policy.widen`
+#: turns one into a 5-output genome that starts by doing what it did.
+ACT_NAMES_FREE = ("steer", "pedal", "wing_l", "wing_r", "wing_top")
+N_ACT_FREE = len(ACT_NAMES_FREE)
+
+#: `expand_base`: the anchor's ONE wing verdict spread over three wings so
+#: that theta = 0 with a free head drives like the published car -- the
+#: panel on the outer flank of the corner ahead (a left turn is `kappa > 0`,
+#: its outer flank the RIGHT one), and the top wing under the 'active' law
+#: (braking, or steering). Curvature in the observation's units (1/m * 50);
+#: 0.15 is a 330 m radius.
+KAPPA_SIDE = 0.15
+
 N_HID = 16
 
 #: The CORSA's road-wheel lock, rad, and the DEFAULT only. The policy's steer
@@ -100,6 +119,18 @@ RESID_GAIN = 0.55
 RESIDUAL = True
 
 
+def expand_base(base, obs) -> np.ndarray:
+    """(steer, pedal, wing) -> (steer, pedal, wing_l, wing_r, wing_top): the
+    anchor's one verdict handed to the wing the published law would have
+    used. See `KAPPA_SIDE`."""
+    k_path = 0.6 * obs[3] + 0.4 * obs[4]
+    w = base[2]
+    left = w if k_path < -KAPPA_SIDE else -1.0       # a right turn: left is outer
+    right = w if k_path > KAPPA_SIDE else -1.0
+    top = w if (base[1] < -0.05 or abs(base[0]) > 0.05) else -1.0
+    return np.array([base[0], base[1], left, right, top])
+
+
 class Policy:
     """A flat parameter vector, viewed as two affine layers with a tanh.
 
@@ -108,25 +139,64 @@ class Policy:
     two representations to disagree.
     """
 
-    __slots__ = ("theta", "W1", "b1", "W2", "b2", "meta", "residual")
+    __slots__ = ("theta", "W1", "b1", "W2", "b2", "meta", "residual", "n_act")
 
-    N_PARAM = N_OBS * N_HID + N_HID + N_HID * N_ACT + N_ACT
+    N_PARAM = N_OBS * N_HID + N_HID + N_HID * N_ACT + N_ACT      # the 4-output head
+
+    @staticmethod
+    def n_param(n_act: int = N_ACT) -> int:
+        return N_OBS * N_HID + N_HID + N_HID * n_act + n_act
+
+    @staticmethod
+    def head_of(n_param: int) -> int:
+        """The output count a parameter count implies, or a ValueError."""
+        rest = n_param - (N_OBS * N_HID + N_HID)
+        if rest <= 0 or rest % (N_HID + 1):
+            raise ValueError(
+                f"policy needs {Policy.N_PARAM} (4 outputs) or "
+                f"{Policy.n_param(N_ACT_FREE)} (free wings) parameters, got {n_param}")
+        return rest // (N_HID + 1)
 
     def __init__(self, theta=None, meta: dict | None = None,
                  residual: bool = RESIDUAL):
         if theta is None:
             theta = np.zeros(self.N_PARAM)
         theta = np.asarray(theta, dtype=np.float64).ravel()
-        if theta.size != self.N_PARAM:
-            raise ValueError(f"policy needs {self.N_PARAM} parameters, got {theta.size}")
+        n_act = self.head_of(theta.size)
+        if n_act not in (N_ACT, N_ACT_FREE):
+            raise ValueError(f"policy has {n_act} outputs; 4 or {N_ACT_FREE} are the heads")
+        self.n_act = n_act
         self.theta = theta
         i = 0
         self.W1 = theta[i:i + N_OBS * N_HID].reshape(N_HID, N_OBS); i += N_OBS * N_HID
         self.b1 = theta[i:i + N_HID]; i += N_HID
-        self.W2 = theta[i:i + N_HID * N_ACT].reshape(N_ACT, N_HID); i += N_HID * N_ACT
-        self.b2 = theta[i:i + N_ACT]
+        self.W2 = theta[i:i + N_HID * n_act].reshape(n_act, N_HID); i += N_HID * n_act
+        self.b2 = theta[i:i + n_act]
         self.meta = dict(meta or {})
         self.residual = bool(residual)
+
+    @property
+    def free_wings(self) -> bool:
+        return self.n_act >= N_ACT_FREE
+
+    @property
+    def n_out(self) -> int:
+        """The outputs the residual composes: 3 (steer, pedal, wing) or 5."""
+        return N_ACT_FREE if self.free_wings else 3
+
+    @staticmethod
+    def widen(theta) -> np.ndarray:
+        """A 4-output genome -> the 5-output one that behaves the same way:
+        the old `wing` row drives all three wings, so the anchor's outer
+        flank / active top still decide WHICH; the swarm then learns to
+        split them. A 5-output genome is returned as is."""
+        theta = np.asarray(theta, float).ravel()
+        if Policy.head_of(theta.size) == N_ACT_FREE:
+            return theta.copy()
+        p = Policy(theta)
+        W2 = np.vstack([p.W2[0], p.W2[1], p.W2[2], p.W2[2], p.W2[2]])
+        b2 = np.array([p.b2[0], p.b2[1], p.b2[2], p.b2[2], p.b2[2]])
+        return np.concatenate([p.W1.ravel(), p.b1, W2.ravel(), b2])
 
     # ---- the forward pass ------------------------------------------------
     def act(self, obs) -> np.ndarray:
@@ -144,7 +214,7 @@ class Policy:
         or more than a full pedal however large the network's output grows.
 
         The three per-car arguments go to the ANCHOR only -- the network reads
-        none of them. That is deliberate: the 308 parameters are a trim in the
+        none of them. That is deliberate: the parameters are a trim in the
         car's own actuator units (a fraction of ITS lock, a fraction of ITS
         pedal), so a checkpoint means the same thing on any car, and the
         cross-car matrix in `evaluate.car_transfer` is comparing the same
@@ -153,10 +223,13 @@ class Policy:
         per rollout; all three are exactly the Corsa's values for the Corsa.
         """
         net = self.act(obs)
+        n = self.n_out
         if not self.residual:
-            return net[:3]
+            return net[:n]
         base = baseline_action(obs, lock_rad, wheelbase, ay_plan)
-        return np.clip(base + RESID_GAIN * net[:3], -1.0, 1.0)
+        if self.free_wings:
+            base = expand_base(base, obs)
+        return np.clip(base + RESID_GAIN * net[:n], -1.0, 1.0)
 
     def controls(self, obs, Controls, lock_rad: float = LOCK_RAD,
                  wheelbase: float = WHEELBASE, ay_plan: float = AY_PLAN):
@@ -169,6 +242,16 @@ class Policy:
         """
         a = self.action(obs, lock_rad, wheelbase, ay_plan)
         pedal = float(a[1])
+        if self.free_wings:
+            cmd = (bool(a[2] > WING_ON_THRESH), bool(a[3] > WING_ON_THRESH),
+                   bool(a[4] > WING_ON_THRESH))
+            return Controls(
+                delta=float(a[0]) * lock_rad,
+                throttle=max(pedal, 0.0),
+                brake=max(-pedal, 0.0),
+                wing_on=any(cmd), wing_cmd=cmd,
+                auto_gearbox=True, auto_clutch=True,
+            )
         return Controls(
             delta=float(a[0]) * lock_rad,
             throttle=max(pedal, 0.0),
@@ -183,9 +266,10 @@ class Policy:
         os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
         with open(path, "w") as fh:
             json.dump(dict(
-                kind="drive.ml.Policy", n_obs=N_OBS, n_hid=N_HID, n_act=N_ACT,
+                kind="drive.ml.Policy", n_obs=N_OBS, n_hid=N_HID, n_act=self.n_act,
                 residual=self.residual,
-                obs_names=list(OBS_NAMES), act_names=list(ACT_NAMES),
+                obs_names=list(OBS_NAMES),
+                act_names=list(ACT_NAMES_FREE if self.free_wings else ACT_NAMES),
                 meta=self.meta,
                 theta=[float(v) for v in self.theta],
             ), fh, indent=1)
@@ -215,10 +299,10 @@ class Policy:
                    residual=bool(d.get("residual", True)))
 
     @classmethod
-    def random(cls, seed: int = 0, scale: float = 0.5) -> "Policy":
+    def random(cls, seed: int = 0, scale: float = 0.5, n_act: int = N_ACT) -> "Policy":
         rng = np.random.default_rng(seed)
-        return cls(rng.normal(0.0, scale, cls.N_PARAM))
+        return cls(rng.normal(0.0, scale, cls.n_param(n_act)))
 
     def __repr__(self):
-        return (f"Policy({self.N_PARAM} params, |theta| "
+        return (f"Policy({self.theta.size} params, {self.n_act} outputs, |theta| "
                 f"{float(np.linalg.norm(self.theta)):.3f}, meta {self.meta})")

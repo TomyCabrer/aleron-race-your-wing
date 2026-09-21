@@ -226,6 +226,39 @@ def self_check(verbose: bool = True) -> bool:
          one == ref and two == want,
          f"1 track {one:.9f} == {ref:.9f}; 2 tracks {two:.9f} == {want:.9f}")
 
+    # --- the free-wings head: 5 outputs, one per wing ---------------------
+    from .policy import N_ACT_FREE, expand_base
+    pf = Policy(np.zeros(Policy.n_param(N_ACT_FREE)))
+    _rep("a 5-output genome is a free-wings policy", pf.free_wings and pf.n_act == N_ACT_FREE
+         and not p0.free_wings, f"{pf.theta.size} parameters, {Policy.N_PARAM} for the 4-output head")
+    cf = pf.controls(veh_obs, Controls)
+    _rep("free wings command each panel", isinstance(cf.wing_cmd, tuple) and len(cf.wing_cmd) == 3
+         and cf.wing_on == any(cf.wing_cmd) and p0.controls(veh_obs, Controls).wing_cmd is None,
+         f"wing_cmd {cf.wing_cmd}; the 4-output head leaves it None")
+    eb = expand_base(baseline_action(veh_obs, LOCK_RAD), veh_obs)
+    _rep("the anchor spreads over three wings", eb.shape == (5,) and eb[0] == baseline_action(veh_obs, LOCK_RAD)[0])
+    epf = rollout(pf, "arena", T=70.0, wing="plate", tr=tr)
+    _rep("theta = 0 with free wings still laps the arena", epf.ended == "time" and epf.laps >= 1,
+         f"reward {epf.reward:.0f}, laps {epf.laps}, ended {epf.ended} (one-wing head: {ep.reward:.0f})")
+    wide = Policy(Policy.widen(pr.theta))
+    acts_old = np.array([pr.act(o) for o in obs])
+    acts_new = np.array([wide.act(o) for o in obs])
+    _rep("widening a 4-output genome keeps its steer, pedal and wing verdicts",
+         wide.free_wings and np.allclose(acts_new[:, :2], acts_old[:, :2])
+         and np.allclose(acts_new[:, 2], acts_old[:, 2]) and np.allclose(acts_new[:, 4], acts_old[:, 2]))
+
+    # --- the swarm: the seed lap's schema, the clone, the GA -------------
+    from . import clone as _cl, swarm as _sw
+    import drive.drive as _dd
+    _rep("the seed lap the sim writes is the one the clone reads",
+         tuple(_dd.SEED_LAP_COLS) == tuple(_cl.SEED_COLS)
+         and _dd.SEED_LAP_KIND == _cl.SEED_LAP_KIND,
+         f"{len(_cl.SEED_COLS)} columns, kind {_cl.SEED_LAP_KIND}")
+    _rep("the clone recovers a known trim from a lap", _cl.self_check(verbose=False),
+         "anchor + fixed trim, 40 s at 100 Hz -> rmse steer < 0.06, pedal < 0.10")
+    _rep("the swarm: elites, lineage, determinism, state, checkpoint",
+         _sw.self_check(verbose=False), "pop 6, 6 s rollouts, one process")
+
     # --- additive: nothing in drive/ imports drive.ml --------------------
     import subprocess
     import sys
