@@ -14,12 +14,20 @@ Modules
     panel2d   Hess-Smith panel method (inviscid cl, cm, Cp, lift slope, alpha_L0)
     polar     the polar table + the viscous ESTIMATE fallback
     xfoil     the XFOIL subprocess wrapper with an on-disk cache
+    blend     the wing -> end plate TRANSITION: turn laws, the ramp the
+              section and the toe meet on, and the junction charge the
+              lattice cannot see
     vlm       the vortex lattice (imaged, endplated), Trefftz induced drag
     wing      WingSpec -> WingAero: what the vehicle reads
+    screen    AeroBO's library SCREEN: the seven criteria, the weights, the
+              gates and the frozen band the composite is read on
+    section   the 2-D section design problem (CST rows -> polar -> score)
+    mission   the quasi-steady lap the whole design chain is scored against
     optimize  GP-BO + random baseline on a WingSpec's planform
     library   airfoils / wings / builds on disk (runs/library)
 
 No pygame anywhere in here: the garage draws, this computes.
 """
 
-__all__ = ["airfoil", "panel2d", "polar", "xfoil", "vlm", "wing", "optimize", "library"]
+__all__ = ["airfoil", "panel2d", "polar", "xfoil", "blend", "vlm", "wing",
+           "screen", "section", "mission", "optimize", "library"]

@@ -105,6 +105,23 @@ def panel(screen, rect, alpha: int = C_PANEL_A, border: bool = True, accent: boo
 
 
 # --------------------------------------------------------------------------- #
+def _wrap_px(text: "Text", msg: str, px: int, size: int) -> list:
+    """`msg` broken to lines that FIT `px`, measured with the font actually
+    drawing them. The flat character caps this file used to carry were the
+    reason a refusal read "the shortlist is chosen on the ma"."""
+    out, line = [], ""
+    for word in str(msg).split():
+        trial = f"{line} {word}".strip()
+        if line and text.width(trial, size) > px:
+            out.append(line)
+            line = word
+        else:
+            line = trial
+    if line:
+        out.append(line)
+    return out
+
+
 class Param:
     """One editable row. `get()`/`set(v)` talk to the model; `kind`:
     'float' (LEFT/RIGHT step, SHIFT fine), 'int', 'choice' (cycles
@@ -120,7 +137,18 @@ class Param:
         self.unit, self.fmt = unit, fmt
         self.choices = list(choices)
         self.help = help
-        self.enabled = enabled
+        self._enabled = enabled
+
+    @property
+    def enabled(self) -> bool:
+        """`enabled` may be a CALLABLE, read every frame. Some rows are only
+        answerable while something else is true -- the plate's blend needs a
+        plate to blend -- and that something can change on a row one panel
+        away, while this row is on screen. A bool captured when the list was
+        built would go stale there, and the row would take an edit the model
+        has nothing to do with."""
+        e = self._enabled
+        return bool(e() if callable(e) else e)
 
     def value_text(self) -> str:
         v = self.get() if self.get is not None else ""
@@ -128,7 +156,15 @@ class Param:
             return "on" if v else "off"
         if self.kind == "action":
             return ""
-        if self.kind in ("float", "int"):
+        if self.kind == "int":
+            #  an int row showed "48.00", because `fmt` defaults to two
+            #  decimals and nothing overrode it for the one kind that cannot
+            #  have them. The kind decides the format, not the default.
+            try:
+                return f"{int(round(float(v)))}" + (f" {self.unit}" if self.unit else "")
+            except (ValueError, TypeError):
+                return str(v)
+        if self.kind == "float":
             try:
                 return self.fmt.format(v) + (f" {self.unit}" if self.unit else "")
             except (ValueError, TypeError):
@@ -176,11 +212,29 @@ class Param:
 
 
 class ParamList:
+    """Rows of `Param`, driven by the keyboard OR the mouse.
+
+    THE MOUSE IS NOT A SECOND WAY IN, it is the SAME way in. A click lands on
+    exactly the row `draw` put under the cursor, and what it does there is
+    what the keyboard would do on that row: an action row fires, a value row
+    steps the way LEFT/RIGHT steps it. The value's two halves are the two
+    arrows -- click the left of the `< value >` and it is a LEFT, the right
+    and it is a RIGHT -- which is why the value is drawn with those arrows on
+    the selected row in the first place.
+    """
+
+    #: how wide the value's click target is, in pixels, measured left from
+    #: the right edge of the row. Wide enough for "< -0.0125 deg >" at 14 px.
+    VALUE_W = 150
+
     def __init__(self, params, title: str = ""):
         self.params = list(params)
         self.title = title
         self.idx = 0
         self.scroll = 0
+        self._rect = None
+        self._hits: list = []          # (index, y, h), filled by draw()
+        self._hover = -1
 
     def current(self) -> Param | None:
         rows = [p for p in self.params if p.kind != "label"]
@@ -212,8 +266,52 @@ class ParamList:
                 self.idx = i
                 return
 
+    # -- the mouse ------------------------------------------------------------
+    def hit(self, pos) -> int:
+        """The row index under `pos`, or -1. Label rows are never hit: they
+        are not selectable by the keyboard either."""
+        x, y = pos
+        if self._rect is None or not self._rect.collidepoint(x, y):
+            return -1
+        for i, ry, rh in self._hits:
+            if ry <= y < ry + rh:
+                return i
+        return -1
+
+    def click(self, pos, fine: bool = False) -> str:
+        """A left click. Returns what it did: 'select', 'adjust', 'action'
+        or '' -- the page prints the row's help afterwards either way."""
+        i = self.hit(pos)
+        if i < 0:
+            return ""
+        moved = (i != self.idx)
+        self.idx = i
+        p = self.params[i]
+        if p.kind == "action":
+            #  a first click on an action row selects it, a second fires it.
+            #  Firing on the click that also moved the cursor would make a
+            #  mis-aimed click run an optimiser.
+            if moved:
+                return "select"
+            p.activate()
+            return "action"
+        if moved:
+            return "select"
+        #  already selected: the click is on one of the two arrows
+        x = pos[0]
+        edge = self._rect.right - 12
+        if x >= edge - self.VALUE_W:
+            p.adjust(1 if x >= edge - self.VALUE_W // 2 else -1, fine)
+            return "adjust"
+        return "select"
+
+    def wheel(self, dy: int) -> None:
+        self.nav(-1 if dy > 0 else 1)
+
     def draw(self, screen, text: Text, rect, row_h: int = 22, size: int = 14, focus: bool = True):
         r = pygame.Rect(rect)
+        self._rect, self._hits = r, []
+        self._hover = self.hit(pygame.mouse.get_pos())
         y = r.y + 6
         if self.title:
             text.blit(screen, self.title, r.x + 10, y, size, C_SECTION, bold=True)
@@ -231,9 +329,12 @@ class ParamList:
                 text.blit(screen, p.label, r.x + 10, y + 3, size - 1, C_SECTION, bold=True)
                 y += row_h
                 continue
+            self._hits.append((i, y - 2, row_h))
             if sel:
                 pygame.draw.rect(screen, C_SEL_BG, (r.x + 4, y - 2, r.w - 8, row_h))
                 pygame.draw.rect(screen, C_ACCENT, (r.x + 4, y - 2, 3, row_h))
+            elif i == self._hover:
+                pygame.draw.rect(screen, C_GRID, (r.x + 4, y - 2, r.w - 8, row_h))
             col = C_TEXT if p.enabled else C_DIM
             if p.kind == "action":
                 text.blit(screen, ("> " if sel else "  ") + p.label, r.x + 12, y + 2, size,
@@ -252,6 +353,205 @@ class ParamList:
 
 
 # --------------------------------------------------------------------------- #
+class Nav:
+    """A two-level navigator: GROUPS with ordered STEPS under them.
+
+    The left column of the design pages. It is the procedure written down --
+    the same four groups, in the same order, that the UROP app's own navigator
+    carries -- so what the garage is doing is legible before anything is
+    pressed rather than only afterwards.
+
+    `tree` is `[(group_label, [(key, label), ...]), ...]`. Only STEPS are
+    selectable; a group header is drawn but never lands under the cursor.
+    `state(key)` is asked, per step, for one of 'done' / 'ready' / 'blocked' /
+    'locked', which is what the mark in the left margin says.
+
+    A BLOCKED OR LOCKED STEP CANNOT BE SELECTED. That is the UROP app's own
+    rule and not a decoration on it: `gui/v3/app.py`'s `select()` reads
+    `session.stage_states(S)`, returns without moving if the stage is locked,
+    and notifies the stored REASON -- "a greyed-out node with no explanation
+    is the thing this shell exists to avoid". `reason(key)` is that sentence
+    here, and `refused` carries the last one so the page can print it.
+
+    The two unavailable states say different things and are drawn
+    differently. BLOCKED is "not yet": the step before it has not been
+    finished, and finishing it opens this one. LOCKED is "not here": there is
+    nothing on this vehicle for the step to decide -- the plates are at zero
+    height, say -- and no amount of work upstream will open it.
+    """
+
+    MARK = {"done": ("+", C_OK), "ready": (">", C_ACCENT),
+            "blocked": ("-", C_DIM), "locked": ("x", C_DIM)}
+    #: the states a step may not be selected in
+    SHUT = ("blocked", "locked")
+
+    def __init__(self, tree, title: str = "", state=None, note=None, reason=None):
+        self.tree = [(g, list(steps)) for g, steps in tree]
+        self.title = title
+        self.state = state or (lambda k: "ready")
+        self.note = note or (lambda k: "")
+        self.reason = reason or (lambda k: "")
+        self.keys = [k for _, steps in self.tree for k, _ in steps]
+        self.idx = 0
+        self.refused = ""
+        self._hits: list = []          # (key, y, h), filled by draw()
+
+    def open(self, key: str) -> bool:
+        """May this step be selected at all?"""
+        return self.state(key) not in self.SHUT
+
+    def first_open(self) -> str:
+        """The first step that may be selected -- where a page opens, and
+        where it falls back to when the step it was on closes under it."""
+        for k in self.keys:
+            if self.open(k):
+                return k
+        return self.keys[0] if self.keys else ""
+
+    # -- selection ----------------------------------------------------------
+    def current(self) -> str:
+        if not self.keys:
+            return ""
+        self.idx = max(0, min(self.idx, len(self.keys) - 1))
+        return self.keys[self.idx]
+
+    def label(self, key: str) -> str:
+        for _, steps in self.tree:
+            for k, lab in steps:
+                if k == key:
+                    return lab
+        return key
+
+    def group_of(self, key: str) -> str:
+        for g, steps in self.tree:
+            if any(k == key for k, _ in steps):
+                return g
+        return ""
+
+    def nav(self, d: int) -> None:
+        """Move to the next SELECTABLE step. A shut one is stepped over
+        rather than landed on and refused, because an arrow key that appears
+        to do nothing is worse than one that skips: the mark in the margin
+        already says the step is shut, and `note()` says why."""
+        if not self.keys:
+            return
+        self.refused = ""
+        n = len(self.keys)
+        for step in range(1, n + 1):
+            j = (self.idx + d * step) % n
+            if self.open(self.keys[j]):
+                self.idx = j
+                return
+        #  nothing at all is selectable: stay put rather than spin
+
+    def nav_group(self, d: int) -> None:
+        """Jump to the first OPEN step of the next / previous GROUP."""
+        cur = self.group_of(self.current())
+        groups = [g for g, _ in self.tree]
+        if cur not in groups:
+            return
+        by = dict(self.tree)
+        for step in range(1, len(groups) + 1):
+            g = groups[(groups.index(cur) + d * step) % len(groups)]
+            for k, _ in by[g]:
+                if self.open(k):
+                    self.select(k)
+                    return
+
+    def select(self, key: str, force: bool = False) -> bool:
+        """Select `key`, or refuse it and keep the reason.
+
+        `force` is for the page's own book-keeping -- re-selecting the step
+        that was already current after its state changed -- and never for a
+        user action.
+        """
+        if key not in self.keys:
+            return False
+        if not force and not self.open(key):
+            self.refused = self.reason(key) or f"'{self.label(key)}' is not open yet"
+            return False
+        self.refused = ""
+        self.idx = self.keys.index(key)
+        return True
+
+    # -- the mouse ------------------------------------------------------------
+    def hit(self, pos) -> str:
+        """The step key under `pos`, or "" -- from the geometry the last
+        `draw` recorded, so what is clickable is exactly what was drawn."""
+        x, y = pos
+        if self._rect is None or not self._rect.collidepoint(x, y):
+            return ""
+        for key, ry, rh in self._hits:
+            if ry <= y < ry + rh:
+                return key
+        return ""
+
+    def click(self, pos) -> str:
+        """A left click: select the step under the cursor. Returns the key
+        that was taken, or "" -- a refusal leaves `refused` set."""
+        k = self.hit(pos)
+        if k and self.select(k):
+            return k
+        return ""
+
+    _rect = None
+
+    # -- drawing -------------------------------------------------------------
+    def draw(self, screen, text: Text, rect, row_h: int = 22, size: int = 13,
+             focus: bool = True):
+        r = pygame.Rect(rect)
+        self._rect, self._hits = r, []
+        self._hover = self.hit(pygame.mouse.get_pos()) if self._rect else ""
+        x, y = r.x + 10, r.y + 8
+        if self.title:
+            text.blit(screen, self.title, x, y, size + 1, C_SECTION, bold=True)
+            y += row_h
+        cur = self.current()
+        for g, steps in self.tree:
+            text.blit(screen, g, x, y, size, C_TEXT, bold=True)
+            y += row_h
+            for k, lab in steps:
+                st = self.state(k)
+                mark, mcol = self.MARK.get(st, self.MARK["ready"])
+                sel = (k == cur)
+                hot = (self._hover == k and st not in self.SHUT and not sel)
+                if sel:
+                    pygame.draw.rect(screen, C_SEL_BG if focus else C_PANEL,
+                                     (r.x + 4, y - 3, r.width - 8, row_h - 2))
+                    pygame.draw.rect(screen, C_ACCENT, (r.x + 4, y - 3, 3, row_h - 2))
+                elif hot:
+                    pygame.draw.rect(screen, C_GRID,
+                                     (r.x + 4, y - 3, r.width - 8, row_h - 2))
+                text.blit(screen, mark, x + 12, y, size, mcol)
+                col = C_TEXT if (sel or st not in self.SHUT) else C_DIM
+                text.blit(screen, lab, x + 28, y, size, col, bold=sel)
+                self._hits.append((k, y - 3, row_h))
+                y += row_h
+            y += 4
+        #  the sentence under the tree is the REFUSAL when there is one --
+        #  a click that did nothing has to say why it did nothing -- and the
+        #  current step's own note otherwise.
+        #  the sentence under the tree: the REFUSAL when there is one -- a
+        #  click that did nothing has to say why -- and the current step's own
+        #  note otherwise. Drawn BELOW the tree rather than pinned to the
+        #  bottom of the panel, and in full: the reason is the whole point of
+        #  refusing, so clipping it to two lines threw away the half that
+        #  said what to do about it.
+        n = self.refused or self.note(cur)
+        if n:
+            col = C_WARN if self.refused else C_DIM
+            y += 6
+            if self.refused:
+                text.blit(screen, "NOT YET", x, y, 11, C_WARN, bold=True)
+                y += 16
+            for ln in _wrap_px(text, n, r.width - 20, 11)[:6]:
+                if y > r.bottom - 16:
+                    break
+                text.blit(screen, ln, x, y, 11, col)
+                y += 15
+        return r
+
+
 class ListBox:
     """Rows of (label, sub, tag) with a cursor and scrolling."""
 
@@ -260,6 +560,9 @@ class ListBox:
         self.title = title
         self.idx = 0
         self.scroll = 0
+        self._rect = None
+        self._hits: list = []
+        self._hover = -1
 
     def set_items(self, items, keep=None) -> None:
         self.items = list(items)
@@ -280,9 +583,35 @@ class ListBox:
         if self.items:
             self.idx = (self.idx + d) % len(self.items)
 
+    # -- the mouse ------------------------------------------------------------
+    def hit(self, pos) -> int:
+        x, y = pos
+        if self._rect is None or not self._rect.collidepoint(x, y):
+            return -1
+        for i, ry, rh in self._hits:
+            if ry <= y < ry + rh:
+                return i
+        return -1
+
+    def click(self, pos) -> str:
+        """Select the row under the cursor; a second click on the row that is
+        already selected is the ENTER on it."""
+        i = self.hit(pos)
+        if i < 0:
+            return ""
+        if i == self.idx:
+            return "activate"
+        self.idx = i
+        return "select"
+
+    def wheel(self, dy: int) -> None:
+        self.nav(-1 if dy > 0 else 1)
+
     def draw(self, screen, text: Text, rect, row_h: int = 34, size: int = 14, focus: bool = True,
              empty: str = "(empty)"):
         r = pygame.Rect(rect)
+        self._rect, self._hits = r, []
+        self._hover = self.hit(pygame.mouse.get_pos())
         y = r.y + 6
         if self.title:
             text.blit(screen, self.title, r.x + 10, y, size, C_SECTION, bold=True)
@@ -298,16 +627,29 @@ class ListBox:
         for i in range(self.scroll, min(len(self.items), self.scroll + n_vis)):
             it = self.items[i]
             sel = (i == self.idx) and focus
+            self._hits.append((i, y - 2, row_h))
             if sel:
                 pygame.draw.rect(screen, C_SEL_BG, (r.x + 4, y - 2, r.w - 8, row_h - 2))
                 pygame.draw.rect(screen, C_ACCENT, (r.x + 4, y - 2, 3, row_h - 2))
+            elif i == self._hover:
+                pygame.draw.rect(screen, C_GRID, (r.x + 4, y - 2, r.w - 8, row_h - 2))
             tag = it[2] if len(it) > 2 else ""
             text.blit(screen, ("> " if sel else "  ") + str(it[0]), r.x + 12, y + 1, size,
                       C_TEXT if sel else C_DIM)
             if tag:
                 text.blit(screen, tag, r.right - 12, y + 1, size - 2, C_KEY if sel else C_DIM, right=True)
             if len(it) > 1 and it[1]:
-                text.blit(screen, str(it[1])[:70], r.x + 26, y + 16, size - 3, C_DIM)
+                #  clipped to the PANEL, not to a fixed 70 characters. The
+                #  ranking table's sub-line is a row of criterion columns and
+                #  the flat cap was cutting it mid-number, in a panel with
+                #  200 px of unused width beside it.
+                sub, avail = str(it[1]), r.right - (r.x + 26) - 12
+                if text.width(sub, size - 3) > avail:
+                    n = max(1, int(len(sub) * avail / max(text.width(sub, size - 3), 1)))
+                    while n > 1 and text.width(sub[:n], size - 3) > avail:
+                        n -= 1
+                    sub = sub[:n]
+                text.blit(screen, sub, r.x + 26, y + 16, size - 3, C_DIM)
             y += row_h
         if self.scroll + n_vis < len(self.items):
             text.blit(screen, f"+{len(self.items) - self.scroll - n_vis} more", r.right - 12, r.bottom - 16,
@@ -496,6 +838,13 @@ def key_hint_bar(screen, text: Text, rect, hints, pad_hints=None, title: str = "
     r = panel(screen, rect)
     x, y = r.x + 10, r.y + 6
     if title:
+        #  clipped to the width actually available: the caller also writes a
+        #  right-aligned status on this line, and a long title ran underneath
+        #  it. 240 px is that reservation -- the longest status the garage
+        #  writes is "XFOIL not found: estimate polars", ~210 px at size 12.
+        room = max(r.width - 20 - 240, 60)
+        while title and text.width(title, 14) > room:
+            title = title[:-2]
         text.blit(screen, title, x, y, 14, C_TEXT)
         y += 18
     for row in (hints, pad_hints or []):

@@ -72,6 +72,7 @@ class Library:
         self.wings: dict[str, WingSpec] = {}
         self.builds: dict[str, dict] = {}
         self._polars: dict[tuple, Polar] = {}
+        self._tc: dict = {}
         self.use_xfoil = bool(use_xfoil) and xfoil.available()
         self._q: queue.Queue = queue.Queue()
         self._done: queue.Queue = queue.Queue()
@@ -213,6 +214,20 @@ class Library:
         if pol is None:
             pol = estimate_polar(a.coords(), reb, a.name)
             self._polars[key] = pol
+        return self._with_tc(pol, a)
+
+    def _with_tc(self, pol: Polar, a: AirfoilSpec) -> Polar:
+        """State the section's thickness ratio on the polar. `estimate_polar`
+        measures it on the way past; an XFOIL polar read back from its cache
+        does not carry one, and a caller pricing a JUNCTION needs it (see
+        `blend`). Measured once per section and remembered."""
+        if not pol.tc:
+            tc = self._tc.get(a.name)
+            if tc is None:
+                from . import airfoil as af
+                tc = float(af.geometry(a.coords())["tc"])
+                self._tc[a.name] = tc
+            pol.tc = tc
         return pol
 
     def has_xfoil_polar(self, airfoil: str, re: float) -> bool:
@@ -273,6 +288,15 @@ class Library:
         a display-only aero."""
         V = V_REF[w.role] if V is None else V
         pol = self.polar(w.airfoil, w.reynolds(V))
+        #  the END PLATE's own section, if it has been given one. Read at the
+        #  plate's own Reynolds number -- its chord is the wing's TIP chord,
+        #  not the root -- because a plate a third of the chord long sits a
+        #  bank lower and `re_bank_snap` would otherwise quote it at the
+        #  wing's number.
+        plate_pol = None
+        if getattr(w, "plate_airfoil", "") and w.plate_airfoil in self.airfoils:
+            plate_pol = self.polar(w.plate_airfoil,
+                                   w.reynolds(V) * max(w.taper, 0.05), want_xfoil=False)
         #  the wall's distance is the spec's own design row (`ride_h`); this
         #  used to carry a THIRD default for it (a 0.45 standoff and a 1.30
         #  ride height), pass it explicitly, and so silently overrule whatever
@@ -283,13 +307,14 @@ class Library:
             standoff = w.ride_h_flown if w.role == "flank" else TOP_PYLON_L
         try:
             aero = analyse(w, pol, V=V, ride_h=ride_h if w.role == "top" else None,
-                           standoff=standoff, wall_side=wall_side)
+                           standoff=standoff, wall_side=wall_side, plate_polar=plate_pol)
         except ValueError as exc:
             aero = dict(w.aero)
             aero["error"] = str(exc)
             w.aero = aero
             return aero
         aero["airfoil"] = w.airfoil
+        aero["plate_airfoil"] = getattr(w, "plate_airfoil", "")
         aero["polar_is_estimate"] = pol.source != "xfoil"
         w.aero = aero
         return aero

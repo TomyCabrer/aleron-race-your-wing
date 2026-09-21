@@ -214,7 +214,7 @@ PS_PAD_BUTTONS = {
     0: "handbrake",      # cross     held
     1: "wing",           # circle    flank-wing toggle
     2: "clutch",         # square    held
-    3: "wing_side",      # triangle  auto / left / right
+    3: "wing_side",      # triangle  auto / left / right / both
     4: "reset",          # create    back to the last sector line
     6: "menu",           # options   pause menu (controls + reset)
     7: "zoom_auto",      # L3
@@ -254,10 +254,11 @@ def gearbox_flags(mode: str) -> tuple[bool, bool]:
 # Pause menu (drive/menu.py). While it is open the inputs stop emitting
 # driving edges and emit these instead. Names are the layout's button names.
 MENU_PAD_NAMES = {
-    "ps": {"up": "nav_up", "down": "nav_down", "cross": "select",
-           "circle": "back", "options": "menu", "create": "reset",
-           "touchpad": "garage"},
-    "generic": {"up": "nav_up", "down": "nav_down", "a": "select", "b": "back",
+    "ps": {"up": "nav_up", "down": "nav_down", "left": "nav_left",
+           "right": "nav_right", "cross": "select", "circle": "back",
+           "options": "menu", "create": "reset", "touchpad": "garage"},
+    "generic": {"up": "nav_up", "down": "nav_down", "left": "nav_left",
+                "right": "nav_right", "a": "select", "b": "back",
                 "start": "menu", "back": "reset"},
 }
 
@@ -326,6 +327,7 @@ EDGE_KEYS = {
     pygame.K_t: "wet",
     pygame.K_m: "marker",
     pygame.K_l: "record",
+    pygame.K_k: "seed_lap",         # arm: the next full valid lap is saved as a swarm seed
     pygame.K_TAB: "track_next",
     pygame.K_BACKSPACE: "garage",   # back to the 3D editor (drive --garage)
     pygame.K_ESCAPE: "menu",        # pause menu: controls + reset / quit
@@ -336,6 +338,8 @@ EDGE_KEYS = {
 MENU_KEYS = {
     pygame.K_UP: "nav_up",
     pygame.K_DOWN: "nav_down",
+    pygame.K_LEFT: "nav_left",         # settings: step the value back
+    pygame.K_RIGHT: "nav_right",       # settings: step the value forward
     pygame.K_RETURN: "select",
     pygame.K_KP_ENTER: "select",
     pygame.K_SPACE: "select",
@@ -406,7 +410,7 @@ def menu_help(layout: str | None) -> list:
 KEY_HELP = """\
 ARROW UP throttle | ARROW DOWN brake | ARROW LEFT/RIGHT steer | LSHIFT fine (half rates, 50% pedal)
 Z clutch | SPACE handbrake | S starter | E shift up | Q shift down
-F flank-wing toggle | G cycle wing side (auto / left / right)
+F flank-wing toggle | G cycle wing side (auto / left / right / both = air brake)
 R reset to last sector line | SHIFT+R full reset (clears skid marks and timing)
 P pause | O single physics step while paused | [ ] slow-mo 0.25x / 1.0x
 C camera cycle | - / = zoom | 0 auto zoom | H HUD cycle | V force vectors | B g-g | N skid | X clear skid
@@ -589,6 +593,9 @@ class KeyboardInput:
         self.wing_side_mode = "auto"          # 'auto' | 'left' | 'right'; HUD only
         self.paused = False
         self.menu = False                     # pause menu open: nav keys only
+        #: a modal text entry (the seed lap's name prompt) takes every
+        #: KEYDOWN while set: `key_sink(ev)`; nothing is mapped or applied
+        self.key_sink = None
 
         # Level state, re-sampled every poll_events() and HELD between polls.
         self.held = {k: False for k in self.key_map}
@@ -665,6 +672,9 @@ class KeyboardInput:
                 cmds.append("quit")
                 continue
             if ev.type != pygame.KEYDOWN:
+                continue
+            if self.key_sink is not None:
+                self.key_sink(ev)
                 continue
             self.n_events += 1
             cmd = (MENU_KEYS if self.menu else EDGE_KEYS).get(ev.key)
@@ -914,6 +924,7 @@ class GamepadInput:
         self.menu = False
         self._menu_prev: dict[str, bool] = {}
         self._menu_stick = None
+        self._menu_stick_x = None
 
     def set_gearbox(self, mode: str) -> None:
         self.auto_gearbox, self.auto_clutch = gearbox_flags(mode)
@@ -936,6 +947,7 @@ class GamepadInput:
             self._menu_prev = {n: self.pressed(n) for n in table}
             from .menu import StickNav
             self._menu_stick = StickNav()
+            self._menu_stick_x = StickNav()
         self.menu = flag
 
     @staticmethod
@@ -1129,6 +1141,11 @@ class GamepadInput:
             nav = self._menu_stick.poll(self.stick("left")[1])
             if nav:
                 cmds.append(nav)
+        if self._menu_stick_x is not None:
+            # the same edge detector on the x axis: left = 'up', right = 'down'
+            nav = self._menu_stick_x.poll(self.stick("left")[0])
+            if nav:
+                cmds.append({"nav_up": "nav_left", "nav_down": "nav_right"}[nav])
         for btn in self.map["buttons"]:
             self._buttons_prev[btn] = self._button(btn)
         return cmds
@@ -1654,6 +1671,7 @@ def self_check(verbose: bool = True) -> bool:
     kb.set_menu(True)
     kb.set_keys(up=True)                   # throttle held when the menu opens
     for key, want in ((pygame.K_UP, "nav_up"), (pygame.K_DOWN, "nav_down"),
+                      (pygame.K_LEFT, "nav_left"), (pygame.K_RIGHT, "nav_right"),
                       (pygame.K_RETURN, "select"), (pygame.K_SPACE, "select"),
                       (pygame.K_r, "reset"), (pygame.K_BACKSPACE, "garage"),
                       (pygame.K_p, "menu"), (pygame.K_ESCAPE, "menu")):

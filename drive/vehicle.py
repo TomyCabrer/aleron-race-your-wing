@@ -264,6 +264,14 @@ class Controls:
                                # False = H-pattern: the pedal is the only clutch
     wing_on: bool = False      # driver's toggle; the actuator lag lives here
     starter: bool = False
+    #: FREE WINGS. None (every existing caller) = the published behaviour:
+    #: `wing_on` arms the flank panel on the OUTER flank of the turn, chosen
+    #: by the steering sign, and the top wing by its own mode. A 3-tuple
+    #: `(left, right, top)` of bools commands each wing DIRECTLY, gated by
+    #: `wing_on`: both flanks out together is an air brake (the side forces
+    #: cancel, the drags add). A `None` entry for `top` leaves that wing on
+    #: its automatic law. The actuator lags are the same either way.
+    wing_cmd: tuple | None = None
 
 
 @dataclass
@@ -750,6 +758,8 @@ class VehicleState:
     dep_raw: float = 0.0         # linear deploy fraction, smoothstepped on use
     dev_side: int = 0            # -1 right, 0 none, +1 left
     dev_hold: float = 0.0        # s, how long the requested side has persisted
+    dep_raw_l: float = 0.0       # per-flank deploy fractions, used ONLY when a
+    dep_raw_r: float = 0.0       #    `Controls.wing_cmd` commands the flanks
     top_raw: float = 0.0         # top-wing linear deploy fraction
     top_hold: float = 0.0        # s, hold-off after an 'active' trigger drops
     F_top_prev: float = 0.0      # N, last step's downforce: LAGGED into the
@@ -984,6 +994,7 @@ class Vehicle:
         self.F_wing = self.D_wing = 0.0
         self.wing_deploy = 0.0
         self.wing_side = 0
+        self.wing_deploy_l = self.wing_deploy_r = 0.0
         self.F_top = self.D_top = 0.0
         self.top_deploy = 0.0
         self.util_f = self.util_r = 0.0
@@ -1091,7 +1102,10 @@ class Vehicle:
         top = cfg.top
         F_top = D_top = dep_top = dz_top = 0.0
         if top is not None:
-            if top.mode == "active":
+            m_top = None if ctl.wing_cmd is None else ctl.wing_cmd[2]
+            if m_top is not None:
+                cmd_t = 1.0 if (m_top and ctl.wing_on) else 0.0
+            elif top.mode == "active":
                 want_t = bool(ctl.wing_on) and (ctl.brake > 0.05
                                                 or fabs(ctl.delta) > self.dev_deadband)
                 if want_t:
@@ -1109,6 +1123,19 @@ class Vehicle:
             F_top = dep_top * q * top.S * top.CZ
             D_top = q * top.S * (dep_top * top.CD + (1.0 - dep_top) * top.CD_stowed)
             dz_top = top.h_t - c.h_cg
+
+        # --- FREE flanks: each panel on its own command (Controls.wing_cmd) --
+        if ctl.wing_cmd is not None and (ctl.wing_cmd[0] is not None
+                                         or ctl.wing_cmd[1] is not None):
+            if st.dep_raw > 0.0:                    # the auto panel stows
+                st.dep_raw = max(0.0, st.dep_raw - dt / cfg.t_ret)
+            return self._aero_free(ctl, dt, q, beta, dict(
+                D_aero=D_aero, Fy_body=Fy_body, Mz_body=Mz_body,
+                F_top=F_top, D_top=D_top, dep_top=dep_top, dz_top=dz_top,
+                beta=beta, q=q, V=V))
+        if st.dep_raw_l > 0.0 or st.dep_raw_r > 0.0:   # the free panels stow
+            st.dep_raw_l = max(0.0, st.dep_raw_l - dt / cfg.t_ret)
+            st.dep_raw_r = max(0.0, st.dep_raw_r - dt / cfg.t_ret)
 
         # --- the flank panel: the outer one, designed law or closed form --
         sgn = float(st.dev_side)
@@ -1155,10 +1182,15 @@ class Vehicle:
             st.dep_raw = max(cmd, st.dep_raw - dt / cfg.t_ret)
         dep = _smoothstep(st.dep_raw)
 
+        #  which FLANK that is, for the HUD: the panel is on the flank
+        #  -sgn*flank (the right one, -1, in a left turn on the outer flank)
+        f_out = -sgn * flank
         base = dict(D_aero=D_aero, Fy_body=Fy_body, Mz_body=Mz_body,
                     F_top=F_top, D_top=D_top, dep_top=dep_top, dz_top=dz_top,
                     x_w=x_w, h_w=h_w, beta=beta, q=q, V=V, dep=dep, sgn_dev=int(sgn),
-                    y_dev=y_dev)
+                    y_dev=y_dev,
+                    dep_l=(dep if f_out > 0.0 else 0.0),
+                    dep_r=(dep if f_out < 0.0 else 0.0))
         if panel is not None:
             if dep <= 0.0 or sgn == 0.0:
                 return dict(base, F_dev=0.0, D_dev=0.0, Mz_dev=0.0, CL_dev=0.0, alpha_dev=0.0)
@@ -1213,6 +1245,99 @@ class Vehicle:
         Mz_dev = F_dev * cfg.x_w + y_dev * D_dev
         return dict(base, F_dev=F_dev, D_dev=D_dev, Mz_dev=Mz_dev, CL_dev=CL,
                     alpha_dev=alpha_dev)
+
+    def _aero_free(self, ctl: Controls, dt: float, q: float, beta: float,
+                   base: dict) -> dict:
+        """The flank panels under DIRECT command (`Controls.wing_cmd`).
+
+        Each flank has its own deploy state and the same actuator lags; the
+        panel on flank f (+1 left, -1 right) is the SAME panel the published
+        path deploys there -- the outer one of a turn of sign `-f*flank_sgn`
+        -- so its force law, its sign and its lateral station are exactly
+        the legacy branch's with `sgn = -f*flank` and `y_dev = f*Y_DEV`. Two
+        panels out at once sum: the side forces cancel and the drags add,
+        which is the air brake the published law can never command. The
+        roll and load-transfer terms read ONE `F_dev` at ONE `h_w`, so the
+        height handed back is the force-weighted one (exactly the single
+        panel's when only one is out).
+        """
+        cfg, c, st = self.cfg, self.car, self.state
+        flank = cfg.flank_sgn()
+        m_l, m_r, _ = ctl.wing_cmd
+        designed = cfg.dev_left is not None or cfg.dev_right is not None
+        has_closed = bool(cfg.wing != "off" or cfg.CL0)
+        F_dev = D_dev = Mz_dev = 0.0
+        sum_Fh = sum_Fx = sum_Dy = 0.0
+        deps = {}
+        CL_pub = alpha_pub = 0.0
+        dep_pub = -1.0
+        for f, m in ((1.0, m_l), (-1.0, m_r)):
+            panel = (cfg.dev_left if f > 0.0 else cfg.dev_right) if designed else None
+            has = (panel is not None) if designed else has_closed
+            armed = has and bool(ctl.wing_on) and bool(m)
+            cmd = 1.0 if armed else 0.0
+            raw = st.dep_raw_l if f > 0.0 else st.dep_raw_r
+            if cmd > raw:
+                raw = min(cmd, raw + dt / cfg.t_ext)
+            elif cmd < raw:
+                raw = max(cmd, raw - dt / cfg.t_ret)
+            if f > 0.0:
+                st.dep_raw_l = raw
+            else:
+                st.dep_raw_r = raw
+            dep = _smoothstep(raw)
+            deps[f] = dep
+            if dep <= 0.0 or not has:
+                continue
+            sgn = -f * flank
+            y_dev = f * self.der.y_dev
+            b_dev = beta
+            x_w = panel.x_w if panel is not None else cfg.x_w
+            h_w = panel.h_w if panel is not None else cfg.h_w
+            if cfg.dev_curved_flow:
+                b_dev = atan2(st.v + st.r * x_w, st.u if st.u > 1.0 else 1.0)
+            if panel is not None:
+                alpha = panel.inc + sgn * (-b_dev)
+                CL = panel.cl(panel.inc if cfg.qss_parity else alpha)
+                F = sgn * dep * q * panel.S * CL
+                D = dep * q * panel.S * panel.cd(CL)
+            else:
+                CL0 = cfg.cl0()
+                if CL0 <= 0.0:
+                    continue
+                alpha = cfg.delta_dev_geom + sgn * (-b_dev)
+                CL = CL0 + cfg.dclda() * alpha
+                CL = 0.0 if CL < 0.0 else (CL_STALL if CL > CL_STALL else CL)
+                F = sgn * dep * q * S_DEV * CL
+                D = dep * q * S_DEV * CL / LD_DEV
+            F_dev += F
+            D_dev += D
+            Mz_dev += F * x_w + y_dev * D
+            sum_Fh += F * h_w
+            sum_Fx += F * x_w
+            sum_Dy += D * y_dev
+            if dep > dep_pub:
+                dep_pub, CL_pub, alpha_pub = dep, CL, alpha
+        dep_l, dep_r = deps[1.0], deps[-1.0]
+        if fabs(F_dev) > 1e-9:
+            h_w = sum_Fh / F_dev
+            x_w = sum_Fx / F_dev
+        else:
+            h_w, x_w = cfg.h_w, cfg.x_w
+        y_dev = sum_Dy / D_dev if D_dev > 1e-12 else 0.0
+        dep = dep_l if dep_l > dep_r else dep_r
+        if dep_l > 0.0 and dep_r > 0.0:
+            sgn_dev = 0                          # both: an air brake, no turn sign
+        elif dep_r > 0.0:
+            sgn_dev = int(-(-1.0) * flank)       # the right panel = a left turn's outer
+        elif dep_l > 0.0:
+            sgn_dev = int(-(1.0) * flank)
+        else:
+            sgn_dev = 0
+        return dict(base, x_w=x_w, h_w=h_w, dep=dep, sgn_dev=sgn_dev, y_dev=y_dev,
+                    dep_l=dep_l, dep_r=dep_r,
+                    F_dev=F_dev, D_dev=D_dev, Mz_dev=Mz_dev, CL_dev=CL_pub,
+                    alpha_dev=alpha_pub)
 
     # ---------------------------------------------------------------- #
     #  THE STEP                                                        #
@@ -1683,6 +1808,8 @@ class Vehicle:
         self.D_wing = aer["D_dev"]
         self.wing_deploy = aer["dep"]
         self.wing_side = aer["sgn_dev"] if aer["dep"] > 0.0 else st.dev_side
+        self.wing_deploy_l = aer["dep_l"]        # per FLANK (+y left, -y right):
+        self.wing_deploy_r = aer["dep_r"]        #    both > 0 only under wing_cmd
         self.F_top = aer["F_top"]
         self.D_top = aer["D_top"]
         self.top_deploy = aer["dep_top"]

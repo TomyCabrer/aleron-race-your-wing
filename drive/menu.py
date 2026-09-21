@@ -12,6 +12,8 @@ draws it duck-typed through `HudData.menu` without importing it at all.
 Command vocabulary (the strings `Menu.handle` understands):
 
     nav_up / nav_down   move the cursor
+    nav_left/nav_right  step the highlighted item's value -> returns
+                        'prev:<action>' / 'next:<action>', menu stays open
     select              run the highlighted item -> returns its action
     back / menu         close                    -> returns 'resume'
 
@@ -34,9 +36,11 @@ C_SEL_BG = (40, 44, 52)
 C_KEY = (217, 206, 85)
 C_SECTION = (79, 163, 255)
 
-NAV_HINT = [("UP / DOWN", "move"), ("ENTER", "select"), ("ESC", "back")]
-NAV_HINT_PAD = [("UP / DOWN", "move  (d-pad, stick)"), ("ENTER", "select  (CROSS)"),
-                ("ESC", "back  (CIRCLE, OPTIONS)")]
+NAV_HINT = [("UP / DOWN", "move"), ("LEFT / RIGHT", "change value"),
+            ("ENTER", "select"), ("ESC", "back")]
+NAV_HINT_PAD = [("UP / DOWN", "move  (d-pad, stick)"),
+                ("LEFT / RIGHT", "change value  (d-pad, stick)"),
+                ("ENTER", "select  (CROSS)"), ("ESC", "back  (CIRCLE, OPTIONS)")]
 
 
 class StickNav:
@@ -131,6 +135,12 @@ class Menu:
             self.move(-1)
         elif cmd == "nav_down":
             self.move(+1)
+        elif cmd in ("nav_left", "nav_right"):
+            # step the highlighted value; the page decides what that means
+            # and re-shows itself, so the menu stays open
+            a = self.action()
+            if a:
+                return ("prev:" if cmd == "nav_left" else "next:") + a
         elif cmd == "select":
             a = self.action()
             self.open = False
@@ -268,6 +278,8 @@ class Menu:
             y += 36 * u
         hint = NAV_HINT_PAD if any("PAD" in (t or "") or "DUALSENSE" in (t or "")
                                    for t, _ in self.sections) else NAV_HINT
+        if not any(a.startswith("set:") for _, a in self.items):
+            hint = [row for row in hint if not row[0].startswith("LEFT")]
         y += 6 * u
         for key, what in hint:
             self._blit(screen, key, x0 + 28 * u, y, f_lbl, C_DIM)
@@ -324,6 +336,10 @@ def self_check(verbose: bool = True) -> bool:
     m.show()
     rep("'menu' while open -> 'resume'", m.handle("menu") == "resume", "")
     rep("unknown commands ignored", m.handle("wing") is None, "")
+    m.show(idx=1)
+    rep("nav_left / nav_right -> prev:/next: and stay open",
+        (m.handle("nav_left"), m.handle("nav_right"), m.open)
+        == ("prev:reset", "next:reset", True), "")
     m.show(items=[("A", "a"), ("B", "b"), ("C", "c")], idx=2, title="SETTINGS")
     rep("show(idx=, title=) keeps the cursor and retitles",
         (m.idx, m.action(), m.title) == (2, "c", "SETTINGS"), f"{m.idx} {m.title}")

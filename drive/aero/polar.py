@@ -42,6 +42,13 @@ class Polar:
     ld_max: float = 0.0
     cl_ldmax: float = 0.0
     cm0: float = 0.0
+    #: thickness ratio of the section this polar belongs to. Not used by any
+    #: polar law -- it is here because the JUNCTION correlation
+    #: (`blend.hoerner_drag_area`) scales on the junction member's thickness,
+    #: and a polar is what a caller has in hand where a corner is charged.
+    #: 0.0 means "not stated", and the correlation then reports itself out of
+    #: band rather than inventing a thickness.
+    tc: float = 0.0
     n_rows: int = 0
 
     def __post_init__(self):
@@ -192,7 +199,7 @@ def estimate_polar(coords: np.ndarray, re: float, name: str = "section",
     cd = np.where(post_hi | post_lo, cd + 0.03 * np.abs(alphas - np.clip(alphas, a_s_lo, a_s_hi)), cd)
     cm = np.full_like(alphas, lin["cm0"])
     return Polar(name=name, re=re, source="estimate", alpha=alphas[keep], cl=cl[keep],
-                 cd=cd[keep], cm=cm[keep])
+                 cd=cd[keep], cm=cm[keep], tc=float(tc))
 
 
 # --------------------------------------------------------------------------- #

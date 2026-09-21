@@ -551,6 +551,11 @@ class HudData:
     wing_on: bool = False
     wing_deploy: float = 0.0
     wing_side: int = 0
+    #: per-FLANK deploy (left = +y, right = -y). None = derive from the two
+    #: above (the published one-panel law); both > 0 is the air brake a
+    #: `Controls.wing_cmd` can command. `flank_deps()` reads them either way.
+    wing_deploy_l: float | None = None
+    wing_deploy_r: float | None = None
     F_wing: float = 0.0
     D_wing: float = 0.0
     lap: int = 0
@@ -620,6 +625,12 @@ class HudData:
     # --- which car, and what it weighs right now (the Car / Ballast settings)
     car_name: str = ''        # cars.CAR_TITLES; '' = draw nothing
     mass_kg: float = 0.0      # the FITTED mass: stock + ballast + wings
+    # --- the swarm viewer (drive.drive --swarm): other cars, drawn as flat
+    # ground silhouettes under the hero car, and a free-text panel. Each
+    # ghost is (x, y, psi, (r, g, b)); drawn BEFORE the car so the hero is
+    # never hidden. Empty = nothing drawn, so every other session is as it was.
+    ghosts: list = field(default_factory=list)
+    overlay: list = field(default_factory=list)   # lines of text, top-left
 
 
 # ======================================================================= #
@@ -1051,6 +1062,21 @@ def car_mesh3():
     return polys
 
 
+def flank_deps(aux) -> tuple:
+    """(dep_left, dep_right) in 0..1 from a HudData (or a Vehicle): the
+    per-flank fields when present, else the one-panel law -- the deployed
+    panel is the one on the OUTER flank of the turn, `-wing_side`."""
+    dl = getattr(aux, 'wing_deploy_l', None)
+    dr = getattr(aux, 'wing_deploy_r', None)
+    if dl is not None and dr is not None:
+        return float(dl), float(dr)
+    dep = float(aux.wing_deploy)
+    side = int(aux.wing_side)
+    if dep <= 0.0 or side == 0:
+        return 0.0, 0.0
+    return (dep, 0.0) if side < 0 else (0.0, dep)
+
+
 def wing_mesh3(aux):
     """The three wings at THIS deployment state, in body frame.
 
@@ -1064,9 +1090,7 @@ def wing_mesh3(aux):
     TOP_RISE to its slot deployed, inverted (suction side down).
     """
     polys = []
-    dep = float(aux.wing_deploy)
-    f = dep * dep * (3.0 - 2.0 * dep)          # the 2-D view's smoothstep
-    side_dep = int(aux.wing_side)
+    dep_l, dep_r = flank_deps(aux)
     legacy = bool(getattr(aux, 'wing_type', '')) and aux.wing_type != 'off'
     chord = float(getattr(aux, 'dev_chord', DEV_CHORD) or DEV_CHORD)
     span = float(getattr(aux, 'dev_span', DEV_SPAN) or DEV_SPAN)
@@ -1082,7 +1106,9 @@ def wing_mesh3(aux):
         xw = float(aux.x_w_left if side > 0 else aux.x_w_right)
         if legacy and not (aux.dev_left or aux.dev_right):
             xw = float(getattr(aux, 'x_w', X_W))
-        active = (side_dep != 0 and side == -side_dep and dep > 0.0)
+        dep = dep_l if side > 0 else dep_r       # THIS flank's own deploy
+        f = dep * dep * (3.0 - 2.0 * dep)          # the 2-D view's smoothstep
+        active = dep > 0.0
         out = DEV_OUT0 + DEV_OUT1 * (f if active else 0.0)
         yc = side * (CAR_HALF_W + out)
         col = C_WING_ON if (active and dep > 0.05) else C_WING_OFF
@@ -1372,6 +1398,40 @@ class Renderer:
     def _px(self, P):
         return self.world_to_screen(P).astype(np.int32).tolist()
 
+    def _gpoly(self, P2):
+        """A filled GROUND polygon's screen points, or [] if off-frame.
+
+        Plan view: `_px`.  Chase: Sutherland-Hodgman through Chase3D's five
+        planes first.  The ribbon is culled per centreline SAMPLE, but its
+        edge vertices sit half a road width off the centreline and the run
+        is padded three samples past the cull, so with the car sideways to
+        the road (a slide, a spin, the seam of a hairpin) a handful of them
+        fall behind the eye.  Projected raw, those land at the +-4096 px
+        clamp and a single such vertex folds the whole concave fill across
+        the frame -- the ribbon and the wet patch on it "disappear" for as
+        long as the pose lasts.  The clipper is exact on the convex kerb
+        and mark quads; on the concave ribbon its bridging edges lie ON the
+        clip planes, outside the CHASE_NEAR_MARGIN band, so the fill is
+        right where it can be seen.
+        """
+        P = np.asarray(P2, dtype=np.float64)
+        if self._cam3 is None:
+            return self._px(P)
+        return self._cam3.poly_px(np.column_stack([P, np.zeros(len(P))]))
+
+    def _gsegs(self, A2, B2):
+        """Ground segments (n,2),(n,2) -> integer screen endpoints and a live
+        mask, trimmed to the frustum in chase mode (a road edge that runs off
+        the near plane keeps the part in front of the eye)."""
+        A = np.asarray(A2, dtype=np.float64)
+        B = np.asarray(B2, dtype=np.float64)
+        if self._cam3 is None:
+            return (self.world_to_screen(A).astype(np.int32),
+                    self.world_to_screen(B).astype(np.int32),
+                    np.ones(len(A), dtype=bool))
+        z = np.zeros((len(A), 1))
+        return self._cam3.clip_segments(np.hstack([A, z]), np.hstack([B, z]))
+
     def _set_rot(self, psi_cam):
         """theta and Rm.  DEVIATION 1 lives here and nowhere else."""
         if self.cfg.mode == 'world_up':
@@ -1522,6 +1582,8 @@ class Renderer:
         self._draw_features()
         if self.cfg.show_skid and skid is not None:
             self._draw_skid(skid)
+        if aux.ghosts:
+            self._draw_ghosts(aux.ghosts)
         if self._cam3 is not None:
             # One 3-D pass owns the car: the body, the wheels and all three
             # wings are one painter's-sorted soup, so a deployed panel is
@@ -1541,6 +1603,8 @@ class Renderer:
                 self._draw_gg(aux)
             if self.cfg.hud == 'full':
                 self._draw_minimap(x, y, aux)
+        if aux.overlay:
+            self._draw_overlay(aux.overlay)
         menu = getattr(aux, 'menu', None)
         if menu is not None and getattr(menu, 'open', False):
             menu.draw(sc)                  # ESC / OPTIONS: controls + reset
@@ -1676,11 +1740,17 @@ class Renderer:
         elif tr.closed:
             k0 = int(np.flatnonzero(~vis)[0])           # rotate to start on a gap
             vr = np.roll(vis, -k0)
-            d = np.diff(vr.astype(np.int8))
-            st = np.flatnonzero(d == 1) + 1
+            # Padded with a 0 at both ends, exactly as the open-track branch
+            # below: without the trailing pad a run that reaches the END of the
+            # rolled array has no falling edge, so it is dropped.  When that
+            # run is the only one -- the eye looking along the seam, with the
+            # rolled gap sitting right behind it -- the whole ribbon vanished
+            # for a frame, and came back the moment the cull disc moved on.
+            d = np.diff(np.concatenate([[0], vr.astype(np.int8), [0]]))
+            st = np.flatnonzero(d == 1)
             en = np.flatnonzero(d == -1)
             starts = [int((a + k0) % n) for a in st]
-            lengths = [int(b - a + 1) for a, b in zip(st, en)]
+            lengths = [int(b - a) for a, b in zip(st, en)]
         else:
             # An open track (the dragstrip) must NOT be rolled: wrapping joins
             # its two ends and draws a ribbon across the paddock.
@@ -1842,7 +1912,7 @@ class Renderer:
         tr = self.track
         for idx in runs:
             poly = np.vstack([tr.left[idx], tr.right[idx][::-1]])
-            pts = self._px(poly)
+            pts = self._gpoly(poly)
             if len(pts) >= 3:
                 pygame.draw.polygon(self.screen, C_TARMAC, pts)
 
@@ -1894,7 +1964,7 @@ class Renderer:
                 n1 = min(p.n1, self._hw)
                 edge_a = tr.xy[ii] + n0 * self._nrm[ii]
                 edge_b = tr.xy[ii] + n1 * self._nrm[ii]
-                pts = self._px(np.vstack([edge_a, edge_b[::-1]]))
+                pts = self._gpoly(np.vstack([edge_a, edge_b[::-1]]))
                 if len(pts) >= 3:
                     pygame.draw.polygon(self.screen, tuple(p.colour), pts)
 
@@ -1921,17 +1991,26 @@ class Renderer:
                     quad = np.array([self._pt(i0, n_in), self._pt(i0, n_out),
                                      self._pt(i1, n_out), self._pt(i1, n_in)])
                     col = C_KERB_A if int(s // blk) % 2 == 0 else C_KERB_B
-                    pygame.draw.polygon(self.screen, col, self._px(quad))
+                    pts = self._gpoly(quad)
+                    if len(pts) >= 3:
+                        pygame.draw.polygon(self.screen, col, pts)
                 s += blk
 
     def _draw_edges(self, runs):
         tr = self.track
         w = max(1, int(round(0.12 * self.ppm)))
+        sc = self.screen
         for idx in runs:
             for arr in (tr.left, tr.right):
-                pts = self._px(arr[idx])
-                if len(pts) >= 2:
-                    pygame.draw.lines(self.screen, C_EDGE, False, pts, w)
+                P = arr[idx]
+                if len(P) < 2:
+                    continue
+                if self._cam3 is None:
+                    pygame.draw.lines(sc, C_EDGE, False, self._px(P), w)
+                    continue
+                A, B, live = self._gsegs(P[:-1], P[1:])
+                for k in np.flatnonzero(live):
+                    pygame.draw.line(sc, C_EDGE, A[k], B[k], w)
 
     def _draw_dashes(self, windows):
         """3 m on / 6 m off centre dashes -- the second speed cue."""
@@ -1942,8 +2021,9 @@ class Renderer:
             while s < s1:
                 i0 = self._i_of_s(s)
                 i1 = self._i_of_s(s + 3.0)
-                p = self._px(np.array([tr.xy[i0], tr.xy[i1]]))
-                pygame.draw.line(self.screen, C_DASH, p[0], p[1], w)
+                A, B, live = self._gsegs(tr.xy[i0][None, :], tr.xy[i1][None, :])
+                if live[0]:
+                    pygame.draw.line(self.screen, C_DASH, A[0], B[0], w)
                 s += 9.0
 
     def _draw_marks(self, windows):
@@ -1965,11 +2045,15 @@ class Renderer:
                         quad = np.array([self._pt(i0, ns[j]), self._pt(i0, ns[j + 1]),
                                          self._pt(i1, ns[j + 1]), self._pt(i1, ns[j])])
                         col = C_EDGE if j % 2 == 0 else (40, 42, 46)
-                        pygame.draw.polygon(self.screen, col, self._px(quad))
+                        pts = self._gpoly(quad)
+                        if len(pts) >= 3:
+                            pygame.draw.polygon(self.screen, col, pts)
                 else:
                     quad = np.array([self._pt(i0, -self._hw), self._pt(i0, self._hw),
                                      self._pt(i1, self._hw), self._pt(i1, -self._hw)])
-                    pygame.draw.polygon(self.screen, C_PURPLE, self._px(quad))
+                    pts = self._gpoly(quad)
+                    if len(pts) >= 3:
+                        pygame.draw.polygon(self.screen, C_PURPLE, pts)
 
     def _draw_skid(self, skid: SkidBuffer):
         """<= 600 lines.  Culled in world coordinates, then strided, then
@@ -2040,6 +2124,44 @@ class Renderer:
         pygame.draw.polygon(self.screen, C_GLASS,
                             self._px(self._body_to_world(x, y, psi, glass)))
 
+    #: the ghost silhouette: the plan-view body outline, nothing else
+    _GHOST_BODY = np.array([
+        (CAR_X_FRONT, CAR_HALF_W * 0.72), (CAR_X_FRONT - 0.30, CAR_HALF_W),
+        (CAR_X_REAR + 0.25, CAR_HALF_W), (CAR_X_REAR, CAR_HALF_W * 0.80),
+        (CAR_X_REAR, -CAR_HALF_W * 0.80), (CAR_X_REAR + 0.25, -CAR_HALF_W),
+        (CAR_X_FRONT - 0.30, -CAR_HALF_W), (CAR_X_FRONT, -CAR_HALF_W * 0.72),
+    ])
+
+    def _draw_ghosts(self, ghosts) -> None:
+        """Other cars as GROUND silhouettes (the swarm, the user's lap).
+
+        Culled against the view radius, drawn through `_gpoly` so they lie on
+        the road in chase mode too. Cheap: one polygon each, no wheels."""
+        R2 = (self._view_radius() * 1.2) ** 2
+        cx, cy = float(self.cam[0]), float(self.cam[1])
+        for g in ghosts:
+            x, y, psi, col = g[0], g[1], g[2], g[3]
+            if (x - cx) ** 2 + (y - cy) ** 2 > R2:
+                continue
+            pts = self._gpoly(self._body_to_world(x, y, psi, self._GHOST_BODY))
+            if len(pts) >= 3:
+                pygame.draw.polygon(self.screen, col, pts)
+                pygame.draw.polygon(self.screen, C_CAR_OUTLINE, pts, 1)
+
+    def _draw_overlay(self, lines) -> None:
+        """A free-text panel, top-left, over everything but the menu."""
+        u = self.ui
+        pad = int(8 * u)
+        h = self.f_lbl.get_linesize()
+        w = max((self.f_lbl.size(str(ln))[0] for ln in lines), default=0) + 2 * pad
+        panel = pygame.Surface((w, h * len(lines) + 2 * pad), pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 150))
+        self.screen.blit(panel, (pad, pad))
+        for i, ln in enumerate(lines):
+            ln = str(ln)
+            col = C_YELLOW if ln.startswith("!") else C_HUD_TEXT
+            self._blit(ln.lstrip('!'), 2 * pad, pad + pad + i * h, self.f_lbl, col)
+
     def _force_px(self, F):
         """px per newton -- the SAME function for tyre and device forces."""
         px = abs(F) * FORCE_PX_PER_N * (self.ppm / FORCE_PPM_REF)
@@ -2108,9 +2230,7 @@ class Renderer:
         Top wing: a span-wide bar with end plates at its station; stowed =
         outline, deployed = filled, its drag drawn as the (backward) arrow.
         """
-        side_dep = int(aux.wing_side)
-        dep = float(aux.wing_deploy)
-        f = dep * dep * (3.0 - 2.0 * dep)
+        dep_l, dep_r = flank_deps(aux)
         legacy = bool(getattr(aux, 'wing_type', '')) and aux.wing_type != 'off'
         chord = float(getattr(aux, 'dev_chord', DEV_CHORD) or DEV_CHORD)
         plate = float(getattr(aux, 'dev_plate', 0.0) or 0.0)
@@ -2121,9 +2241,10 @@ class Renderer:
             xw = float(aux.x_w_left if side > 0 else aux.x_w_right)
             if legacy and not (aux.dev_left or aux.dev_right):
                 xw = float(getattr(aux, 'x_w', X_W))
-            # the deployed panel is on the OUTER flank: y = -sgn * 0.72
-            active = (side_dep != 0 and side == -side_dep and dep > 0.0)
-            fs = f if active else 0.0
+            # THIS flank's own deploy (one panel: the OUTER flank of the turn)
+            dep = dep_l if side > 0 else dep_r
+            active = dep > 0.0
+            fs = dep * dep * (3.0 - 2.0 * dep) if active else 0.0
             y_side = side * CAR_HALF_W
             out = side * (DEV_OUT0 + DEV_OUT1 * fs)
             panel = np.array([
@@ -2343,11 +2464,11 @@ class Renderer:
                 p0, u = got
                 self._arrow(p0, (u[0] * n_px, u[1] * n_px), col)
 
-        dep = float(aux.wing_deploy)
-        side_dep = int(aux.wing_side)
-        if side_dep != 0 and dep > 0.05:
+        dep_l, dep_r = flank_deps(aux)
+        dep = max(dep_l, dep_r)
+        if dep > 0.05:
             f = dep * dep * (3.0 - 2.0 * dep)
-            side = -side_dep                      # the OUTER flank of the turn
+            side = +1 if dep_l >= dep_r else -1   # the panel that is out
             xw = float(aux.x_w_left if side > 0 else aux.x_w_right)
             legacy = (bool(getattr(aux, 'wing_type', ''))
                       and aux.wing_type != 'off')
@@ -2535,10 +2656,10 @@ class Renderer:
         legacy = bool(getattr(aux, 'wing_type', '')) and aux.wing_type != 'off'
         has_l = bool(getattr(aux, 'dev_left', False)) or legacy
         has_r = bool(getattr(aux, 'dev_right', False)) or legacy
-        side = int(aux.wing_side)
-        # the deployed panel sits on the OUTER flank: side +1 (left turn) -> RIGHT
-        l_txt = ('L ' + ('>' if (on and side == -1) else '-')) if has_l else 'L  x'
-        r_txt = ('R ' + ('<' if (on and side == +1) else '-')) if has_r else 'R  x'
+        dep_l, dep_r = flank_deps(aux)
+        # each flank's own state; one panel out = the OUTER flank of the turn
+        l_txt = ('L ' + ('>' if dep_l > 0.01 else '-')) if has_l else 'L  x'
+        r_txt = ('R ' + ('<' if dep_r > 0.01 else '-')) if has_r else 'R  x'
         self._blit(f'FLANK  {l_txt}  {r_txt}  {int(round(aux.wing_deploy * 100)):3d}%',
                    r.x + 10 * u, r.y + 24 * u, self.f_val, C_WING_ON if on else C_HUD_DIM)
         fw = int(round(aux.F_wing / 10.0) * 10)              # 10 N quantum
@@ -3056,6 +3177,45 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     w_far = _ribbon_px_width(rndc, op, 160.0)
     rep('chase: the road narrows with distance', w_far < 0.55 * w_near,
         f'12 m ribbon is {w_near:.0f} px at 10 m ahead, {w_far:.0f} px at 100 m')
+    # --- the two ways the road used to vanish in the chase view.
+    #     1. the closed-track run splitter dropped a visible run that reached
+    #        the end of the rolled array (no falling edge) -- on the skidpad
+    #        that was EVERY frame; on a circuit, the seam.
+    #     2. a ribbon / patch vertex behind the eye, projected raw, folded the
+    #        whole concave fill off-frame: the car sideways to the road.
+    def _road_px(r_, tr_):
+        a = pygame.surfarray.pixels3d(r_.screen)
+        m = np.zeros(a.shape[:2], dtype=bool)
+        cols = [C_TARMAC, C_TARMAC_WET, C_TARMAC_DAMP] + [tuple(p.colour) for p in tr_.surfaces]
+        for c in cols:
+            m |= (a[..., 0] == c[0]) & (a[..., 1] == c[1]) & (a[..., 2] == c[2])
+        del a
+        return int(m.sum())
+    sk = trk.make_track('skidpad')
+    rsk = Renderer(ViewConfig(mode='chase'), sk, headless=True)
+    n_run_ok, n_px_min = True, 10 ** 9
+    for i_k in range(0, len(sk.xy), max(1, len(sk.xy) // 24)):
+        st_k = _demo_state(float(sk.xy[i_k][0]), float(sk.xy[i_k][1]), float(sk.psi[i_k]),
+                           u=20.0, v=0.0, r=0.0)
+        rsk.update_camera(st_k, 0.0)
+        runs_k = rsk._visible_indices(st_k.X, st_k.Y)[0]
+        n_run_ok &= len(runs_k) > 0
+        rsk.draw_frame(st_k, None, 0.0, _demo_ctl(), _demo_hud(V=20.0), SkidBuffer())
+        n_px_min = min(n_px_min, _road_px(rsk, sk))
+    rep('chase: the skidpad ribbon is drawn from every station (run splitter seam)',
+        n_run_ok and n_px_min > 50000, f'min {n_px_min} road px over 24 stations')
+    n_px_side = 10 ** 9
+    for dpsi_ in (1.0, -0.5, 2.0):
+        i_w = trk_index(op, 471.5)                      # on the arena's wet patch
+        st_w = _demo_state(float(op.xy[i_w][0]), float(op.xy[i_w][1]),
+                           float(op.psi[i_w] + dpsi_), u=20.0, v=0.0, r=0.0)
+        rndc.update_camera(st_w, 0.0)
+        rndc.draw_frame(st_w, None, 0.0, _demo_ctl(), _demo_hud(V=20.0), SkidBuffer())
+        n_px_side = min(n_px_side, _road_px(rndc, op))
+    rep('chase: the road survives the car sideways to it (near-plane clip of the ribbon)',
+        n_px_side > 50000, f'min {n_px_side} road px at +1.0 / -0.5 / +2.0 rad off the road')
+    for _ in range(5):
+        rndc.update_camera(st_c, 1.0 / 60.0)
     _okc, _whyc = frame_budget_verdict(float(np.mean(t_c)),
                                        float(np.percentile(t_c, 99)),
                                        budget_mean=12.0, budget_p99=20.0)

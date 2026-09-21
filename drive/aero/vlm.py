@@ -33,6 +33,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from . import blend as bl
+
 FOUR_PI = 4.0 * math.pi
 TWO_PI = 2.0 * math.pi
 _XHAT = np.array([1.0, 0.0, 0.0])
@@ -107,8 +109,18 @@ class Lattice:
     chord(y)     callable -> chord [m] (vectorised over y)
     twist(y)     callable -> geometric twist [rad], nose-up positive
     a, alpha_L0  section lift slope [/rad] and zero-lift angle [rad]
-    plate_h      tip-plate height [m] along +z at both tips (0 = none)
+    plate_h      tip-plate DEVELOPED ARC [m] at both tips (0 = none). With no
+                 blend the plate is a straight ray along +z and this is its
+                 height, which is what it has always meant
     plate_a/L0   the plate's own section (a flat plate by default)
+    plate_blend  fraction of that arc spent TURNING out of the wing plane, in
+                 [0, 1] -- see `blend`. 0 is the sharp right-angle corner the
+                 lattice has always built, bit-for-bit
+    plate_shape  which turn law draws it (`blend.BLEND_SHAPES`)
+    plate_cant_deg
+                 the angle the plate finishes at, out of the wing plane. 90
+                 (normal to the wing) is the only one carsim builds; the turn
+                 law is normalised by it, so it has to be named
     image_z      z of a rigid wall (None = free air); the wing must sit
                  wholly on one side of it, plates included
     """
@@ -116,6 +128,8 @@ class Lattice:
     def __init__(self, span: float, chord, twist, a: float, alpha_L0: float,
                  N: int = 24, plate_h: float = 0.0, n_plate: int = 6,
                  plate_a: float = TWO_PI, plate_L0: float = 0.0,
+                 plate_blend: float = 0.0, plate_shape: str = "arc",
+                 plate_cant_deg: float = 90.0,
                  image_z: float | None = None, image_sign: float = -1.0,
                  V: float = 1.0, sweep_deg: float = 0.0):
         b = float(span)
@@ -139,25 +153,60 @@ class Lattice:
         st_y, st_z = ys, zs
         h = float(plate_h)
         self.plate_h = 0.0
+        self.plate_blend, self.plate_shape = 0.0, bl.check_shape(plate_shape)
+        self.plate_cant_deg = float(plate_cant_deg)
+        self.plate_projection = self.plate_tip_height = 0.0
+        ramp_all = np.zeros(N)
         if h > 0.01 * b and n_plate > 0:
             self.plate_h = h
+            self.plate_blend = float(plate_blend)
+            #  THE STATIONS ARE ARC LENGTH NOW, not height. They were the same
+            #  number while the plate was a straight vertical ray, and the
+            #  cosine clustering (dense at the junction and at the tip) is
+            #  unchanged -- so a sharp plate is panelled exactly as before.
             j = np.arange(n_plate + 1)
-            te = 0.5 * h * (1.0 - np.cos(np.pi * j / n_plate))
-            ts = 0.5 * h * (1.0 - np.cos(np.pi * (np.arange(n_plate) + 0.5) / n_plate))
+            se = 0.5 * h * (1.0 - np.cos(np.pi * j / n_plate))
+            ss = 0.5 * h * (1.0 - np.cos(np.pi * (np.arange(n_plate) + 0.5) / n_plate))
+            dy_e, dz_e = bl.path(se, h, plate_cant_deg, plate_blend, plate_shape)
+            dy_s, dz_s = bl.path(ss, h, plate_cant_deg, plate_blend, plate_shape)
+            self.plate_projection = float(dy_e[-1])
+            self.plate_tip_height = float(dz_e[-1])
+            #  ...and how far each station has got through the wing -> plate
+            #  TRANSITION. 1 everywhere on a sharp corner, which is what makes
+            #  the old one-step junction the step it was.
+            w = bl.ramp(ss, np.ones(n_plate, bool), h, plate_cant_deg,
+                        plate_blend, plate_shape)
+            ye_s, ye_p = b / 2.0 + dy_e, -(b / 2.0 + dy_e)
+            ys_s, ys_p = b / 2.0 + dy_s, -(b / 2.0 + dy_s)
             c_tip = float(np.asarray(chord(np.array([b / 2.0])))[0])
+            tw_tip = float(np.asarray(twist(np.array([b / 2.0])))[0])
             # port plate runs from its top down to the wing tip; starboard
-            # from the tip up -- both keep the sense "A -> B = +y then +z"
-            A_y = np.concatenate([np.full(n_plate, -b / 2.0), A_y, np.full(n_plate, b / 2.0)])
-            B_y = np.concatenate([np.full(n_plate, -b / 2.0), B_y, np.full(n_plate, b / 2.0)])
-            A_z = np.concatenate([te[::-1][:-1], A_z, te[:-1]])
-            B_z = np.concatenate([te[::-1][1:], B_z, te[1:]])
-            st_y = np.concatenate([np.full(n_plate, -b / 2.0), st_y, np.full(n_plate, b / 2.0)])
-            st_z = np.concatenate([ts[::-1], st_z, ts])
+            # from the tip up -- both keep the sense "A -> B = +y then +z", so
+            # the whole lattice is one continuous bound line
+            A_y = np.concatenate([ye_p[::-1][:-1], A_y, ye_s[:-1]])
+            B_y = np.concatenate([ye_p[::-1][1:], B_y, ye_s[1:]])
+            A_z = np.concatenate([dz_e[::-1][:-1], A_z, dz_e[:-1]])
+            B_z = np.concatenate([dz_e[::-1][1:], B_z, dz_e[1:]])
+            st_y = np.concatenate([ys_p[::-1], st_y, ys_s])
+            st_z = np.concatenate([dz_s[::-1], st_z, dz_s])
+            #  carsim's plate carries the WING'S TIP CHORD, so there is no
+            #  chord step here to ramp over (AeroBO's plate has its own chord,
+            #  up to 3x the tip's, and ramps it on exactly this `w`).
             c_all = np.concatenate([np.full(n_plate, c_tip), c_all, np.full(n_plate, c_tip)])
-            tw_all = np.concatenate([np.zeros(n_plate), tw_all, np.zeros(n_plate)])
-            a_all = np.concatenate([np.full(n_plate, float(plate_a)), a_all, np.full(n_plate, float(plate_a))])
-            L0_all = np.concatenate([np.full(n_plate, float(plate_L0)), L0_all, np.full(n_plate, float(plate_L0))])
+            #  THE SECTION AND THE TWIST MEET. They used to arrive in ONE STEP
+            #  at the junction panel: the wing's cambered alpha_L0 and its tip
+            #  twist on one side of an edge, the plate's on the other. Now they
+            #  ramp with the turn, so the surface finishes becoming the plate
+            #  exactly where it finishes turning into it. At blend 0 `w` is 1
+            #  and every one of these is the constant it used to be.
+            tw_p = (1.0 - w) * tw_tip                 # the plate's own toe is 0
+            a_p = (1.0 - w) * float(a) + w * float(plate_a)
+            L0_p = (1.0 - w) * float(alpha_L0) + w * float(plate_L0)
+            tw_all = np.concatenate([tw_p[::-1], tw_all, tw_p])
+            a_all = np.concatenate([a_p[::-1], a_all, a_p])
+            L0_all = np.concatenate([L0_p[::-1], L0_all, L0_p])
             is_plate = np.concatenate([np.ones(n_plate, bool), is_plate, np.ones(n_plate, bool)])
+            ramp_all = np.concatenate([w[::-1], ramp_all, w])
         Np = c_all.size
         tanL = math.tan(math.radians(sweep_deg))
         A3 = np.column_stack([np.abs(A_y) * tanL, A_y, A_z])
@@ -211,6 +260,7 @@ class Lattice:
         self.ly, self.width, self.c = lvec[:, 1], width, c_all
         self.y, self.z, self.x = st3[:, 1], st3[:, 2], st3[:, 0]
         self.is_plate = is_plate
+        self.blend_ramp = ramp_all
         self.a_panel, self.L0_panel = a_all, L0_all
         self.twist = tw_all
         self.N = N
@@ -314,6 +364,57 @@ def self_check(verbose: bool = True) -> bool:
     rp = p.solve(5.0)
     rep("tip plates (0.1 b): e above the planar wing", rp.e > r.e + 0.03, f"e {rp.e:.4f} vs {r.e:.4f}")
     rep("plates carry no lift of their own", abs(np.sum(rp.Gamma[rp.is_plate] * p.ly[rp.is_plate])) < 1e-12, "")
+    # -- the wing -> plate TRANSITION --------------------------------------
+    def _flank(**kw):
+        return Lattice(0.78, lambda y: 0.45 * (1 - 0.3 * np.abs(y) / 0.39),
+                       lambda y: np.radians(-3.0 * np.abs(y) / 0.39),
+                       6.2, math.radians(-2.3), N=24, plate_h=0.12,
+                       plate_a=6.0, plate_L0=math.radians(-1.0), **kw)
+    sharp, bld = _flank(), _flank(plate_blend=0.6, plate_shape="spiral")
+    sp, bp = sharp.is_plate, bld.is_plate
+    rep("a sharp plate is FULLY the plate from its first panel -- the step",
+        np.allclose(sharp.blend_ramp[sp], 1.0)
+        and np.allclose(sharp.L0_panel[sp], math.radians(-1.0))
+        and np.allclose(sharp.twist[sp], 0.0),
+        "section and toe both arrive in one step at the junction")
+    dev = np.where(bp & (bld.y > 0.0))[0]           # starboard, junction -> tip
+    L0_w, tw_w = math.radians(-2.3), math.radians(-3.0)
+    rep("a blended plate LEAVES THE WING at the wing's own section and toe",
+        abs(bld.L0_panel[dev[0]] - L0_w) < 0.1 * abs(L0_w)
+        and abs(bld.twist[dev[0]] - tw_w) < 0.1 * abs(tw_w)
+        and abs(bld.L0_panel[dev[-1]] - math.radians(-1.0)) < 1e-9
+        and abs(bld.twist[dev[-1]]) < 1e-9,
+        f"alpha_L0 {np.degrees(bld.L0_panel[dev[0]]):+.2f} -> "
+        f"{np.degrees(bld.L0_panel[dev[-1]]):+.2f} deg, toe "
+        f"{np.degrees(bld.twist[dev[0]]):+.2f} -> {np.degrees(bld.twist[dev[-1]]):+.2f} deg")
+    rep("...monotonically, on the turn's own ramp",
+        np.all(np.diff(bld.blend_ramp[dev]) >= -1e-12)
+        and np.all(np.diff(np.abs(bld.L0_panel[dev])) <= 1e-12),
+        f"ramp {bld.blend_ramp[dev][0]:.3f} -> {bld.blend_ramp[dev][-1]:.3f}")
+    rep("the WING is untouched by the ramp -- only the plate turns",
+        np.allclose(sharp.c[~sp], bld.c[~bp]) and np.allclose(sharp.twist[~sp], bld.twist[~bp])
+        and np.allclose(sharp.L0_panel[~sp], bld.L0_panel[~bp])
+        and np.allclose(sharp.y[~sp], bld.y[~bp]),
+        "carsim's transition is device-side only (blend.py's module note)")
+    #  arc length is the family's invariant, so a blend is the same SIZE of
+    #  plate -- it trades height for outboard reach and a smooth corner. The
+    #  PANELS are straight chords of that arc, so a panelled curve is always a
+    #  little short; what has to hold is that the deficit is the discretisation
+    #  and converges away, not a plate that quietly shrank.
+    dev6 = np.sum(bld.width[bp]) / (2.0 * 0.12)
+    d24 = _flank(plate_blend=0.6, plate_shape="spiral", n_plate=24)
+    dev24 = np.sum(d24.width[d24.is_plate]) / (2.0 * 0.12)
+    rep("a blend keeps the plate's ARC, so it is the same size",
+        abs(np.sum(sharp.width[sp]) - 2.0 * 0.12) < 1e-12
+        and 0.98 < dev6 < 1.0 and (1.0 - dev24) < 0.1 * (1.0 - dev6),
+        f"panelled/arc {dev6:.5f} at 6 panels, {dev24:.5f} at 24 -- chords of a curve; "
+        f"it trades {sharp.plate_tip_height - bld.plate_tip_height:.4f} m of height for "
+        f"{bld.plate_projection:.4f} m of reach, a side")
+    rep("blend 0 IS the published lattice, bit-for-bit",
+        np.array_equal(sharp.y, _flank(plate_blend=0.0, plate_shape="spiral").y)
+        and sharp.solve(4.0).CDi == _flank(plate_blend=0.0).solve(4.0).CDi,
+        "no wing in the library moves because this module exists")
+
     # cambered, twisted, tapered flank-sized panel
     lat = Lattice(0.78, lambda y: 0.45 * (1 - 0.3 * np.abs(y) / 0.39), lambda y: np.radians(-2.0 * np.abs(y) / 0.39),
                   6.2, math.radians(-2.3), N=24, plate_h=0.08)
