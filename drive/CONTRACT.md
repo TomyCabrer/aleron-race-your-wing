@@ -712,8 +712,13 @@ top entry leaves the top wing on its own law. `wing_cmd is None` is the
 published path bit-for-bit (the suite, 33/33, is unmoved). Users reach it
 with `G` (auto / left / right / both); `drive.ml`'s free-wings policy head
 (5 outputs: steer, pedal, wing_l, wing_r, wing_top; 373 parameters) emits
-it, and is what `--swarm` breeds by default. 4-output checkpoints load and
-drive unchanged.
+it, and is what `--swarm` breeds by default. The anchor's wing rule enters
+that head as a ±`policy.WING_PRIOR` prior per wing, composed at
+`policy.WING_GAIN` (full authority), so the head really can command any of
+the eight deployment patterns; through task 17 the rule's ±1 verdicts at
+the 0.55 residual gain could not be overruled and the head was free in
+name only. 4-output checkpoints load and drive unchanged: that head's wing
+output is still the rule's, to the bit.
 
 The TOP wing is new physics, all of it exactly 0.0 when `top is None`:
 
@@ -1180,8 +1185,10 @@ python3 -m drive.drive [--track arena|open|skidpad|dragstrip] [--radius 50] [--c
   [--sound off|low|mid|high] [--wing-inc 0.0] [--dev-flank outer|inner]
   [--garage] [--build NAME]
   [--ml-drive CHECKPOINT] [--seed-lap] [--race anchor|best|CHECKPOINT]
+  [--race-car same|corsa|mx5|540i]
   [--swarm N] [--swarm-seed none|latest|FILE] [--swarm-gens G] [--swarm-T S]
-  [--swarm-name NAME] [--swarm-resume STATE]
+  [--swarm-name NAME] [--swarm-resume STATE] [--swarm-car same|corsa|mx5|540i]
+  [--swarm-fast] [--swarm-save ask|always|never]
 ```
 `--script drive_probe` is the one scripted entry that deliberately switches
 the driver aids ON, because it exists to measure them (section 9 item 9 is
@@ -1357,6 +1364,16 @@ the bot's lap count / last / best. `opts.race_menu` carries the choice and
 whether a race was on across a restart (a map change keeps racing). Adding the
 rival costs one more `Vehicle.step` and one `observe` per physics step; V21's
 RTF is measured without one.
+
+The page's *Test* (`Sim.start_bot_test`) is the one bot path NOT stepped in
+lockstep with the session: bot 1 alone in each `RACE_BOT_CARS` entry, built by
+`Sim._race_car`, driven by `drive.ml.evaluate.bot_lap` (the `lap_time`
+rollout at `DT_EVAL`, `BOT_TEST_T` s, the session's Track, the global wet
+folded into `mu_scale`) in a `multiprocessing` pool of its own, collected by
+`_bot_test_poll` from the render loop. Nothing of it reaches the session's
+physics; its output is text (the page, the HUD `msg`, the terminal). The
+swarm's car (`--swarm-car`, the swarm page's *Car*) is built by the same rule,
+`_swarm_car`.
 
 exactly as `--wing` does, and `--build NAME` loads a car saved in the garage
 library (`runs/library/builds/NAME.json`) instead of the last one built.

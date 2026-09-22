@@ -72,6 +72,11 @@ def compare(path: str, track: str = "arena", wing: str = "plate",
             print(f"  {tag:9s} {bl:>9s} {r['laps']:5d} {r['v_mean']:7.3f} "
                   f"{r['v_max']:7.3f} {r['s']:8.1f} {100 * r['wing_frac']:6.1f} "
                   f"{100 * r['wing_outer_frac']:7.1f}  {r['ended']}")
+        if learned.free_wings:          # what it did with each of the three
+            r = rows["learned"]
+            print(f"  learned wings: L {100 * r['wing_l_frac']:.1f} %  "
+                  f"R {100 * r['wing_r_frac']:.1f} %  top {100 * r['wing_top_frac']:.1f} %  "
+                  f"both flanks (air brake) {100 * r['wing_both_frac']:.1f} %")
         b, l = rows["baseline"]["best"], rows["learned"]["best"]
         if b and l:
             print(f"  -> {b - l:+.3f} s a lap ({100 * (b - l) / b:+.2f} %)")
@@ -200,6 +205,29 @@ def _car_cell(arg) -> tuple:
     r = lap_time(pol, track, wing=wing, dt=DT_EVAL, T=T,
                  car=_car_of(car_name))
     return (path, car_name, r)
+
+
+#: The RACE page's *Test* (`drive.drive.Sim.start_bot_test`): sim seconds
+#: per car -- a standing-start lap and at least one flying lap on the arena
+#: for every car in the library.
+BOT_TEST_T = 150.0
+
+
+def bot_lap(job: dict) -> dict:
+    """One cell of the RACE page's test: a bot in one car, best flying lap
+    at DT_EVAL. `job`: `spec` ('anchor' or a checkpoint path), `car` (a
+    `cars.CarSpec`), `cfg_kwargs` (the car's whole `VehicleConfig`), `tr`
+    (the session's Track) and `T`. Plain data back, for a pool worker; a
+    failure comes back as `error` instead of killing the other cars' cells."""
+    try:
+        spec = job.get("spec")
+        pol = Policy() if spec in (None, "", "anchor") else Policy.load(spec)
+        tr = job.get("tr")
+        return lap_time(pol, getattr(tr, "name", "arena"), dt=DT_EVAL,
+                        T=float(job.get("T") or BOT_TEST_T), car=job.get("car"),
+                        cfg_kwargs=job.get("cfg_kwargs"), tr=tr)
+    except Exception as exc:
+        return dict(best=None, error=f"{type(exc).__name__}: {exc}")
 
 
 def car_transfer(paths=None, cars_=TRANSFER_CARS, track: str = "arena",

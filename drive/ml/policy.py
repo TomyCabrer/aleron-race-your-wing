@@ -20,7 +20,7 @@ import os
 
 import numpy as np
 
-from .baseline import AY_PLAN, WHEELBASE, baseline_action
+from .baseline import K_US_RAD_PER_G, AY_PLAN, WHEELBASE, baseline_action
 
 #: The observation, in order. Every entry is a read-only quantity the contract
 #: already publishes (CONTRACT section 4's attribute list) or a pure function
@@ -69,12 +69,33 @@ N_ACT = len(ACT_NAMES)
 #: FREE WINGS (the swarm's head). Five outputs: the two the driver has, then
 #: ONE PER WING -- left flank, right flank, top -- each a tanh threshold on
 #: `Controls.wing_cmd`, so the car decides for itself which panel to run and
-#: may run both flanks at once as an air brake. `Policy` reads its head off
+#: may run both flanks at once as an air brake, all three for a braking
+#: zone, two for a corner, or none. `Policy` reads its head off
 #: `theta.size`, so a 4-output checkpoint (every ES checkpoint in
 #: `checkpoints/`) still loads and drives exactly as before; `Policy.widen`
 #: turns one into a 5-output genome that starts by doing what it did.
 ACT_NAMES_FREE = ("steer", "pedal", "wing_l", "wing_r", "wing_top")
 N_ACT_FREE = len(ACT_NAMES_FREE)
+
+#: With the free head the anchor's wing verdicts are PRIORS, not orders.
+#: `expand_base` hands the residual +-WING_PRIOR per wing (the sign is the
+#: anchor's choice) and the network's three wing outputs are composed at
+#: WING_GAIN -- full authority -- rather than at RESID_GAIN, so an output
+#: past -+WING_PRIOR overrules the anchor: deploys a wing it would have kept
+#: in, or stows one it would have run. theta = 0 still drives exactly the
+#: anchor's choice, and the swarm is free to learn any deployment pattern.
+#:
+#: Why: through task 17 the verdicts were +-1 and the wing outputs were
+#: composed at RESID_GAIN = 0.55 like the steer and pedal, so the composed
+#: wing entry sat in [-1, -0.45] or [0.45, 1] whatever the net said and
+#: could never cross `WING_ON_THRESH`. The 'free-wings' head was free in
+#: name only -- measured: a net forcing +1 or -1 on every wing output gave
+#: the same wing_frac and the same reward as theta = 0, on BOTH heads -- and
+#: every wing decision in every checkpoint was the anchor's rule. The
+#: 4-output head is deliberately left as it was (its wing output is still
+#: the anchor's), so every committed ES checkpoint's numbers are unmoved.
+WING_PRIOR = 0.5
+WING_GAIN = 1.0
 
 #: `expand_base`: the anchor's ONE wing verdict spread over three wings so
 #: that theta = 0 with a free head drives like the published car -- the
@@ -114,6 +135,10 @@ WING_ON_THRESH = 0.0
 #: rarely uses more than 0.3 of lock) while keeping small outputs as trims.
 RESID_GAIN = 0.55
 
+#: The per-output residual gain of the free head: steer and pedal at
+#: `RESID_GAIN`, the three wings at `WING_GAIN` (see `WING_PRIOR`).
+_GAIN_FREE = np.array([RESID_GAIN, RESID_GAIN, WING_GAIN, WING_GAIN, WING_GAIN])
+
 #: Set False to evaluate the network on its own, with no baseline underneath --
 #: used by the self-check to prove the residual is what is doing the work.
 RESIDUAL = True
@@ -122,12 +147,13 @@ RESIDUAL = True
 def expand_base(base, obs) -> np.ndarray:
     """(steer, pedal, wing) -> (steer, pedal, wing_l, wing_r, wing_top): the
     anchor's one verdict handed to the wing the published law would have
-    used. See `KAPPA_SIDE`."""
+    used, as a +-WING_PRIOR prior the network can overrule. See
+    `KAPPA_SIDE`, `WING_PRIOR`."""
     k_path = 0.6 * obs[3] + 0.4 * obs[4]
-    w = base[2]
-    left = w if k_path < -KAPPA_SIDE else -1.0       # a right turn: left is outer
-    right = w if k_path > KAPPA_SIDE else -1.0
-    top = w if (base[1] < -0.05 or abs(base[0]) > 0.05) else -1.0
+    w = WING_PRIOR if base[2] > 0.0 else -WING_PRIOR
+    left = w if k_path < -KAPPA_SIDE else -WING_PRIOR   # a right turn: left is outer
+    right = w if k_path > KAPPA_SIDE else -WING_PRIOR
+    top = w if (base[1] < -0.05 or abs(base[0]) > 0.05) else -WING_PRIOR
     return np.array([base[0], base[1], left, right, top])
 
 
@@ -186,16 +212,22 @@ class Policy:
 
     @staticmethod
     def widen(theta) -> np.ndarray:
-        """A 4-output genome -> the 5-output one that behaves the same way:
-        the old `wing` row drives all three wings, so the anchor's outer
-        flank / active top still decide WHICH; the swarm then learns to
-        split them. A 5-output genome is returned as is."""
+        """A 4-output genome -> the 5-output one that DRIVES the same way:
+        the steer and pedal rows carry over and the three wing rows are
+        ZERO. The 4-output head's wing row never had any authority (see
+        `WING_PRIOR`: its composed wing entry could not cross the
+        threshold), so that genome's wing behaviour WAS the anchor's rule,
+        and zero rows plus the free head's priors reproduce exactly that;
+        the swarm then learns to split the wings. Copying the old row, as
+        this used to, would have handed never-selected weights real
+        authority. A 5-output genome is returned as is."""
         theta = np.asarray(theta, float).ravel()
         if Policy.head_of(theta.size) == N_ACT_FREE:
             return theta.copy()
         p = Policy(theta)
-        W2 = np.vstack([p.W2[0], p.W2[1], p.W2[2], p.W2[2], p.W2[2]])
-        b2 = np.array([p.b2[0], p.b2[1], p.b2[2], p.b2[2], p.b2[2]])
+        z = np.zeros(N_HID)
+        W2 = np.vstack([p.W2[0], p.W2[1], z, z, z])
+        b2 = np.array([p.b2[0], p.b2[1], 0.0, 0.0, 0.0])
         return np.concatenate([p.W1.ravel(), p.b1, W2.ravel(), b2])
 
     # ---- the forward pass ------------------------------------------------
@@ -207,32 +239,37 @@ class Policy:
 
     def action(self, obs, lock_rad: float = LOCK_RAD,
                wheelbase: float = WHEELBASE,
-               ay_plan: float = AY_PLAN) -> np.ndarray:
-        """(steer, pedal, wing) in [-1, 1]: the baseline plus this net's trim.
+               ay_plan: float = AY_PLAN,
+               k_us: float = K_US_RAD_PER_G) -> np.ndarray:
+        """(steer, pedal, wing) in [-1, 1]: the baseline plus this net's trim
+        -- or, with the free head, (steer, pedal, wing_l, wing_r, wing_top),
+        the three wings composed on the anchor's priors at `WING_GAIN`.
 
         Clipped, so the composed action can never ask for more than full lock
         or more than a full pedal however large the network's output grows.
 
-        The three per-car arguments go to the ANCHOR only -- the network reads
+        The four per-car arguments go to the ANCHOR only -- the network reads
         none of them. That is deliberate: the parameters are a trim in the
         car's own actuator units (a fraction of ITS lock, a fraction of ITS
         pedal), so a checkpoint means the same thing on any car, and the
         cross-car matrix in `evaluate.car_transfer` is comparing the same
         policy rather than the same numbers meaning different angles. They
         come from `baseline.driver_trim(car)`, which `env.rollout` calls once
-        per rollout; all three are exactly the Corsa's values for the Corsa.
+        per rollout; all four are exactly the Corsa's values for the Corsa.
         """
         net = self.act(obs)
         n = self.n_out
         if not self.residual:
             return net[:n]
-        base = baseline_action(obs, lock_rad, wheelbase, ay_plan)
+        base = baseline_action(obs, lock_rad, wheelbase, ay_plan, k_us)
         if self.free_wings:
-            base = expand_base(base, obs)
+            #  the wings at full authority over the anchor's +-WING_PRIOR
+            return np.clip(expand_base(base, obs) + _GAIN_FREE * net, -1.0, 1.0)
         return np.clip(base + RESID_GAIN * net[:n], -1.0, 1.0)
 
     def controls(self, obs, Controls, lock_rad: float = LOCK_RAD,
-                 wheelbase: float = WHEELBASE, ay_plan: float = AY_PLAN):
+                 wheelbase: float = WHEELBASE, ay_plan: float = AY_PLAN,
+                 k_us: float = K_US_RAD_PER_G):
         """The action decoded into a `vehicle.Controls`.
 
         `Controls` is passed in rather than imported so this module has no
@@ -240,7 +277,7 @@ class Policy:
         importable with `drive.vehicle` absent, which is what keeps the
         self-check cheap and the package honestly additive.
         """
-        a = self.action(obs, lock_rad, wheelbase, ay_plan)
+        a = self.action(obs, lock_rad, wheelbase, ay_plan, k_us)
         pedal = float(a[1])
         if self.free_wings:
             cmd = (bool(a[2] > WING_ON_THRESH), bool(a[3] > WING_ON_THRESH),

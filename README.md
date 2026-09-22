@@ -30,6 +30,7 @@ python3 -m drive.drive --garage                 # start in the 3D garage
 python3 -m drive.drive --ml-drive drive/ml/checkpoints/arena_plate.json
 python3 -m drive.drive --race best              # race the newest swarm checkpoint on a copy of your car
 python3 -m drive.drive --swarm 32 --swarm-seed latest   # a learning swarm, bred from your lap
+python3 -m drive.drive --swarm 32 --swarm-car mx5 --swarm-fast --swarm-save never   # in a stock MX-5, unwatched, unsaved
 ```
 
 | key | | key | |
@@ -458,7 +459,15 @@ The policy is a 14 → 16 → 4 tanh net of 308 parameters, and it is a **residu
 on a hand-written driver** (pure pursuit, a curvature-limited speed target and
 a wing rule), so zero parameters *is* that driver and the search spends its
 budget on the line and the aero rather than on rediscovering that grass is
-slow. It observes only what a driver at the HUD can see: speed, where it is on
+slow. The anchor does **not** hold the centreline: its lateral feedback is a
+barrier that is zero across the middle 90 % of the road and only fences the
+outer strip (`N_FREE`), so a line the residual picks is not fought every
+tick. (It used to be a spring on the offset, and every trained bot drove down
+the middle of the road as a result. The spring had also been hiding two
+holes in the anchor, now filled: the steer feedforward is the steady-state
+angle `L·κ + K_us·a_y` with a measured per-car understeer gradient rather
+than the zero-speed bicycle angle, and the pedal is capped by the friction
+ellipse of the corner being driven.) It observes only what a driver at the HUD can see: speed, where it is on
 the ribbon, heading error, the curvature 15 / 35 / 70 m ahead, sideslip, yaw
 rate, lateral g, the two axle utilisations, the panel's deploy fraction and
 whether it is on tarmac. Reward is metres of centreline advanced, with going
@@ -479,32 +488,71 @@ sealed plate:
 
 **+9.22 % a lap.** The ablation is the more interesting half: the learned
 policy is 0.637 s a lap faster *with* the panel than without it, and deploys it
-**less** than the baseline while going faster — so part of what it learned is
-when not to carry the drag. The baseline cannot lap at all without the device;
+**less** than the baseline while going faster. That is not the policy choosing
+when to carry the drag, though: with this 4-output head the wing output has
+no authority (the rule's ±1 verdict at the 0.55 residual gain never crosses
+the threshold, see `policy.WING_PRIOR`), so the lower deployment is the
+rule reacting to the faster line. Only the free-wings head the swarm breeds
+decides its wings itself. The baseline cannot lap at all without the device;
 it had come to depend on the front grip its own wing rule was buying. It is
 trained on one track with one aero configuration, so it is a fast lap on a
 memorised circuit, not a general driver.
 
-### Race the bot
+### Race the bots
 
-From the game: `ESC` → **Race vs bot**. `←` `→` picks the bot: the built-in
-driver (the anchor the swarm breeds from) or any checkpoint in
-`drive/ml/checkpoints` (the ones `K` saved in a swarm). *Start* puts both cars
-on the line, the bot 2 m to your left, standing start. It is the same car as
-yours with the ML driver at the wheel, drawn as an orange ghost with its name
-over it — you drive through it, so the race is against its lap, not its
-bumper. The HUD's bottom line shows the gap (`+` you are behind, `-` ahead)
-in seconds along the track and in metres, and the bot's lap count, last and
-best. `R` or `SHIFT+R` restarts the race from the line; if the bot leaves the
-map or spins it rejoins at its last sector line after 2.5 s. From the
-terminal, `--race anchor`, `--race best` (the newest swarm checkpoint) or
-`--race PATH`.
+From the game: `ESC` → **Race vs bot**. The page is a grid of up to three
+bots. `←` `→` on a *Bot* row picks who drives it: the built-in driver (the
+anchor the swarm breeds from) or any checkpoint in `drive/ml/checkpoints` —
+your swarm bots first, newest first, then the `train.py` ones — and a
+session starts with the bot you saved last as bot 1; the *car* row under it picks what it
+drives — *same as mine* (your car, ballast and wings included) or a stock
+Corsa, MX-5 or 540i on your session's settings with its own grip scale. A
+policy is a trim in the car's own actuator units, so one checkpoint can be
+put in each of the three cars and raced against itself; that is how a bot is
+tested in a different car. The next slot opens once the one above it is
+filled. *Start* puts every car on the line, standing start: bot 1 two metres
+to your left, bot 2 to your right, bot 3 a row back. Each bot is the ML
+driver in its own car, drawn as a coloured ghost (orange, blue, violet) with
+its name over it — you drive through them, so the race is against their
+laps, not their bumpers. The HUD's bottom line shows, per bot, the gap (`+`
+you are behind, `-` ahead) in seconds along the track and in metres, and its
+lap count and best; a bot's lap timer, like yours, starts at its first
+crossing of the line after the launch, not at the launch. `R` or `SHIFT+R`
+restarts the race from the line; if a bot leaves the map or spins it rejoins
+at its last sector line after 2.5 s. From the terminal, `--race anchor`,
+`--race best` (the newest swarm checkpoint) or `--race PATH`, comma-separated
+for a grid, with `--race-car` naming each bot's car the same way:
+`--race best,best,best --race-car corsa,mx5,540i` races the newest bot in
+all three cars. The RACE page also has a `Delete bot` row for bot 1's
+checkpoint: select it twice and the file under `drive/ml/checkpoints` is
+removed (the built-in driver cannot be deleted).
+
+**Test a bot in every car.** *Test bot 1 in every car* on the same page
+drives bot 1 **alone**, with nothing drawn, in each car the *car* row offers
+— yours, then the stock Corsa, MX-5 and 540i on your settings — for 150 s
+each at the contract's 1 ms, on your map and surface, in a process pool of
+its own (`Sim.start_bot_test` → `drive.ml.evaluate.bot_lap`). You keep
+driving meanwhile; about 16 s later the page shows each car's best flying
+lap, or how and when the bot left the road, and the HUD and the terminal
+carry the same line. Selecting the row again while it runs cancels it. It is
+the rollout's judgement, so a car that goes off is *out* (a race would put it
+back at the line): measured on the arena with the plate, `swarm_bot_2` — bred
+in a Corsa — laps the Corsa in 62.79 s, goes off in the MX-5 after 6 s and
+spins the 540i after 46 s, which is the case for breeding a bot in the car it
+will drive (below). A bot you have just saved in a swarm from the game comes back as bot 1
+on this page, in the car it was bred in, so racing it is *Race vs bot* →
+*Start*.
 
 ### Deploy a swarm, and breed the best
 
-From the game: `ESC` → **Deploy swarm**. The page has *Cars* (8–64), *Seed*
+From the game: `ESC` → **Deploy swarm**. The page has *Car* (what the swarm
+breeds in: *same as mine*, or a stock Corsa, MX-5 or 540i on your settings —
+the RACE page's rule, `--swarm-car` on the command line; the bot is named
+after it, `swarm_<map>_<car>_…`, and a resume keeps it), *Cars* (8–64), *Seed*
 (none / your last seed lap / best saved swarm), *Generations*, *Sim time*,
-*Seed lap* and *Deploy*. *Seed lap* puts you on the start line, recording from
+*Replay* (watch every generation, or off), *Save best* (what `ESC` does with
+the best car: ask, always, never), *Seed lap* and *Deploy*. *Seed lap* puts
+you on the start line, recording from
 the standing start; when you cross the line again a prompt asks the lap's name
 (ENTER saves `runs/swarm/seed_<map>_<car>_<name>.json`, ESC discards) and the
 page comes back with that lap as the seed, cursor on *Deploy*. `K` while
@@ -517,15 +565,27 @@ python3 -m drive.drive --swarm 32                       # 32 cars, bred from the
 python3 -m drive.drive --swarm 32 --swarm-seed latest   # ... from the last seed lap YOU drove
 python3 -m drive.drive --swarm 32 --swarm-seed drive/ml/checkpoints/swarm_arena.json
 python3 -m drive.drive --swarm-resume runs/swarm/<name>_state.json
+python3 -m drive.drive --swarm 32 --swarm-fast --swarm-gens 20 --swarm-save never   # no replay, no checkpoint
 python3 -m drive.ml.swarm --pop 32 --gens 20 --seed runs/swarm/seed_arena_*.json --save   # headless
 ```
 
 `--swarm N` is a **genetic algorithm** over a **free-wings** genome
 (`drive/ml/swarm.py`, 373 parameters): the same net with five outputs — steer,
 pedal and *one per wing* (left flank, right flank, top), so every car decides
-for itself which panel to run and may run both flanks at once as an air
-brake for a braking zone (`Controls.wing_cmd`; the physics path with it unset
-is bit-for-bit the published one). N cars on the map and car you were
+for itself which wings to run: both flanks at once as an air brake for a
+braking zone, all three under braking, two for a corner, none on a straight
+(`Controls.wing_cmd`; the physics path with it unset is bit-for-bit the
+published one). The hand-written driver's wing rule is only a **prior** on
+those three outputs (`policy.WING_PRIOR`, ±0.5, composed at full authority
+rather than the steer and pedal's 0.55), so a genome can deploy a wing the
+rule would keep in or stow one it would run; `theta = 0` still drives the
+rule. (Until this was measured, the verdicts were ±1 at the residual gain
+and no output could ever cross the threshold: every "free-wings" bot was
+running the rule, and so was every ES bot — the 4-output head still does,
+unchanged, so its checkpoints' numbers are unmoved.) The swarm window and
+the headless log report what the best car does with each wing (`wings L R
+top both`), and a seed lap now records each wing's own deploy state so the
+clone learns your `G` choices too. N cars on the map and car you were
 driving; every generation the top 15 % survive untouched and the rest are
 bred from tournament-picked parents by BLX crossover and gaussian mutation.
 Each genome carries its **own mutation step** (self-adaptive, log-normally
@@ -539,9 +599,16 @@ drawn as the car with the camera on it — while the pool is already computing
 the next one (measured: 14.4 s a generation for 32 cars × 70 s on twelve
 cores, 2.5–2.9 s for 8 cars × 40 s). `SPACE`
 toggles auto-run, `ENTER` jumps to the next generation, `[` `]` change the
-playback speed, `C` the camera, `ESC` quits. `--swarm-gens G` stops after G
-generations; the whole population is saved to `runs/swarm/<name>_state.json`
-after every one and `--swarm-resume` continues it.
+playback speed, `C` the camera, `ESC` quits. **The replay is a clock**: with
+auto-run the next generation is taken only when the playback of the last one
+ends, so at `x1` a 70 s rollout paces the swarm at 70 s a generation however
+fast the pool is. *Replay off* (`V` in the window, the page's *Replay* row,
+or `--swarm-fast`) takes each generation the moment it is scored, the workers
+send no trace back, the window drops to 12 fps and shows a table of the last
+twelve generations instead of the ghosts; `V` again brings the ghosts back
+from the next generation scored. `--swarm-gens G` stops after G generations;
+the whole population is saved to `runs/swarm/<name>_state.json` after every
+one and `--swarm-resume` continues it.
 
 **The user's lap as the base.** You decide *before* the lap: press `K` while
 driving (or launch with `--seed-lap`), and the next complete, valid lap from
@@ -556,12 +623,21 @@ alongside the swarm in cyan. A seed is never assumed: `--swarm-seed none`
 (the default) breeds from the hand-written anchor, and a `Policy` checkpoint
 — from `train.py` or from an earlier swarm — seeds the same way.
 
-**Saving the best.** `K` in the swarm window (or `ESC`, if nothing was saved
-yet) first asks for the bot's name, then writes `drive/ml/checkpoints/swarm_<name>.json`: a plain `Policy`
+**Saving the best — or not.** `K` in the swarm window asks for the bot's
+name, then writes `drive/ml/checkpoints/swarm_<name>.json`: a plain `Policy`
 checkpoint with the swarm's lineage in its `meta` and the best lap
-**re-measured at 1 ms**. `--ml-drive` drives it, and the next swarm can
-`--swarm-seed` from it, so a base carries over from one iteration — or one car
-— to the next.
+**re-measured at 1 ms** — on the car it was bred in, garage wings, engine
+and assists included (until 2026-09-22 that measurement ran on the stock
+config whatever the swarm had bred on). `ESC` with nothing saved yet does what the page's
+*Save best* row (`--swarm-save`) says: *ask* (the default) opens the same
+prompt, where `ENTER` saves and `ESC` discards — no checkpoint is written;
+*always* saves under the swarm's name; *never* writes nothing. A save you
+asked for with `K` is never thrown away: `ESC` while its 1 ms lap is still
+being measured waits for it (a second `ESC` saves it unmeasured). The population
+is in `runs/swarm/<name>_state.json` either way, so a discarded best can
+still be resumed and kept. A saved bot is what the RACE page lists, what
+`--ml-drive` drives, and what the next swarm can `--swarm-seed` from, so a
+base carries over from one iteration — or one car — to the next.
 
 ## Check it
 

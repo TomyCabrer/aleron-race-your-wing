@@ -40,15 +40,25 @@ import numpy as np
 from .baseline import baseline_action, driver_trim
 from .env import observe
 from .policy import (Policy, N_OBS, N_ACT, N_ACT_FREE, N_HID, RESID_GAIN,
-                     expand_base)
+                     WING_GAIN, expand_base)
 
 SEED_LAP_KIND = "carsim-seed-lap-1"
 
 #: the row schema the sim writes; kept here so the reader and the writer
 #: agree by NAME (the sim looks the list up through a plain JSON header, not
 #: through this module)
+#: `wing_deploy_l / wing_deploy_r / top_deploy` were appended for the free
+#: wings: what the user actually did with each of the three (the `G` key's
+#: left / right / both, and the top wing). Read by NAME, so a seed lap
+#: written before they existed still loads; `pairs` then infers the side
+#: from the yaw rate as it always did.
 SEED_COLS = ("t", "x", "y", "psi", "u", "v", "r", "beta", "ay", "util_f",
-             "util_r", "wing_deploy", "delta", "throttle", "brake", "wing_on")
+             "util_r", "wing_deploy", "delta", "throttle", "brake", "wing_on",
+             "wing_deploy_l", "wing_deploy_r", "top_deploy")
+
+#: the free head's per-output residual gain (policy._GAIN_FREE): the clone's
+#: target for the net is (user - anchor) / gain, so the wings divide by theirs
+_GAIN_FREE = np.array([RESID_GAIN, RESID_GAIN, WING_GAIN, WING_GAIN, WING_GAIN])
 
 WING_TARGET = 0.8
 
@@ -75,6 +85,8 @@ def pairs(seed: dict, tr, car=None, mu_scale: float = 1.0,
     n_out = N_ACT_FREE if n_act >= N_ACT_FREE else 3
     cols, rows = seed["cols"], seed["rows"]
     ix = {c: i for i, c in enumerate(cols)}
+    has_lr = "wing_deploy_l" in ix and "wing_deploy_r" in ix
+    has_top = "top_deploy" in ix
     lock_rad = float(seed.get("lock_rad") or 0.0)
     if car is None:
         from corsa_c import CorsaC
@@ -95,19 +107,31 @@ def pairs(seed: dict, tr, car=None, mu_scale: float = 1.0,
         fake.util_f, fake.util_r = r[ix["util_f"]], r[ix["util_r"]]
         fake.wing_deploy = r[ix["wing_deploy"]]
         observe(fake, tr, obs[k])
-        b3 = baseline_action(obs[k], lock_rad, trim["wheelbase"], trim["ay_plan"])
+        b3 = baseline_action(obs[k], lock_rad, trim["wheelbase"], trim["ay_plan"],
+                             trim["k_us"])
         base[k] = expand_base(b3, obs[k]) if n_out == N_ACT_FREE else b3
         tgt[k, 0] = r[ix["delta"]] / lock_rad
         tgt[k, 1] = r[ix["throttle"]] - r[ix["brake"]]
         on = r[ix["wing_on"]] > 0.5
         if n_out == N_ACT_FREE:
-            out = r[ix["wing_deploy"]] > 0.05
-            tgt[k, 2] = WING_TARGET if (out and r[ix["r"]] < 0.0) else -WING_TARGET
-            tgt[k, 3] = WING_TARGET if (out and r[ix["r"]] > 0.0) else -WING_TARGET
-            tgt[k, 4] = WING_TARGET if (on and r[ix["brake"]] > 0.05) else -WING_TARGET
+            if has_lr:                       # the user's own per-panel use
+                out_l = r[ix["wing_deploy_l"]] > 0.05
+                out_r = r[ix["wing_deploy_r"]] > 0.05
+            else:                            # an older lap: the outer flank
+                out = r[ix["wing_deploy"]] > 0.05
+                out_l = out and r[ix["r"]] < 0.0
+                out_r = out and r[ix["r"]] > 0.0
+            if has_top:
+                out_t = r[ix["top_deploy"]] > 0.05
+            else:
+                out_t = on and r[ix["brake"]] > 0.05
+            tgt[k, 2] = WING_TARGET if out_l else -WING_TARGET
+            tgt[k, 3] = WING_TARGET if out_r else -WING_TARGET
+            tgt[k, 4] = WING_TARGET if out_t else -WING_TARGET
         else:
             tgt[k, 2] = WING_TARGET if on else -WING_TARGET
-    net_tgt = np.clip((tgt - base) / RESID_GAIN, -1.0, 1.0)
+    gain = _GAIN_FREE if n_out == N_ACT_FREE else RESID_GAIN
+    net_tgt = np.clip((tgt - base) / gain, -1.0, 1.0)
     return obs, net_tgt, base
 
 
@@ -181,19 +205,31 @@ def clone_from_lap(path: str, tr, car=None, mu_scale: float = 1.0,
 
 
 def seed_lap_trace(seed: dict) -> list:
-    """The user's lap as the (t, x, y, psi, u, wing_deploy, wing_side)
-    tuples `env.rollout(collect=)` produces, t re-zeroed at the lap start,
-    so a viewer draws the user's ghost with the same code as a swarm car's."""
+    """The user's lap as the (t, x, y, psi, u, wing_deploy, wing_side,
+    top_deploy) tuples `env.rollout(collect=)` produces, t re-zeroed at the
+    lap start, so a viewer draws the user's ghost with the same code as a
+    swarm car's. Side 0 with a deploy > 0 is both flanks (the air brake)."""
     cols, rows = seed["cols"], seed["rows"]
     ix = {c: i for i, c in enumerate(cols)}
+    has_lr = "wing_deploy_l" in ix and "wing_deploy_r" in ix
+    has_top = "top_deploy" in ix
     t0 = rows[0, ix["t"]] if len(rows) else 0.0
     out = []
     for r in rows:
         side = 0
-        if r[ix["wing_deploy"]] > 0.05:
+        if has_lr:
+            dl, dr = r[ix["wing_deploy_l"]], r[ix["wing_deploy_r"]]
+            if dl > 0.05 and dr > 0.05:
+                side = 0
+            elif dr > 0.05:
+                side = 1                     # the right panel: a left turn's outer
+            elif dl > 0.05:
+                side = -1
+        elif r[ix["wing_deploy"]] > 0.05:
             side = 1 if r[ix["r"]] > 0 else -1
         out.append((r[ix["t"]] - t0, r[ix["x"]], r[ix["y"]], r[ix["psi"]],
-                    r[ix["u"]], r[ix["wing_deploy"]], side))
+                    r[ix["u"]], r[ix["wing_deploy"]], side,
+                    r[ix["top_deploy"]] if has_top else 0.0))
     return out
 
 
@@ -216,14 +252,16 @@ def self_check(verbose: bool = True) -> bool:
     for k in range(int(40.0 / dt)):
         observe(veh, tr, obs)
         a = np.clip(baseline_action(obs, trim["lock_rad"], trim["wheelbase"],
-                                    trim["ay_plan"]) + RESID_GAIN * bias, -1, 1)
+                                    trim["ay_plan"], trim["k_us"])
+                    + RESID_GAIN * bias, -1, 1)
         ctl = Controls(delta=float(a[0]) * trim["lock_rad"],
                        throttle=max(float(a[1]), 0.0), brake=max(-float(a[1]), 0.0),
                        wing_on=bool(a[2] > 0.0), auto_gearbox=True, auto_clutch=True)
         if k % 5 == 0:
             rows.append([k * dt, veh.x, veh.y, veh.psi, veh.u, veh.v, veh.r,
                          veh.beta, veh.ay, veh.util_f, veh.util_r, veh.wing_deploy,
-                         ctl.delta, ctl.throttle, ctl.brake, 1.0 if ctl.wing_on else 0.0])
+                         ctl.delta, ctl.throttle, ctl.brake, 1.0 if ctl.wing_on else 0.0,
+                         veh.wing_deploy_l, veh.wing_deploy_r, veh.top_deploy])
         veh.step(ctl, (1.0,) * 4, (1.0,) * 4, dt)
     seed = dict(kind=SEED_LAP_KIND, cols=list(SEED_COLS), rows=np.array(rows),
                 lock_rad=trim["lock_rad"], track="arena")

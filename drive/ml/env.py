@@ -79,8 +79,14 @@ class Episode:
     lap_times: list = field(default_factory=list)
     v_mean: float = 0.0
     v_max: float = 0.0
-    wing_frac: float = 0.0       # fraction of steps with the panel deployed
+    wing_frac: float = 0.0       # fraction of steps with a flank panel deployed
     wing_outer_frac: float = 0.0 # ... of THOSE, the fraction on the outer flank
+    #  per wing, for the free-wings head (`policy.WING_PRIOR`): what the car
+    #  actually did with its three wings. `wing_both_frac` is the air brake.
+    wing_l_frac: float = 0.0     # fraction of steps with the LEFT flank panel out
+    wing_r_frac: float = 0.0     # ... the RIGHT one
+    wing_top_frac: float = 0.0   # ... the top wing (0.0 when the car has none)
+    wing_both_frac: float = 0.0  # ... BOTH flanks at once
     ended: str = "time"          # 'time' | 'offtrack' | 'spin' | 'stall'
     util_f_max: float = 0.0
     util_r_max: float = 0.0
@@ -201,7 +207,7 @@ def rollout(policy: Policy, track: str = "arena", *, dt: float = DT_TRAIN,
     to deploy it is part of the problem rather than a separate experiment.
 
     `collect`, if given, is a list that receives `(t, x, y, psi, u, wing_deploy,
-    wing_side)` once per 20 steps -- for plotting a learned line.
+    wing_side, top_deploy)` once per 20 steps -- for plotting a learned line.
     """
     tr = trk.make_track(track) if tr is None else tr
     car = CorsaC() if car is None else car
@@ -231,6 +237,7 @@ def rollout(policy: Policy, track: str = "arena", *, dt: float = DT_TRAIN,
     lock_rad = float(getattr(veh, "lock_rad", trim["lock_rad"]))
     wheelbase = trim["wheelbase"]
     ay_plan = trim["ay_plan"]
+    k_us = trim["k_us"]
     obs = np.empty(N_OBS)
     mu = [1.0, 1.0, 1.0, 1.0]
     crr = [1.0, 1.0, 1.0, 1.0]
@@ -240,6 +247,7 @@ def rollout(policy: Policy, track: str = "arena", *, dt: float = DT_TRAIN,
     s_prev, _n, _k, _p, _i = trk.project(tr, veh.x, veh.y)
     s_sum = 0.0
     v_sum, wing_sum, outer_sum, t_slow = 0.0, 0.0, 0.0, 0.0
+    l_sum = r_sum = top_sum = both_sum = 0.0
 
     for k in range(n_steps):
         t = k * dt                       # contract section 0: never accumulated
@@ -250,7 +258,8 @@ def rollout(policy: Policy, track: str = "arena", *, dt: float = DT_TRAIN,
         #  Corsa's values on the Corsa, so every committed checkpoint's
         #  measured numbers are unmoved by either change.
         ctl = policy.controls(obs, Controls, lock_rad=lock_rad,
-                              wheelbase=wheelbase, ay_plan=ay_plan)
+                              wheelbase=wheelbase, ay_plan=ay_plan,
+                              k_us=k_us)
         mu[0] = mu[1] = mu[2] = mu[3] = m
         crr[0] = crr[1] = crr[2] = crr[3] = c
         veh.step(ctl, mu, crr, dt)
@@ -275,12 +284,21 @@ def rollout(policy: Policy, track: str = "arena", *, dt: float = DT_TRAIN,
             # rate agrees with it
             if veh.wing_side != 0 and veh.r * veh.wing_side > 0.0:
                 outer_sum += 1.0
+        dl, dr = veh.wing_deploy_l, veh.wing_deploy_r
+        if dl > 0.05:
+            l_sum += 1.0
+            if dr > 0.05:
+                both_sum += 1.0
+        if dr > 0.05:
+            r_sum += 1.0
+        if veh.top_deploy > 0.05:
+            top_sum += 1.0
         ep.v_max = max(ep.v_max, veh.u)
         ep.util_f_max = max(ep.util_f_max, veh.util_f)
         ep.util_r_max = max(ep.util_r_max, veh.util_r)
         if collect is not None and k % 20 == 0:
             collect.append((t, veh.x, veh.y, veh.psi, veh.u,
-                            veh.wing_deploy, veh.wing_side))
+                            veh.wing_deploy, veh.wing_side, veh.top_deploy))
 
         # --- termination ---------------------------------------------------
         if abs(n) > half + MARGIN_OFF:
@@ -304,6 +322,10 @@ def rollout(policy: Policy, track: str = "arena", *, dt: float = DT_TRAIN,
     ep.v_mean = v_sum / n_done
     ep.wing_frac = wing_sum / n_done
     ep.wing_outer_frac = (outer_sum / wing_sum) if wing_sum > 0 else 0.0
+    ep.wing_l_frac = l_sum / n_done
+    ep.wing_r_frac = r_sum / n_done
+    ep.wing_top_frac = top_sum / n_done
+    ep.wing_both_frac = both_sum / n_done
     ep.reward = W_PROGRESS * s_sum
     if ep.ended == "offtrack":
         ep.reward -= W_OFFTRACK
@@ -314,7 +336,7 @@ def rollout(policy: Policy, track: str = "arena", *, dt: float = DT_TRAIN,
 
 def lap_time(policy: Policy, track: str = "arena", *, wing: str = "plate",
              dt: float = DT_EVAL, T: float = 240.0, laps: int = 3,
-             car=None, collect=None) -> dict:
+             car=None, collect=None, cfg_kwargs=None, tr=None) -> dict:
     """Best flying lap at the EVALUATION timestep, for a reported number.
 
     Everything the ES sees is measured at `DT_TRAIN`; everything quoted to a
@@ -325,13 +347,20 @@ def lap_time(policy: Policy, track: str = "arena", *, wing: str = "plate",
     package was written, but the only function that reports a LAP TIME could
     not, so every quoted number in the study was a Corsa number by
     construction rather than by choice.
+
+    `cfg_kwargs` / `tr` go to `rollout` unchanged: the car's whole config
+    (a garage build's three wings, the session's assists and grip) and a
+    track built with the session's own options. Both default to what this
+    function always measured, so every quoted number is unmoved.
     """
     ep = rollout(policy, track, dt=dt, T=T, wing=wing, car=car,
-                 collect=collect)
+                 collect=collect, cfg_kwargs=cfg_kwargs, tr=tr)
     times = ep.lap_times
     flying = [b - a for a, b in zip(times, times[1:])][:laps]
     return dict(best=min(flying) if flying else None, laps=ep.laps,
                 flying=flying, ended=ep.ended, t=ep.t, s=ep.s_progress,
                 v_mean=ep.v_mean, v_max=ep.v_max, wing_frac=ep.wing_frac,
                 wing_outer_frac=ep.wing_outer_frac, reward=ep.reward,
+                wing_l_frac=ep.wing_l_frac, wing_r_frac=ep.wing_r_frac,
+                wing_top_frac=ep.wing_top_frac, wing_both_frac=ep.wing_both_frac,
                 util_f_max=ep.util_f_max, util_r_max=ep.util_r_max)

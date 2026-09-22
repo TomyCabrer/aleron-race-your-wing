@@ -91,29 +91,55 @@ SEED_LAP_KIND = "carsim-seed-lap-1"
 SEED_LAP_HZ = 100
 SEED_LAP_DIR = os.path.join("runs", "swarm")
 SEED_LAP_COLS = ("t", "x", "y", "psi", "u", "v", "r", "beta", "ay", "util_f",
-                 "util_r", "wing_deploy", "delta", "throttle", "brake", "wing_on")
+                 "util_r", "wing_deploy", "delta", "throttle", "brake", "wing_on",
+                 "wing_deploy_l", "wing_deploy_r", "top_deploy")
 
 #: The pause menu's DEPLOY SWARM page: its rows, their choices and defaults.
 #: `seed`: 'none' = the anchor driver, 'latest' = the newest seed lap the
 #: user recorded with K, 'best' = the newest swarm checkpoint saved. `gens`
 #: 0 = keep breeding until ESC.
-SWARM_MENU_DEFAULTS = dict(pop=24, seed="none", gens=0, T=70.0)
+#: `view`: 'replay' draws every scored generation as ghosts and waits for
+#: the playback before taking the next; 'fast' takes each generation the
+#: moment it is scored (the pool is the only clock, and no trace crosses
+#: the pipe). `save`: what ESC in the swarm window does with the best.
+#: `car`: what the swarm breeds in -- 'same' = the car you are driving
+#: (ballast, garage build and all), else a STOCK library car on your
+#: session's settings with its own grip scale: the RACE page's car rule
+#: (`_swarm_car`, `Sim._race_car`), so a bot bred in the MX-5 is raced and
+#: tested in that same MX-5.
+SWARM_MENU_DEFAULTS = dict(pop=24, seed="none", gens=0, T=70.0, view="replay", save="ask",
+                           car="same")
 SWARM_MENU_CHOICES = dict(pop=(8, 12, 16, 24, 32, 48, 64),
                           seed=("none", "latest", "best"),
                           gens=(0, 3, 5, 10, 20, 50),
-                          T=(40.0, 55.0, 70.0, 90.0, 120.0))
+                          T=(40.0, 55.0, 70.0, 90.0, 120.0),
+                          view=("replay", "fast"),
+                          save=("ask", "always", "never"),
+                          car=("same",) + tuple(cars.CAR_ORDER))
 SWARM_SEED_LABELS = {"none": "None (the built-in driver)",
                      "latest": "Your last seed lap",
                      "best": "Best saved swarm"}
+SWARM_VIEW_LABELS = {"replay": "watch every generation",
+                     "fast": "off - breed flat out (V)"}
+SWARM_SAVE_LABELS = {"ask": "ask on exit",
+                     "always": "always on exit",
+                     "never": "never (K still saves)"}
 SWARM_HELP = [("DEPLOY SWARM", [
+    ("Car", "what they breed in: your car, or a stock one"),
+    ("", "(then raced and tested in that same car)"),
     ("Cars", "how many cars in each generation"),
-    ("Seed", "what generation 0 is bred from: nothing, the last seed lap"),
-    ("", "you drove, or the last swarm you saved"),
+    ("Seed", "what generation 0 is bred from: nothing,"),
+    ("", "your last seed lap, or the last swarm saved"),
     ("Generations", "0 = keep going until ESC"),
     ("Sim time", "seconds each car gets per generation"),
-    ("Seed lap", "puts you on the line and records; at the line again"),
-    ("", "you name the lap and it is saved as the seed"),
-    ("Deploy", "runs the swarm in this window; ESC there comes back here"),
+    ("Replay", "watch each generation as ghosts, or off:"),
+    ("", "no cars drawn, the next one starts the moment"),
+    ("", "one is scored -- many times faster"),
+    ("Save best", "what ESC in the swarm does with the best car;"),
+    ("", "ask: ENTER saves it, ESC discards it"),
+    ("Seed lap", "puts you on the line, recording; at the line"),
+    ("", "again you name the lap and it is the seed"),
+    ("Deploy", "runs it in this window; ESC there comes back"),
 ])]
 #: The pause menu's RACE VS BOT page. `bot`: 'none' | 'anchor' (the hand-
 #: written driver, `Policy()` with theta = 0) | a checkpoint path under
@@ -121,32 +147,67 @@ SWARM_HELP = [("DEPLOY SWARM", [
 #: car and config -- stepped in lockstep with the user's at the same dt,
 #: driven by the policy exactly as `--ml-drive` drives one, drawn as a ghost
 #: (no collision: it is a pace car, not a wall) with its own lap timer.
-RACE_MENU_DEFAULTS = dict(bot="anchor")
+#: The page has RACE_GRID_MAX slots: 'bot' / 'car' for the first, 'bot2' /
+#: 'car2' for the second, ... (`race_slot_keys`). A slot opens once the one
+#: above it is filled.
+RACE_GRID_MAX = 3
+RACE_MENU_DEFAULTS = dict(bot="anchor", car="same",
+                          bot2="none", car2="same",
+                          bot3="none", car3="same")
 RACE_BOT_ANCHOR = "anchor"
 RACE_CHECKPOINT_DIR = os.path.join("drive", "ml", "checkpoints")
+#: What a bot drives: 'same' = the session's car (ballast, wings and all),
+#: else a STOCK car from `cars.CARS` on the session's config with that car's
+#: own grip scale (`Sim._race_car`). The policy is a trim in the car's own
+#: actuator units (`policy.Policy.action`), so a checkpoint bred on one car
+#: can be put in another and raced -- which is how a bot is tried in a
+#: different car.
+RACE_BOT_CARS = ("same",) + tuple(cars.CAR_ORDER)
 RACE_START_OFFSET_M = 2.2       # the bot lines up this far LEFT of the user
+#: The grid, (n, s) per slot: bot 1 on the user's left, bot 2 on the right,
+#: bot 3 a row back on the left. A back-row car's `progress` starts at its
+#: s (negative), so every gap is read from the LINE.
+RACE_GRID = ((RACE_START_OFFSET_M, 0.0), (-RACE_START_OFFSET_M, 0.0),
+             (RACE_START_OFFSET_M, -7.0))
+#: A bot's lap timer arms once it has travelled this far from its grid
+#: slot. The user's standing start at s = 0 is not a line crossing (the first
+#: timed lap is the flying one after it), and a bot on the right of the
+#: line or a row back would otherwise log a 'start' in its first metres and
+#: time a standing-start lap the user's car never times.
+RACE_TIMER_ARM_M = 30.0
 RACE_RESPAWN_S = 2.5            # off the map / spun for this long -> back to the line
 RACE_RESPAWN_V = 8.0            # m/s it rejoins at
 RACE_GAP_HZ = 20                # the (progress, t) trail the time gap is read from
 RACE_GAP_KEEP_S = 300.0         # how much of it is kept
 C_RIVAL = (255, 140, 43)        # the ghost's colour: the HUD's accent orange
+C_RIVALS = (C_RIVAL, (110, 200, 255), (215, 120, 255))   # bot 1, 2, 3
 RACE_HELP = [("RACE VS BOT", [
-    ("Bot", "who drives the other car: the built-in driver, or a"),
-    ("", "checkpoint the swarm saved (drive/ml/checkpoints)"),
-    ("Start", "both cars to the line; the bot lines up on your left"),
-    ("Stop", "takes the bot off the track"),
+    ("Bot 1..3", "who drives each other car: the built-in driver, or a"),
+    ("", "checkpoint the swarm saved (drive/ml/checkpoints);"),
+    ("", "a slot opens once the one above it is filled"),
+    ("car", "what that bot drives: your car, or a stock one"),
+    ("Start", "every car to the line: bot 1 on your left, 2 on"),
+    ("", "your right, 3 a row back"),
+    ("Stop", "takes the bots off the track"),
+    ("Test", "bot 1's lap time in EVERY car, at 1 ms, in the"),
+    ("", "background: no window, keep driving meanwhile"),
+    ("Delete", "removes bot 1's checkpoint file; select twice"),
     ("Gap", "HUD: + you are behind, - you are ahead, in seconds"),
-    ("", "along the track, and in metres"),
+    ("", "along the track, and in metres, per bot"),
     ("R", "any reset restarts the race from the line"),
 ])]
-RACE_NOTE = ("The bot is the same car as yours with the ML driver at the wheel. It "
-             "is a ghost -- you drive through it -- so the race is against its lap, "
-             "not its bumper. It restarts from the line if it leaves the map or spins.")
+RACE_NOTE = ("A bot is a second car with the ML driver at the wheel -- your car, or "
+             "any car in the library, so one checkpoint can be tried in three "
+             "machines. Bots are ghosts -- you drive through them -- so the race is "
+             "against their laps, not their bumpers. A bot restarts from the line "
+             "if it leaves the map or spins.")
 SWARM_NOTE = ("The swarm is a genetic algorithm over the ML driver: every generation "
-              "the best cars are kept and the rest are bred from them. The window "
-              "replays each generation as ghost cars while the next is computed. "
-              "K in the swarm window saves the best as a checkpoint you can drive "
-              "with --ml-drive or breed from again.")
+              "the best cars are kept and the rest are bred from them, in your car "
+              "or a stock one (Car). The window "
+              "replays each generation as ghost cars while the next is computed -- "
+              "or, with Replay off, breeds flat out and shows the table. "
+              "K in the swarm window saves the best as a checkpoint you can race "
+              "against or breed from again.")
 
 DELTA_LOCK_DEG = 32.625      # deg road wheel = 522 deg at the wheel / 16.0
 MU_WET_SCALE = 0.632183908   # published, qss.sweep: 0.55/0.87
@@ -637,20 +698,33 @@ def _ml_input(path: str, tr, opts):
         tm = _trim["t"]
         return pol.controls(observe(veh, track), Controls,
                             lock_rad=tm["lock_rad"], wheelbase=tm["wheelbase"],
-                            ay_plan=tm["ay_plan"])
+                            ay_plan=tm["ay_plan"], k_us=tm["k_us"])
 
     return ScriptedInput(fn, vehicle=None, track=tr)
 
 
 def race_bot_choices() -> list:
     """[(spec, label)] the RACE page cycles through: none, the anchor, then
-    every checkpoint under drive/ml/checkpoints, oldest first."""
+    YOUR bots -- the swarm's checkpoints, newest first, so RIGHT from the
+    anchor is the bot you saved last -- then the trained ones (train.py),
+    newest first."""
     import glob
     out = [("none", "None"), (RACE_BOT_ANCHOR, "Built-in driver (the anchor, theta = 0)")]
-    for path in sorted(glob.glob(os.path.join(RACE_CHECKPOINT_DIR, "*.json")),
-                       key=os.path.getmtime):
+    paths = sorted(glob.glob(os.path.join(RACE_CHECKPOINT_DIR, "*.json")),
+                   key=os.path.getmtime, reverse=True)
+    mine = [p for p in paths if os.path.basename(p).startswith("swarm_")]
+    for path in mine + [p for p in paths if p not in mine]:
         out.append((path, os.path.basename(path)[:-5]))
     return out
+
+
+def race_newest_bot():
+    """The swarm checkpoint saved last, or None: the RACE page's bot 1 when
+    a session starts, so racing your newest bot is ESC > Race > Start."""
+    import glob
+    c = sorted(glob.glob(os.path.join(RACE_CHECKPOINT_DIR, "swarm_*.json")),
+               key=os.path.getmtime)
+    return c[-1] if c else None
 
 
 def race_bot_label(spec) -> str:
@@ -658,6 +732,69 @@ def race_bot_label(spec) -> str:
         if k == spec:
             return lbl
     return os.path.basename(str(spec))[:-5] if str(spec).endswith(".json") else str(spec)
+
+
+def race_slot_keys(i: int) -> tuple:
+    """The RACE page's option keys for grid slot `i` (1-based): ('bot',
+    'car'), ('bot2', 'car2'), ..."""
+    sfx = "" if i == 1 else str(int(i))
+    return "bot" + sfx, "car" + sfx
+
+
+def race_car_label(name) -> str:
+    return "same as mine" if name in ("same", None, "") else f"{cars.car_name(name)} ({name})"
+
+
+def swarm_car_label(name, session_car) -> str:
+    """The Deploy-swarm page's Car row."""
+    if name in ("same", None, ""):
+        return f"same as mine ({cars.car_name(session_car)})"
+    return f"stock {cars.car_name(name)} ({name})"
+
+
+def _swarm_car(name, car, cfg_kwargs: dict, session_car_name: str) -> tuple:
+    """The car a swarm breeds in -> (car, cfg_kwargs, car_name).
+
+    'same' (or None) is the session's own car and config, untouched; a
+    `cars.CARS` key is that STOCK car on the session's config (aero,
+    assists, power scale) with its own grip scale -- `Sim._race_car`'s
+    rule, so the car a bot is bred in is the car the RACE page and its
+    Test put it back in. An unknown name breeds in the session's car."""
+    if name in (None, "", "same"):
+        return car, cfg_kwargs, session_car_name
+    if name not in cars.CARS:
+        print(f"swarm car {name!r}: not in the library "
+              f"({', '.join(cars.CAR_ORDER)}); breeding in your car")
+        return car, cfg_kwargs, session_car_name
+    c = cars.get(name)
+    return c, dict(cfg_kwargs, mu_scale=float(c.mu_scale)), name
+
+
+def _swarm_state_car(path: str, session_car_name: str) -> str:
+    """The car a saved swarm was bred in, for a resume with no car given:
+    its `car_name` when that is a library car other than the session's
+    (it was bred in a stock car), else 'same'."""
+    try:
+        with open(path) as f:
+            bred = json.load(f).get("car_name")
+    except Exception:
+        return "same"
+    if bred and bred != session_car_name and bred in cars.CARS:
+        print(f"swarm: resuming in the car it was bred in, the stock {cars.car_name(bred)}")
+        return bred
+    return "same"
+
+
+def race_best_path() -> str:
+    """'best' resolved: the newest swarm checkpoint, or the anchor (with a
+    note) when none has been saved."""
+    import glob
+    c = sorted(glob.glob(os.path.join(RACE_CHECKPOINT_DIR, "swarm_*.json")),
+               key=os.path.getmtime)
+    if not c:
+        print("--race best: no swarm checkpoint saved yet; racing the anchor")
+        return RACE_BOT_ANCHOR
+    return c[-1]
 
 
 def _load_bot(spec: str, tr):
@@ -669,14 +806,7 @@ def _load_bot(spec: str, tr):
     if not spec or spec == "none":
         return None
     if spec == "best":
-        import glob
-        c = sorted(glob.glob(os.path.join(RACE_CHECKPOINT_DIR, "swarm_*.json")),
-                   key=os.path.getmtime)
-        if not c:
-            print("--race best: no swarm checkpoint saved yet; racing the anchor")
-            spec = RACE_BOT_ANCHOR
-        else:
-            spec = c[-1]
+        spec = race_best_path()
     try:
         from .ml.policy import Policy
         if spec == RACE_BOT_ANCHOR:
@@ -692,7 +822,8 @@ def _load_bot(spec: str, tr):
     if meta.get("track") and meta["track"] != getattr(tr, "name", None):
         print(f"  NOTE: trained on '{meta['track']}', racing on '{tr.name}' -- "
               f"it has never seen this track")
-    return pol, race_bot_label(spec)
+    #  the name over the ghost and on the HUD: short, so three of them fit
+    return pol, ("anchor" if spec == RACE_BOT_ANCHOR else race_bot_label(spec))
 
 
 class Rival:
@@ -710,12 +841,18 @@ class Rival:
     """
 
     def __init__(self, policy, car, cfg, track, label: str = "bot",
-                 dt: float = DT_PHYS, global_wet: float = 1.0):
+                 dt: float = DT_PHYS, global_wet: float = 1.0,
+                 colour=C_RIVAL, grid=RACE_GRID[0], car_name: str = "same",
+                 spec=None):
         from .ml.env import observe, N_OBS
         from .ml.baseline import driver_trim
         self._observe = observe
         self.policy = policy
         self.label = label
+        self.colour = tuple(colour)
+        self.grid_n, self.grid_s = float(grid[0]), float(grid[1])
+        self.car_name = car_name            # 'same' or a cars.CARS key
+        self.spec = spec                    # the RACE page choice it was built from
         self.track = track
         self.dt = float(dt)
         self.global_wet = float(global_wet)
@@ -734,17 +871,22 @@ class Rival:
 
     # -- the trail the time gap is read from -----------------------------
     def reset(self, t0: float = 0.0) -> None:
-        """Back to the line, `RACE_START_OFFSET_M` left of the centreline,
-        standing start in 1st like the user."""
+        """Back to its grid slot: `grid_n` left of the centreline, `grid_s`
+        along it (a back row is negative -- before the line), standing
+        start in 1st like the user. `progress` starts at `grid_s`, so a
+        back-row car's gap is read from the LINE like everyone's."""
         tr = self.track
-        x, y, psi = trk.start_pose(tr, RACE_START_OFFSET_M)
-        self.veh.reset(x, y, psi, V=0.0, gear=1)
+        s0 = self.grid_s
+        s0 = (s0 % tr.length) if tr.closed else max(s0, 0.0)
+        x, y = trk.point_at(tr, s0, self.grid_n)
+        _, _, _, psi_c, _ = trk.project(tr, x, y)
+        self.veh.reset(x, y, psi_c, V=0.0, gear=1)
         self.n = 0
         self.t = float(t0)
         self.t0 = float(t0)
-        self.s, self.n_lat = 0.0, RACE_START_OFFSET_M
+        self.s, self.n_lat = s0, self.grid_n
         self._s_prev = None
-        self.progress = 0.0
+        self.progress = min(self.grid_s, 0.0)
         self.trail_p: list = []            # progress, m (non-decreasing)
         self.trail_t: list = []            # sim time it was reached
         self.lap.reset()
@@ -771,13 +913,15 @@ class Rival:
         tm = self._trim
         self._observe(veh, tr, self._obs, mu_here=self.mu[0])
         ctl = self.policy.controls(self._obs, Controls, lock_rad=tm["lock_rad"],
-                                   wheelbase=tm["wheelbase"], ay_plan=tm["ay_plan"])
+                                   wheelbase=tm["wheelbase"], ay_plan=tm["ay_plan"],
+                                   k_us=tm["k_us"])
         self.ctl = ctl
         veh.step(ctl, tuple(self.mu), tuple(self.crr), dt)
 
         s, n_lat, _k, _p, _i = trk.project(tr, veh.x, veh.y)
         half = 0.5 * tr.width
         active = abs(n_lat) <= half + 2.0
+        armed = self.progress - min(self.grid_s, 0.0) > RACE_TIMER_ARM_M
         if self._s_prev is not None:
             ds = s - self._s_prev
             if tr.closed:
@@ -788,7 +932,8 @@ class Rival:
             if abs(ds) <= 10.0 and active:
                 self.progress += ds
             self.lap.update(t_now, self._s_prev, s, dt,
-                            all_off_track=not any(self.on_track4), active=active)
+                            all_off_track=not any(self.on_track4),
+                            active=active and armed)
         self._s_prev = s
         self.s, self.n_lat = s, n_lat
         self.n += 1
@@ -817,7 +962,7 @@ class Rival:
         if tr.sector_s:
             cands = [v for v in tr.sector_s if v <= self.s]
             s0 = max(cands) if cands else 0.0
-        x, y = trk.point_at(tr, s0, RACE_START_OFFSET_M)
+        x, y = trk.point_at(tr, s0, self.grid_n)
         _, _, _, psi_c, _ = trk.project(tr, x, y)
         self.veh.reset(x, y, psi_c, V=RACE_RESPAWN_V, gear=2)
         self._s_prev = None
@@ -855,7 +1000,7 @@ class Rival:
 
     def ghost(self):
         v = self.veh
-        return (v.x, v.y, v.psi, C_RIVAL, self.label)
+        return (v.x, v.y, v.psi, self.colour, self.label)
 
 
 # ==================================================================== #
@@ -1121,12 +1266,17 @@ class Sim:
         # the RACE VS BOT page. `rival` is the bot's car while a race is on;
         # its trail and the user's own feed the HUD's gap.
         self.race_opts = dict(RACE_MENU_DEFAULTS)
-        self.rival: Rival | None = None
+        self._race_delete_armed = None     # checkpoint path awaiting a 2nd 'delete'
+        self.rivals: list = []             # the grid: one Rival per filled slot
+        self._gap_stride = max(1, int(round(1.0 / (RACE_GAP_HZ * self.dt))))
         self.progress = 0.0                # the user's unwrapped centreline metres
         self.trail_p: list = []
         self.trail_t: list = []
         self._race_msg = ""
         self._race_msg_until = -1
+        # the RACE page's Test: bot 1 in every car, headless, in a pool
+        self._bot_test = None              # in flight: spec, label, pool, result
+        self.bot_test_result = None        # the last one: rows per car
 
         self._bind_input()
         self._sample_surfaces()
@@ -1220,7 +1370,7 @@ class Sim:
                     self.telem.mark(f"{e[0]}{e[1]}")
                 if e[0] in ("start", "lap"):
                     self._seed_line(e)
-        if s_prev is not None and self.rival is not None:
+        if s_prev is not None and self.rivals:
             ds = (s - s_prev)
             if tr.closed:
                 if ds < -0.5 * tr.length:
@@ -1229,7 +1379,7 @@ class Sim:
                     ds -= tr.length
             if abs(ds) <= 10.0 and abs(n_lat) <= 0.5 * tr.width + 2.0:
                 self.progress += ds
-            if (self.n + 1) % self.rival.gap_stride == 0 and (
+            if (self.n + 1) % self._gap_stride == 0 and (
                     not self.trail_p or self.progress >= self.trail_p[-1]):
                 self.trail_p.append(self.progress)
                 self.trail_t.append(t_prev + dt)
@@ -1238,11 +1388,11 @@ class Sim:
                     del self.trail_p[:keep]
                     del self.trail_t[:keep]
         self._s_prev = s
-        if self.rival is not None:
-            # the bot's step, AFTER the user's and reading nothing of it:
+        for rv in self.rivals:
+            # the bots' steps, AFTER the user's and reading nothing of it:
             # the user's Vehicle is bit-identical with or without a rival
             # (asserted by V30 in the self-check)
-            self.rival.step(dt, t_prev)
+            rv.step(dt, t_prev)
         if self.seed_rows is not None:
             if not any(self.on_track4):
                 self._seed_valid = False
@@ -1360,15 +1510,16 @@ class Sim:
             s0 = max(cands) if cands else 0.0
             V0 = min(hypot(self.veh.u, self.veh.v), 25.0)
             gear = max(self.veh.gear, 1)
-        if self.rival is not None:
+        if self.rivals:
             # a race restarts from the line: teleporting one car to a sector
-            # line while the other keeps lapping is not a gap anyone can read
+            # line while the others keep lapping is not a gap anyone can read
             to_checkpoint = False
             s0, V0, gear = 0.0, 0.0, 1
-            self.rival.reset()
+            for rv in self.rivals:
+                rv.reset()
             self.progress = 0.0
             self.trail_p, self.trail_t = [], []
-            self._race_note(f"RACE vs {self.rival.label}: GO", 3.0)
+            self._race_note(f"RACE vs {self._rivals_label()}: GO", 3.0)
         x, y = trk.point_at(tr, s0, 0.0)
         _, _, _, psi_c, _ = trk.project(tr, x, y)
         if self.gearbox == "clutch" and V0 < 0.5:
@@ -1425,6 +1576,8 @@ class Sim:
                 self.handle_event(ev)
             if self.quit:
                 break
+            if self._bot_test is not None:
+                self._bot_test_poll()
 
             if self.paused:
                 if self.single_step:
@@ -1458,6 +1611,7 @@ class Sim:
                 if self.audio is not None:
                     self.audio.update(hud)       # engine / tyres; render loop only
             del nstep
+        self.cancel_bot_test()
         if self.audio is not None:
             self.audio.stop()
 
@@ -1705,8 +1859,8 @@ class Sim:
         if self.has_garage:
             items.append(("Garage: build the flank panel (3D)", "garage"))
         items.append(("Deploy swarm: learning cars that breed", "swarm"))
-        items.append((("Race vs bot: " + self.rival.label) if self.rival is not None
-                      else "Race vs bot: the ML driver on your car", "race"))
+        items.append((("Race vs bot: " + self._rivals_label()) if self.rivals
+                      else "Race vs bot: the ML driver, in your car or another", "race"))
         items.append(("Quit", "quit"))
         layout = getattr(self.inp, "layout", None)
         try:
@@ -1784,12 +1938,16 @@ class Sim:
             aero = f"{cfg.wing} flank panel"
         else:                              # the swarm breeds THIS car: no wing,
             aero = "NONE - fit one (garage / Aero)"   # nothing to deploy
-        return [(f"{'Aero':<13s}{aero}", "swarm_aero"),
+        return [(f"{'Car':<13s}{swarm_car_label(o.get('car', 'same'), self.settings.car)}",
+                 "set:sw_car"),
+                (f"{'Aero':<13s}{aero}", "swarm_aero"),
                 (f"{'Cars':<13s}{o['pop']}", "set:sw_pop"),
                 (f"{'Seed':<13s}{seed}", "set:sw_seed"),
                 (f"{'Generations':<13s}{'until ESC' if not o['gens'] else o['gens']}",
                  "set:sw_gens"),
                 (f"{'Sim time':<13s}{o['T']:.0f} s per car", "set:sw_T"),
+                (f"{'Replay':<13s}{SWARM_VIEW_LABELS[o.get('view', 'replay')]}", "set:sw_view"),
+                (f"{'Save best':<13s}{SWARM_SAVE_LABELS[o.get('save', 'ask')]}", "set:sw_save"),
                 (f"{'Seed lap':<13s}{armed}", "swarm_arm"),
                 ("Deploy the swarm", "swarm_go"),
                 ("Back", "swarm_back")]
@@ -1802,57 +1960,171 @@ class Sim:
                        title="DEPLOY SWARM", idx=idx, columns=1)
         self._menu_page = "swarm"
 
+    # ---- the RACE VS BOT page, and the grid it fills --------------------
+    @property
+    def rival(self):
+        """Bot 1 (the first grid slot), or None: the one-bot view the CLI
+        and V30 read. The grid itself is `rivals`."""
+        return self.rivals[0] if self.rivals else None
+
+    def _race_slots(self) -> list:
+        """The filled grid slots, in order: [(i, spec, car_name)]. A slot
+        counts only while every slot above it is filled, which is also how
+        the page shows them."""
+        out = []
+        for i in range(1, RACE_GRID_MAX + 1):
+            kb, kc = race_slot_keys(i)
+            spec = self.race_opts.get(kb, "none")
+            if spec in ("none", None, ""):
+                break
+            out.append((i, spec, self.race_opts.get(kc, "same") or "same"))
+        return out
+
+    def _rivals_label(self) -> str:
+        return ", ".join(rv.label for rv in self.rivals)
+
     def _race_items(self) -> list:
-        spec = self.race_opts["bot"]
-        rows = [(f"{'Bot':<8s}{race_bot_label(spec)}", "set:race_bot")]
-        if self.rival is not None:
-            rows.append((f"Restart the race vs {self.rival.label}", "race_go"))
-            rows.append(("Stop the race (take the bot off)", "race_stop"))
-        else:
+        o = self.race_opts
+        rows = []
+        for i in range(1, RACE_GRID_MAX + 1):
+            kb, kc = race_slot_keys(i)
+            spec = o.get(kb, "none")
+            rows.append((f"{'Bot ' + str(i):<8s}{race_bot_label(spec)}", f"set:race_{kb}"))
+            if spec == "none":
+                break                      # the next slot opens once this one is filled
+            rows.append((f"{'  car':<8s}{race_car_label(o.get(kc, 'same'))}",
+                         f"set:race_{kc}"))
+        n = len(self._race_slots())
+        if self.rivals:
+            rows.append((f"Restart the race vs {self._rivals_label()}", "race_go"))
+            rows.append(("Stop the race (take the bot%s off)"
+                         % ("s" if len(self.rivals) > 1 else ""), "race_stop"))
+        elif n == 0:
+            rows.append(("Start the race (choose a bot first)", "race_go"))
+        elif n == 1:
             rows.append(("Start the race: both cars to the line", "race_go"))
+        else:
+            rows.append((f"Start the race: you and {n} bots to the line", "race_go"))
+        spec = o["bot"]
+        if self._bot_test is not None:
+            rows.append((f"Testing {self._bot_test['label']} in every car ... "
+                         "(select: cancel)", "race_test"))
+        elif spec != "none":
+            rows.append(("Test bot 1 in every car: lap times, no window", "race_test"))
+        if spec not in ("none", RACE_BOT_ANCHOR):
+            if self._race_delete_armed == spec:
+                rows.append((f"Delete {race_bot_label(spec)}? select again to confirm",
+                             "race_delete"))
+            else:
+                rows.append((f"Delete bot {race_bot_label(spec)} (bot 1's file)", "race_delete"))
         rows.append(("Back", "race_back"))
         return rows
 
+    def delete_bot(self, spec=None) -> bool:
+        """Remove a checkpoint file under drive/ml/checkpoints. The built-in
+        driver and 'none' cannot be deleted. A race with that bot on the
+        grid is stopped first; bot 1's choice steps back to the previous
+        entry and any other slot holding it is emptied."""
+        spec = self.race_opts["bot"] if spec is None else spec
+        if spec in ("none", RACE_BOT_ANCHOR, None):
+            self._race_note("race: the built-in driver cannot be deleted", 3.0)
+            return False
+        ch = [k for k, _ in race_bot_choices()]
+        if spec not in ch:
+            self._race_note("race: that checkpoint is already gone", 3.0)
+            self.race_opts["bot"] = ch[0]
+            return False
+        if any(rv.spec == spec for rv in self.rivals):
+            self.stop_race(quiet=True)
+        try:
+            os.remove(spec)
+        except OSError as exc:
+            print(f"delete bot {spec}: {type(exc).__name__}: {exc}")
+            self._race_note("race: could not delete (see the terminal)", 4.0)
+            return False
+        i = ch.index(spec)
+        self.race_opts["bot"] = ch[i - 1] if i > 0 else "none"
+        for k in range(2, RACE_GRID_MAX + 1):
+            kb = race_slot_keys(k)[0]
+            if self.race_opts.get(kb) == spec:
+                self.race_opts[kb] = "none"
+        print(f"deleted bot {spec}")
+        self._race_note(f"race: deleted {race_bot_label(spec)}", 3.0)
+        return True
+
     def _menu_show_race(self, idx: int = 0) -> None:
-        self.menu.show(items=self._race_items(), sections=RACE_HELP,
+        test = self._bot_test_section()
+        self.menu.show(items=self._race_items(),
+                       sections=([test] if test else []) + RACE_HELP,
                        subtitle=self._menu_subtitle(), note=RACE_NOTE,
-                       footer="LEFT / RIGHT choose the bot   ENTER / CROSS select   "
-                              "ESC / CIRCLE back",
+                       footer="LEFT / RIGHT choose a bot and its car   ENTER / CROSS select   "
+                              "DELETE twice removes it   ESC / CIRCLE back",
                        title="RACE VS BOT", idx=idx, columns=1)
         self._menu_page = "race"
 
-    def _race_step(self, d: int) -> None:
-        ch = [k for k, _ in race_bot_choices()]
-        cur = self.race_opts["bot"]
+    def _race_step(self, key: str, d: int) -> None:
+        """LEFT / RIGHT on a page row; `key` is 'bot', 'car', 'bot2', ..."""
+        ch = ([k for k, _ in race_bot_choices()] if key.startswith("bot")
+              else list(RACE_BOT_CARS))
+        cur = self.race_opts.get(key)
         i = ch.index(cur) if cur in ch else 0
-        self.race_opts["bot"] = ch[(i + d) % len(ch)]
+        self.race_opts[key] = ch[(i + d) % len(ch)]
+        self._race_delete_armed = None
+
+    def _race_car(self, car_name):
+        """(CarSpec, VehicleConfig) a bot drives. 'same' is the session's own
+        car and config, ballast and wings included; a library name is that
+        STOCK car on the session's config (aero, assists, power scale) with
+        its own grip scale, the way `drive.ml.env.rollout` builds it."""
+        if car_name in ("same", None, ""):
+            return self.veh.car, self.veh.cfg
+        if car_name not in cars.CARS:
+            raise ValueError(f"unknown car '{car_name}' (one of {', '.join(cars.CAR_ORDER)})")
+        from dataclasses import replace
+        car = cars.get(car_name)
+        return car, replace(self.veh.cfg, mu_scale=float(car.mu_scale))
 
     def start_race(self, spec=None) -> bool:
-        """Put the bot on the line and restart. False (with a note) when the
-        choice is 'none' or the checkpoint / drive.ml cannot be loaded."""
-        spec = self.race_opts["bot"] if spec is None else spec
+        """Put the grid on the line and restart. `spec` given: that one bot
+        alone, in the page's car for slot 1 (V30's path); None: every filled
+        slot of the RACE page. False (with a note) when no bot is chosen or
+        none can be loaded; a slot that fails to load is skipped with the
+        reason printed and the race goes on with the rest."""
         self.stop_race(quiet=True)
-        loaded = _load_bot(spec, self.track)
-        if loaded is None:
-            self._race_note("race: no bot loaded (see the terminal)"
-                            if spec not in ("none", None) else "race: no bot chosen", 4.0)
+        slots = ([(1, spec, self.race_opts.get("car", "same"))] if spec is not None
+                 else self._race_slots())
+        if not slots:
+            self._race_note("race: no bot chosen", 4.0)
             return False
-        pol, label = loaded
-        try:
-            self.rival = Rival(pol, self.veh.car, self.veh.cfg, self.track,
-                               label=label, dt=self.dt, global_wet=self.global_wet)
-        except Exception as exc:
-            print(f"race vs bot: {type(exc).__name__}: {exc}")
-            self._race_note("race: the bot could not be built (see the terminal)", 4.0)
-            self.rival = None
+        rivals = []
+        for i, sp, car_name in slots:
+            loaded = _load_bot(sp, self.track)
+            if loaded is None:
+                continue
+            pol, label = loaded
+            try:
+                car, cfg = self._race_car(car_name)
+                if car_name not in ("same", None, ""):
+                    label = f"{label}/{car_name}"
+                rivals.append(Rival(pol, car, cfg, self.track, label=label, dt=self.dt,
+                                    global_wet=self.global_wet,
+                                    colour=C_RIVALS[(i - 1) % len(C_RIVALS)],
+                                    grid=RACE_GRID[(i - 1) % len(RACE_GRID)],
+                                    car_name=car_name, spec=sp))
+            except Exception as exc:
+                print(f"race vs bot {sp}: {type(exc).__name__}: {exc}")
+        if not rivals:
+            self._race_note("race: no bot loaded (see the terminal)", 4.0)
             return False
-        self.reset(to_checkpoint=False)    # both cars to the line
+        self.rivals = rivals
+        self.reset(to_checkpoint=False)    # every car to the line
         return True
 
     def stop_race(self, quiet: bool = False) -> None:
-        if self.rival is not None and not quiet:
-            self._race_note("race: the bot is off the track", 3.0)
-        self.rival = None
+        if self.rivals and not quiet:
+            self._race_note("race: the bots are off the track" if len(self.rivals) > 1
+                            else "race: the bot is off the track", 3.0)
+        self.rivals = []
         self.progress = 0.0
         self.trail_p, self.trail_t = [], []
 
@@ -1860,19 +2132,119 @@ class Sim:
         self._race_msg = text
         self._race_msg_until = self.n + int(secs / self.dt)
 
+    # ---- the RACE page's TEST: one bot in every car, no window ----------
+    def start_bot_test(self, spec=None, T=None, workers=None) -> bool:
+        """Bot 1 (or `spec`) ALONE in every car the page offers -- yours,
+        then each stock car on your settings (`_race_car`, the rule a race
+        uses) -- driven headless by `drive.ml.evaluate.bot_lap` at the
+        contract's 1 ms, on this session's track and surface, in a pool of
+        its own: nothing is drawn and the session keeps running. The
+        result lands through `_bot_test_poll`: the page, the HUD and the
+        terminal. False (with a note) when there is no bot to test."""
+        self.cancel_bot_test()
+        spec = self.race_opts.get("bot") if spec is None else spec
+        if spec == "best":
+            spec = race_best_path()
+        if not spec or spec == "none":
+            self._race_note("test: choose a bot first", 3.0)
+            return False
+        try:
+            import multiprocessing as mp
+            from dataclasses import fields
+            from .ml.evaluate import bot_lap, BOT_TEST_T
+        except Exception as exc:
+            print(f"bot test: drive.ml unavailable ({type(exc).__name__}: {exc})")
+            self._race_note("test: drive.ml unavailable (see the terminal)", 4.0)
+            return False
+        T = float(T or BOT_TEST_T)
+        jobs = []
+        for name in RACE_BOT_CARS:
+            car, cfg = self._race_car(name)
+            kw = {f.name: getattr(cfg, f.name) for f in fields(cfg) if f.init}
+            #  the rollout has no global wet: the same grip through the config
+            kw["mu_scale"] = float(kw["mu_scale"]) * self.global_wet
+            jobs.append(dict(spec=spec, car=car, cfg_kwargs=kw, tr=self.track, T=T))
+        label = "anchor" if spec == RACE_BOT_ANCHOR else race_bot_label(spec)
+        n = len(jobs) if workers is None else max(1, min(int(workers), len(jobs)))
+        pool = mp.Pool(n)
+        self._bot_test = dict(spec=spec, label=label, T=T, pool=pool,
+                              res=pool.map_async(bot_lap, jobs, chunksize=1),
+                              t0=time.perf_counter())
+        print(f"bot test: {label} alone in "
+              + ", ".join(race_car_label(c) for c in RACE_BOT_CARS)
+              + f" -- {T:.0f} s each at 1 ms, in the background")
+        self._race_note(f"TEST {label}: measuring in {len(jobs)} cars at 1 ms ...", 4.0)
+        return True
+
+    def cancel_bot_test(self) -> None:
+        bt, self._bot_test = self._bot_test, None
+        if bt is not None:
+            bt["pool"].terminate()
+
+    @staticmethod
+    def _bot_test_cell(r: dict) -> str:
+        """One car's result as the page and the terminal show it."""
+        if r.get("error"):
+            return "error: " + r["error"]
+        ended = r.get("ended", "time")
+        if r.get("best"):
+            return f"{r['best']:.2f} s" + ("" if ended == "time" else f"  (then {ended})")
+        if r.get("laps"):
+            return f"no flying lap ({r['laps']} lap, {ended} at {r.get('t', 0.0):.0f} s)"
+        return f"no lap: {ended} at {r.get('t', 0.0):.0f} s, {r.get('s', 0.0):.0f} m"
+
+    def _bot_test_poll(self) -> None:
+        """Collect a finished Test: the page (if open), the HUD, the terminal."""
+        bt = self._bot_test
+        if bt is None or not bt["res"].ready():
+            return
+        self._bot_test = None
+        try:
+            res = bt["res"].get()
+        except Exception as exc:
+            res = [dict(best=None, error=f"{type(exc).__name__}: {exc}")] * len(RACE_BOT_CARS)
+        finally:
+            bt["pool"].terminate()
+        rows = list(zip(RACE_BOT_CARS, res))
+        self.bot_test_result = dict(spec=bt["spec"], label=bt["label"], T=bt["T"],
+                                    rows=rows, secs=time.perf_counter() - bt["t0"])
+        print(f"bot test: {bt['label']}, best flying lap at 1 ms on "
+              f"{self.track.title or self.track.name} ({bt['T']:.0f} s per car, "
+              f"{self.bot_test_result['secs']:.1f} s wall)")
+        for name, r in rows:
+            print(f"  {race_car_label(name):28s} {self._bot_test_cell(r)}")
+        short = " | ".join(f"{'mine' if n == 'same' else n} "
+                           + (f"{r['best']:.2f}" if r.get("best") else "--")
+                           for n, r in rows)
+        self._race_note(f"TEST {bt['label']} (1 ms): {short}", 15.0)
+        if self.menu is not None and self.menu.open and self._menu_page == "race":
+            self._menu_show_race(idx=self.menu.idx)
+
+    def _bot_test_section(self):
+        """The page's result block: (title, [(car, lap), ...]) or None."""
+        r = self.bot_test_result
+        if not r:
+            return None
+        return (f"TEST: {r['label']}, 1 ms, {self.track.name}",
+                [(race_car_label(n), self._bot_test_cell(c)) for n, c in r["rows"]])
+
     def _race_hud(self) -> str:
         if self.n < self._race_msg_until and self._race_msg:
             return self._race_msg
-        rv = self.rival
-        if rv is None:
+        if not self.rivals:
             return ""
-        gs, dm = rv.gap_to(self.progress, self.trail_p, self.trail_t, self.t)
-        gap = f"{gs:+.2f} s" if not math.isnan(gs) else "  --  "
-        lap = rv.lap
-        last = f"{lap.last_lap:.2f}" if not math.isnan(lap.last_lap) else "--"
-        best = f"{lap.best_lap:.2f}" if not math.isnan(lap.best_lap) else "--"
-        return (f"BOT {rv.label}  gap {gap} ({dm:+.0f} m)  "
-                f"bot lap {lap.lap} last {last} best {best}")
+        parts = []
+        for rv in self.rivals:
+            gs, dm = rv.gap_to(self.progress, self.trail_p, self.trail_t, self.t)
+            gap = f"{gs:+.2f} s" if not math.isnan(gs) else "  --  "
+            lap = rv.lap
+            last = f"{lap.last_lap:.2f}" if not math.isnan(lap.last_lap) else "--"
+            best = f"{lap.best_lap:.2f}" if not math.isnan(lap.best_lap) else "--"
+            if len(self.rivals) == 1:
+                return (f"BOT {rv.label}  gap {gap} ({dm:+.0f} m)  "
+                        f"bot lap {lap.lap} last {last} best {best}")
+            parts.append(f"{rv.label} {gap} ({dm:+.0f} m) lap {lap.lap} best {best}")
+        return "BOTS  " + "  |  ".join(parts)
 
     def _hud_msg(self) -> str:
         return " | ".join(m for m in (self._seed_hud(), self._race_hud()) if m)
@@ -1989,16 +2361,17 @@ class Sim:
         if self._menu_page == "race":
             idx = self.menu.idx
             if action in ("resume", "race_back"):
+                self._race_delete_armed = None
                 self._menu_show_main()
                 self.menu.idx = [a for _, a in self.menu.items].index("race")
                 return
             if action.startswith(("prev:", "next:")):
-                if action[5:] == "set:race_bot":
-                    self._race_step(-1 if action[0] == "p" else +1)
+                if action[5:].startswith("set:race_"):
+                    self._race_step(action[14:], -1 if action[0] == "p" else +1)
                     self._menu_show_race(idx=idx)
                 return
-            if action == "set:race_bot":
-                self._race_step(+1)
+            if action.startswith("set:race_"):
+                self._race_step(action[9:], +1)
                 self._menu_show_race(idx=idx)
                 return
             if action == "race_go":
@@ -2008,6 +2381,23 @@ class Sim:
             if action == "race_stop":
                 self._menu_close()
                 self.stop_race()
+                return
+            if action == "race_test":
+                if self._bot_test is not None:
+                    self.cancel_bot_test()
+                    self._race_note("test: cancelled", 3.0)
+                else:
+                    self.start_bot_test()
+                self._menu_show_race(idx=idx)
+                return
+            if action == "race_delete":
+                spec = self.race_opts["bot"]
+                if self._race_delete_armed == spec:
+                    self._race_delete_armed = None
+                    self.delete_bot(spec)
+                else:
+                    self._race_delete_armed = spec
+                self._menu_show_race(idx=idx)
                 return
             if action in ("reset", "full_reset", "garage"):
                 pass                       # the hotkeys fall through below
@@ -2110,7 +2500,8 @@ class Sim:
         self.seed_rows.append([
             self.t, v.x, v.y, v.psi, v.u, v.v, v.r, v.beta, v.ay,
             v.util_f, v.util_r, v.wing_deploy,
-            c.delta, c.throttle, c.brake, 1.0 if self.wing_on else 0.0])
+            c.delta, c.throttle, c.brake, 1.0 if self.wing_on else 0.0,
+            v.wing_deploy_l, v.wing_deploy_r, v.top_deploy])
 
     @staticmethod
     def _seed_safe_name(name: str) -> str:
@@ -2233,8 +2624,8 @@ class Sim:
             top_deploy=float(getattr(v, "top_deploy", 0.0)),
             msg=self._hud_msg(),
         )
-        if self.rival is not None:
-            d["ghosts"] = [self.rival.ghost()]
+        if self.rivals:
+            d["ghosts"] = [rv.ghost() for rv in self.rivals]
         if self.hud_cfg:
             d.update(self.hud_cfg)          # the garage build's wing geometry
         try:
@@ -3573,14 +3964,94 @@ def _v30_race_vs_bot(verbose=True):
         s1.handle_event("select")
         stop_ok = s1.rival is None and not s1.menu.open
         s1.renderer = None
-    ok = same and moved and gap_ok and hud_ok and rst_ok and page_ok and cyc_ok and stop_ok
+    # a GRID: two bots, the second in a DIFFERENT car (the stock 540i, its own
+    # grip scale) on the user's right; both move, both are drawn in their own
+    # colour, the HUD reads both gaps, the page shows a car row per filled
+    # slot and opens the next slot
+    with contextlib.redirect_stdout(io.StringIO()):
+        drv2 = lambda t, v, T_: Controls(throttle=0.6 if t > 0.5 else 0.0,
+                                         delta=radians(2.0) * sin(0.4 * t),
+                                         auto_gearbox=True)
+        s2 = _build("arena", driver=drv2)
+        s2.race_opts.update(bot=RACE_BOT_ANCHOR, car="same",
+                            bot2=RACE_BOT_ANCHOR, car2="540i")
+        grid_ok = bool(s2.start_race()) and len(s2.rivals) == 2
+        r1, r2 = s2.rivals
+        c540 = cars.get("540i")
+        car_ok = (r1.veh.car is s2.veh.car and r2.veh.car is c540
+                  and abs(r2.veh.cfg.mu_scale - c540.mu_scale) < 1e-12
+                  and r2.veh.cfg.wing == s2.veh.cfg.wing
+                  and r2.label.endswith("/540i") and r1.label == r2.label[:-5])
+        n1 = trk.project(s2.track, r1.veh.x, r1.veh.y)[1]
+        n2 = trk.project(s2.track, r2.veh.x, r2.veh.y)[1]
+        pos_ok = (abs(n1 - RACE_START_OFFSET_M) < 0.05
+                  and abs(n2 + RACE_START_OFFSET_M) < 0.05)
+        s2.run_headless(8.0)
+        moved2 = all(rv.progress > 20.0 for rv in s2.rivals)
+        h2 = s2.hud_data()
+        ghosts_ok = (len(h2.ghosts) == 2 and h2.ghosts[0][3] != h2.ghosts[1][3]
+                     and h2.ghosts[0][3] == C_RIVAL and "BOTS" in h2.msg
+                     and "/540i" in h2.msg)
+        s2.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
+        s2._menu_open()
+        s2._menu_show_race()
+        acts = [a for _, a in s2.menu.items]
+        rows_ok = (acts[:5] == ["set:race_bot", "set:race_car", "set:race_bot2",
+                                "set:race_car2", "set:race_bot3"]
+                   and "set:race_car3" not in acts)
+        s2._race_step("car", +1)
+        cyc2 = s2.race_opts["car"] == RACE_BOT_CARS[1]
+        s2.stop_race(quiet=True)
+        # the list: none, the anchor, then YOUR (swarm) bots newest first, so
+        # RIGHT from the anchor is the bot saved last -- and that is the one
+        # a session starts with as bot 1
+        ch = [k for k, _ in race_bot_choices()]
+        mine = [os.path.basename(k).startswith("swarm_") for k in ch[2:]]
+        mt = [os.path.getmtime(k) for k, m in zip(ch[2:], mine) if m]
+        order_ok = (ch[:2] == ["none", RACE_BOT_ANCHOR] and mine == sorted(mine, reverse=True)
+                    and mt == sorted(mt, reverse=True)
+                    and race_newest_bot() == (ch[2] if any(mine) else None))
+        cyc2 = cyc2 and order_ok
+        # the swarm page's Car row cycles the library, and `_swarm_car` puts
+        # a stock car on the session's config the way `_race_car` does
+        s2._menu_show_swarm()
+        sw_row = "set:sw_car" in [a for _, a in s2.menu.items]
+        s2._swarm_step("car", +1)
+        kw0 = dict(wing="plate", mu_scale=1.0, abs_on=True)
+        c_m, kw_m, n_m = _swarm_car("mx5", s2.veh.car, kw0, "corsa")
+        c_s, kw_s, n_s = _swarm_car("same", s2.veh.car, kw0, "corsa")
+        swcar_ok = (sw_row and s2.swarm_opts["car"] == SWARM_MENU_CHOICES["car"][1]
+                    and c_m is cars.get("mx5") and n_m == "mx5" and kw_m["wing"] == "plate"
+                    and kw_m["mu_scale"] == float(cars.get("mx5").mu_scale)
+                    and c_s is s2.veh.car and kw_s is kw0 and n_s == "corsa")
+        # the RACE page's Test: the bot ALONE in every car, in a pool, and
+        # the result lands on the page (a 3 s drive each: the plumbing)
+        s2._menu_show_race()
+        test_row = "race_test" in [a for _, a in s2.menu.items]
+        started = s2.start_bot_test(RACE_BOT_ANCHOR, T=3.0, workers=2)
+        if started:
+            s2._bot_test["res"].wait(180)
+            s2._bot_test_poll()
+        tr_ = s2.bot_test_result
+        test_ok = (test_row and started and tr_ is not None
+                   and [n for n, _ in tr_["rows"]] == list(RACE_BOT_CARS)
+                   and all(not c.get("error") and c.get("s", 0.0) > 5.0 for _, c in tr_["rows"])
+                   and s2.menu.sections[0][0].startswith("TEST"))
+        s2.cancel_bot_test()
+        s2.renderer = None
+    grid_all = grid_ok and car_ok and pos_ok and moved2 and ghosts_ok and rows_ok and cyc2
+    ok = (same and moved and gap_ok and hud_ok and rst_ok and page_ok and cyc_ok and stop_ok
+          and grid_all and swcar_ok and test_ok)
     if verbose:
         print(f"  [V30] race vs bot: user car identical with/without bot {same}; "
               f"bot {bot_m:.0f} m / user {user_m:.0f} m in {T:.0f} s ({moved}); "
               f"gap {gs:+.2f} s {dm:+.0f} m ({gap_ok}); hud {hud_ok}; "
-              f"reset {rst_ok}; menu page {page_ok} cycle {cyc_ok} stop {stop_ok}"
+              f"reset {rst_ok}; menu page {page_ok} cycle {cyc_ok} stop {stop_ok}; "
+              f"grid of 2 with a 540i: built {grid_ok} car {car_ok} slots {pos_ok} "
+              f"moved {moved2} ghosts {ghosts_ok} page {rows_ok} car cycle {cyc2}; "
+              f"swarm car {swcar_ok}; test in every car {test_ok}"
               f"  -> {'ok' if ok else 'FAIL'}")
-    return ok, dict(same=same, progress=bot_m, gap_s=gs, gap_m=dm)
+    return ok, dict(same=same, progress=bot_m, gap_s=gs, gap_m=dm, grid=grid_all)
 
 
 def _v20_determinism(tmp, verbose=True):
@@ -4254,10 +4725,14 @@ def build_parser():
                    help="put a trained drive.ml policy in the driver's seat "
                         "(e.g. drive/ml/checkpoints/arena_plate.json); the "
                         "sub-package is optional and is imported only here")
-    p.add_argument("--race", default=None, metavar="BOT",
-                   help="race against the ML driver on a second copy of your car: "
-                        "'anchor' (the built-in driver), 'best' (the newest swarm "
-                        "checkpoint) or a checkpoint path; also ESC > Race vs bot")
+    p.add_argument("--race", default=None, metavar="BOT[,BOT2[,BOT3]]",
+                   help="race against the ML driver: 'anchor' (the built-in driver), "
+                        "'best' (the newest swarm checkpoint) or a checkpoint path, "
+                        "comma-separated for up to 3 bots on the grid; also "
+                        "ESC > Race vs bot")
+    p.add_argument("--race-car", dest="race_car", default=None, metavar="CAR[,CAR2[,CAR3]]",
+                   help="what each bot drives: 'same' (your car, the default) or a "
+                        "stock corsa / mx5 / 540i, per bot like --race")
     p.add_argument("--garage", action="store_true",
                    help="open the 3D editor first; ENTER / cross drives the "
                         "car you built, BACKSPACE / touchpad comes back")
@@ -4280,6 +4755,18 @@ def build_parser():
                         "drive/ml/checkpoints/swarm_<name>.json)")
     p.add_argument("--swarm-resume", dest="swarm_resume", default=None,
                    help="continue a swarm from its runs/swarm/*_state.json")
+    p.add_argument("--swarm-car", dest="swarm_car", default=None,
+                   choices=("same",) + tuple(cars.CAR_ORDER),
+                   help="what the swarm breeds in: 'same' (your car, the default) or "
+                        "a stock corsa / mx5 / 540i on your settings, like --race-car")
+    p.add_argument("--swarm-fast", dest="swarm_fast", action="store_true",
+                   help="no replay: the next generation starts the moment one is "
+                        "scored (V in the swarm window toggles it)")
+    p.add_argument("--swarm-save", dest="swarm_save", default="ask",
+                   choices=("ask", "always", "never"),
+                   help="whether ESC in the swarm window writes the best as a "
+                        "checkpoint: ask (ENTER save / ESC discard), always, or "
+                        "never (K still saves)")
     p.add_argument("--tyre", default=tlm.DEFAULT_TYRE_FILE)
     p.add_argument("--dt", type=float, default=DT_PHYS)
     p.add_argument("--fps", type=int, default=FPS)
@@ -4531,7 +5018,7 @@ def run_interactive_cli(opts) -> int:
             sim = _interactive_session(opts, pad=pad, settings=settings,
                                        garage=(grg is not None))
             pad = getattr(sim.inp, "pad", pad)
-            opts.race_menu = dict(sim.race_opts, active=sim.rival is not None)
+            opts.race_menu = dict(sim.race_opts, active=bool(sim.rivals))
             if sim.stop_reason == "garage" and grg is not None:
                 mode = "garage"
                 continue
@@ -4544,13 +5031,29 @@ def run_interactive_cli(opts) -> int:
                 opts.swarm_seed = launch["seed"]
                 opts.swarm_gens = int(launch["gens"])
                 opts.swarm_T = float(launch["T"])
+                opts.swarm_fast = launch.get("view", "replay") == "fast"
+                opts.swarm_save = launch.get("save", "ask")
+                opts.swarm_car = launch.get("car", "same")
                 opts.swarm_resume = None
                 opts.swarm_name = None
+                opts.swarm_saved = None
                 try:
                     run_swarm_cli(opts, settings=settings, embedded=True)
                 except Exception as exc:
                     print(f"swarm: {type(exc).__name__}: {exc}")
+                saved = getattr(opts, "swarm_saved", None)
+                if saved and os.path.exists(saved):
+                    #  the bot just saved is bot 1 on the RACE page, in the
+                    #  car it was bred in: racing it is ESC > Race > Start
+                    rm = dict(getattr(opts, "race_menu", None) or {})
+                    rm["bot"] = saved
+                    rm["car"] = opts.swarm_car or "same"
+                    opts.race_menu = rm
+                    print(f"race it: ESC > Race vs bot > Start "
+                          f"(bot 1 is now {race_bot_label(saved)})")
                 opts.swarm = None
+                opts.swarm_car = None
+                opts.swarm_saved = None
                 opts.swarm_menu = dict(launch)     # the page remembers its values
                 continue
             if sim.stop_reason == "restart":
@@ -4566,6 +5069,10 @@ def run_interactive_cli(opts) -> int:
 # ==================================================================== #
 #: playback speeds the [ ] keys step through
 SWARM_SPEEDS = (0.5, 1.0, 2.0, 4.0, 8.0)
+#: the window's frame rate with the replay OFF: the pool has the cores
+SWARM_FAST_FPS = 12
+#: generations of history the table shows with the replay off
+SWARM_TABLE_ROWS = 12
 #: ghost colours: the ranked population from best (green) to worst (red),
 #: a crashed car's last pose (grey), the user's own seed lap (cyan)
 C_SWARM_BEST = (90, 200, 110)
@@ -4581,15 +5088,19 @@ def _lerp3(a, b, t):
 
 
 class _Replay:
-    """One car's rollout trace, (t, x, y, psi, u, wing_deploy, wing_side)
-    every 20 training steps, interpolated at any playback time."""
+    """One car's rollout trace, (t, x, y, psi, u, wing_deploy, wing_side,
+    top_deploy) every 20 training steps, interpolated at any playback time.
+    A 7-column trace (a state file from before the top wing was recorded)
+    is padded with a stowed top wing."""
 
     __slots__ = ("arr", "t_end", "alive_to_end", "colour", "label")
 
     def __init__(self, trace, colour, alive_to_end: bool, label: str = ""):
         a = np.asarray(trace, dtype=np.float64)
         if a.ndim != 2 or len(a) == 0:
-            a = np.zeros((1, 7))
+            a = np.zeros((1, 8))
+        elif a.shape[1] < 8:
+            a = np.hstack([a, np.zeros((len(a), 8 - a.shape[1]))])
         self.arr = a
         self.t_end = float(a[-1, 0])
         self.alive_to_end = bool(alive_to_end)
@@ -4597,21 +5108,22 @@ class _Replay:
         self.label = label
 
     def pose(self, tau: float):
-        """(x, y, psi, u, wing_deploy, wing_side, alive) at playback time tau."""
+        """(x, y, psi, u, wing_deploy, wing_side, alive, top_deploy) at
+        playback time tau."""
         a = self.arr
         if tau >= self.t_end:
             r = a[-1]
-            return r[1], r[2], r[3], r[4], r[5], int(r[6]), self.alive_to_end
+            return r[1], r[2], r[3], r[4], r[5], int(r[6]), self.alive_to_end, r[7]
         i = int(np.searchsorted(a[:, 0], tau, side="right"))
         if i <= 0:
             r = a[0]
-            return r[1], r[2], r[3], r[4], r[5], int(r[6]), True
+            return r[1], r[2], r[3], r[4], r[5], int(r[6]), True, r[7]
         r0, r1 = a[i - 1], a[i]
         f = (tau - r0[0]) / max(r1[0] - r0[0], 1e-9)
         psi = r0[3] + _wrap_pi(r1[3] - r0[3]) * f
         return (r0[1] + (r1[1] - r0[1]) * f, r0[2] + (r1[2] - r0[2]) * f, psi,
                 r0[4] + (r1[4] - r0[4]) * f, r0[5] + (r1[5] - r0[5]) * f,
-                int(r1[6]), True)
+                int(r1[6]), True, r0[7] + (r1[7] - r0[7]) * f)
 
 
 def _swarm_seed_spec(spec: str | None) -> str:
@@ -4634,14 +5146,23 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
 
         SPACE  auto-run on / off        ENTER  next generation now
         K      name + save the best   [ ]    playback speed
-        C      camera                   - = 0  zoom          ESC  quit
+        V      replay on / off          C      camera
+        - = 0  zoom                     ESC    quit
 
-    `K` (and ESC, if nothing was saved) writes `drive/ml/checkpoints/
-    swarm_<name>.json` -- a plain `Policy` that `--ml-drive` drives and that a
-    later `--swarm-seed` breeds from -- with the best lap RE-MEASURED at the
-    contract's 1 ms step. The whole population is saved to `runs/swarm/
-    <name>_state.json` after every generation and `--swarm-resume` continues
-    it. drive.ml is imported HERE and nowhere else on this path.
+    With the replay OFF (`--swarm-fast`, the page's Replay row, or V) the
+    next generation starts the moment one is scored and the workers send
+    no trace back: the pool is the only clock. ESC then does what
+    `--swarm-save` (the page's Save best row) says: ask (ENTER saves under
+    the name typed, ESC discards -- the population is in the state file
+    either way), always, or never.
+
+    `K` writes `drive/ml/checkpoints/swarm_<name>.json` -- a plain `Policy`
+    that the RACE page lists, `--ml-drive` drives and a later `--swarm-seed`
+    breeds from -- with the best lap RE-MEASURED at the contract's 1 ms step;
+    ESC with nothing saved yet asks, saves or discards per `--swarm-save`.
+    The whole population is saved to `runs/swarm/<name>_state.json` after
+    every generation and `--swarm-resume` continues it. drive.ml is imported
+    HERE and nowhere else on this path.
     """
     try:
         import pygame
@@ -4650,7 +5171,7 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
         return 1
     try:
         from .ml.swarm import Swarm
-        from .ml import clone as ml_clone
+        from .ml import clone as ml_clone, swarm as ml_swarm
     except Exception as exc:
         print(f"--swarm: drive.ml unavailable ({type(exc).__name__}: {exc})")
         return 1
@@ -4663,12 +5184,21 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
         _resolve_design(opts)
     w, h = (int(v) for v in opts.size.lower().split("x"))
     tr, car, cfg_kwargs, global_wet = _session_car(opts, settings)
+    #  what it breeds in: the session's car, or a stock one (--swarm-car,
+    #  the page's Car row); a resume with no car given keeps the one the
+    #  swarm was bred in
+    want_car = getattr(opts, "swarm_car", None) or "same"
+    if opts.swarm_resume and want_car == "same":
+        want_car = _swarm_state_car(opts.swarm_resume, settings.car)
+    car, cfg_kwargs, car_name = _swarm_car(want_car, car, cfg_kwargs, settings.car)
+    stock = want_car not in (None, "", "same") and car_name == want_car
     if global_wet != 1.0:
         #  the rollout has no global wet; the same physics reached through
         #  the config's grip scale (vehicle.py: mu[i] * cfg.mu_scale)
         cfg_kwargs = dict(cfg_kwargs, mu_scale=cfg_kwargs["mu_scale"] * global_wet)
     track_kw = dict(radius=opts.radius, cw=opts.cw, surfaces=(opts.wet != "none"))
-    car_name = settings.car
+    car_title = cars.car_name(car_name) + (" (stock)" if stock else "")
+    opts.swarm_saved = None         # the checkpoint this run writes, if any
 
     user_replay = None
     user_lap = None
@@ -4715,7 +5245,7 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
             user_replay = _Replay(ml_clone.seed_lap_trace(seed), C_SWARM_USER, True, "you")
             user_lap = seed.get("lap_time")
         print(f"swarm {sw.name}: {sw.pop} cars, seed {sw.seed_source}, "
-              f"{tr.title or tr.name}, {cars.car_name(car_name)} {car.m:.0f} kg, "
+              f"{tr.title or tr.name}, {car_title} {car.m:.0f} kg, "
               f"wing {opts.wing}, T {sw.T:.0f} s, {sw.workers} workers")
 
     from . import render as rnd
@@ -4725,8 +5255,8 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
     cfgv.show_vectors = False
     cfgv.show_gg = False
     renderer = rnd.Renderer(cfgv, tr, headless=(opts.render == "offscreen"))
-    print("swarm: SPACE auto-run | ENTER next generation | K name + save best | [ ] speed | "
-          "C camera | - = 0 zoom | ESC quit")
+    print("swarm: SPACE auto-run | ENTER next generation | K name + save best | V replay | "
+          "[ ] speed | C camera | - = 0 zoom | ESC quit")
 
     replays: list = []
     shown = None                    # the history row of the generation on screen
@@ -4745,6 +5275,11 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
     closing = False                 # ESC pressed: saving, then out
     t_shown = time.perf_counter()
     bot_name = sw.name              # what the checkpoint is called; the prompt sets it
+    fast = bool(getattr(opts, "swarm_fast", False))   # replay off: breed flat out
+    save_mode = str(getattr(opts, "swarm_save", None) or "ask")   # ask | always | never
+    discarded = False               # ESC said: no checkpoint
+    save_asked = False              # K asked for one: it is kept whatever ESC says
+    sw.collect_traces = not fast
     prompt = None                   # the name prompt (garage_ui.TextPrompt), when open
     prompt_then = None              # 'save' (K) or 'close' (ESC): what follows ENTER
     ui_text = None
@@ -4760,9 +5295,9 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
         if ui_text is None:
             return False
         prompt = _gui.TextPrompt()
-        prompt.show("name this bot", "",
+        prompt.show("name this bot" if then == "save" else "save the best bot?", "",
                     f"ENTER save (empty = {bot_name})   ESC "
-                    + ("save under the swarm's name" if then == "close" else "cancel"))
+                    + ("discard - no checkpoint" if then == "close" else "cancel"))
         prompt_then = then
         return True
 
@@ -4799,7 +5334,8 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
     try:
         sw.start_evaluation()
         while running:
-            dt_wall = clock.tick_busy_loop(opts.fps) / 1000.0
+            dt_wall = (clock.tick(SWARM_FAST_FPS) if fast
+                       else clock.tick_busy_loop(opts.fps)) / 1000.0
             now = time.perf_counter()
             for ev in pygame.event.get():
                 if ev.type == pygame.QUIT:
@@ -4815,10 +5351,15 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
                         bot_name = value.strip()
                     if prompt_then == "save":
                         if res == "ok" and sw.best is not None and measuring is None:
+                            save_asked = True
                             measuring = sw.measure_best_async()
                             note, note_until = f"!measuring {bot_name} at 1 ms ...", now + 60.0
                     elif prompt_then == "close":
-                        if not _begin_close():
+                        if res == "ok":
+                            if not _begin_close():
+                                running = False
+                        else:              # ESC in the prompt: no checkpoint
+                            discarded = True
                             running = False
                     prompt_then = None
                 elif ev.type == pygame.KEYDOWN:
@@ -4832,7 +5373,16 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
                             if sw.best is not None and saved_path is None:
                                 _save_now()
                             running = False
-                        elif sw.best is not None and saved_path is None and _ask_name("close"):
+                        elif sw.best is None or saved_path is not None:
+                            running = False
+                        elif measuring is not None:
+                            #  K already asked for this save: finish it (the
+                            #  1 ms lap lands, then out; ESC again = unmeasured)
+                            _begin_close()
+                        elif save_mode == "never":
+                            discarded = True
+                            running = False
+                        elif save_mode == "ask" and _ask_name("close"):
                             pass           # ENTER / ESC in the prompt continues the close
                         elif not _begin_close():
                             running = False
@@ -4843,8 +5393,15 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
                     elif k == pygame.K_k:
                         if sw.best is not None and measuring is None:
                             if not _ask_name("save"):
+                                save_asked = True
                                 measuring = sw.measure_best_async()
                                 note, note_until = "!measuring the best at 1 ms ...", now + 60.0
+                    elif k == pygame.K_v:
+                        fast = not fast
+                        sw.collect_traces = not fast    # from the next generation started
+                        note = ("!replay OFF: breeding flat out" if fast
+                                else "!replay ON from the next generation scored")
+                        note_until = now + 4.0
                     elif k == pygame.K_LEFTBRACKET:
                         speed_i = max(0, speed_i - 1)
                     elif k == pygame.K_RIGHTBRACKET:
@@ -4876,7 +5433,7 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
             playback_done = (shown is None) or all(
                 tau >= r.t_end for r in replays)
             allowed = gens_target <= 0 or (len(sw.history) - gens_done_at_start) < gens_target
-            take = (shown is None) or want_next or (autorun and playback_done)
+            take = (shown is None) or want_next or (autorun and (fast or playback_done))
             if take and not closing and sw.poll():
                 want_next = False
                 shown = sw.history[-1]
@@ -4884,6 +5441,8 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
                 n = max(len(pop) - 1, 1)
                 replays = []
                 for rank, ind in enumerate(pop):
+                    if not ind.get("trace"):
+                        continue           # bred flat out: nothing to replay
                     col = _lerp3(C_SWARM_BEST, C_SWARM_WORST, rank / n)
                     replays.append(_Replay(ind.get("trace") or [], col,
                                            ind.get("ended") == "time",
@@ -4910,18 +5469,19 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
             hud = rnd.HudData()
             if replays:
                 for i, r in enumerate(replays):
-                    x, y, psi, u, wd, ws, alive = r.pose(tau)
+                    x, y, psi, u, wd, ws, alive, td = r.pose(tau)
                     if i == 0:
                         hero_st = SimpleNamespace(x=x, y=y, psi=psi, u=u, v=0.0)
                         hud.wing_deploy, hud.wing_side = float(wd), int(ws)
-                        hud.wing_on = wd > 0.05
+                        hud.wing_on = wd > 0.05 or td > 0.05
                         if wd > 0.0 and int(ws) == 0:      # both flanks: the air brake
                             hud.wing_deploy_l = hud.wing_deploy_r = float(wd)
+                        hud.top_deploy = float(td)
                         hud.V, hud.V_kmh = u, u * 3.6
                         continue
                     ghosts.append((x, y, psi, r.colour if alive else C_SWARM_DEAD))
             if user_replay is not None:
-                x, y, psi, u, wd, ws, alive = user_replay.pose(tau)
+                x, y, psi, u, wd, ws, alive, _td = user_replay.pose(tau)
                 if tau <= user_replay.t_end:
                     ghosts.append((x, y, psi, C_SWARM_USER))
             if hero_st is None:
@@ -4938,7 +5498,7 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
 
             # --- overlay -------------------------------------------------
             lines = [f"SWARM {sw.name}   {sw.pop} cars   seed {sw.seed_source}   "
-                     f"{tr.title or tr.name} / {cars.car_name(car_name)} / wing {opts.wing}"]
+                     f"{tr.title or tr.name} / {car_title} / wing {opts.wing}"]
             if shown is not None:
                 lb = shown["lap_best"]
                 lines.append(f"generation {shown['gen']}:  best {shown['best']:.0f} m   "
@@ -4950,14 +5510,27 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
                 b = sw.best
                 lines.append(f"all-time best: gen {b.get('gen', 0)} car #{b['id']}   "
                              f"{b['reward']:.0f} m   "
-                             + (f"lap {b['lap_best']:.2f} s" if b.get("lap_best") else "no lap"))
+                             + (f"lap {b['lap_best']:.2f} s" if b.get("lap_best") else "no lap")
+                             + f"   wings {ml_swarm.wings_str(b)}")
             if user_lap:
                 lines.append(f"your seed lap: {user_lap:.2f} s  (cyan car)")
+            if fast:
+                lines.append("!REPLAY OFF - breeding flat out; V to watch the next generation")
+                hist = sw.history[-SWARM_TABLE_ROWS:]
+                if hist:
+                    lines.append("   gen    best m    mean m    lap s   lapped   sigma   secs")
+                    for h in hist:
+                        lb = h["lap_best"]
+                        lines.append(f"  {h['gen']:4d}  {h['best']:8.0f}  {h['mean']:8.0f}  "
+                                     + (f"{lb:7.2f}" if lb else "     --")
+                                     + f"   {h['n_lapped']:2d}/{sw.pop:<3d}  {h['sigma']:.3f}  "
+                                     f"{h['secs']:5.1f}")
             nxt = ("ready" if sw.ready() else "computing ...") if sw._pending is not None else (
                 "closing" if closing else ("stopped (--swarm-gens reached)" if not allowed else "-"))
             lines.append(f"next generation: {nxt}   auto-run {'ON' if autorun else 'off'}   "
                          f"t {tau:5.1f} / {sw.T:.0f} s   x{spd:g}")
-            lines.append("SPACE auto | ENTER next | K name + save best | [ ] speed | C camera | - = 0 zoom | "
+            lines.append("SPACE auto | ENTER next | K name + save best | V replay | [ ] speed | "
+                         "C camera | - = 0 zoom | "
                          + ("ESC back to driving" if embedded else "ESC quit"))
             if saved_path and (not note or now >= note_until):
                 lines.append(f"saved: {saved_path}")
@@ -4977,16 +5550,28 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
             if sw.scored() or sw.history:
                 sw.save_state()
                 print(f"swarm state: {sw.state_path()}  (--swarm-resume to continue)")
-            if sw.best is not None and saved_path is None and sw.history:
+            if (sw.best is not None and saved_path is None and sw.history
+                    and (save_asked or (not discarded and save_mode != "never"))):
                 #  the window closed some other way: keep the best, unmeasured
                 #  (the blocking 1 ms measurement is what froze the window)
                 path, _m = sw.save_best(measure=False, name=bot_name)
+                opts.swarm_saved = path
                 print(f"swarm: saved the best genome (not re-measured) to {path}")
                 print(f"  drive it:      python3 -m drive.drive --ml-drive {path}")
                 print(f"  breed from it: python3 -m drive.drive --swarm {sw.pop} --swarm-seed {path}")
+                print(f"  race it:       python3 -m drive.drive --race {path}"
+                      + (f" --race-car {car_name}" if stock else ""))
+            elif sw.best is not None and saved_path is None and sw.history:
+                print("swarm: the best genome was NOT written as a checkpoint "
+                      + ("(ESC discarded it)" if discarded else "(save best: never)")
+                      + f"; it is in the state file -- --swarm-resume {sw.state_path()} "
+                      "and K to keep it")
             elif saved_path:
+                opts.swarm_saved = saved_path
                 print(f"  drive it:      python3 -m drive.drive --ml-drive {saved_path}")
                 print(f"  breed from it: python3 -m drive.drive --swarm {sw.pop} --swarm-seed {saved_path}")
+                print(f"  race it:       python3 -m drive.drive --race {saved_path}"
+                      + (f" --race-car {car_name}" if stock else ""))
         finally:
             if measuring is not None:
                 measuring[1].terminate()
@@ -5147,17 +5732,33 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
         opts.seed_lap = False              # once; a restart is a fresh choice
     if getattr(opts, "swarm_menu", None):
         sim.swarm_opts.update(opts.swarm_menu)
+    newest = race_newest_bot()
+    if newest:
+        sim.race_opts["bot"] = newest      # your newest bot, unless the page says otherwise
     race_menu = getattr(opts, "race_menu", None) or {}
-    if race_menu.get("bot"):
-        sim.race_opts["bot"] = race_menu["bot"]
+    for k in RACE_MENU_DEFAULTS:
+        if race_menu.get(k):
+            sim.race_opts[k] = race_menu[k]
     race_spec = getattr(opts, "race", None)
+    race_on = False
     if race_spec:
-        opts.race = None                   # once; the page owns it from here
+        #  --race BOT[,BOT2[,BOT3]] [--race-car CAR[,CAR2[,CAR3]]]: the grid,
+        #  once; the page owns it from here. A car list shorter than the bot
+        #  list repeats its last entry.
+        specs = [s.strip() for s in str(race_spec).split(",") if s.strip()]
+        carl = [c.strip() for c in str(getattr(opts, "race_car", None) or "same").split(",")
+                if c.strip()] or ["same"]
+        for i in range(1, RACE_GRID_MAX + 1):
+            kb, kc = race_slot_keys(i)
+            sp = specs[i - 1] if i <= len(specs) else "none"
+            sim.race_opts[kb] = race_best_path() if sp == "best" else sp
+            sim.race_opts[kc] = carl[i - 1] if i <= len(carl) else carl[-1]
+        opts.race = None
+        race_on = True
     elif race_menu.get("active"):
-        race_spec = sim.race_opts["bot"]   # a restart keeps the race on
-    if race_spec:
-        sim.race_opts["bot"] = race_spec
-        sim.start_race(race_spec)
+        race_on = True                     # a restart keeps the race on
+    if race_on:
+        sim.start_race()
     sim.hud_cfg = getattr(opts, "hud_cfg", None)   # the build's wing geometry
     if cfg.has_designed():
         sim.wing_on = True                 # a garage build starts armed, as --wing does

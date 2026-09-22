@@ -44,7 +44,7 @@ import time
 import numpy as np
 
 from .env import rollout, lap_time, DT_TRAIN, DT_EVAL
-from .policy import Policy
+from .policy import Policy, N_ACT, N_ACT_FREE
 
 #: built once per worker process; `make_track` is ~15 ms and a rollout is ~1 s,
 #: so rebuilding it per candidate would be 1.5 % of the whole run for nothing
@@ -132,11 +132,19 @@ def train(track: str = "arena", wing: str = "plate", iters: int = 60,
           seed: int = 0, T: float = 60.0, workers: int | None = None,
           dt: float = DT_TRAIN, out: str | None = None,
           init: str | None = None, verbose: bool = True,
-          save_every: int = 1, car: str | None = None) -> dict:
+          save_every: int = 1, car: str | None = None,
+          free_wings: bool = False) -> dict:
+    """`free_wings` breeds the 5-output head (one output per wing, see
+    `policy.WING_PRIOR`) instead of the published 4-output one; a 4-output
+    `init` is widened. Default False, so every committed ES run is
+    reproducible as it was."""
     if pop % 2:
         pop += 1                      # mirrored sampling needs pairs
     rng = np.random.default_rng(seed)
-    base = Policy.load(init) if init else Policy(np.zeros(Policy.N_PARAM))
+    n_act = N_ACT_FREE if free_wings else N_ACT
+    base = Policy.load(init) if init else Policy(np.zeros(Policy.n_param(n_act)))
+    if free_wings and not base.free_wings:
+        base = Policy(Policy.widen(base.theta), base.meta)
     theta = base.theta.copy()
     tracks = _tracks(track)
     #  One track -> normaliser exactly 1.0, so `_score` returns `ep.reward`
@@ -244,9 +252,14 @@ def main(argv=None) -> int:
                          "policy trims THAT car's own lock and wheelbase.")
     ap.add_argument("--eval", action="store_true",
                     help="after training, re-measure at DT_EVAL and print lap times")
+    ap.add_argument("--free-wings", action="store_true",
+                    help="breed the 5-output head: one output per wing (left flank, "
+                         "right flank, top), each free to deploy on its own")
     a = ap.parse_args(argv)
     tks = _tracks(a.track)
-    print(f"ES  {Policy.N_PARAM} params  pop {a.pop}  sigma {a.sigma}  lr {a.lr}  "
+    n_par = Policy.n_param(N_ACT_FREE if a.free_wings else N_ACT)
+    print(f"ES  {n_par} params{' (free wings)' if a.free_wings else ''}  "
+          f"pop {a.pop}  sigma {a.sigma}  lr {a.lr}  "
           f"{a.iters} iters  dt {a.dt * 1e3:.0f} ms  T {a.duration:.0f} s  "
           f"workers {a.workers or os.cpu_count()}  "
           f"car {a.car or 'corsa'}  "
@@ -254,7 +267,7 @@ def main(argv=None) -> int:
           f"{f'  ({len(tks)} rollouts per candidate)' if len(tks) > 1 else ''}")
     r = train(a.track, a.wing, a.iters, a.pop, a.sigma, a.lr, a.seed,
               a.duration, a.workers, a.dt, a.out, a.init,
-              save_every=a.save_every, car=a.car)
+              save_every=a.save_every, car=a.car, free_wings=a.free_wings)
     if a.eval:
         print("\n  re-measured at DT_EVAL = 1 ms:")
         for tk in tks:

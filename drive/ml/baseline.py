@@ -47,8 +47,57 @@ WHEELBASE = _CAR.L
 #  ribbon for the whole run; the pre-sweep set (0.85 / 0.55 / 0.80 g / 0.45)
 #  went off at 31.9 s having covered 562 m, so it could not post a lap at all.
 K_PSI = 1.80         # rad of road wheel per rad of heading error
-K_N = 1.60           # ... per unit of normalised lateral offset
+K_N = 1.60           # ... per unit of normalised lateral offset, AT THE EDGE
 K_FF = 1.00          # feedforward fraction of the bicycle angle L*kappa
+
+#: The UNDERSTEER feedforward, rad of road wheel per g of planned lateral
+#: acceleration, the CORSA's and the DEFAULT only (3.25 deg/g, measured by
+#: `_k_us_measured`: a sub-limit open-loop ramp steer at 25 m/s, stopped at
+#: half the car's peak a_y). The bicycle angle `L * kappa` is the ZERO-speed
+#: steer for a corner; a real car wants `L * kappa + K_us * a_y / g` on top
+#: of it, and at 0.75 g that extra is 2.4 deg on the Corsa and 3.3 deg on the
+#: 540i against a kinematic term of 1.3 / 1.5 deg -- i.e. the feedforward was
+#: asking for well under HALF the steer the corner needed and the `K_N`
+#: spring was quietly supplying the rest by letting the car run wide until
+#: the offset bought the angle. That is why removing the spring (see
+#: `N_FREE`) put the 540i in the grass at the arena's R = 110 m: it was the
+#: spring, not the feedforward, that had been steering the corner. Per car
+#: via `driver_trim`, as a ratio to the Corsa's, so the Corsa gets exactly
+#: this number.
+K_US_RAD_PER_G = math.radians(3.25)
+
+#: The lateral feedback is a BARRIER, not a spring. Inside `|n_norm| <
+#: N_FREE` there is no position term at all: the driver holds heading and
+#: curvature and lets the car sit wherever it is across the road. Only past
+#: N_FREE does the `K_N` term ramp in, reaching its full value at the edge.
+#:
+#: Why: the old law `- K_N * n_norm` pulled the car to the centreline every
+#: tick, so the residual policy (and the clone of a user's lap, and the
+#: swarm seeded from it) had to FIGHT that spring to hold any other line.
+#: Every trained bot therefore drove down the middle of the road, and the
+#: docstring promise that the ES "learns the LINE" was not one the anchor
+#: allowed it to keep. The middle 2 * N_FREE of the ribbon is now free for the
+#: residual to place the car in; the outer strip is still fenced.
+N_FREE = 0.45
+
+#: The band is `N_FREE` wide only where it has to be. Measured, anchor, dt
+#: 1 ms, 200 s, plate: with `N_FREE = 0.45` everywhere the bots sat at 1/4
+#: and 3/4 of the road width -- exactly the knee, because `K_N` at the knee
+#: is about `RESID_GAIN` worth of steer and the residual could push no
+#: further. Raising `N_FREE` to 0.70 / 0.80 / 0.90 for the whole road put
+#: the anchor in the grass on the arena on all three cars (corsa at 0.80+,
+#: mx5 / 540i at 0.70+): it parks on the OUTSIDE of the R = 110 m corner on
+#: the straight before it, enters at plan speed with no margin, understeers
+#: 3 m and is gone. So the barrier is asymmetric: the outside of the corner
+#: ahead is fenced at `N_FREE` as before, and the inside and the straights
+#: are free out to `N_FREE_DRY` -- narrowing back to `N_FREE` as `mu_ahead`
+#: falls, so a wet patch is still approached from the middle. Every cell
+#: laps at 0.80 and at 0.90 with lap times within 0.3 s of the 0.45 anchor;
+#: 0.80 keeps 1.2 m of tarmac beyond the band on the arena. The residual
+#: can now sit on the inside edge at the apex, which is what a line IS; a
+#: wide entry is still the anchor's to fence and the residual's to buy.
+N_FREE_DRY = 0.80
+MU_FREE_LO, MU_FREE_HI = 0.60, 1.00
 
 # --- speed ------------------------------------------------------------------
 #: The cornering limit this driver plans to: 0.75 g, comfortably inside the
@@ -58,6 +107,17 @@ AY_PLAN = 0.75 * G
 V_MAX_PLAN = 42.0    # m/s, above the Corsa's 47.2 Vmax after drag anyway
 V_MIN_PLAN = 7.0     # m/s, so a hairpin does not command a stop
 K_V = 0.45           # pedal per m/s of speed error
+
+#: The friction ellipse, on the PEDAL: a car using `u = a_y / ay_plan` of its
+#: grip sideways has `sqrt(1 - u^2)` of it left for the pedal, and the plan
+#: caps |pedal| there, never below `PEDAL_FLOOR` so a corner that is still
+#: being driven can be slowed for the tighter one after it. Without this the
+#: 540i stood on the brake (pedal -1.00) at 0.76 g in the arena's R = 110 m,
+#: the front let go, the steer collapsed from 0.65 g to 0.17 g in a tenth,
+#: and it ran off. The centreline spring used to mask this by putting the car
+#: in the middle of the road with 6 m of run-off; the residual driver now
+#: places the car itself, so the anchor has to be safe on its own.
+PEDAL_FLOOR = 0.35
 #: How much of the 70 m lookahead's curvature enters the speed plan.
 #:
 #: Wave 3 shipped a plan that read `obs[3]/obs[4]/obs[5]` -- the 0 / 15 / 35 m
@@ -233,8 +293,9 @@ def power_grip_ratio(car, mu_scale: float = 1.0) -> float:
 def driver_trim(car, mu_scale: float = 1.0) -> dict:
     """The per-car calibration of this one hand-written driver.
 
-    Three numbers, and they are the ONLY things the anchor takes from the car:
-    its steering lock, its wheelbase, and the grip it plans to. `K_PSI`,
+    Four numbers, and they are the ONLY things the anchor takes from the car:
+    its steering lock, its wheelbase, the grip it plans to, and its understeer
+    gradient (`k_us`, see `K_US_RAD_PER_G`). `K_PSI`,
     `K_N`, `K_V`, `KAPPA_ARM`, `K70_PLAN`, `K120_PLAN` and
     `MU_NEAR_STATIONS` are the same on every car on purpose -- what the
     residual sits on has to be ONE driver evaluated on three machines, or a
@@ -249,9 +310,36 @@ def driver_trim(car, mu_scale: float = 1.0) -> dict:
     """
     ay_ratio = _ay_peak(car, mu_scale) / _AY_REF
     from ..vehicle import car_lock_rad          # lazy: keeps import-time pure
+    k_us = K_US_RAD_PER_G * (_k_us_measured(car, mu_scale)
+                             / _k_us_measured(_CAR, 1.0))
     return dict(lock_rad=float(car_lock_rad(car)), wheelbase=float(car.L),
                 ay_plan=AY_PLAN * ay_ratio, ay_ratio=ay_ratio,
+                k_us=float(k_us),
                 power_grip=power_grip_ratio(car, mu_scale))
+
+
+_K_US_CACHE: dict = {}
+
+
+def _k_us_measured(car, mu_scale: float = 1.0, V: float = 25.0) -> float:
+    """Sub-limit understeer gradient, rad of road wheel per g, measured on
+    the car with the contract's own open-loop ramp steer (`vehicle.ramp_steer`
+    with `ay_target`), stopped at HALF the car's peak a_y so it reads the
+    linear range and not the limit. Cached per (car, mu_scale): one ramp per
+    car per process. Only ever used as a RATIO to the Corsa's in
+    `driver_trim`, so the absolute value cancels for the Corsa and matters
+    for the others only through how much more or less they push on."""
+    key = (getattr(car, "name", id(car)), round(float(mu_scale), 4), V)
+    if key not in _K_US_CACHE:
+        from ..vehicle import ramp_steer, VehicleConfig   # lazy, as above
+        ay_t = 0.5 * _ay_peak(car, mu_scale)
+        tel = ramp_steer(V, car=car, cfg=VehicleConfig(mu_scale=mu_scale),
+                         ay_target=ay_t)
+        ay = float(tel["peak_ay"])
+        delta = float(tel["delta"])
+        k_us = (delta - car.L * ay / (V * V)) / (ay / G)
+        _K_US_CACHE[key] = max(k_us, 0.0)
+    return _K_US_CACHE[key]
 
 
 # --- the wing ---------------------------------------------------------------
@@ -261,8 +349,33 @@ def driver_trim(car, mu_scale: float = 1.0) -> dict:
 KAPPA_ARM = 1.0 / 220.0
 
 
+
+def free_band(mu_ahead: float, n_norm: float, k_ahead: float) -> float:
+    """Where the barrier starts for THIS side of the road: `N_FREE` on the
+    outside of the corner ahead (`kappa > 0` is a left turn, whose outside is
+    `n < 0`), else `N_FREE_DRY` on dry tarmac fading to `N_FREE` as the
+    worst grip in the next 90 m falls (see `N_FREE_DRY`)."""
+    if abs(k_ahead) > KAPPA_ARM and n_norm * k_ahead < 0.0:
+        return N_FREE
+    f = (mu_ahead - MU_FREE_LO) / (MU_FREE_HI - MU_FREE_LO)
+    f = 0.0 if f < 0.0 else (1.0 if f > 1.0 else f)
+    return N_FREE + (N_FREE_DRY - N_FREE) * f
+
+
+def lateral_barrier(n_norm: float, n_free: float = N_FREE) -> float:
+    """The position error the steering feedback sees: 0 across the free
+    band of the road, ramping linearly from `n_free` to a full 1.0 at the
+    edge (see `N_FREE`, `free_band`). Sign preserved, so it always pushes
+    INWARD."""
+    a = abs(n_norm)
+    if a <= n_free:
+        return 0.0
+    return math.copysign((a - n_free) / (1.0 - n_free), n_norm)
+
+
 def baseline_action(obs, lock_rad: float, wheelbase: float = WHEELBASE,
-                   ay_plan: float = AY_PLAN) -> np.ndarray:
+                   ay_plan: float = AY_PLAN,
+                   k_us: float = K_US_RAD_PER_G) -> np.ndarray:
     """(N_OBS,) -> (steer, pedal, wing) each in [-1, 1], the policy's own units.
 
     `steer` is a FRACTION of lock, not radians, so it composes with the
@@ -289,8 +402,16 @@ def baseline_action(obs, lock_rad: float, wheelbase: float = WHEELBASE,
     #    feedforward takes kappa's sign directly; n > 0 is LEFT of the
     #    centreline and psi_err > 0 points left of the tangent, so both
     #    feedback terms are negative.
+    #    Feedforward is the STEADY-STATE steer for the corner ahead: the
+    #    bicycle angle plus the understeer term for the a_y this speed will
+    #    pull there (`K_US_RAD_PER_G`). Planned a_y, not measured, so it leads
+    #    the corner instead of chasing it.
     k_path = 0.6 * k0 + 0.4 * k1
-    delta = K_FF * wheelbase * k_path - K_PSI * psi_err - K_N * n_norm
+    k_ahead = max((k0, k1, k2, K70_PLAN * k3), key=abs)
+    ay_dem = u * u * k_path
+    delta = (K_FF * wheelbase * k_path + k_us * ay_dem / G
+             - K_PSI * psi_err
+             - K_N * lateral_barrier(n_norm, free_band(mu_ahead, n_norm, k_ahead)))
     steer = delta / lock_rad
 
     # -- speed: plan for the tightest curvature in the lookahead window, so
@@ -330,6 +451,9 @@ def baseline_action(obs, lock_rad: float, wheelbase: float = WHEELBASE,
                 math.sqrt(ay_far / k_far) if k_far > 1e-6 else V_MAX_PLAN)
     v_tgt = min(max(v_tgt, V_MIN_PLAN), V_MAX_PLAN)
     pedal = K_V * (v_tgt - u)
+    lat = min(abs(ay_dem) / max(ay_plan, 1e-6), 1.0)
+    room = max(math.sqrt(1.0 - lat * lat), PEDAL_FLOOR)
+    pedal = min(max(pedal, -room), room)
 
     # -- the wing: arm it for the corner ahead, and keep it armed while the
     #    front axle is actually working (the device buys front grip)

@@ -98,9 +98,13 @@ def _track():
     return _TRACK[name]
 
 
-def _score(theta) -> dict:
-    """One individual, in a pool worker. Plain floats and a short trace back."""
-    trace: list = []
+def _score(job) -> dict:
+    """One individual, in a pool worker: `(theta, collect)`. Plain floats
+    back, and the replay trace only when asked for (`Swarm.collect_traces`):
+    a window breeding flat out has no use for it, and it is most of what
+    crosses the pipe from the pool."""
+    theta, collect = job
+    trace = [] if collect else None
     ep = rollout(Policy(np.asarray(theta, float)), _CFG["track"], dt=_CFG["dt"],
                  T=_CFG["T"], wing=_CFG["wing"], car=_CFG.get("car"),
                  cfg_kwargs=_CFG.get("cfg_kwargs"), tr=_track(), collect=trace)
@@ -113,13 +117,19 @@ def _score(theta) -> dict:
                 laps=int(ep.laps), lap_best=(min(fl) if fl else first),
                 lap_first=first,
                 v_mean=float(ep.v_mean), wing_frac=float(ep.wing_frac),
-                ended=ep.ended, trace=trace)
+                wings=dict(l=round(ep.wing_l_frac, 3), r=round(ep.wing_r_frac, 3),
+                           top=round(ep.wing_top_frac, 3), both=round(ep.wing_both_frac, 3)),
+                ended=ep.ended, trace=(trace or []))
 
 
 def _measure(theta) -> dict:
-    """The deliverable's number: best flying lap at DT_EVAL, 3 laps."""
+    """The deliverable's number: best flying lap at DT_EVAL, 3 laps -- on
+    the car the swarm BRED on (its config: a garage build's wings, the
+    session's engine, assists and grip) and the track it bred on. Without
+    `cfg_kwargs` a window swarm's lap was measured on the stock config."""
     r = lap_time(Policy(np.asarray(theta, float)), _CFG["track"], wing=_CFG["wing"],
-                 dt=DT_EVAL, T=_CFG.get("T_eval", 240.0), car=_CFG.get("car"))
+                 dt=DT_EVAL, T=_CFG.get("T_eval", 240.0), car=_CFG.get("car"),
+                 cfg_kwargs=_CFG.get("cfg_kwargs"), tr=_track())
     r.pop("flying", None)
     return r
 
@@ -160,6 +170,9 @@ class Swarm:
                         else int(workers))
         self._pool = None
         self._pending = None
+        #: whether the workers send the replay trace back with each score
+        #: (`_score`); the window turns it off to breed flat out
+        self.collect_traces = True
 
     # ---- population ----------------------------------------------------
     def _new(self, theta, parents=(), sigma: float | None = None) -> dict:
@@ -252,13 +265,13 @@ class Swarm:
         """Kick the generation's rollouts off in the pool; `poll()` collects."""
         if self._pending is not None:
             return
-        thetas = [ind["theta"] for ind in self.population]
+        jobs = [(ind["theta"], bool(self.collect_traces)) for ind in self.population]
         p = self.pool()
         self._t0 = time.perf_counter()
         if p is None:
-            self._pending = [_score(t) for t in thetas]
+            self._pending = [_score(j) for j in jobs]
         else:
-            self._pending = p.map_async(_score, thetas, chunksize=1)
+            self._pending = p.map_async(_score, jobs, chunksize=1)
 
     def ready(self) -> bool:
         if self._pending is None:
@@ -347,7 +360,7 @@ class Swarm:
             nxt.append(c)
         for ind in nxt:
             for k in ("reward", "s", "t", "laps", "lap_best", "lap_first",
-                      "v_mean", "wing_frac", "ended"):
+                      "v_mean", "wing_frac", "wings", "ended"):
                 if not ind.get("elite"):
                     ind.pop(k, None)
         self.population = nxt
@@ -495,6 +508,15 @@ def _json_default(o):
 
 
 # ---- CLI -------------------------------------------------------------------
+
+def wings_str(ind) -> str:
+    """'L 42% R 38% top 61% both 12%' for a scored individual, or '-'."""
+    w = (ind or {}).get("wings")
+    if not w:
+        return "-"
+    return (f"L {100 * w['l']:.0f}% R {100 * w['r']:.0f}% "
+            f"top {100 * w['top']:.0f}% both {100 * w['both']:.0f}%")
+
 def _fmt_lap(v) -> str:
     return "  --  " if v is None else f"{v:6.2f}"
 
@@ -523,7 +545,8 @@ def run(a) -> Swarm:
             sw.save_state()
             print(f"  gen {h['gen']:3d}  best {h['best']:8.1f}  mean {h['mean']:8.1f}  "
                   f"lap {_fmt_lap(h['lap_best'])}  lapped {h['n_lapped']:2d}/{sw.pop}  "
-                  f"sigma {h['sigma']:.3f}  {h['ended']}  [{h['secs']} s]", flush=True)
+                  f"sigma {h['sigma']:.3f}  {h['ended']}  "
+                  f"wings {wings_str(sw.best)}  [{h['secs']} s]", flush=True)
         if a.out or a.save:
             path, m = sw.save_best(a.out)
             print(f"  saved {path}\n  at 1 ms: {json.dumps(m, default=str)}")
@@ -623,21 +646,34 @@ def self_check(verbose: bool = True) -> bool:
         sw4.seed_from(cp)
         rep("checkpoint seeds index 0", np.array_equal(sw4.population[0]["theta"], pol.theta)
             and sw4.seed_source.startswith("ckpt:"))
-        # a 4-output (published ES) checkpoint seeds a free-wings swarm, widened
+        # a 4-output (published ES) checkpoint seeds a free-wings swarm, widened:
+        # its steer / pedal rows carry over, its (authority-less) wing row does
+        # not -- the wing rows are zero and the anchor's priors decide, which is
+        # what that checkpoint's wings were doing all along
         old = Policy(np.zeros(Policy.N_PARAM))
         old.theta[-2] = 0.7                       # its wing bias
+        old.theta[-4] = 0.3                       # its steer bias
         op = old.save(os.path.join(td, "old.json"))
         sw5 = Swarm(pop=4, track="arena", T=6.0, seed=3, workers=1, name="sc5")
         sw5.seed_from(op)
         w = Policy(sw5.population[0]["theta"])
-        rep("4-output checkpoint widened", w.free_wings and w.b2[2] == w.b2[3] == w.b2[4] == 0.7
-            and w.b2[0] == 0.0)
+        rep("4-output checkpoint widened", w.free_wings and w.b2[0] == 0.3
+            and w.b2[2] == w.b2[3] == w.b2[4] == 0.0 and not np.any(w.W2[2:]))
         # the legacy head still breeds
         sw6 = Swarm(pop=4, track="arena", T=3.0, seed=4, workers=1, name="sc6", n_act=N_ACT)
         sw6.seed_from("none")
         sw6.evaluate()
         rep("legacy head breeds", sw6.population[0]["theta"].size == Policy.N_PARAM
             and sw6.scored())
+        # the replay trace is optional: a swarm breeding flat out asks for none
+        sw7 = Swarm(pop=4, track="arena", T=3.0, seed=5, workers=1, name="sc7")
+        sw7.seed_from("none")
+        sw7.collect_traces = False
+        sw7.evaluate()
+        rep("no trace unless asked", sw7.scored()
+            and all(not i.get("trace") for i in sw7.population)
+            and bool(sw6.population[0].get("trace")),
+            f"{len(sw6.population[0].get('trace') or [])} rows with, 0 without")
     return ok
 
 

@@ -80,6 +80,34 @@ def self_check(verbose: bool = True) -> bool:
          ep.wing_frac > 0.2 and ep.wing_outer_frac > 0.90,
          f"deployed {100 * ep.wing_frac:.0f} % of steps, "
          f"{100 * ep.wing_outer_frac:.0f} % of those on the outer flank")
+    #  and it does NOT hold the centreline: a residual that asks for a line
+    #  off the middle gets it, instead of being sprung back every tick. A
+    #  net that outputs a constant steer trim of +0.15 must move the MEAN
+    #  offset well left and still lap (the barrier fences the edge).
+    import drive.ml.env as _env
+    from .baseline import N_FREE
+    ns: list = []
+    _orig = _env.observe
+
+    def _spy(veh, tr_, out=None, mu_here=None):
+        o = _orig(veh, tr_, out, mu_here)
+        ns.append(float(o[1]))
+        return o
+
+    class _Biased(Policy):
+        def act(self, obs):
+            return np.array([0.15, 0.0, 0.0, 0.0])
+
+    _env.observe = _spy
+    try:
+        epb = rollout(_Biased(), "arena", T=60.0, wing="plate", tr=tr)
+    finally:
+        _env.observe = _orig
+    n_mean = float(np.mean(ns))
+    _rep("the anchor lets a residual hold a line off the centreline",
+         n_mean > 0.5 * N_FREE and epb.ended == "time",
+         f"steer trim +0.15 -> mean n_norm {n_mean:+.2f} (free band +-{N_FREE}), "
+         f"ended '{epb.ended}'")
 
     # --- the corrected anchor can drive the OPEN map ----------------------
     #  This is the whole of wave 4 item 1 in one assertion. Through wave 3
@@ -227,7 +255,7 @@ def self_check(verbose: bool = True) -> bool:
          f"1 track {one:.9f} == {ref:.9f}; 2 tracks {two:.9f} == {want:.9f}")
 
     # --- the free-wings head: 5 outputs, one per wing ---------------------
-    from .policy import N_ACT_FREE, expand_base
+    from .policy import N_ACT, N_ACT_FREE, expand_base
     pf = Policy(np.zeros(Policy.n_param(N_ACT_FREE)))
     _rep("a 5-output genome is a free-wings policy", pf.free_wings and pf.n_act == N_ACT_FREE
          and not p0.free_wings, f"{pf.theta.size} parameters, {Policy.N_PARAM} for the 4-output head")
@@ -243,9 +271,59 @@ def self_check(verbose: bool = True) -> bool:
     wide = Policy(Policy.widen(pr.theta))
     acts_old = np.array([pr.act(o) for o in obs])
     acts_new = np.array([wide.act(o) for o in obs])
+    #  the wing rows of the widened genome are ZERO (the 4-output head's wing
+    #  row never had authority, see policy.WING_PRIOR), so the composed wing
+    #  verdict is the anchor's prior -- exactly what the 4-output genome did
+    same_wing = all(pr.controls(o, Controls).wing_on == wide.controls(o, Controls).wing_on
+                    for o in obs)
     _rep("widening a 4-output genome keeps its steer, pedal and wing verdicts",
          wide.free_wings and np.allclose(acts_new[:, :2], acts_old[:, :2])
-         and np.allclose(acts_new[:, 2], acts_old[:, 2]) and np.allclose(acts_new[:, 4], acts_old[:, 2]))
+         and not np.any(acts_new[:, 2:]) and same_wing,
+         f"wing_on agrees on {sum(1 for o in obs)} observations, wing rows zero")
+
+    # --- the free head has REAL authority over all three wings -----------
+    #  Through task 17 it did not: the anchor's +-1 verdicts at RESID_GAIN
+    #  0.55 could never be crossed, so 'free wings' was a name. Now the
+    #  verdict is a +-WING_PRIOR prior at WING_GAIN 1.0. Forced +1 on every
+    #  wing output must put ALL THREE out for the whole run (both flanks =
+    #  the air brake, and the top wing on a car that has one); forced -1
+    #  must keep every one in; and the 4-output head must be UNMOVED by
+    #  either, to the bit.
+    from .policy import WING_PRIOR, WING_GAIN
+    from ..vehicle import TopAero
+
+    class _Forced(Policy):
+        def __init__(self, n_act, val):
+            super().__init__(np.zeros(Policy.n_param(n_act)))
+            self.val = val
+
+        def act(self, o):
+            a = np.zeros(self.n_act)
+            a[2:] = self.val
+            return a
+
+    top_kw = dict(top=TopAero(mode="active"))
+    ep_all = rollout(_Forced(N_ACT_FREE, +1.0), "arena", T=40.0, wing="plate", tr=tr,
+                     cfg_kwargs=top_kw)
+    ep_none = rollout(_Forced(N_ACT_FREE, -1.0), "arena", T=40.0, wing="plate", tr=tr,
+                      cfg_kwargs=top_kw)
+    _rep("the free head can put all three wings out where the anchor would not",
+         ep_all.wing_l_frac > 0.97 and ep_all.wing_r_frac > 0.97
+         and ep_all.wing_both_frac > 0.97 and ep_all.wing_top_frac > 0.97,
+         f"forced +1: L {100 * ep_all.wing_l_frac:.1f} % R {100 * ep_all.wing_r_frac:.1f} % "
+         f"top {100 * ep_all.wing_top_frac:.1f} % both {100 * ep_all.wing_both_frac:.1f} % "
+         f"(prior +-{WING_PRIOR} at gain {WING_GAIN})")
+    _rep("... and keep every wing in where the anchor would run one",
+         ep_none.wing_frac == 0.0 and ep_none.wing_top_frac == 0.0
+         and ep_none.wing_l_frac == 0.0 and ep_none.wing_r_frac == 0.0,
+         f"forced -1: flank {100 * ep_none.wing_frac:.1f} % top {100 * ep_none.wing_top_frac:.1f} %")
+    ep4_0 = rollout(Policy(), "arena", T=40.0, wing="plate", tr=tr, cfg_kwargs=top_kw)
+    ep4_p = rollout(_Forced(N_ACT, +1.0), "arena", T=40.0, wing="plate", tr=tr, cfg_kwargs=top_kw)
+    ep4_m = rollout(_Forced(N_ACT, -1.0), "arena", T=40.0, wing="plate", tr=tr, cfg_kwargs=top_kw)
+    _rep("the 4-output head is unmoved: its wing is still the anchor's, to the bit",
+         ep4_0.reward == ep4_p.reward == ep4_m.reward
+         and ep4_0.wing_frac == ep4_p.wing_frac == ep4_m.wing_frac and ep4_0.wing_frac > 0.3,
+         f"reward {ep4_0.reward:.6f} for net wing -1 / 0 / +1, wing {100 * ep4_0.wing_frac:.1f} %")
 
     # --- the swarm: the seed lap's schema, the clone, the GA -------------
     from . import clone as _cl, swarm as _sw
