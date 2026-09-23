@@ -175,6 +175,23 @@ R_WARN = (440, 760, 400, 22)
 #: the driving tutorial's box (drive/tutorial.py): left, between the state
 #: panel and the pedals, clear of the car; its height follows the text
 R_TUTOR = (12, 340, 430, 318)
+#: the lap's results card (drive/results.py): top centre, under the delta
+R_RESULTS = (440, 196, 400, 140)
+#: tyre smoke (task 27): a fixed pool of particles, emitted where a tyre
+#: slides (|kappa| or |alpha| past the thresholds, above SMOKE_V), at most
+#: SMOKE_EMIT new ones a frame, each living SMOKE_LIFE_S -- pooled and
+#: budgeted, so a long slide costs the same as a short one
+SMOKE_MAX = 160
+SMOKE_EMIT = 2                 # a frame, taken round the sliding tyres in turn
+SMOKE_LIFE_S = 1.3             # 2 a frame x 60 fps x 1.3 s = 156 <= SMOKE_MAX: a full
+#                                pool never recycles a particle that is still fading
+SMOKE_KAPPA = 0.15
+SMOKE_ALPHA = 0.14             # rad
+SMOKE_V = 4.0                  # m/s
+C_SMOKE = (170, 172, 176)
+#: camera shake on the kerbs and off the road (task 27): the view moves by
+#: at most SHAKE_PX pixels, a deterministic mix of three frequencies
+SHAKE_PX = 2.5
 #: the race grid the frame budget is held to: drive.RACE_GRID_MAX bots (task
 #: 26), plus the two time-trial ghosts; drive.py's V36 asserts they agree
 V22_GRID_BOTS = 5
@@ -662,6 +679,12 @@ class HudData:
     # --- the driving tutorial's box (drive/tutorial.py Tutorial.overlay): a
     # dict of head / text / status / warn / hint / flash / foot; None = none
     tutorial: dict | None = None
+    # --- task 27: the lap's results card (drive/results.py view), the four
+    # contact patches in the world (the tyre smoke comes off them), and the
+    # camera shake's strength 0..1 (0 = none; the setting can switch it off)
+    results: dict | None = None
+    wheels_xy: list = field(default_factory=list)
+    shake: float = 0.0
 
 
 # ======================================================================= #
@@ -1337,6 +1360,8 @@ class Renderer:
         self._prep_track()
         self._panels = {}
         self._wraps = {}                   # (text, font, px) -> wrapped lines
+        self.smoke = SmokePool()
+        self._dt_frame = 1.0 / 60.0        # update_camera's dt: the smoke ages by it
         self._gg_trail = deque(maxlen=GG_TRAIL_N)
         self._gg_t = -1.0
         self._frame_ms = 0.0
@@ -1475,10 +1500,12 @@ class Renderer:
         self._Rm = np.array([[c, -s], [s, c]])
 
     # ------------------------------------------------------------------ #
-    def update_camera(self, st, dt_frame: float) -> None:
-        """Eq.13.  Heading lag, speed lead, speed zoom; all exponential."""
+    def update_camera(self, st, dt_frame: float, shake: float = 0.0) -> None:
+        """Eq.13.  Heading lag, speed lead, speed zoom; all exponential.
+        `shake` (0..1): the kerb / off-road camera shake (task 27)."""
         cfg = self.cfg
         x, y, psi = _pose(st)
+        self._dt_frame = min(max(float(dt_frame), 0.0), 0.1)
         V = _speed(st)
         dt = max(float(dt_frame), 0.0)
         self._t_render += dt
@@ -1517,12 +1544,18 @@ class Renderer:
         self._anchor = np.array(
             [self.W * 0.5,
              self.H * (0.5 if cfg.mode == 'world_up' else cfg.car_screen_frac)])
+        ox, oy = shake_offset(self._t_render, shake)
+        self._shake_px = (ox, oy)
+        if ox or oy:                       # the view moves, the HUD does not
+            self._anchor = self._anchor + np.array([ox, oy]) * self.ui
         self._set_rot(self.psi_cam)
 
         if self._cam3 is not None:
             # The eye rides behind the LAGGED heading (tau_heading * 2.5 =
             # 0.30 s), so it swings into a slide a beat late.
-            self._cam3.set_pose(x, y, self.psi_cam, V, self.zoom_manual)
+            #  the shake moves the eye a few centimetres (the HUD stays put)
+            self._cam3.set_pose(x + 0.012 * ox, y + 0.012 * oy, self.psi_cam, V,
+                                self.zoom_manual)
             # self.ppm keeps its meaning for LINE WIDTHS only -- a perspective
             # view has no single px/m, so it is pinned to the px/m at
             # CHASE_PPM_REF_D and the widths come out like the 2-D view's.
@@ -1614,6 +1647,10 @@ class Renderer:
         self._draw_features()
         if self.cfg.show_skid and skid is not None:
             self._draw_skid(skid)
+        if not getattr(aux, 'paused', False):      # a pause freezes the smoke too
+            self.smoke.emit_from(aux)
+            self.smoke.step(self._dt_frame)
+        self._draw_smoke()
         self._ghost_tops = []
         if aux.ghosts:
             self._draw_ghosts(aux.ghosts)
@@ -1641,6 +1678,9 @@ class Renderer:
             self._draw_delta(aux)
         if aux.overlay:
             self._draw_overlay(aux.overlay)
+        res = getattr(aux, 'results', None)
+        if res:
+            self._draw_results(res)
         tut = getattr(aux, 'tutorial', None)
         if tut:
             self._draw_tutorial(tut)
@@ -2223,6 +2263,103 @@ class Renderer:
         if fl:
             col = C_FLASH.get(getattr(aux, 'flash_col', ''), C_HUD_TEXT)
             self._blit(fl, cx - self.f_val.size(fl)[0] / 2, y, self.f_val, col)
+
+    def _draw_smoke(self) -> None:
+        """The pool's live particles: grey discs that grow and fade, oldest
+        first, into whatever is under each one (the tarmac, the grass, a
+        kerb: its colour is read from the frame, so an old puff off the road
+        is not a tarmac-coloured blob). Plan view at the view's px/m; the
+        chase view scales each by its camera depth, culls those at or behind
+        the ground-near plane, and caps a puff's radius."""
+        sm = self.smoke
+        live = np.nonzero(sm.age < SMOKE_LIFE_S)[0]
+        if not len(live):
+            return
+        live = live[np.argsort(-sm.age[live])]          # oldest first
+        f = sm.age[live] / SMOKE_LIFE_S
+        rad_m = sm.r0[live] + 0.9 * sm.age[live]
+        P = np.column_stack([sm.x[live], sm.y[live]])
+        S = self.world_to_screen(P)
+        W, H = self.W, self.H
+        if self._cam3 is not None:
+            dep = self._cam3.ground_depth(P)
+            scale = np.where(dep > CHASE_GROUND_NEAR,
+                             self._cam3.fl / np.maximum(dep, CHASE_GROUND_NEAR), 0.0)
+        else:
+            scale = np.full(len(live), self.ppm)
+        r_cap = max(4, int(0.15 * H))
+        scr = self.screen
+        for (sx, sy), r_m, k, fr in zip(S, rad_m, scale, f):
+            if k <= 0.0:
+                continue
+            r = int(min(max(1.0, r_m * k), r_cap))
+            if not (-r < sx < W + r and -r < sy < H + r):
+                continue
+            px, py = int(min(max(sx, 0), W - 1)), int(min(max(sy, 0), H - 1))
+            bg = scr.get_at((px, py))
+            c = (int(C_SMOKE[0] + (bg[0] - C_SMOKE[0]) * fr),
+                 int(C_SMOKE[1] + (bg[1] - C_SMOKE[1]) * fr),
+                 int(C_SMOKE[2] + (bg[2] - C_SMOKE[2]) * fr))
+            pygame.draw.circle(scr, c, (int(sx), int(sy)), r)
+
+    def _draw_results(self, rc) -> None:
+        """The lap's results card (drive/results.py): the time, the delta to
+        the PB, the sectors in their colours, the place and the medal; a NEW
+        PB drops in with its header pulsing gold."""
+        from .results import drop, pulse
+        u = self.ui
+        age = float(rc.get('age', 0.0))
+        x0, y0, w0, h0 = (v * u for v in R_RESULTS)
+        if not rc.get('valid'):
+            h0 = 58 * u
+        y0 -= (1.0 - drop(age)) * (h0 + y0)
+        key = ('results', int(w0), int(h0))
+        panel = self._panels.get(key)
+        if panel is None:
+            panel = pygame.Surface((int(w0), int(h0)), pygame.SRCALPHA)
+            panel.fill((*C_HUD_BG, 225))
+            pygame.draw.rect(panel, (60, 64, 70, 230), panel.get_rect(), 1)
+            self._panels[key] = panel
+        self.screen.blit(panel, (int(x0), int(y0)))
+        pad = 10 * u
+        cx = x0 + w0 / 2
+        y = y0 + pad * 0.6
+        if rc.get('new_pb'):
+            p = int(round(pulse(age) * 4)) / 4.0          # 5 shades: the cache holds
+            col = tuple(int(a + (b - a) * p) for a, b in zip(C_HUD_TEXT, C_YELLOW))
+            s = 'NEW PB'
+        elif not rc.get('valid'):
+            col, s = C_HUD_DIM, 'LAP NOT COUNTED'
+        else:
+            col, s = C_HUD_DIM, 'LAP'
+        self._blit(s, cx - self.f_val.size(s)[0] / 2, y, self.f_val, col)
+        y += self.f_val.get_linesize()
+        t = str(rc.get('time', ''))
+        if not rc.get('valid'):
+            why = f"{t}   {rc.get('why', '')}"
+            self._blit(why, cx - self.f_lbl.size(why)[0] / 2, y, self.f_lbl, C_HUD_TEXT)
+            return
+        self._blit(t, cx - self.f_gear.size(t)[0] / 2, y, self.f_gear, C_HUD_TEXT)
+        y += self.f_gear.get_linesize()
+        d = str(rc.get('delta', ''))
+        dcol = {-1: C_GREEN, 1: C_BAR_BRK}.get(rc.get('delta_sign', 0), C_HUD_TEXT)
+        tail = '   '.join(v for v in (str(rc.get('pos', '')),
+                                      str(rc.get('medal', '')).upper()) if v)
+        wd, wt = self.f_val.size(d)[0], self.f_val.size(tail)[0]
+        xl = cx - (wd + (12 * u if tail else 0) + wt) / 2
+        self._blit(d, xl, y, self.f_val, dcol)
+        if tail:
+            self._blit(tail, xl + wd + 12 * u, y, self.f_val,
+                       C_MEDAL.get(str(rc.get('medal', '')), C_HUD_TEXT))
+        y += self.f_val.get_linesize()
+        secs = rc.get('sectors') or []
+        if secs:
+            ws = [self.f_lbl.size(s_)[0] for s_, _ in secs]
+            gap = 10 * u
+            xs = cx - (sum(ws) + gap * (len(ws) - 1)) / 2
+            for (s_, c_), w_ in zip(secs, ws):
+                self._blit(s_, xs, y, self.f_lbl, C_FLASH.get(c_, C_HUD_TEXT))
+                xs += w_ + gap
 
     def _wrap_px(self, text, font, w):
         """Word-wrap to `w` px; cached, the tutorial's text is the same every
@@ -2997,6 +3134,74 @@ def _demo_ctl(delta=0.06, throttle=0.85, brake=0.0):
     return c
 
 
+class SmokePool:
+    """Tyre smoke: a FIXED pool of `SMOKE_MAX` particles (x, y, age, start
+    radius), recycled oldest-first. `emit_from(aux)` adds at most SMOKE_EMIT a
+    frame at the contact patches of the tyres that slide; `step(dt)` ages
+    and drifts them. Deterministic (no random): the jitter is a hash of the
+    emit count."""
+
+    def __init__(self, n: int = SMOKE_MAX):
+        self.n = int(n)
+        self.x = np.zeros(self.n)
+        self.y = np.zeros(self.n)
+        self.age = np.full(self.n, np.inf)
+        self.r0 = np.zeros(self.n)
+        self.emitted = 0
+        self._rr = 0                               # round-robin start over the tyres
+
+    def live(self) -> int:
+        return int(np.count_nonzero(self.age < SMOKE_LIFE_S))
+
+    def slip(self, aux) -> list:
+        """Per wheel, 0..1: how hard it slides (0 below the thresholds)."""
+        V = float(getattr(aux, 'V', 0.0))
+        if V < SMOKE_V:
+            return []
+        k = np.abs(np.asarray(getattr(aux, 'kappa', np.zeros(4)), dtype=float))
+        a = np.abs(np.asarray(getattr(aux, 'alpha', np.zeros(4)), dtype=float))
+        s = np.maximum((k - SMOKE_KAPPA) / SMOKE_KAPPA, (a - SMOKE_ALPHA) / SMOKE_ALPHA)
+        return [float(min(max(v, 0.0), 1.0)) for v in s]
+
+    def emit_from(self, aux) -> int:
+        pts = list(getattr(aux, 'wheels_xy', None) or [])
+        sl = self.slip(aux)
+        new = 0
+        n = min(len(pts), len(sl))
+        order = [(self._rr + j) % n for j in range(n)] if n else []
+        self._rr = (self._rr + 1) % max(n, 1)   # the next frame starts at the next tyre
+        for j in order:
+            (wx, wy), sv = pts[j], sl[j]
+            if sv <= 0.0 or new >= SMOKE_EMIT:
+                continue
+            i = int(np.argmax(self.age))           # a dead one, else the oldest
+            h = (self.emitted * 2654435761) % 1000 / 1000.0
+            self.x[i] = wx + 0.3 * (h - 0.5)
+            self.y[i] = wy + 0.3 * (((h * 7.13) % 1.0) - 0.5)
+            self.age[i] = 0.0
+            self.r0[i] = 0.25 + 0.35 * sv
+            self.emitted += 1
+            new += 1
+        return new
+
+    def step(self, dt: float) -> None:
+        self.age += max(float(dt), 0.0)
+
+    def clear(self) -> None:
+        self.age[:] = np.inf
+
+
+def shake_offset(t: float, strength: float) -> tuple:
+    """The camera shake, in pixels at the base size: a deterministic mix of
+    three frequencies, at most SHAKE_PX; (0, 0) at strength 0."""
+    s = min(max(float(strength), 0.0), 1.0)
+    if s <= 0.0:
+        return 0.0, 0.0
+    ox = math.sin(71.0 * t) + 0.5 * math.sin(113.0 * t + 1.3)
+    oy = math.sin(89.0 * t + 0.7) + 0.5 * math.sin(131.0 * t)
+    return SHAKE_PX * s * ox / 1.5, SHAKE_PX * s * oy / 1.5
+
+
 def _demo_hud(V=28.0):
     Fz = np.array([1900.0, 3900.0, 1200.0, 2900.0])
     mu = np.ones(4)
@@ -3157,8 +3362,13 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
         rnd.update_camera(st_n, 1.0 / 60.0)
         #  the busiest time-trial frame: the PB and ghost 2, a FULL race
         #  grid (V22_GRID_BOTS, drive.RACE_GRID_MAX), all in view and
-        #  labelled, the delta and a flash
+        #  labelled, the delta and a flash -- and all four tyres smoking
+        #  (task 27: the pool stays full)
         ps = float(tr.psi[i])
+        aux.wheels_xy = [(px + dx * math.cos(ps) - dy * math.sin(ps),
+                          py + dx * math.sin(ps) + dy * math.cos(ps))
+                         for dx, dy in ((1.3, 0.7), (1.3, -0.7), (-1.2, 0.7), (-1.2, -0.7))]
+        aux.kappa = np.full(4, 0.35)
         aux.ghosts = [(px + dx * math.cos(ps) - dy * math.sin(ps),
                        py + dx * math.sin(ps) + dy * math.cos(ps), ps, col, lbl)
                       for dx, dy, col, lbl in _V22_GHOSTS]
@@ -3254,6 +3464,53 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
             and tut_counts['long'][1] == 0 and tut_counts['none'][0] < 10)
     rep('tutorial box drawn, fits R_TUTOR', ok_t,
         f"yellow px in / below the box: {tut_counts}")
+    #  task 27: the tyre smoke is pooled and only where a tyre slides; the
+    #  results card is drawn (and gone after its time); the shake is subtle
+    from types import SimpleNamespace
+    aux.kappa = np.zeros(4)
+    aux.wheels_xy = []
+    rep('V22 frame with the tyre smoke pool full', rnd.smoke.live() >= SMOKE_MAX // 2
+        and rnd.smoke.live() <= SMOKE_MAX, f'{rnd.smoke.live()} live of {SMOKE_MAX}')
+    sp = SmokePool()
+    calm = SimpleNamespace(V=28.0, kappa=np.zeros(4), alpha=np.zeros(4),
+                           wheels_xy=[(0.0, 0.0)] * 4)
+    slide = SimpleNamespace(V=28.0, kappa=np.array([0.0, 0.0, 0.4, 0.4]), alpha=np.zeros(4),
+                            wheels_xy=[(0.0, 0.0)] * 4)
+    n0 = sp.emit_from(calm)
+    n1 = sp.emit_from(slide)
+    for _ in range(400):
+        sp.emit_from(slide)
+        sp.step(1.0 / 60.0)
+    full = sp.live()
+    for _ in range(120):
+        sp.step(1.0 / 60.0)
+    rep('tyre smoke: none without slip, two sliding tyres two a frame, pooled, fades',
+        n0 == 0 and n1 == 2 and full <= SMOKE_MAX and sp.live() == 0,
+        f'{n1} a frame, {full} live at most of {SMOKE_MAX}, 0 after {SMOKE_LIFE_S} s')
+    aux_r = _demo_hud()
+    counts_r = {}
+    for tag, rc in (('pb', dict(time='1:00.900', valid=True, delta='-0.500', delta_sign=-1,
+                                sectors=[('S1 20.000', 'purple'), ('S2 20.300', 'green')],
+                                medal='gold', pos='P1', new_pb=True, age=1.0)),
+                    ('none', None)):
+        aux_r.results = rc
+        rnd.draw_frame(st_n, None, 0.0, _demo_ctl(), aux_r, sk2)
+        a_ = pygame.surfarray.pixels3d(rnd.screen)
+        x0_, y0_, w_, h_ = (int(v * rnd.ui) for v in R_RESULTS)
+        box = a_[x0_:x0_ + w_, y0_:y0_ + h_]
+        counts_r[tag] = tuple(int(((box[..., 0] == c[0]) & (box[..., 1] == c[1])
+                                   & (box[..., 2] == c[2])).sum())
+                              for c in (C_PURPLE, C_GREEN, C_MEDAL['gold']))
+        del box, a_                        # the pixel view locks the surface
+    aux_r.results = None
+    rep('results card: the sectors in their colours, the medal, nothing without it',
+        all(v > 10 for v in counts_r['pb']) and counts_r['none'][0] < 10,
+        f"purple / green / gold px {counts_r['pb']}, without {counts_r['none']}")
+    offs = [shake_offset(k / 60.0, 1.0) for k in range(600)]
+    mx = max(max(abs(a), abs(b)) for a, b in offs)
+    rep('camera shake: subtle (<= SHAKE_PX), moving, none at strength 0',
+        0.5 < mx <= SHAKE_PX + 1e-9 and shake_offset(1.0, 0.0) == (0.0, 0.0)
+        and len({round(a, 3) for a, _ in offs}) > 100, f'max {mx:.2f} px')
     hit = rnd._txt_hits / max(rnd._txt_hits + rnd._txt_miss, 1)
     rep('text cache hit rate', hit > 0.95,
         f'{rnd._txt_hits} hits / {rnd._txt_miss} misses = {hit * 100:.2f}%')

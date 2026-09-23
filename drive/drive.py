@@ -364,10 +364,11 @@ class Settings:
     wet: str = "patch"            # SURFACE_MODES
     camera: str = "car_up"        # CAMERA_MODES
     sound: str = SOUND_DEFAULT    # SOUND_MODES -> audio.CarSound volume
+    shake: bool = True            # the kerb / off-road camera shake (task 27)
     path: str = field(default=SETTINGS_PATH, repr=False, compare=False)
 
     KEYS = ("track", "car", "ballast", "ballast_at", "engine", "gearbox",
-            "abs", "tc", "steer_aid", "wet", "camera", "sound")
+            "abs", "tc", "steer_aid", "wet", "camera", "sound", "shake")
 
     def clamp(self) -> "Settings":
         if self.track not in trk.TRACKS:
@@ -393,6 +394,7 @@ class Settings:
         self.abs = bool(self.abs)
         self.tc = bool(self.tc)
         self.steer_aid = bool(self.steer_aid)
+        self.shake = bool(self.shake)
         return self
 
     @property
@@ -546,6 +548,8 @@ class Settings:
             self.wet = step(SURFACE_MODES, self.wet)
         elif key == "camera":
             self.camera = step(CAMERA_MODES, self.camera)
+        elif key == "shake":
+            self.shake = not self.shake
 
 
 # The settings whose change is a new session (a new map, or a new CarSpec:
@@ -1333,6 +1337,8 @@ class Sim:
         self.challenge_end = False
         self.challenge_build = None
         self.garage_lib = None             # the garage library: a bot's own build (task 26)
+        self._results = None               # the last lap's results card (drive/results.py)
+        self._results_n = 0
 
         self._bind_input()
         self._sample_surfaces()
@@ -1607,6 +1613,8 @@ class Sim:
         if not to_checkpoint:
             self.lap.reset()
             self.skid.clear()
+            if self.renderer is not None and hasattr(self.renderer, "smoke"):
+                self.renderer.smoke.clear()
         if self.seed_rows is not None:
             self.seed_rows = None          # a reset is not a lap; stays armed
             self._seed_note("seed lap: discarded (reset)"
@@ -1674,7 +1682,9 @@ class Sim:
                 hud = self.hud_data()
                 hud.paused = self.paused
                 hud.time_scale = self.time_scale
-                self.renderer.update_camera(self.veh, dt_wall)
+                self.renderer.update_camera(self.veh, dt_wall,
+                                            shake=(hud.shake if (self.settings.shake
+                                                                 and not self.paused) else 0.0))
                 self.renderer.draw_frame(self.veh, self.pose_prev,
                                          self.alpha_render, self.ctl,
                                          hud, self.skid)
@@ -1763,7 +1773,7 @@ class Sim:
         s = self.settings
         s.cycle(key, d)
         restart = False
-        if self.recorder is not None and key not in ("sound", "camera"):
+        if self.recorder is not None and key not in ("sound", "camera", "shake"):
             self.recorder.discard(f"{key} changed")   # the lap cannot be replayed
             self.recorder.retarget(s, self._pending)   # the engine is in the class,
             #                                             the aids go with the lap
@@ -1999,7 +2009,9 @@ class Sim:
                 (f"{'Steer aid':<11s}{'On' if s.steer_aid else 'Off'}", "set:steer_aid"),
                 (f"{'Surface':<11s}{SURFACE_LABELS[s.wet]}{mark['wet']}", "set:wet"),
                 (f"{'Camera':<11s}{CAMERA_LABELS[s.camera]}", "set:camera"),
-                (f"{'Sound':<11s}{SOUND_LABELS[s.sound]}", "set:sound")]
+                (f"{'Sound':<11s}{SOUND_LABELS[s.sound]}", "set:sound"),
+                (f"{'Shake':<11s}{'On' if s.shake else 'Off'}  (camera, kerbs / off road)",
+                 "set:shake")]
         if self.has_garage:
             rows.append(("Garage (3D panel editor)", "garage"))
         rows.append(("Back", "settings_back"))
@@ -2387,6 +2399,20 @@ class Sim:
         self._rec_note(text, secs)
         self._rec_tag_until = self._rec_msg_until
         print(text)
+        if res.get("save_error") and res.get("pos") is not None:
+            return      # the filing thread's repeat of a lap already carded: the note only
+        #  the results card and the chime (drive/results.py, audio.py; task 27)
+        try:
+            from .results import card
+            self._results = card(res, self.recorder.book if self.recorder else None)
+            self._results_n = self.n
+            if self.audio is not None:
+                if res.get("medal_best"):          # a new best medal is always a new PB
+                    self.audio.chime("medal")      # too: the rarer one sounds
+                elif self._results.get("new_pb"):
+                    self.audio.chime("pb")
+        except Exception as exc:           # noqa: BLE001 -- a card never stops the car
+            print(f"results: {type(exc).__name__}: {exc}")
 
     def _lap_medal(self, res: dict):
         """(the medal a valid lap earned or None, True when it is the class's
@@ -3133,6 +3159,28 @@ class Sim:
             f = gs.flash_now(self)
             if f:
                 d["sector_flash"], d["flash_col"] = f
+        if self._results is not None:      # the lap's results card (task 27)
+            from .results import view
+            d["results"] = view(self._results, (self.n - self._results_n) * self.dt)
+            if d["results"] is None:
+                self._results = None
+        #  the tyre smoke's contact patches and the camera shake (task 27): part
+        #  of the car off the ribbon (a kerb, the edge) shakes a little, all of
+        #  it off the road more, both with speed
+        wxy = d["wheels_xy"] = self.wheel_world()
+        off = 4 - sum(1 for w in self.on_track4 if w)
+        kerb = 0
+        if off < 4 and hypot(v.u, v.v) > 1.0:
+            #  a wheel ON the ribbon but on a kerb strip: the kerbs are painted
+            #  on the corners' inner 0.8 m (render._draw_kerbs' own rule)
+            hw = 0.5 * self.track.width
+            for (wx, wy), on in zip(wxy, self.on_track4):
+                if on:
+                    _s, n_, k_, _p, _i = trk.project(self.track, wx, wy)
+                    if abs(k_) > 1.0 / 60.0 and n_ * k_ > 0.0 and abs(n_) > hw - 0.8:
+                        kerb += 1
+        d["shake"] = ((1.0 if off == 4 else (0.35 if off + kerb > 0 else 0.0))
+                      * min(hypot(v.u, v.v) / 20.0, 1.0))
         if self.tutorial is not None:      # the tutorial's box (drive/tutorial.py)
             d["tutorial"] = self.tutorial.overlay()
         if self.challenge is not None and not d.get("tutorial"):

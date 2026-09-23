@@ -84,6 +84,7 @@ saved). Scripted and headless runs never read the file.
 | Surface | Dry everywhere / Dry, wet patches / Wet everywhere (`--wet`) | restarts the session |
 | Camera | Car up / **Chase (3D)** / World up (`--camera`, `C`) | at once |
 | Sound | Off / Low / Medium / High (`--sound`) | at once |
+| Shake | On / Off: the camera shakes a little on the kerbs and more off the road | at once |
 | Garage | opens the 3D panel editor | |
 
 **Engine.** The real car is a 75 hp 1.2 that takes 15 s to 100 km/h, and from
@@ -216,6 +217,21 @@ keeps the car you just built, and `--build` / `--wing` win at launch. The
 switch never touches the garage's own file (`runs/garage_design.json`), so
 the car on the ramp is still there. The screen is never shown to a script, a
 headless run or `--ml-drive`.
+
+### The results card, the chime, the smoke
+
+When a timed lap closes a **results card** drops in at the top centre for six
+seconds, over the drive (a time trial is lap after lap, so it never stops the
+car): the lap time, the delta to the PB it was driven against, each sector in
+its colour (purple = the class's best ever, green = better than that PB lap's,
+red = slower), its place in the top 5 and its medal. A **new PB** drops in
+with *NEW PB* pulsing gold and a four-note chime; a new best medal has a
+three-note one (both synthesised, like the engine: no sound files). A lap
+that does not count gets a short card that says why. A tyre that slides
+throws **smoke** off its contact patch (a fixed pool, so a long slide costs no
+more than a short one), and the camera **shakes** a little with a wheel on a
+kerb or over the edge, more off the road (Settings > *Shake* turns it off).
+A pause freezes both.
 
 ### Ghosts and the live delta
 
@@ -969,6 +985,7 @@ drive/
                 (data/challenges/*.json)
   race_grid.py  the race grid's slots (D3: name, colour, checkpoint, build) and a bot's own car
   swarm_panel.py the swarm window's progress panel and the page's free values
+  results.py    the lap's results card (time, delta, sectors, place, medal, NEW PB)
   telemetry.py  fixed-schema CSV + sidecar json
   plots.py      overview, g-g, track map, laps, A/B compare
   drive.py      main loop, settings, garage <-> drive session loop, CLI,

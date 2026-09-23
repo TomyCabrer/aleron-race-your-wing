@@ -87,6 +87,34 @@ TAU_SQUEAL_DOWN = 0.15  # s
 TAU_LEVEL = 0.05        # s  wind / grass
 
 
+#: the time trial's chimes (task 27), procedural like everything here: a
+#: rising arpeggio of decaying sines (a touch of the octave), NOTE_S apart --
+#: a NEW PB is four notes to the octave, a new best MEDAL three
+CHIMES = {"pb": (659.25, 830.61, 987.77, 1318.51),     # E5 G#5 B5 E6
+          "medal": (523.25, 659.25, 783.99)}          # C5 E5 G5
+NOTE_S = 0.09           # s between the notes
+CHIME_TAIL_S = 0.50     # s the last note rings
+CHIME_DECAY_S = 0.16    # s  each note's decay
+A_CHIME = 0.40          # peak level, under the engine's A_ENGINE
+CHIME_CHANNEL = 1       # the engine streams on channel 0
+
+
+def chime_wave(kind: str, rate: int = RATE) -> np.ndarray:
+    """The chime as float samples in [-A_CHIME, A_CHIME]. Pure."""
+    notes = CHIMES.get(kind) or CHIMES["medal"]
+    n = int(round((NOTE_S * (len(notes) - 1) + CHIME_TAIL_S) * rate))
+    t = np.arange(n) / float(rate)
+    y = np.zeros(n)
+    for k, f in enumerate(notes):
+        t0 = k * NOTE_S
+        m = t >= t0
+        tt = t[m] - t0
+        env = (1.0 - np.exp(-tt / 0.004)) * np.exp(-tt / CHIME_DECAY_S)
+        y[m] += (np.sin(2.0 * np.pi * f * tt) + 0.3 * np.sin(4.0 * np.pi * f * tt)) * env
+    peak = float(np.max(np.abs(y))) or 1.0
+    return y * (A_CHIME / peak)
+
+
 def _clip01(x: float) -> float:
     return 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)
 
@@ -301,6 +329,29 @@ class CarSound:
     # -- controls --------------------------------------------------------
     def set_volume(self, volume: float) -> None:
         self.volume = float(volume)
+
+    def chime(self, kind: str) -> bool:
+        """Play a chime (`CHIMES`) on its own channel, over the engine, at
+        the session's volume. False when there is no device."""
+        if not self.ok:
+            return False
+        try:
+            pg = self._pg
+            if pg.mixer.get_num_channels() <= CHIME_CHANNEL:
+                pg.mixer.set_num_channels(CHIME_CHANNEL + 1)
+            y = chime_wave(kind, self.rate) * float(self.volume)
+            pcm = (np.clip(y, -1.0, 1.0) * 32767.0).astype(np.int16)
+            if self.nch > 1:
+                pcm = np.repeat(pcm[:, None], self.nch, axis=1)
+            if not self._signed:
+                pcm = (pcm.astype(np.int32) + 32768).astype(np.uint16)
+            snd = pg.mixer.Sound(buffer=pcm.tobytes())
+            self._keep.append(snd)
+            pg.mixer.Channel(CHIME_CHANNEL).play(snd)
+            return True
+        except Exception as exc:          # a chime never takes the sound down
+            self.error = f"chime: {type(exc).__name__}: {exc}"
+            return False
 
     def stop(self) -> None:
         if not self.ok:
@@ -542,6 +593,18 @@ def self_check(verbose: bool = True, wav_path: str | None = None) -> bool:
             print(f"  SKIP  {'streaming (dummy driver)':<46s} {got}")
     else:
         chk("streams through pygame.mixer (dummy driver)", stream_ok, got)
+
+    # 8. the time trial's chimes (task 27)
+    pb, md = chime_wave("pb", rate), chime_wave("medal", rate)
+    seg = int(NOTE_S * rate)
+    f1 = _peak_hz(pb[:seg], rate, 3000.0)
+    tail = float(np.max(np.abs(pb[-int(0.02 * rate):])))
+    chk("chime: rising notes, no clipping, it rings out",
+        abs(f1 - CHIMES["pb"][0]) < 15.0 and 0.0 < float(np.max(np.abs(pb))) <= A_CHIME + 1e-9
+        and tail < 0.1 * A_CHIME and len(md) < len(pb)
+        and _peak_hz(pb[3 * seg:4 * seg], rate, 3000.0) > f1,
+        f"first note {f1:.0f} Hz, peak {np.max(np.abs(pb)):.2f}, tail {tail:.3f}, "
+        f"{len(pb) / rate:.2f} s / {len(md) / rate:.2f} s")
 
     # 7. the demo file
     if wav_path is None:
