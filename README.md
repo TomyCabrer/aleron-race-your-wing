@@ -85,6 +85,7 @@ saved). Scripted and headless runs never read the file.
 | Camera | Car up / **Chase (3D)** / World up (`--camera`, `C`) | at once |
 | Sound | Off / Low / Medium / High (`--sound`) | at once |
 | Shake | On / Off: the camera shakes a little on the kerbs and more off the road | at once |
+| Graphics | Full / Low detail (a slower PC) / Classic (the plain look, no scenery) | at once |
 | Garage | opens the 3D panel editor | |
 
 **Engine.** The real car is a 75 hp 1.2 that takes 15 s to 100 km/h, and from
@@ -233,10 +234,41 @@ more than a short one), and the camera **shakes** a little with a wheel on a
 kerb or over the edge, more off the road (Settings > *Shake* turns it off).
 A pause freezes both.
 
+### The look and the sound
+
+Every map sits in a landscape now: a sky with clouds over a tree line and
+distant hills, grass with mowing stripes, verges, gravel traps outside the
+slow corners and painted run-off outside the fast ones, raised kerbs (at the
+apex and the exit), a rubbered racing line, standing water that reads as
+water, grid boxes where the race actually lines up, and haze toward the
+horizon. Round the circuit: tree belts, tyre walls and armco with made-up
+sponsor boards, grandstands, the pit building and race-control tower, the
+start gantry, brake boards before the slow corners; the open map is a test
+centre (hangars, a tower, a windsock), the dragstrip has its walls, start
+lights and timing boards. It is all laid out from the track's own shape, so
+a new track gets it too, and nothing solid is nearer than 30 m to the road
+(the car cannot hit any of it -- the physics has no scenery). The car is
+drawn in its own body style (hatch, roadster, saloon; generic shapes), rolls
+with the physics' roll angle, steers its front wheels, spins its rims, lights
+its brake lamps and casts a soft shadow; the chase camera follows on a
+spring and looks a little into the corners. Tyres smoke past the grip peak
+(not before: a well-driven corner is clean), throw dust off the road and
+spray on the wet. Settings > *Graphics* trades the detail for speed, or goes
+back to the classic plain look.
+
+The engine is built from each cylinder's firing through an exhaust, per car
+(the Corsa's small four, the MX-5's rorty four, the 540i's V8), with pops on
+a lift from high revs, one clunk per shift and the limiter's stutter. The
+tyres scrub before the limit and squeal past it, the kerbs rumble, gravel
+crunches, the wet hisses, the wind rises with speed, the active wing's
+actuator whines while a panel moves, and a sector chimes as it flashes. All
+synthesised, no sound files.
+
 ### Ghosts and the live delta
 
 From the moment you cross the line two ghosts run your lap with you, as flat
-silhouettes on the road (in the plan views and the chase view): **PB**, your
+silhouettes on the road in the plan views and translucent cars in the chase
+view: **PB**, your
 best lap in the class, and **ghost 2** — by default the **reference bot**,
 the lap the class's author medal was set with; the pre-race page's *Ghost 2*
 row (`←` `→`) changes it to none or your P2 to P5 (P1 is the PB). They
@@ -967,8 +999,14 @@ drive/
                 surfaces, world-space areas
   input.py      keyboard and gamepad (PS5 layout, hot-plug, rumble), ramps, aid,
                 gearbox modes
-  render.py     pygame plan views, the 3-D chase camera, and the HUD
-  audio.py      procedural engine / tyre / wind / grass sound, streamed via pygame.mixer
+  render.py     pygame plan views, the 3-D chase camera, the car, and the HUD
+  scenery.py    the ground beside the road (verges, traps, run-off, kerbs, paint),
+                and what each wheel is on
+  world.py      the sky, the landscape, the ground and the haze; the track layers
+  props.py      trees, barriers, stands, buildings, gantry, boards
+  fx.py         tyre smoke, dust, spray and the chase camera's jolt
+  audio.py      procedural engine / tyre / road / wind sound per car, streamed
+                via pygame.mixer
   garage.py     software-3D editor: place the flank panel, closed-form readout
   menu.py       pause / help / settings menu (ESC, OPTIONS) shared by the drive and the garage
   records.py    lap records: top 5 per class, the lap's trace, its controls log and

@@ -804,12 +804,13 @@ def group_G(quick):
         import contextlib, io
         with contextlib.redirect_stdout(io.StringIO()):
             ok = AU.self_check(verbose=False, wav_path=os.path.join(tmp, "audio_demo.wav"))
-        got = "10 checks (continuity, spectrum, squeal band, silence, speed, streaming, demo)"
+        got = ("50 checks (engine per car, tyres, road, air, cues, the lap chime, junk "
+               "HUD values, silence, speed, streaming, demos)")
     except Exception as exc:
         ok, got = False, f"{type(exc).__name__}: {exc}"
     chk("G", "car sound: synth + streaming self-check", "all pass", got, ok, hard=False,
         secs=time.time() - t0,
-        note="drive/audio.py: procedural engine / tyre / wind / grass sound, "
+        note="drive/audio.py: procedural engine / tyre / road / air sound, "
              "render-loop consumer of HudData only; never an input to the physics")
 
 
@@ -891,7 +892,8 @@ MODULES = ("tyre", "powertrain", "track", "telemetry", "vehicle", "input",
            "aero.xfoil", "aero.blend", "aero.vlm", "aero.wing", "aero.optimize",
            "aero.library", "aero.screen", "aero.section", "aero.mission",
            "records", "prerace", "medals", "ghosts", "progress", "tutorial",
-           "wing_tutorial", "challenges", "race_grid", "swarm_panel", "results")
+           "wing_tutorial", "challenges", "race_grid", "swarm_panel", "results",
+           "scenery", "world", "props", "fx")
 
 
 def group_M():

@@ -342,6 +342,12 @@ SOUND_MODES = ("off", "low", "mid", "high")
 SOUND_VOLUME = {"off": 0.0, "low": 0.3, "mid": 0.6, "high": 1.0}
 SOUND_LABELS = {"off": "Off", "low": "Low", "mid": "Medium", "high": "High"}
 SOUND_DEFAULT = "mid"
+# The Graphics setting: render.look_config -> the world round the road, the
+# props and the particles (drive/world.py, props.py, fx.py). 'classic' is the
+# plain look every screenshot before them shows; renderer config only.
+GRAPHICS_MODES = ("full", "low", "classic")
+GRAPHICS_LABELS = {"full": "Full", "low": "Low detail", "classic": "Classic (no scenery)"}
+GRAPHICS_DEFAULT = "full"
 
 
 @dataclass
@@ -365,10 +371,11 @@ class Settings:
     camera: str = "car_up"        # CAMERA_MODES
     sound: str = SOUND_DEFAULT    # SOUND_MODES -> audio.CarSound volume
     shake: bool = True            # the kerb / off-road camera shake (task 27)
+    graphics: str = GRAPHICS_DEFAULT   # GRAPHICS_MODES -> render.look_config
     path: str = field(default=SETTINGS_PATH, repr=False, compare=False)
 
     KEYS = ("track", "car", "ballast", "ballast_at", "engine", "gearbox",
-            "abs", "tc", "steer_aid", "wet", "camera", "sound", "shake")
+            "abs", "tc", "steer_aid", "wet", "camera", "sound", "shake", "graphics")
 
     def clamp(self) -> "Settings":
         if self.track not in trk.TRACKS:
@@ -395,6 +402,8 @@ class Settings:
         self.tc = bool(self.tc)
         self.steer_aid = bool(self.steer_aid)
         self.shake = bool(self.shake)
+        if self.graphics not in GRAPHICS_MODES:
+            self.graphics = GRAPHICS_DEFAULT
         return self
 
     @property
@@ -550,6 +559,8 @@ class Settings:
             self.camera = step(CAMERA_MODES, self.camera)
         elif key == "shake":
             self.shake = not self.shake
+        elif key == "graphics":
+            self.graphics = step(GRAPHICS_MODES, self.graphics)
 
 
 # The settings whose change is a new session (a new map, or a new CarSpec:
@@ -1773,7 +1784,7 @@ class Sim:
         s = self.settings
         s.cycle(key, d)
         restart = False
-        if self.recorder is not None and key not in ("sound", "camera", "shake"):
+        if self.recorder is not None and key not in ("sound", "camera", "shake", "graphics"):
             self.recorder.discard(f"{key} changed")   # the lap cannot be replayed
             self.recorder.retarget(s, self._pending)   # the engine is in the class,
             #                                             the aids go with the lap
@@ -1802,6 +1813,10 @@ class Sim:
         elif key == "camera":
             if self.renderer is not None:
                 self.renderer.cfg.mode = s.camera
+        elif key == "graphics":
+            sl = getattr(self.renderer, "set_look", None)
+            if sl is not None:
+                sl(s.graphics)
         if restart:
             self._pending.clear()      # this value IS the next session's
         self._save_settings()
@@ -2011,7 +2026,8 @@ class Sim:
                 (f"{'Camera':<11s}{CAMERA_LABELS[s.camera]}", "set:camera"),
                 (f"{'Sound':<11s}{SOUND_LABELS[s.sound]}", "set:sound"),
                 (f"{'Shake':<11s}{'On' if s.shake else 'Off'}  (camera, kerbs / off road)",
-                 "set:shake")]
+                 "set:shake"),
+                (f"{'Graphics':<11s}{GRAPHICS_LABELS[s.graphics]}", "set:graphics")]
         if self.has_garage:
             rows.append(("Garage (3D panel editor)", "garage"))
         rows.append(("Back", "settings_back"))
@@ -3169,16 +3185,34 @@ class Sim:
         #  it off the road more, both with speed
         wxy = d["wheels_xy"] = self.wheel_world()
         off = 4 - sum(1 for w in self.on_track4 if w)
+        #  what each wheel is on -- 'tarmac' | 'wet' | 'kerb' | 'grass' |
+        #  'gravel' (drive/scenery.py, read off the SAME tables the renderer
+        #  draws the kerbs and the traps from) -- for the particles, the
+        #  sound and the shake below; and which car, for the engine's sound.
+        #  Render loop only: the physics never reads either.
+        d["car_key"] = str(self.settings.car)
+        scen = bool(getattr(getattr(self.renderer, "cfg", None), "scenery", False))
+        try:
+            from .scenery import wheel_surfaces
+            d["surf4"] = wheel_surfaces(self.track, wxy, self.on_track4, self.mu,
+                                        scenery=scen)
+        except Exception:                  # noqa: BLE001 -- a look, never a stop
+            d["surf4"] = None
         kerb = 0
         if off < 4 and hypot(v.u, v.v) > 1.0:
-            #  a wheel ON the ribbon but on a kerb strip: the kerbs are painted
-            #  on the corners' inner 0.8 m (render._draw_kerbs' own rule)
-            hw = 0.5 * self.track.width
-            for (wx, wy), on in zip(wxy, self.on_track4):
-                if on:
-                    _s, n_, k_, _p, _i = trk.project(self.track, wx, wy)
-                    if abs(k_) > 1.0 / 60.0 and n_ * k_ > 0.0 and abs(n_) > hw - 0.8:
-                        kerb += 1
+            #  a wheel ON the ribbon but on a kerb (the kerbs are paint on the
+            #  ribbon): the drawn kerbs, apex and exit, via surf4; without it
+            #  the corners' inner 0.8 m, render._draw_kerbs' own rule
+            if d["surf4"] is not None:
+                kerb = sum(1 for sf, on in zip(d["surf4"], self.on_track4)
+                           if on and sf == "kerb")
+            else:
+                hw = 0.5 * self.track.width
+                for (wx, wy), on in zip(wxy, self.on_track4):
+                    if on:
+                        _s, n_, k_, _p, _i = trk.project(self.track, wx, wy)
+                        if abs(k_) > 1.0 / 60.0 and n_ * k_ > 0.0 and abs(n_) > hw - 0.8:
+                            kerb += 1
         d["shake"] = ((1.0 if off == 4 else (0.35 if off + kerb > 0 else 0.0))
                       * min(hypot(v.u, v.v) / 20.0, 1.0))
         if self.tutorial is not None:      # the tutorial's box (drive/tutorial.py)
@@ -7105,7 +7139,8 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
             from . import render as rnd
             w, h = (int(v) for v in opts.size.lower().split("x"))
             rnd.set_car(car)               # the HUD's %mg and the g-g envelope
-            cfgv = rnd.ViewConfig(size=(w, h), fps=opts.fps, mode=settings.camera)
+            cfgv = rnd.ViewConfig(size=(w, h), fps=opts.fps, mode=settings.camera,
+                                  **rnd.look_config(settings.graphics))
             renderer = rnd.Renderer(cfgv, tr,
                                     headless=(opts.render == "offscreen"
                                               or opts.headless))
@@ -7252,6 +7287,11 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
           f"wing {opts.wing} x_w {opts.wing_x:+.2f} h_w {opts.wing_h:.2f}")
     if renderer is not None and opts.render != "offscreen" and not opts.headless:
         sim.sound_enabled = True
+        try:                               # the scipy.signal import, off the frame:
+            from .audio import warm_up     # turning the sound on later never stalls
+            warm_up()
+        except Exception:                  # noqa: BLE001
+            pass
         sim._audio_apply()
     if offer_now:
         sim.open_tutorial_offer()          # the first launch: WELCOME

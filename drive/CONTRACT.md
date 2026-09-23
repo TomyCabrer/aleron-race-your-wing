@@ -39,14 +39,18 @@ from the repo root.
 | `drive/vehicle.py` | EOM, load transfer, roll, aero+wing, integrator | `tyre`, `powertrain`, `corsa_c`, `cars` |
 | `drive/track.py` | track geometry, projection, surfaces | numpy |
 | `drive/input.py` | keyboard/gamepad → `Controls` | pygame |
-| `drive/render.py` | pygame drawing + HUD | `track`, `qss`, pygame |
+| `drive/render.py` | pygame drawing + HUD; the chase camera and the 3-D car (a body STYLE per fitted car: hatch / roadster / saloon, generic shapes); `look_config` / `Renderer.set_look` (the Graphics setting) | `track`, `qss`, pygame; `world`, `props`, `fx` inside `Renderer` (built when `ViewConfig.scenery` / `effects`) |
+| `drive/scenery.py` | the ground beside the road, laid out from the track's own geometry (a generated track gets it too): verges, gravel traps (slow corners), painted run-off (fast ones), apex + exit kerbs, the racing line, paint (grid boxes at `race_grid`'s slots, sector bars, the dragstrip's lane / numerals), all within 24 m of the edge; `wheel_surfaces(track, pts, on_track4, mu4, scenery=)` -> per wheel `'tarmac' \| 'wet' \| 'kerb' \| 'grass' \| 'gravel'`, read off the SAME tables the drawing uses. Never read by the physics | `track`, numpy |
+| `drive/world.py` | the look's backdrop and ground: sky + a per-map panorama (clouds, ridges, a tree line; scrolled by the chase camera's VIEW heading), grass with mowing stripes, the dressing from `scenery`, detail ON the tarmac (rubber, repairs, water, inset lines, raised kerbs), the horizon haze; the chase view's track layers batched (one projection a layer). The SHARED look: `SUN_DIR`, `HAZE_RGB`, `haze_factor`, `hazed`, `HAZE_LAND` | numpy, pygame, `scenery`; `render` only lazily (it is handed the renderer) |
+| `drive/props.py` | the solid things round the road: trees, tyre walls / armco with fictional boards, catch fences, stands, the pit building and tower, the start gantry, brake boards, marshal posts, masts; per-map themes, generic from the geometry; every solid prop >= 30 m from the edge (the car has no collision), thin exceptions justified in its docstring. Plan footprints and a pre-lit chase soup + tree sprites, split at the car's depth | numpy, pygame, `world`; `render` only lazily |
+| `drive/fx.py` | the particles -- tyre smoke past the grip peak (a per-car onset), dust off the road, spray on wet -- in one fixed pool (`POOL_N`), and the chase view's surface-aware camera jolt; a consumer of `HudData` (`surf4`, `wheels_xy`, `car_key`), never an input | numpy, pygame, `world`; `render` only lazily |
 | `drive/telemetry.py` | CSV logging | csv |
 | `drive/plots.py` | matplotlib post-run plots (Agg) | matplotlib, numpy |
 | `drive/garage.py` | 3D garage: `CarBuild` (three wing slots) -> `VehicleConfig` kwargs and the fitted wings' mass; the MISSION page and the DESIGN navigator (`DESIGN_TREE`: airfoil / endplate / wing / results, four stages each -- the criterion WEIGHTS are asked on the screening step, and the design box is a BAND table). The navigator GATES: a step whose predecessor is unfinished cannot be selected at all, by key or by click, and the refusal quotes the reason. Every page takes the MOUSE as well as the keyboard. Plus the airfoil and library pages | `corsa_c`, `cars`, `crossover`, `input`, `menu`, `garage_ui`, `aero`, `track` (`make_track`, for the mission's circuit), `vehicle` (the two aero dataclasses only), pygame |
 | `drive/garage_ui.py` | widget kit for the garage pages (params, lists, plots, prompt) | pygame, numpy |
 | `drive/aero/` | wing-design physics: sections, panel method, polars (XFOIL / estimate), vortex lattice, GP-BO, the library, and the three-step design procedure -- `mission.py` (the lap a wing is for), `screen.py` (the seven weighted criteria the library is ranked on), `section.py` (the aerofoil designed in 2-D against it), `wing.py` (the planform), `blend.py` (how the wing and its end plates meet) | numpy, scipy, the `xfoil` binary if present; `mission.py` alone also imports `corsa_c` and `qss` |
 | `drive/menu.py` | pause / help menu overlay (ESC, OPTIONS); pure UI | pygame only |
-| `drive/audio.py` | procedural car sound: `Synth` (numpy) + `CarSound` (one pygame.mixer channel); a render-loop consumer of `HudData`, never an input | numpy, pygame |
+| `drive/audio.py` | procedural car sound: `Synth` (numpy) + `CarSound` (one pygame.mixer channel, stereo when the mixer grants it; task 27's chime on channel 1); an engine PROFILE per car (`HudData.car_key`); a render-loop consumer of `HudData`, never an input | numpy, pygame; `scipy.signal` optional, imported off-frame by `warm_up` (its fast path uses scipy's private `_sigtools._linear_filter`, checked for exact equality with `lfilter` at import, else the public one); its self-check imports `render.frame_budget_verdict` lazily (the `garage` exception) |
 | `drive/records.py` | lap records: the class key `track\|car\|engine\|surface`, `RecordBook` (top 5 per class, `runs/records/<class>.json`, best sectors, best medal, `last_builds.json`), `LapRecorder` (the `Sim` hooks: controls log, 50 Hz trace, the lap's exact start state), `resimulate` (a lap re-driven from its log, bit for bit) | numpy; `vehicle`, `powertrain`, `cars`, `corsa_c` (dataclass registry only); `drive.drive` / `track` lazily inside `resimulate` and the self-check. Never pygame, never `drive.ml` |
 | `drive/prerace.py` | the pre-race (TIME TRIAL) page's content: `PreRace` rows and help sections from a `RecordBook`, the medal table and the library's builds; `wanted(opts, settings)` (never a script, headless, `--ml-drive`, offscreen, the dragstrip); the PICK page rows. Pure UI logic: the `Sim` owns the menu and dispatches | `records`; `medals` lazily. Never pygame |
 | `drive/medals.py` | medal times per class (plan D4): author = the best valid, spin-free, full lap a reference driver sets headless in the class's STOCK car (`LapDriver` at margins 0.90 / 0.80 / 0.70 / 0.60, the `drive.ml` anchor, every bundled checkpoint for that car + track; aids off and on), gold / silver / bronze = author x 1.02 / 1.06 / 1.12. Owns `drive/data/medals.json` (`--build`) and `drive/data/reference_laps.json` (the author laps' 20 Hz traces, task 22's reference ghost). `targets`, `medal_for`, `reference_trace`; staleness by a hash of the track definitions, car specs and engine modes | numpy, `records` at module level; `drive.drive`, `track`, `cars` lazily; `drive.ml` only in the build's workers. Never pygame |
@@ -982,8 +986,15 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
 
 * `Renderer(cfg: ViewConfig, track, headless=False)` with `update_camera`,
   `draw_frame`, `present`, `screenshot`, `frame_ms`.
-* The tarmac ribbon is **ONE concave polygon** (0.58 ms) — never per-quad
-  tessellation (20.4 ms, misses 60 fps).
+* The tarmac ribbon is **ONE concave polygon per visible run** (0.58 ms) —
+  never per-quad tessellation (20.4 ms, misses 60 fps). With the world on
+  (`drive/world.py`) a run's verge is one more polygon under it, a long run
+  is decimated where the curve and the distance allow, and the chase view
+  cuts it at a few camera depths into pieces that overlap by one sample (so
+  no seam shows); every chase track layer is projected in one call, and only
+  what crosses the near plane meets `Chase3D`'s clipper. That batching made
+  the chase frame FASTER with all of the look on (6.1 ms against 9.5 over the
+  standard scenes, worst 8.3 against 17.6).
 * Skid marks capped at 600 visible segments by strided subsampling.
 * Tyre-force and wing-force arrows drawn at the **same** px/N. The wing is
   63–227 N against a 9908 N car and must look that small.
@@ -999,8 +1010,11 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
   '' / 0): the plan-view panel is drawn at `aux.x_w`, not at a constant, so a
   garage-built car shows its panel where the physics has it.
 * `HudData.ghosts` (default `[]`, tuples `(x, y, psi, (r, g, b))`) are other
-  cars drawn as flat GROUND silhouettes (`_gpoly`, so they lie on the road in
-  chase mode too) after the skid layer and BEFORE the car; `HudData.overlay`
+  cars drawn as flat GROUND silhouettes (`_gpoly`) in the plan views and, in
+  the chase view, as translucent low-poly 3-D cars (the nearest few; further
+  ones cross-fade to the silhouette, one level with the hero is drawn before
+  it with its outline, one between the eye and the hero fades but keeps its
+  outline and label), after the skid layer and BEFORE the car; `HudData.overlay`
   (default `[]`, strings; a leading `!` draws the line in the warning
   colour) is a top-left text panel drawn after the HUD and before the menu.
   A ghost tuple may carry a fifth element, a label string, drawn above the
@@ -1016,21 +1030,68 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
   label, `tc_active` joins `abs_active` in the flag row (`TC ABS`), and
   `eng_load` (`PowertrainOutput.load`) is carried for the sound.
 * **Sound** (`drive/audio.py`). `CarSound(volume)` owns one `pygame.mixer`
-  channel (mono 16-bit, `CHUNK = 2048` samples, `BUFFER = 512`) and a `Synth`
-  that renders phase-continuous chunks in numpy: engine (firing fundamental
-  at rpm/30 Hz, harmonics 2–4 opened by load, the half-order, an exhaust
-  ring per firing at `F_RES = 130 Hz`, load-shaped intake noise, limiter
-  stutter, starter crank), tyre squeal from `max(util_f, util_r) > 0.90` or
-  `max|kappa| > 0.10` above 2 m/s, grass rumble when `not on_track`, wind
-  `(V/45)^2`, a clunk on the 0 → gear edge; `paused` fades it out. `Sim.run_
+  channel (16-bit, stereo when the mixer grants it, else mono; `CHUNK =
+  2048` samples, `BUFFER = 512`) and a `Synth` that renders phase- and
+  filter-state-continuous chunks in numpy: the ENGINE as per-cylinder firing
+  pulses (sub-sample placed, cycle-to-cycle jitter) through a pipe echo and
+  exhaust resonances with a load-opened low-pass, per-firing flow noise,
+  intake roar, a valve tick; a PROFILE per car from `HudData.car_key`
+  (`car_name` as the fallback): the Corsa's small I4, the MX-5's rorty I4,
+  the 540i's cross-plane V8 (its banks' uneven trains, one per side in
+  stereo, asymmetric so a mono fold keeps the burble); pops on a genuine
+  lift from high rpm (a per-lift budget, never on a shift's declutch),
+  an ignition-cut limiter, the starter; ONE clunk per shift (the physics'
+  g -> 0 -> g' is one shift) with an upshift cut; a faint final-drive whine
+  (louder in reverse); tyres -- scrub from 80 % of the grip, squeal past it
+  (panned to the sliding side), a harsher lock-up, ABS chatter; the road by
+  `HudData.surf4` per wheel (tarmac hum, wet spray, a kerb's rumble strip at
+  V / 0.35 m on its side, grass swish and thumps, gravel crunch); wind with
+  gusts; the active wing's servo whine only while a panel MOVES; sector
+  chimes on the rising edge of `sector_flash` (the lap's own chime is task
+  27's `CarSound.chime`, called once by `Sim._rec_lap`); a bus compressor,
+  a DC blocker and a soft clip under `CEIL`. Every HudData read is guarded
+  (non-finite -> default, clamped) and a non-finite chunk resets the synth
+  (one silent chunk, then sound). Synthesis IS frame time: <= 1.5 ms a chunk
+  (the worst case, V8 stereo, everything on; ~0.65 ms typical). `Sim.run_
   interactive` calls `audio.update(hud)` right after the pad `feedback(hud)`
-  — the render loop, never `step_physics` — and keeps the channel one chunk
-  ahead (`play` + `queue`), so the sound trails the physics by 50–90 ms and
-  `underruns` counts the frames that ran the queue dry. `CarSound.ok` False
-  = no device; the sim drives silently. `python3 -m drive.audio` is its
-  self-check (continuity across chunks, firing order in the spectrum, squeal
-  band, silence, speed, the streaming path on SDL's dummy driver, a demo
-  WAV).
+  -- the render loop, never `step_physics` -- and keeps the channel one chunk
+  ahead (`play` + `queue`), so the sound trails the physics by 50-90 ms and
+  `underruns` counts the frames that ran the queue dry. The interactive
+  session calls `audio.warm_up()` at its start (the scipy.signal import and
+  the chimes in a thread, so turning the sound on later never stalls a
+  frame). `CarSound.ok` False = no device; the sim drives silently.
+  `python3 -m drive.audio` is its self-check (50 checks: continuity, each
+  profile, the spectra of every layer, cue edges, the lap chime, junk HUD
+  values, silence, speed, streaming mono and stereo on SDL's dummy driver,
+  one demo WAV per car).
+* **The look** (`drive/world.py`, `drive/props.py`, `drive/fx.py`,
+  `drive/scenery.py`; renderer config only, no physics read or written that
+  the flat modes did not already read). `ViewConfig.scenery / effects /
+  shake / detail` ('high' | 'low'); `render.look_config(mode)` maps the
+  Graphics setting ('full' | 'low' | 'classic' = the original plain look)
+  onto them and `Renderer.set_look(mode)` applies it live. `draw_frame`:
+  `fx.update` -> the jolt -> `world.draw_backdrop` (else `_draw_sky3` /
+  `C_BG`) -> `world.draw_ground` -> the track layers (with
+  `world.draw_surface` after the ribbon) -> skid -> `world.draw_atmosphere`
+  (the haze band, ground layers only: props and particles haze themselves by
+  depth) -> `props.draw(far=True)` -> `fx.draw(far=True)` -> ghosts -> the
+  car -> `props.draw(far=False)` -> `fx.draw(far=False)` -> HUD. far / near =
+  deeper / nearer than the car (`Renderer._car_depth`); a plan view draws
+  everything far, under the car. `HudData.surf4` (drive.hud_data, from
+  `scenery.wheel_surfaces`) and `HudData.car_key` feed the particles, the
+  jolt and the sound. `Renderer.smoke` (task 27's handle) is a view of fx's
+  pool. The renderer reads two more state fields, `phi` (the body rolls)
+  and `omega` (the rims spin; V/R when absent), read-only (DEVIATION 9).
+  The chase camera is a spring (it trails under acceleration, closes under
+  braking, swings out and looks into a corner, never rolls the horizon) at a
+  CONSTANT focal length; `Chase3D.view_psi` is the heading it actually looks
+  along, which leans off `psi_cam` in a corner by up to ~3 deg, and the
+  panorama scrolls by that. `Renderer.__init__` pre-builds the meshes and
+  panels and ends with `gc.unfreeze(); gc.collect(); gc.freeze()` (the
+  session's object graph out of the full collections: the 3-4 ms gen-2
+  pauses; at most one stale session is held across restarts). Frame cost,
+  standard scenes, 1280x800: chase 5.7-6.1 ms mean of scene means (worst
+  scene ~7.7-8.3), plan ~3.1 ms (worst ~4.0).
 * **Open-map drawing.** `Renderer._prep_track` precomputes each Area's polygon
   and bbox and the feature list. `draw_frame` draws the areas (filled, bbox-
   culled) after the grid and before the ribbon, and the features after the
@@ -1544,13 +1605,18 @@ wheel -- or off the ribbon, 1.0 x speed with all four off, speed as V / 20
 m/s capped at 1; nothing while paused);
 `run_interactive` passes `shake` to `Renderer.update_camera(st, dt, shake=)`
 only while `Settings.shake` is on (a live setting, saved; not in the class,
-so it never discards a lap). The renderer: `render.SmokePool` (`SMOKE_MAX`
-particles, `SMOKE_EMIT` a frame round the sliding tyres' patches, aged by
-the camera's frame dt, frozen while paused, drawn under the car, each fading
-into the frame's colour under it; the chase view scales by camera depth), `shake_offset` (at most `SHAKE_PX`,
-deterministic; the plan views move the anchor, the chase view the eye a few
-cm; the HUD stays put), `_draw_results` (`R_RESULTS`). A full reset clears
-the smoke with the skid marks. V22's busy frame keeps the smoke pool full.
+so it never discards a lap). With the look merged the kerb test reads
+`HudData.surf4` (the DRAWN kerbs, apex and exit) and falls back to the
+inner-0.8 m rule without it. The renderer: `shake_offset` (at most
+`SHAKE_PX`, deterministic) moves a plan view's anchor; the chase view takes
+`drive/fx.py`'s surface-aware jolt (a kerb's fine vertical buzz, grass /
+gravel bumps) while the strength is above 0, and falls back to
+`shake_offset`'s eye offset only without fx; the HUD stays put.
+`_draw_results` (`R_RESULTS`). The tyre smoke is `drive/fx.py`'s particle
+pool (smoke / dust / spray), which replaced task 27's `SmokePool`;
+`Renderer.smoke` is a view of it (`live()`, `clear()`), so a full reset
+still clears the smoke with the skid marks and V22's busy frame still holds
+the pool full (a real lock-up, past fx's hold).
 
 **The pre-race page** (`drive/prerace.py`, task 20). `_interactive_session`
 builds `Sim.prerace` (a `PreRace` on the recorder's book and class, the
