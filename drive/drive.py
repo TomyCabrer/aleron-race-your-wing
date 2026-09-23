@@ -64,6 +64,7 @@ from corsa_c import CorsaC, G, RHO
 
 from . import telemetry as tlm
 from . import track as trk
+from . import race_grid
 from .vehicle import Controls, Vehicle, VehicleConfig, wheel_positions
 
 # ==================================================================== #
@@ -109,10 +110,11 @@ SEED_LAP_COLS = ("t", "x", "y", "psi", "u", "v", "r", "beta", "ay", "util_f",
 #: tested in that same MX-5.
 SWARM_MENU_DEFAULTS = dict(pop=24, seed="none", gens=0, T=70.0, view="replay", save="ask",
                            car="same")
-SWARM_MENU_CHOICES = dict(pop=(8, 12, 16, 24, 32, 48, 64),
-                          seed=("none", "latest", "best"),
+#: `pop` and `T` are FREE values (drive/swarm_panel.py, task 26): any
+#: population in [4, 128] and any whole second in [20, 240], LEFT / RIGHT one
+#: step, ENTER a big one; the rest are lists
+SWARM_MENU_CHOICES = dict(seed=("none", "latest", "best"),
                           gens=(0, 3, 5, 10, 20, 50),
-                          T=(40.0, 55.0, 70.0, 90.0, 120.0),
                           view=("replay", "fast"),
                           save=("ask", "always", "never"),
                           car=("same",) + tuple(cars.CAR_ORDER))
@@ -127,11 +129,13 @@ SWARM_SAVE_LABELS = {"ask": "ask on exit",
 SWARM_HELP = [("DEPLOY SWARM", [
     ("Car", "what they breed in: your car, or a stock one"),
     ("", "(then raced and tested in that same car)"),
-    ("Cars", "how many cars in each generation"),
+    ("Cars", "how many cars in each generation: 4 to 128,"),
+    ("", "LEFT / RIGHT one, ENTER eight at a time"),
     ("Seed", "what generation 0 is bred from: nothing,"),
     ("", "your last seed lap, or the last swarm saved"),
     ("Generations", "0 = keep going until ESC"),
-    ("Sim time", "seconds each car gets per generation"),
+    ("Sim time", "seconds each car gets per generation: 20 to"),
+    ("", "240, LEFT / RIGHT 5 s, ENTER 20 s"),
     ("Replay", "watch each generation as ghosts, or off:"),
     ("", "no cars drawn, the next one starts the moment"),
     ("", "one is scored -- many times faster"),
@@ -150,25 +154,29 @@ SWARM_HELP = [("DEPLOY SWARM", [
 #: The page has RACE_GRID_MAX slots: 'bot' / 'car' for the first, 'bot2' /
 #: 'car2' for the second, ... (`race_slot_keys`). A slot opens once the one
 #: above it is filled.
-RACE_GRID_MAX = 3
-RACE_MENU_DEFAULTS = dict(bot="anchor", car="same",
-                          bot2="none", car2="same",
-                          bot3="none", car3="same")
+RACE_GRID_MAX = race_grid.GRID_MAX    # 5: measured, .handoff/26-bots.md
+RACE_MENU_DEFAULTS = dict(bot="anchor", car="own",
+                          bot2="none", car2="own",
+                          bot3="none", car3="own",
+                          bot4="none", car4="own",
+                          bot5="none", car5="own")
 RACE_BOT_ANCHOR = "anchor"
 RACE_CHECKPOINT_DIR = os.path.join("drive", "ml", "checkpoints")
-#: What a bot drives: 'same' = the session's car (ballast, wings and all),
-#: else a STOCK car from `cars.CARS` on the session's config with that car's
-#: own grip scale (`Sim._race_car`). The policy is a trim in the car's own
+#: What a bot drives: 'own' = the car it was BRED in, from its checkpoint's
+#: metadata (drive/race_grid.py `own_car`; plan D3: a slot is a name, a
+#: colour, a checkpoint and a saved build) -- the built-in driver has none and
+#: drives yours; 'same' = the session's car (ballast, wings and all), else a
+#: STOCK car from `cars.CARS` on the session's config with that car's own
+#: grip scale (`Sim._race_car`). The policy is a trim in the car's own
 #: actuator units (`policy.Policy.action`), so a checkpoint bred on one car
 #: can be put in another and raced -- which is how a bot is tried in a
 #: different car.
-RACE_BOT_CARS = ("same",) + tuple(cars.CAR_ORDER)
+RACE_BOT_CARS = (race_grid.OWN, "same") + tuple(cars.CAR_ORDER)
 RACE_START_OFFSET_M = 2.2       # the bot lines up this far LEFT of the user
 #: The grid, (n, s) per slot: bot 1 on the user's left, bot 2 on the right,
 #: bot 3 a row back on the left. A back-row car's `progress` starts at its
 #: s (negative), so every gap is read from the LINE.
-RACE_GRID = ((RACE_START_OFFSET_M, 0.0), (-RACE_START_OFFSET_M, 0.0),
-             (RACE_START_OFFSET_M, -7.0))
+RACE_GRID = tuple(race_grid.grid_slot(i) for i in range(1, RACE_GRID_MAX + 1))
 #: A bot's lap timer arms once it has travelled this far from its grid
 #: slot. The user's standing start at s = 0 is not a line crossing (the first
 #: timed lap is the flying one after it), and a bot on the right of the
@@ -180,7 +188,7 @@ RACE_RESPAWN_V = 8.0            # m/s it rejoins at
 RACE_GAP_HZ = 20                # the (progress, t) trail the time gap is read from
 RACE_GAP_KEEP_S = 300.0         # how much of it is kept
 C_RIVAL = (255, 140, 43)        # the ghost's colour: the HUD's accent orange
-C_RIVALS = (C_RIVAL, (110, 200, 255), (215, 120, 255))   # bot 1, 2, 3
+C_RIVALS = race_grid.COLOURS         # bot 1..5: orange, blue, violet, rose, lime
 RACE_HELP = [("RACE VS BOT", [
     ("Bot 1..3", "who drives each other car: the built-in driver, or a"),
     ("", "checkpoint the swarm saved (drive/ml/checkpoints);"),
@@ -742,6 +750,8 @@ def race_slot_keys(i: int) -> tuple:
 
 
 def race_car_label(name) -> str:
+    if name == race_grid.OWN:
+        return "its own (the car it was bred in)"
     return "same as mine" if name in ("same", None, "") else f"{cars.car_name(name)} ({name})"
 
 
@@ -797,6 +807,19 @@ def race_best_path() -> str:
     return c[-1]
 
 
+def _bot_meta(spec) -> dict:
+    """A checkpoint's meta (the car it was bred in), {} for the built-in
+    driver or a file that cannot be read."""
+    if not spec or spec in ("none", RACE_BOT_ANCHOR):
+        return {}
+    try:
+        with open(race_best_path() if spec == "best" else spec) as fh:
+            m = json.load(fh).get("meta")
+        return m if isinstance(m, dict) else {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
 def _load_bot(spec: str, tr):
     """(Policy, label) for a RACE page choice, or None with the reason printed.
 
@@ -843,13 +866,14 @@ class Rival:
     def __init__(self, policy, car, cfg, track, label: str = "bot",
                  dt: float = DT_PHYS, global_wet: float = 1.0,
                  colour=C_RIVAL, grid=RACE_GRID[0], car_name: str = "same",
-                 spec=None):
+                 spec=None, slot: int = 1):
         from .ml.env import observe, N_OBS
         from .ml.baseline import driver_trim
         self._observe = observe
         self.policy = policy
         self.label = label
         self.colour = tuple(colour)
+        self.slot = int(slot)                 # the RACE page's slot (its colour, its number)
         self.grid_n, self.grid_s = float(grid[0]), float(grid[1])
         self.car_name = car_name            # 'same' or a cars.CARS key
         self.spec = spec                    # the RACE page choice it was built from
@@ -1308,6 +1332,7 @@ class Sim:
         self.challenge_pick = None
         self.challenge_end = False
         self.challenge_build = None
+        self.garage_lib = None             # the garage library: a bot's own build (task 26)
 
         self._bind_input()
         self._sample_surfaces()
@@ -2019,11 +2044,11 @@ class Sim:
         return [(f"{'Car':<13s}{swarm_car_label(o.get('car', 'same'), self.settings.car)}",
                  "set:sw_car"),
                 (f"{'Aero':<13s}{aero}", "swarm_aero"),
-                (f"{'Cars':<13s}{o['pop']}", "set:sw_pop"),
+                (f"{'Cars':<13s}{o['pop']}   (4 - 128)", "set:sw_pop"),
                 (f"{'Seed':<13s}{seed}", "set:sw_seed"),
                 (f"{'Generations':<13s}{'until ESC' if not o['gens'] else o['gens']}",
                  "set:sw_gens"),
-                (f"{'Sim time':<13s}{o['T']:.0f} s per car", "set:sw_T"),
+                (f"{'Sim time':<13s}{o['T']:.0f} s per car   (20 - 240)", "set:sw_T"),
                 (f"{'Replay':<13s}{SWARM_VIEW_LABELS[o.get('view', 'replay')]}", "set:sw_view"),
                 (f"{'Save best':<13s}{SWARM_SAVE_LABELS[o.get('save', 'ask')]}", "set:sw_save"),
                 (f"{'Seed lap':<13s}{armed}", "swarm_arm"),
@@ -2067,7 +2092,8 @@ class Sim:
         for i in range(1, RACE_GRID_MAX + 1):
             kb, kc = race_slot_keys(i)
             spec = o.get(kb, "none")
-            rows.append((f"{'Bot ' + str(i):<8s}{race_bot_label(spec)}", f"set:race_{kb}"))
+            rows.append((f"{'Bot ' + str(i):<6s}{race_grid.colour_name(i):<7s}"
+                         f"{race_bot_label(spec)}", f"set:race_{kb}"))
             if spec == "none":
                 break                      # the next slot opens once this one is filled
             rows.append((f"{'  car':<8s}{race_car_label(o.get(kc, 'same'))}",
@@ -2149,11 +2175,18 @@ class Sim:
         self.race_opts[key] = ch[(i + d) % len(ch)]
         self._race_delete_armed = None
 
-    def _race_car(self, car_name):
-        """(CarSpec, VehicleConfig) a bot drives. 'same' is the session's own
-        car and config, ballast and wings included; a library name is that
-        STOCK car on the session's config (aero, assists, power scale) with
-        its own grip scale, the way `drive.ml.env.rollout` builds it."""
+    def _race_car(self, car_name, meta=None):
+        """(CarSpec, VehicleConfig) a bot drives. 'own' is the car it was
+        bred in (its checkpoint's meta, `race_grid.own_car`), or yours when
+        it has none; 'same' is the session's own car and config, ballast and
+        wings included; a library name is that STOCK car on the session's
+        config (aero, assists, power scale) with its own grip scale, the way
+        `drive.ml.env.rollout` builds it."""
+        if car_name == race_grid.OWN:
+            own = race_grid.own_car(meta or {}, self.veh.cfg, self.garage_lib)
+            if own is not None:
+                return own[0], own[1]
+            car_name = "same"
         if car_name in ("same", None, ""):
             return self.veh.car, self.veh.cfg
         if car_name not in cars.CARS:
@@ -2181,14 +2214,19 @@ class Sim:
                 continue
             pol, label = loaded
             try:
-                car, cfg = self._race_car(car_name)
-                if car_name not in ("same", None, ""):
+                car, cfg = self._race_car(car_name, getattr(pol, "meta", None))
+                if car_name == race_grid.OWN:
+                    own_name = race_grid.own_car(getattr(pol, "meta", None) or {},
+                                                 self.veh.cfg, self.garage_lib)
+                    if own_name is not None and own_name[2] != self.settings.car:
+                        label = f"{label}/{own_name[2]}"
+                elif car_name not in ("same", None, ""):
                     label = f"{label}/{car_name}"
                 rivals.append(Rival(pol, car, cfg, self.track, label=label, dt=self.dt,
                                     global_wet=self.global_wet,
                                     colour=C_RIVALS[(i - 1) % len(C_RIVALS)],
                                     grid=RACE_GRID[(i - 1) % len(RACE_GRID)],
-                                    car_name=car_name, spec=sp))
+                                    car_name=car_name, spec=sp, slot=i))
             except Exception as exc:
                 print(f"race vs bot {sp}: {type(exc).__name__}: {exc}")
         if not rivals:
@@ -2236,8 +2274,9 @@ class Sim:
             return False
         T = float(T or BOT_TEST_T)
         jobs = []
+        meta = _bot_meta(spec)
         for name in RACE_BOT_CARS:
-            car, cfg = self._race_car(name)
+            car, cfg = self._race_car(name, meta)
             kw = {f.name: getattr(cfg, f.name) for f in fields(cfg) if f.init}
             #  the rollout has no global wet: the same grip through the config
             kw["mu_scale"] = float(kw["mu_scale"]) * self.global_wet
@@ -2321,7 +2360,13 @@ class Sim:
             if len(self.rivals) == 1:
                 return (f"BOT {rv.label}  gap {gap} ({dm:+.0f} m)  "
                         f"bot lap {lap.lap} last {last} best {best}")
+            if len(self.rivals) >= 3:          # a full grid: slot number and gap, to fit
+                i = rv.slot                    # the bar (the ghosts carry the names)
+                parts.append(f"{i} {gs:+.1f}" if not math.isnan(gs) else f"{i} --")
+                continue
             parts.append(f"{rv.label} {gap} ({dm:+.0f} m) lap {lap.lap} best {best}")
+        if len(self.rivals) >= 3:
+            return "BOTS gap s  " + "   ".join(parts)
         return "BOTS  " + "  |  ".join(parts)
 
     def _hud_msg(self) -> str:
@@ -2669,7 +2714,17 @@ class Sim:
             self._menu_show_challenge(self._ch_cur, idx=idx)
         return True
 
-    def _swarm_step(self, key: str, d: int) -> None:
+    def _swarm_step(self, key: str, d: int, coarse: bool = False) -> None:
+        if key in ("pop", "T"):            # free values (drive/swarm_panel.py)
+            from .swarm_panel import step_value, clamp_pop, clamp_T, POP_MAX, T_MAX
+            cur = self.swarm_opts[key]
+            if coarse:                     # ENTER: a big step, round to the bottom
+                top = POP_MAX if key == "pop" else T_MAX
+                nxt = (cur + (8 if key == "pop" else 20.0)) if cur < top else 0
+                self.swarm_opts[key] = clamp_pop(nxt) if key == "pop" else clamp_T(nxt)
+            else:
+                self.swarm_opts[key] = step_value(key, cur, d)
+            return
         ch = SWARM_MENU_CHOICES[key]
         cur = self.swarm_opts[key]
         i = ch.index(cur) if cur in ch else 0
@@ -2760,7 +2815,7 @@ class Sim:
                     self._menu_show_swarm(idx=idx)
                 return
             if action.startswith("set:sw_"):
-                self._swarm_step(action[7:], +1)
+                self._swarm_step(action[7:], +1, coarse=True)
                 self._menu_show_swarm(idx=idx)
                 return
             if action == "swarm_arm":
@@ -4455,8 +4510,8 @@ def _v30_race_vs_bot(verbose=True):
         rows_ok = (acts[:5] == ["set:race_bot", "set:race_car", "set:race_bot2",
                                 "set:race_car2", "set:race_bot3"]
                    and "set:race_car3" not in acts)
-        s2._race_step("car", +1)
-        cyc2 = s2.race_opts["car"] == RACE_BOT_CARS[1]
+        s2._race_step("car", +1)           # RIGHT: the car after 'same' in the list
+        cyc2 = s2.race_opts["car"] == RACE_BOT_CARS[RACE_BOT_CARS.index("same") + 1]
         s2.stop_race(quiet=True)
         # the list: none, the anchor, then YOUR (swarm) bots newest first, so
         # RIGHT from the anchor is the bot saved last -- and that is the one
@@ -4984,6 +5039,117 @@ def _v34_tutorial(tmp, verbose=True):
             print(f"    passed {passed}  pages {pages}  heads {sorted(heads)}  "
                   f"step {tut.step.id if tut else None}  mem {tut.mem if tut else None}")
     return ok, dict(passed=passed, maps=maps, results=res, sim_s=sim_t)
+
+
+def _v36_grid(tmp, verbose=True):
+    """A FULL race grid (RACE_GRID_MAX bots, plan D3 slots). The user's car
+    is bit-identical with and without it (V30's rule, with five cars); every
+    bot leaves the line from its own slot and keeps going; each is drawn in
+    its slot's colour and read in the HUD's gaps; a checkpoint bred in
+    another car drives THAT car by default ('own', from its metadata); the
+    render's frame budget is held to the same grid (render.V22_GRID_BOTS);
+    and the grid's physics cost is measured and reported (why the grid is
+    five). Skipped (as a pass) when drive/ml is unavailable."""
+    import contextlib, io
+    from . import render as rnd
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            loaded = _load_bot(RACE_BOT_ANCHOR, trk.make_arena())
+    except Exception:
+        loaded = None
+    if loaded is None:
+        if verbose:
+            print("  [V36] race grid: drive/ml unavailable -- skipped")
+        return True, {"skipped": True}
+    specs = [RACE_BOT_ANCHOR] + [os.path.join(RACE_CHECKPOINT_DIR, f) for f in (
+        "arena_plate.json", "540i_arena_plate.json", "mx5_arena_plate.json",
+        "arena_open_plate.json")]
+    specs = specs[:RACE_GRID_MAX]
+    T = 12.0
+
+    def run(with_grid):
+        drv = lambda t, v, T_: Controls(throttle=0.6 if t > 0.5 else 0.0,
+                                        delta=radians(2.0) * sin(0.4 * t),
+                                        auto_gearbox=True)
+        sim = _build("arena", driver=drv)
+        if with_grid:
+            for i, sp in enumerate(specs, 1):
+                kb, kc = race_slot_keys(i)
+                sim.race_opts[kb], sim.race_opts[kc] = sp, race_grid.OWN
+            assert sim.start_race()
+        sim.run_headless(T)
+        v = sim.veh
+        return sim, (v.x, v.y, v.psi, v.u, v.v, v.r, v.rpm, v.gear)
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        s0, a = run(False)
+        s1, b = run(True)
+    same = (a == b)
+    rv = s1.rivals
+    n = len(rv)
+    full = n == RACE_GRID_MAX == len(specs)
+    moved = full and all(r.progress > 30.0 for r in rv)
+    slots = [(r.grid_n, r.grid_s) for r in rv]
+    slot_ok = slots == list(RACE_GRID[:n]) and len(set(slots)) == n
+    col_ok = [r.colour for r in rv] == list(C_RIVALS[:n]) and len(set(C_RIVALS[:n])) == n
+    own = [r for r in rv if r.spec.endswith("540i_arena_plate.json")]
+    own_ok = (len(own) == 1 and own[0].veh.car is cars.get("540i")
+              and own[0].veh.cfg.wing == "plate" and own[0].label.endswith("/540i")
+              and rv[0].veh.car is s1.veh.car)         # the built-in driver drives yours
+    hud = s1.hud_data()
+    hud_ok = (len(getattr(hud, "ghosts", [])) == n
+              and [g[3] for g in hud.ghosts] == list(C_RIVALS[:n])
+              and hud.msg.startswith("BOTS gap s") and all(f"{i} " in hud.msg
+                                                          for i in range(1, n + 1)))
+    agree = rnd.V22_GRID_BOTS == RACE_GRID_MAX
+    # D3 end to end: a swarm's saved bot carries the car it was bred in (the
+    # saved state too), and 'own' rebuilds exactly that car
+    bred_ok = False
+    try:
+        import numpy as _np
+        from .ml.swarm import Swarm
+        from .ml.policy import Policy
+        from .aero.library import Library
+        lib = Library(os.path.join(tmp, "grid_lib"), use_xfoil=False)
+        build = dict(version=2, name="bred", mirror=True, builtin=False,
+                     slots={"left": {"wing": "flank-e423", "x": 0.97, "h": 0.9, "inc_deg": 0.0}})
+        st = Settings(path="", car="mx5", engine="tuned")
+        sw = Swarm(pop=4, track="arena", car_name="mx5", workers=1)
+        sw.bred = race_grid.bred_meta("mx5", True, build, st, 1.5)
+        sw.best = dict(theta=_np.zeros(Policy.n_param(sw.n_act)), gen=3, id=7, reward=1.0,
+                       lap_best=None)
+        sp = sw.save_state(os.path.join(tmp, "grid_state.json"))
+        sw2 = Swarm.load_state(sp, workers=1)
+        meta = sw2.best_policy().meta
+        car_, cfg_, name_ = race_grid.own_car(meta, s1.veh.cfg, lib)
+        bred_ok = (meta.get("bred", {}).get("build") == build and name_ == "mx5"
+                   and cfg_.dev_left is not None and cfg_.power_scale == 1.5
+                   and car_ is cars.get("mx5"))
+    except Exception as exc:               # noqa: BLE001
+        print(f"    V36 bred: {type(exc).__name__}: {exc}")
+    # the cost, the reason the grid is five: steps of the user alone and with
+    # the full grid, and the physics share of a 60 fps frame
+    k = 3000
+    t0 = time.perf_counter()
+    for _ in range(k):
+        s0.step_physics(s0.dt)
+    t_one = (time.perf_counter() - t0) / (k * s0.dt)
+    t0 = time.perf_counter()
+    for _ in range(k):
+        s1.step_physics(s1.dt)
+    t_grid = (time.perf_counter() - t0) / (k * s1.dt)
+    frame_ms = 1e3 / FPS * t_grid
+    ok = same and full and moved and slot_ok and col_ok and own_ok and hud_ok and agree and bred_ok
+    if verbose:
+        print(f"  V36 race grid   : {n} bots (RACE_GRID_MAX {RACE_GRID_MAX}); your car identical "
+              f"with and without {same}; all moved {moved} "
+              f"({', '.join(f'{r.progress:.0f}' for r in rv)} m); slots {slot_ok}; colours "
+              f"{col_ok}; the 540i checkpoint drives its own 540i {own_ok}; HUD ghosts + gaps "
+              f"{hud_ok}; render budget grid = {rnd.V22_GRID_BOTS} {agree}; a swarm's saved bot "
+              f"carries its bred car (state and checkpoint) {bred_ok}; cost: RTF "
+              f"{1 / t_one:.1f} alone, {1 / t_grid:.2f} with the grid = {frame_ms:.1f} ms of "
+              f"physics in a {1e3 / FPS:.1f} ms frame  -> {'ok' if ok else 'FAIL'}")
+    return ok, dict(n=n, rtf_one=1 / t_one, rtf_grid=1 / t_grid, frame_ms=frame_ms)
 
 
 def _v20_determinism(tmp, verbose=True):
@@ -5591,6 +5757,7 @@ def self_check(verbose=True) -> bool:
                      ("V33", lambda: _v33_ghost_delta(tmp, verbose)),
                      ("V34", lambda: _v34_tutorial(tmp, verbose)),
                      ("V35", lambda: _v35_challenges(tmp, verbose)),
+                     ("V36", lambda: _v36_grid(tmp, verbose)),
                      ("V20", lambda: _v20_determinism(tmp, verbose)),
                      ("accel", lambda: _accel_end_to_end(tmp, verbose)),
                      ("V21", lambda: _v21_rtf(tmp, 60.0, verbose))):
@@ -5662,14 +5829,15 @@ def build_parser():
                    help="put a trained drive.ml policy in the driver's seat "
                         "(e.g. drive/ml/checkpoints/arena_plate.json); the "
                         "sub-package is optional and is imported only here")
-    p.add_argument("--race", default=None, metavar="BOT[,BOT2[,BOT3]]",
+    p.add_argument("--race", default=None, metavar="BOT[,BOT2,...]",
                    help="race against the ML driver: 'anchor' (the built-in driver), "
                         "'best' (the newest swarm checkpoint) or a checkpoint path, "
-                        "comma-separated for up to 3 bots on the grid; also "
+                        "comma-separated for up to 5 bots on the grid; also "
                         "ESC > Race vs bot")
-    p.add_argument("--race-car", dest="race_car", default=None, metavar="CAR[,CAR2[,CAR3]]",
-                   help="what each bot drives: 'same' (your car, the default) or a "
-                        "stock corsa / mx5 / 540i, per bot like --race")
+    p.add_argument("--race-car", dest="race_car", default=None, metavar="CAR[,CAR2,...]",
+                   help="what each bot drives: 'own' (the car it was bred in, the "
+                        "default), 'same' (your car) or a stock corsa / mx5 / 540i, "
+                        "per bot like --race")
     p.add_argument("--garage", action="store_true",
                    help="open the 3D editor first; ENTER / cross drives the "
                         "car you built, BACKSPACE / touchpad comes back")
@@ -6072,7 +6240,7 @@ def run_interactive_cli(opts) -> int:
                     #  car it was bred in: racing it is ESC > Race > Start
                     rm = dict(getattr(opts, "race_menu", None) or {})
                     rm["bot"] = saved
-                    rm["car"] = opts.swarm_car or "same"
+                    rm["car"] = race_grid.OWN      # its checkpoint says which car it was bred in
                     opts.race_menu = rm
                     print(f"race it: ESC > Race vs bot > Start "
                           f"(bot 1 is now {race_bot_label(saved)})")
@@ -6210,6 +6378,12 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
         settings.save()
         _resolve_design(opts)
     w, h = (int(v) for v in opts.size.lower().split("x"))
+    from . import swarm_panel as spn
+    _pop, _T = spn.clamp_pop(opts.swarm), spn.clamp_T(opts.swarm_T)
+    if (_pop, _T) != (opts.swarm, opts.swarm_T):
+        print(f"swarm: {opts.swarm} cars / {opts.swarm_T} s -> {_pop} cars / {_T:.0f} s "
+              f"(the ranges are 4-128 cars and 20-240 s)")
+    opts.swarm, opts.swarm_T = _pop, _T
     tr, car, cfg_kwargs, global_wet = _session_car(opts, settings)
     #  what it breeds in: the session's car, or a stock one (--swarm-car,
     #  the page's Car row); a resume with no car given keeps the one the
@@ -6274,6 +6448,35 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
         print(f"swarm {sw.name}: {sw.pop} cars, seed {sw.seed_source}, "
               f"{tr.title or tr.name}, {car_title} {car.m:.0f} kg, "
               f"wing {opts.wing}, T {sw.T:.0f} s, {sw.workers} workers")
+    #  the car it breeds in goes into the saved bot (plan D3): the RACE page's
+    #  'own' car puts it back in this car -- ALWAYS the car this run breeds
+    #  and measures in (a resume in another car / build / engine records that)
+    bred_now = race_grid.bred_meta(car_name, stock, getattr(opts, "build_json", None),
+                                   settings, float(cfg_kwargs.get("power_scale", 1.0)))
+    if getattr(sw, "bred", None) not in (None, bred_now):
+        print("swarm: this resume breeds in a different car / build / engine than the one "
+              "it started in; the saved bot records the one it breeds and is measured in now")
+    sw.bred = bred_now
+    #  the progress panel (drive/swarm_panel.py): the class's medals and your
+    #  PB (a player file: a player session only)
+    sw_key = "|".join((tr.name, car_name, settings.engine, settings.wet))
+    from .records import records_reason
+    _kw = getattr(sw, "track_kw", None) or {}
+    sw_off = records_reason(tr.name, _kw.get("radius", 50.0), _kw.get("cw", False)) or ""
+    sw_targets = None
+    if not sw_off:
+        try:
+            from . import medals as _med
+            sw_targets = _med.targets(sw_key)
+        except Exception:                  # noqa: BLE001 -- medals are optional
+            sw_targets = None
+    sw_pb = None
+    if not sw_off and _player_session(opts):
+        try:
+            from .records import RecordBook
+            sw_pb = RecordBook().pb_time(sw_key)
+        except Exception:                  # noqa: BLE001
+            sw_pb = None
 
     from . import render as rnd
     rnd.set_car(car)
@@ -6541,6 +6744,8 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
                              + f"   wings {ml_swarm.wings_str(b)}")
             if user_lap:
                 lines.append(f"your seed lap: {user_lap:.2f} s  (cyan car)")
+            lines += spn.panel_lines(sw.history, sw.pop, sw_key, sw_targets, sw_pb, sw.best,
+                                     sw.dt, why_none=sw_off)
             if fast:
                 lines.append("!REPLAY OFF - breeding flat out; V to watch the next generation")
                 hist = sw.history[-SWARM_TABLE_ROWS:]
@@ -6920,6 +7125,7 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     #  challenges (drive/challenges.py): a player session with a garage can
     #  list them; a session started for one drives it
     lib = getattr(opts, "garage_lib", None)
+    sim.garage_lib = lib                   # a bot's own build is rebuilt with it (task 26)
     if sim.progress_file is not None and lib is not None:
         sim.challenge_build = (getattr(opts, "build_json", None), lib)
     chal = getattr(opts, "challenge", None)
@@ -6965,8 +7171,8 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
         #  once; the page owns it from here. A car list shorter than the bot
         #  list repeats its last entry.
         specs = [s.strip() for s in str(race_spec).split(",") if s.strip()]
-        carl = [c.strip() for c in str(getattr(opts, "race_car", None) or "same").split(",")
-                if c.strip()] or ["same"]
+        carl = [c.strip() for c in str(getattr(opts, "race_car", None) or race_grid.OWN).split(",")
+                if c.strip()] or [race_grid.OWN]
         for i in range(1, RACE_GRID_MAX + 1):
             kb, kc = race_slot_keys(i)
             sp = specs[i - 1] if i <= len(specs) else "none"

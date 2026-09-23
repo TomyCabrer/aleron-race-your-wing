@@ -28,7 +28,7 @@ python3 -m drive.drive --ballast 200 --ballast-at boot
 python3 -m drive.drive --camera chase           # the 3D view from behind
 python3 -m drive.drive --garage                 # start in the 3D garage
 python3 -m drive.drive --ml-drive drive/ml/checkpoints/arena_plate.json
-python3 -m drive.drive --race best              # race the newest swarm checkpoint on a copy of your car
+python3 -m drive.drive --race best              # race the newest swarm checkpoint in the car it was bred in
 python3 -m drive.drive --swarm 32 --swarm-seed latest   # a learning swarm, bred from your lap
 python3 -m drive.drive --swarm 32 --swarm-car mx5 --swarm-fast --swarm-save never   # in a stock MX-5, unwatched, unsaved
 ```
@@ -654,23 +654,31 @@ memorised circuit, not a general driver.
 
 ### Race the bots
 
-From the game: `ESC` → **Race vs bot**. The page is a grid of up to three
-bots. `←` `→` on a *Bot* row picks who drives it: the built-in driver (the
+From the game: `ESC` → **Race vs bot**. The page is a grid of up to **five**
+bots (the most the loop steps in real time: each bot is a second car at
+1 kHz, measured below). Each slot is a name, a colour, a checkpoint and a
+car (plan D3). `←` `→` on a *Bot* row picks who drives it: the built-in driver (the
 anchor the swarm breeds from) or any checkpoint in `drive/ml/checkpoints` —
 your swarm bots first, newest first, then the `train.py` ones — and a
 session starts with the bot you saved last as bot 1; the *car* row under it picks what it
-drives — *same as mine* (your car, ballast and wings included) or a stock
-Corsa, MX-5 or 540i on your session's settings with its own grip scale. A
+drives — **its own** (the default: the car it was bred in, which a swarm now
+writes into the checkpoint -- the car, stock or yours with your ballast and
+wing masses, the garage build and the engine; a bundled checkpoint drives its
+stock car with its published wing; the built-in driver, and a swarm bot saved
+before this version, drive yours), *same
+as mine* (your car, ballast and wings included) or a stock Corsa, MX-5 or
+540i on your session's settings with its own grip scale. A
 policy is a trim in the car's own actuator units, so one checkpoint can be
 put in each of the three cars and raced against itself; that is how a bot is
 tested in a different car. The next slot opens once the one above it is
 filled. *Start* puts every car on the line, standing start: bot 1 two metres
-to your left, bot 2 to your right, bot 3 a row back. Each bot is the ML
-driver in its own car, drawn as a coloured ghost (orange, blue, violet) with
-its name over it — you drive through them, so the race is against their
+to your left, bot 2 to your right, bots 3 and 4 a row back, bot 5 a row
+behind that. Each bot is the ML driver in its own car, drawn as a coloured
+ghost (orange, blue, violet, rose, lime) with its name over it — you drive through them, so the race is against their
 laps, not their bumpers. The HUD's bottom line shows, per bot, the gap (`+`
 you are behind, `-` ahead) in seconds along the track and in metres, and its
-lap count and best; a bot's lap timer, like yours, starts at its first
+lap count and best (with three or more bots, the slot number and the gap in
+seconds, so the line fits); a bot's lap timer, like yours, starts at its first
 crossing of the line after the launch, not at the launch. `R` or `SHIFT+R`
 restarts the race from the line; if a bot leaves the map or spins it rejoins
 at its last sector line after 2.5 s. From the terminal, `--race anchor`,
@@ -702,8 +710,10 @@ on this page, in the car it was bred in, so racing it is *Race vs bot* →
 From the game: `ESC` → **Deploy swarm**. The page has *Car* (what the swarm
 breeds in: *same as mine*, or a stock Corsa, MX-5 or 540i on your settings —
 the RACE page's rule, `--swarm-car` on the command line; the bot is named
-after it, `swarm_<map>_<car>_…`, and a resume keeps it), *Cars* (8–64), *Seed*
-(none / your last seed lap / best saved swarm), *Generations*, *Sim time*,
+after it, `swarm_<map>_<car>_…`, and a resume keeps it), *Cars* (any number
+from 4 to 128: `←` `→` one, `ENTER` eight), *Seed*
+(none / your last seed lap / best saved swarm), *Generations*, *Sim time* (any
+whole second from 20 to 240: `←` `→` 5 s, `ENTER` 20 s),
 *Replay* (watch every generation, or off), *Save best* (what `ESC` does with
 the best car: ask, always, never), *Seed lap* and *Deploy*. *Seed lap* puts
 you on the start line, recording from
@@ -713,6 +723,14 @@ page comes back with that lap as the seed, cursor on *Deploy*. `K` while
 driving does the same from the next line crossing. The swarm runs on the map,
 car and settings you are driving, in the same window; `ESC` in the swarm
 brings you back to the car. From the terminal:
+
+**The progress panel.** The swarm runs until `ESC`, as before; its window
+now also says where it is going: the best lap of each of the last eight
+generations with a bar (the fastest, the longest), how many cars lapped, the
+class's medal lines (author / gold / silver / bronze) and your PB in the class,
+each with the swarm's best lap's gap to it (`-` = the swarm is faster). The
+swarm's laps are at its 2 ms training step, the medals and your PB at 1 ms,
+and the panel says so; the saved bot is re-measured at 1 ms as before.
 
 ```
 python3 -m drive.drive --swarm 32                       # 32 cars, bred from the anchor driver
@@ -949,6 +967,8 @@ drive/
   wing_tutorial.py  the wing-design tutorial: a guided pass through the garage's navigator
   challenges.py the challenges: files, rules, stars, the per-step meter, the references
                 (data/challenges/*.json)
+  race_grid.py  the race grid's slots (D3: name, colour, checkpoint, build) and a bot's own car
+  swarm_panel.py the swarm window's progress panel and the page's free values
   telemetry.py  fixed-schema CSV + sidecar json
   plots.py      overview, g-g, track map, laps, A/B compare
   drive.py      main loop, settings, garage <-> drive session loop, CLI,

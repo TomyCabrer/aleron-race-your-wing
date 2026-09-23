@@ -55,6 +55,8 @@ from the repo root.
 | `drive/tutorial.py` | the driving tutorial: 11 data-driven `Step`s (`id, map, kind, title, text, hint, check(frame, mem), status, reset, setup, wing`), `frame_of(sim)` (what a predicate sees), the `Tutorial` state machine (`tick(sim)` -> 'restart' / 'page' / 'done'), the overlay payload, the page / menu rows, `wing_car` (the published plate for a car without a flank wing) | `corsa_c.G`; `records`, `medals` lazily. Never pygame, never `drive.drive` |
 | `drive/wing_tutorial.py` | the wing-design tutorial: 10 `WStep`s (`check(garage, mem, action)`, an `anchor` naming the garage widget the hint points at), `WingTutor` (`update` / `draw` / the garage menu's rows), `anchor_rect` (from the widgets' own `_rect` / `_hits`) | `garage_ui`, `prerace._same_build`, `progress` (via the object handed in); `garage` and pygame only lazily / in the self-check. Never `drive.drive` |
 | `drive/challenges.py` | challenges (`drive/data/challenges/*.json`, kind `carsim-challenge-1`): `validate`, `load_all`, the constraint checker (`build_stats`, `refusals`), `stars_for`, the per-step `Meter` (lap_time, stop_distance, skid_ay, drag_time, trap_speed) and `ChallengeRun` (the Sim's hooks, best + stars into `runs/progress.json`), the reference runs (`measure`; `--measure` / `--write` derive every threshold as ref x 1.12 / 1.06 / 1.02), the page rows | `records`, `progress` (via the object handed in); `drive.drive`, `garage`, `track`, `vehicle`, `aero.library` lazily. Never pygame |
+| `drive/race_grid.py` | the race grid (plan D3): `GRID_MAX` (5, measured), `grid_slot(i)` (rows of two, 7 m apart), the slot colours, `bred_meta` (what a swarm writes into a checkpoint about the car it bred in), `own_car(meta, cfg, lib)` (that car rebuilt: stock or yours with ballast and wing masses, the garage build's aero, the engine) | `cars`, `vehicle`; `garage` lazily. Never pygame, never `drive.ml` |
+| `drive/swarm_panel.py` | the swarm window's progress panel (`panel_lines`: the best lap per generation with a bar, the class's medal lines and the owner's PB with the swarm's gap to each) and the Deploy-swarm page's free values (`clamp_pop` 4-128, `clamp_T` 20-240 s, `step_value`) | nothing (pure; the caller hands in the PB). Never pygame, never `drive.ml` |
 | `drive/drive.py` | main loop, CLI, scripted runs | everything |
 | `drive/validate.py` | the whole acceptance suite | everything |
 
@@ -1201,7 +1203,7 @@ python3 -m drive.drive [--track arena|open|skidpad|dragstrip] [--radius 50] [--c
   [--sound off|low|mid|high] [--wing-inc 0.0] [--dev-flank outer|inner]
   [--garage] [--build NAME]
   [--ml-drive CHECKPOINT] [--seed-lap] [--race anchor|best|CHECKPOINT]
-  [--race-car same|corsa|mx5|540i]
+  [--race-car own|same|corsa|mx5|540i]
   [--swarm N] [--swarm-seed none|latest|FILE] [--swarm-gens G] [--swarm-T S]
   [--swarm-name NAME] [--swarm-resume STATE] [--swarm-car same|corsa|mx5|540i]
   [--swarm-fast] [--swarm-save ask|always|never]
@@ -1513,6 +1515,22 @@ started during a challenge ends the challenge. No per-map build switch
 while a challenge runs. The drag area counts EACH fitted flank panel's own
 D/q (G can put both out). V35 re-runs every
 reference (3 stars, the file's value exactly) and the page flow.
+
+**The race grid and the swarm panel** (task 26). `RACE_GRID_MAX =
+race_grid.GRID_MAX` (5) slots, `RACE_GRID` / `C_RIVALS` from `race_grid`;
+`RACE_BOT_CARS = ('own', 'same', corsa, mx5, 540i)`, default `'own'`:
+`Sim._race_car(name, meta)` rebuilds the bot's bred car from its checkpoint's
+`meta['bred']` (`race_grid.own_car`, the library on `Sim.garage_lib`), or an
+old checkpoint's `meta['car']` + `meta['wing']`; `start_race` and
+`start_bot_test` hand the meta in (`_bot_meta`). `drive.ml.swarm.Swarm.bred`
+(set by `run_swarm_cli` from `race_grid.bred_meta`) goes into the saved
+bot's meta and the state file. With three or more bots `_race_hud` prints
+the slot number and the gap. The Deploy-swarm page's `pop` / `T` are free
+values (`swarm_panel.step_value`; ENTER a coarse step), and the command line
+is clamped the same way. `run_swarm_cli` adds `swarm_panel.panel_lines` to
+its text panel (the PB read only in a player session). `render.V22_GRID_BOTS`
+(5) is the grid the frame budget is held to; V36 asserts it equals
+`RACE_GRID_MAX`, races the full grid and measures its cost.
 
 **The pre-race page** (`drive/prerace.py`, task 20). `_interactive_session`
 builds `Sim.prerace` (a `PreRace` on the recorder's book and class, the

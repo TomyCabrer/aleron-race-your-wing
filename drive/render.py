@@ -175,6 +175,15 @@ R_WARN = (440, 760, 400, 22)
 #: the driving tutorial's box (drive/tutorial.py): left, between the state
 #: panel and the pedals, clear of the car; its height follows the text
 R_TUTOR = (12, 340, 430, 318)
+#: the race grid the frame budget is held to: drive.RACE_GRID_MAX bots (task
+#: 26), plus the two time-trial ghosts; drive.py's V36 asserts they agree
+V22_GRID_BOTS = 5
+_V22_BOT_COLS = ((255, 140, 43), (110, 200, 255), (215, 120, 255), (250, 95, 130),
+                 (170, 230, 90))
+_V22_GHOSTS = ((6.0, 1.5, (120, 220, 160), 'PB'), (-5.0, -1.5, (205, 205, 215), 'REF'),
+               (12.0, -2.0, _V22_BOT_COLS[0], 'bot1'), (-10.0, 2.0, _V22_BOT_COLS[1], 'bot2'),
+               (18.0, 1.0, _V22_BOT_COLS[2], 'bot3'), (-16.0, -2.0, _V22_BOT_COLS[3], 'bot4'),
+               (24.0, 2.0, _V22_BOT_COLS[4], 'bot5'))
 
 # --- colours (est; dark ground so the yellow car and orange device read) --
 C_BG = (27, 29, 33)
@@ -3146,16 +3155,13 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
         px, py = tr.xy[i]
         st_n = _demo_state(px, py, float(tr.psi[i]), u=28.0, v=-0.6, r=0.25)
         rnd.update_camera(st_n, 1.0 / 60.0)
-        #  the busiest time-trial frame: the PB and ghost 2, a full race
-        #  grid of three bots, all in view and labelled, the delta and a flash
+        #  the busiest time-trial frame: the PB and ghost 2, a FULL race
+        #  grid (V22_GRID_BOTS, drive.RACE_GRID_MAX), all in view and
+        #  labelled, the delta and a flash
         ps = float(tr.psi[i])
         aux.ghosts = [(px + dx * math.cos(ps) - dy * math.sin(ps),
                        py + dx * math.sin(ps) + dy * math.cos(ps), ps, col, lbl)
-                      for dx, dy, col, lbl in ((6.0, 1.5, (120, 220, 160), 'PB'),
-                                               (-5.0, -1.5, (205, 205, 215), 'REF'),
-                                               (12.0, -2.0, (255, 140, 43), 'bot1'),
-                                               (-10.0, 2.0, (110, 200, 255), 'bot2'),
-                                               (18.0, 1.0, (215, 120, 255), 'bot3'))]
+                      for dx, dy, col, lbl in _V22_GHOSTS]
         t0 = time.perf_counter()
         rnd.draw_frame(st_n, st_prev, 0.5, _demo_ctl(), aux, sk2)
         times.append((time.perf_counter() - t0) * 1e3)
@@ -3393,9 +3399,9 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     def _gh(dx, dy, col, lbl):
         return (st_c.X + dx * math.cos(pc) - dy * math.sin(pc),
                 st_c.Y + dx * math.sin(pc) + dy * math.cos(pc), pc, col, lbl)
-    aux_c.ghosts = [_gh(4.0, 0.0, (120, 220, 160), 'PB'), _gh(-6.0, 1.5, (205, 205, 215), 'REF'),
-                    _gh(14.0, -2.0, (255, 140, 43), 'bot1'), _gh(20.0, 2.0, (110, 200, 255), 'bot2'),
-                    _gh(26.0, 0.0, (215, 120, 255), 'bot3')]
+    aux_c.ghosts = [_gh(4.0, 0.0, (120, 220, 160), 'PB'), _gh(-6.0, 1.5, (205, 205, 215), 'REF')] + [
+        _gh(8.0 + 6.0 * k, (-2.0, 2.0)[k % 2], col, f'bot{k + 1}')
+        for k, col in enumerate(_V22_BOT_COLS[:V22_GRID_BOTS])]
     aux_c.delta_s, aux_c.sector_flash, aux_c.flash_col = 0.12, 'S1  20.440  +0.080', 'red'
     for _ in range(5):
         rndc.update_camera(st_c, 1.0 / 60.0)
@@ -3460,7 +3466,8 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
                                        float(np.percentile(t_c, 99)),
                                        budget_mean=12.0, budget_p99=20.0)
     rep('chase: frame budget', _okc,
-        f'60 frames with 5 ghosts, the delta and a flash: {_whyc} (flat car_up is 2.1-2.4 ms)')
+        f'60 frames with {len(aux_c.ghosts)} ghosts, the delta and a flash: {_whyc} '
+        f'(flat car_up is 2.1-2.4 ms)')
     #  a PB ghost 4 m ahead lies UNDER the 3-D body: its outline and its
     #  label are drawn after the car, so it is still seen (review of task 22)
     for _ in range(5):

@@ -115,7 +115,7 @@ def _score(job) -> dict:
     first = ep.lap_times[0] if ep.lap_times else None
     return dict(reward=float(ep.reward), s=float(ep.s_progress), t=float(ep.t),
                 laps=int(ep.laps), lap_best=(min(fl) if fl else first),
-                lap_first=first,
+                lap_first=first, lap_flying=bool(fl),
                 v_mean=float(ep.v_mean), wing_frac=float(ep.wing_frac),
                 wings=dict(l=round(ep.wing_l_frac, 3), r=round(ep.wing_r_frac, 3),
                            top=round(ep.wing_top_frac, 3), both=round(ep.wing_both_frac, 3)),
@@ -173,6 +173,10 @@ class Swarm:
         #: whether the workers send the replay trace back with each score
         #: (`_score`); the window turns it off to breed flat out
         self.collect_traces = True
+        #: the car it breeds in, for the saved bot's meta (drive/race_grid.py
+        #: `bred_meta`: car, stock or yours, the garage build, the engine);
+        #: set by the window, None headless
+        self.bred = None
 
     # ---- population ----------------------------------------------------
     def _new(self, theta, parents=(), sigma: float | None = None) -> dict:
@@ -303,10 +307,15 @@ class Swarm:
         self.sigma = float(np.median([ind.get("sigma", self.sigma) for ind in self.population]))
         R = np.array([ind["reward"] for ind in self.population])
         laps = [ind["lap_best"] for ind in self.population if ind.get("lap_best")]
+        lap_ind = min((i for i in self.population if i.get("lap_best")),
+                      key=lambda i: i["lap_best"], default=None)
         self.history.append(dict(
             gen=self.gen, best=float(R.max()), mean=float(R.mean()),
             median=float(np.median(R)), worst=float(R.min()),
             lap_best=(min(laps) if laps else None), n_lapped=len(laps),
+            #  a FLYING lap, or the first lap from the rollout's rolling start
+            #  (T too short for two): only a flying one compares with the medals
+            lap_flying=bool(lap_ind.get("lap_flying", True)) if lap_ind else False,
             sigma=self.sigma, best_id=top["id"],
             ended={e: sum(1 for i in self.population if i["ended"] == e)
                    for e in sorted({i["ended"] for i in self.population})},
@@ -359,7 +368,7 @@ class Swarm:
             c = self._new(child, parents, sg)
             nxt.append(c)
         for ind in nxt:
-            for k in ("reward", "s", "t", "laps", "lap_best", "lap_first",
+            for k in ("reward", "s", "t", "laps", "lap_best", "lap_first", "lap_flying",
                       "v_mean", "wing_frac", "wings", "ended"):
                 if not ind.get("elite"):
                     ind.pop(k, None)
@@ -388,7 +397,7 @@ class Swarm:
                  seed_source=self.seed_source, seed_report=self.seed_report,
                  rng=self.rng.bit_generator.state,
                  history=self.history, best=best, population=pop,
-                 n_act=self.n_act, n_param=Policy.n_param(self.n_act))
+                 n_act=self.n_act, n_param=Policy.n_param(self.n_act), bred=self.bred)
         tmp = path + ".part"
         with open(tmp, "w") as fh:
             json.dump(d, fh, default=_json_default)
@@ -414,6 +423,7 @@ class Swarm:
         sw.gen, sw.next_id = int(d["gen"]), int(d["next_id"])
         sw.seed_source, sw.seed_report = d.get("seed_source", "none"), d.get("seed_report", {})
         sw.history = list(d.get("history", []))
+        sw.bred = d.get("bred") if isinstance(d.get("bred"), dict) else None
         sw.rng.bit_generator.state = d["rng"]
         sw.population = []
         for p in d["population"]:
@@ -462,6 +472,8 @@ class Swarm:
                     reward=round(float(b["reward"]), 2),
                     lap_best_train=b.get("lap_best"), ended=b.get("ended"),
                     measured_1ms=measured, history=self.history)
+        if self.bred is not None:
+            meta["bred"] = dict(self.bred)     # racing it puts it back in this car
         return Policy(b["theta"].copy(), meta)
 
     def save_best(self, path: str | None = None, measure: bool = True,
