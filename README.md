@@ -152,6 +152,42 @@ cycles.
 * **Skidpad** — one constant-radius guide circle (`--radius`, `--cw`).
 * **Dragstrip** — 1500 m straight with 1/8 mile, 1/4 mile and km gates.
 
+## Time trial: your records
+
+Every lap you drive on a map with a lap (arena, open, the standard 50 m
+skidpad) is recorded, and the valid ones go into that **class's top 5**,
+kept in `runs/records/`. A class is *map | car | engine | surface*, e.g.
+`arena | corsa | sport | wet patches`: change any of those four and it is a
+different table. Your garage build and ballast are **not** in the class —
+designing the car is the game — but each lap remembers the build it was set
+in (its name and the whole build) and the assists you had on (ABS, TC, steer
+aid, gearbox). The HUD shows the class **PB** under LAP / LAST / BEST, and
+when a lap lands the bottom line says where: `NEW PB 1:00.729 (-0.412) P1 of
+top 5`, `LAP 1:01.204 P3 of top 5`, or `outside the top 5`.
+
+A lap is only a record if the timer calls it valid (not all four wheels off
+the track), it went **round** (every sector line in order and at least 95 %
+of the track's length — reversing back over the line and forward again is
+not a lap), it was driven at full speed (not in slow motion, not one step at
+a time) and nothing happened in it that cannot be driven again: a reset
+(`R`, `SHIFT+R`, a race start), a setting changed from the menu (engine,
+gearbox, ABS, TC, steer aid) or the `T` wet toggle. The HUD says `not
+recorded (reset)` and so on. Changing the engine mid-session moves you to
+that engine's class from the next lap on. The dragstrip has no lap, so it has
+no records; nor does a skidpad of another radius (`--radius`, `--cw`). If
+`runs/records/` cannot be written the lap says `NOT SAVED` and you keep
+driving.
+
+Each record keeps the pose of the car at 50 Hz (the ghost of task 22 is drawn
+from it) and every control input handed to the physics, one per millisecond,
+with the car's exact state where the lap began — enough to drive the lap
+again and get the same time **to the last bit** (`python3 -m drive.drive
+--self-check`, V31). To make that exact and small the continuous inputs are
+rounded before the physics sees them while a lap is being recorded (steering
+to 6e-8 rad, pedals to 1e-6 of travel), a thousand times finer than a hand or
+a stick. A lap costs 25-180 KB on disk. Scripted and headless runs never
+read or write `runs/records/`.
+
 ## Build it: the 3D garage
 
 ```
@@ -783,6 +819,8 @@ drive/
   audio.py      procedural engine / tyre / wind / grass sound, streamed via pygame.mixer
   garage.py     software-3D editor: place the flank panel, closed-form readout
   menu.py       pause / help / settings menu (ESC, OPTIONS) shared by the drive and the garage
+  records.py    lap records: top 5 per class, the lap's trace, its controls log and
+                start state (re-simulated bit for bit), runs/records/
   telemetry.py  fixed-schema CSV + sidecar json
   plots.py      overview, g-g, track map, laps, A/B compare
   drive.py      main loop, settings, garage <-> drive session loop, CLI,
@@ -790,7 +828,7 @@ drive/
   ml/           optional: an evolution-strategy driving agent (numpy only).
                 Nothing in drive/ imports it; --ml-drive is its only hook.
   validate.py   the acceptance suite
-runs/           telemetry, plots, settings.json, garage_design.json
+runs/           telemetry, plots, settings.json, garage_design.json, records/
 ```
 
 Read `drive/CONTRACT.md` before changing anything in `drive/`. It records the

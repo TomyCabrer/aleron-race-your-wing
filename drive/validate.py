@@ -889,7 +889,8 @@ def group_X():
 MODULES = ("tyre", "powertrain", "track", "telemetry", "vehicle", "input",
            "render", "menu", "garage", "aero.airfoil", "aero.panel2d", "aero.polar",
            "aero.xfoil", "aero.blend", "aero.vlm", "aero.wing", "aero.optimize",
-           "aero.library", "aero.screen", "aero.section", "aero.mission")
+           "aero.library", "aero.screen", "aero.section", "aero.mission",
+           "records")
 
 
 def group_M():

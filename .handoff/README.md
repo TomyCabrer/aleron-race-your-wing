@@ -95,6 +95,12 @@ the panel staying on the outer flank, and its "there is no configuration in
 which the suction surface faces outboard and the useful force is still inboard"
 is true of the two cells it swept and false of the two it did not.
 
+### Steam plan, Phase A (`PLAN-steam-engagement.md`, tasks 19-22)
+
+| note | task | one line |
+|---|---|---|
+| `19-records.md` | **19** | every lap recorded; the valid ones are the class's **top 5** in `runs/records/` (class = `track\|car\|engine\|surface`, file name `__`-joined for Windows). A record keeps a 50 Hz trace, the controls log and the lap's exact start state, and `records.resimulate` drives it again **bit for bit** (V31). The continuous controls are **quantised** (2^-24 rad, 2^-20 pedal) while a lap is recorded so the log is exact and 22-174 KB. An adversarial review found a 12 s "lap" (reverse over the line) filed as the PB, the engine change filing into the wrong class, and a 0.45 s stall at the line -- all fixed. Dragstrip **excluded** |
+
 ### Wave 7
 
 | note | one line |

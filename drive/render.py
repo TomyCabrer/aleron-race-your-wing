@@ -164,7 +164,7 @@ FONT_NAMES = ('Menlo', 'Monaco', 'DejaVu Sans Mono', 'Courier New')
 
 # HUD rects at the 1280x800 base size; multiplied by ui_scale elsewhere.
 R_SPEED = (12, 12, 300, 150)
-R_TIMING = (460, 12, 360, 86)
+R_TIMING = (460, 12, 360, 104)
 R_LOADS = (968, 12, 300, 230)
 R_STATE = (12, 180, 220, 150)
 R_WING = (1028, 260, 240, 124)
@@ -631,6 +631,10 @@ class HudData:
     # never hidden. Empty = nothing drawn, so every other session is as it was.
     ghosts: list = field(default_factory=list)
     overlay: list = field(default_factory=list)   # lines of text, top-left
+    # --- lap records (drive/records.py): the class PB under LAP / LAST /
+    # BEST, and the top-5 place the last lap took ('P2'), briefly
+    pb_lap: float = 0.0
+    lap_rank: str = ''
 
 
 # ======================================================================= #
@@ -2608,6 +2612,15 @@ class Renderer:
         if not aux.lap_valid:
             self._blit('INVALID', r.x + 250 * u, r.y + 52 * u, self.f_lbl,
                        C_BAR_BRK)
+        # the class PB (drive/records.py) and, when a lap has just landed in
+        # the top 5, the place it took
+        pb = getattr(aux, 'pb_lap', 0.0)
+        self._blit('PB', r.x + 10 * u, r.y + 76 * u, self.f_lbl, C_HUD_DIM)
+        self._blit(_fmt_t(pb), r.x + 40 * u, r.y + 76 * u, self.f_lbl, C_PURPLE)
+        rank = getattr(aux, 'lap_rank', '') or ''
+        if rank:
+            self._blit(f'{rank} of top 5', r.x + 130 * u, r.y + 76 * u, self.f_lbl,
+                       C_GREEN)
 
         # --- loads / utilisation ------------------------------------------
         r = self._panel(R_LOADS)

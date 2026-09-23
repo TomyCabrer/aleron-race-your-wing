@@ -47,6 +47,7 @@ from the repo root.
 | `drive/aero/` | wing-design physics: sections, panel method, polars (XFOIL / estimate), vortex lattice, GP-BO, the library, and the three-step design procedure -- `mission.py` (the lap a wing is for), `screen.py` (the seven weighted criteria the library is ranked on), `section.py` (the aerofoil designed in 2-D against it), `wing.py` (the planform), `blend.py` (how the wing and its end plates meet) | numpy, scipy, the `xfoil` binary if present; `mission.py` alone also imports `corsa_c` and `qss` |
 | `drive/menu.py` | pause / help menu overlay (ESC, OPTIONS); pure UI | pygame only |
 | `drive/audio.py` | procedural car sound: `Synth` (numpy) + `CarSound` (one pygame.mixer channel); a render-loop consumer of `HudData`, never an input | numpy, pygame |
+| `drive/records.py` | lap records: the class key `track\|car\|engine\|surface`, `RecordBook` (top 5 per class, `runs/records/<class>.json`, best sectors, best medal, `last_builds.json`), `LapRecorder` (the `Sim` hooks: controls log, 50 Hz trace, the lap's exact start state), `resimulate` (a lap re-driven from its log, bit for bit) | numpy; `vehicle`, `powertrain`, `cars`, `corsa_c` (dataclass registry only); `drive.drive` / `track` lazily inside `resimulate` and the self-check. Never pygame, never `drive.ml` |
 | `drive/drive.py` | main loop, CLI, scripted runs | everything |
 | `drive/validate.py` | the whole acceptance suite | everything |
 
@@ -1377,6 +1378,34 @@ swarm's car (`--swarm-car`, the swarm page's *Car*) is built by the same rule,
 
 exactly as `--wing` does, and `--build NAME` loads a car saved in the garage
 library (`runs/library/builds/NAME.json`) instead of the last one built.
+
+**Lap records** (`drive/records.py`, task 19). `Sim.recorder` is None on
+every scripted and headless Sim; only `_interactive_session` attaches one
+(`records.session_recorder`: a lap map, the standard skidpad, no
+`--ml-drive`, not headless), so no acceptance run reads or writes
+`runs/records/`. It is fed from `step_physics` at three points and nowhere
+else: `recorder.controls(sim, ctl)` right before `Vehicle.step` -- it
+QUANTISES the five continuous `Controls` fields in place (road wheel to
+2^-24 rad, pedals to 2^-20) and logs the row, so the log is integers and
+exact; `recorder.event(sim, e)` for each `LapTimer` event; and
+`recorder.after_step(sim)` after `n` / `t` advance (the lap opens at the
+end of the crossing step with a snapshot of every dynamic `Vehicle`
+attribute, the harness's surface samples and the `LapTimer`, and closes at
+the end of the next crossing step, after its sector event). `reset()`, a
+live `apply_setting` (anything but sound / camera) and the `T` wet toggle
+`discard` the open lap: the physics could not replay it; the live change
+also `retarget`s the recorder (the engine is in the key, the assists go
+with the lap). A lap is filed only when `LapTimer.lap_valid` holds, it went
+ROUND (every sector event in order, centreline progress >= 0.95 of the
+length: the timer counts a crossing after its lockout however the car got
+back to the line), and no step of it ran in slow motion or single-stepped.
+A failed write keeps the book in memory and never raises into the step. `records.resimulate(rec)` rebuilds
+the car and `VehicleConfig` from the record, restores the snapshot, and
+drives the log through a headless `Sim`: V31 asserts the lap time and the
+sector times come back BIT FOR BIT, and that a 3-lap scripted run leaves
+the right top 5. The class key is D1's; its file name writes `|` as `__`
+(Windows). `HudData.pb_lap` / `lap_rank` carry the class PB and the top-5
+place of a lap that just landed.
 
 `Sim` pause menu: `'menu'` -> `_menu_open()` sets `paused = True`, remembers
 whether `P` had paused already, and calls `inp.set_menu(True)`; while

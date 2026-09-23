@@ -1277,6 +1277,11 @@ class Sim:
         # the RACE page's Test: bot 1 in every car, headless, in a pool
         self._bot_test = None              # in flight: spec, label, pool, result
         self.bot_test_result = None        # the last one: rows per car
+        # lap records (drive/records.py, task 19): the interactive session
+        # attaches a LapRecorder; a scripted or headless Sim never has one
+        self.recorder = None
+        self._rec_msg = ""
+        self._rec_msg_until = -1
 
         self._bind_input()
         self._sample_surfaces()
@@ -1345,6 +1350,8 @@ class Sim:
         if self.wing_side_mode and ctl.wing_cmd is None:
             ctl.wing_cmd = {1: (True, False, None), -1: (False, True, None),
                             2: (True, True, None)}[self.wing_side_mode]
+        if self.recorder is not None:
+            self.recorder.controls(self, ctl)   # quantised + logged (records.py)
         self.ctl = ctl
 
         self.pose_prev = (veh.x, veh.y, veh.psi)
@@ -1370,6 +1377,8 @@ class Sim:
                     self.telem.mark(f"{e[0]}{e[1]}")
                 if e[0] in ("start", "lap"):
                     self._seed_line(e)
+                if self.recorder is not None:
+                    self.recorder.event(self, e)
         if s_prev is not None and self.rivals:
             ds = (s - s_prev)
             if tr.closed:
@@ -1404,6 +1413,8 @@ class Sim:
 
         self.n += 1
         self.t = self.n * dt               # t = n*dt, NEVER accumulated
+        if self.recorder is not None:
+            self.recorder.after_step(self)
         self._log(self.n)
 
     def _emit_skid(self):
@@ -1501,6 +1512,8 @@ class Sim:
         Both force the first-frame guard, because the wall-clock gap across a
         reset is exactly the 0.5-2 s pause the guard exists for.
         """
+        if self.recorder is not None:
+            self.recorder.discard("reset")     # a teleport is not a lap
         tr = self.track
         s0 = 0.0
         V0 = 0.0
@@ -1687,6 +1700,10 @@ class Sim:
         s = self.settings
         s.cycle(key, d)
         restart = False
+        if self.recorder is not None and key not in ("sound", "camera"):
+            self.recorder.discard(f"{key} changed")   # the lap cannot be replayed
+            self.recorder.retarget(s, self._pending)   # the engine is in the class,
+            #                                             the aids go with the lap
         if key in RESTART_KEYS:
             # A different car, or different ballast, is a different CarSpec:
             # the tyre model, the wheel stations, the static loads, the
@@ -1815,6 +1832,8 @@ class Sim:
         elif ev == "wet":
             self.global_wet = (MU_WET_SCALE if self.global_wet == 1.0 else 1.0)
             self._sample_surfaces()
+            if self.recorder is not None:
+                self.recorder.discard("the wet toggle (T)")
         elif ev == "marker":
             if self.telem is not None:
                 self.telem.mark("marker")
@@ -2247,7 +2266,22 @@ class Sim:
         return "BOTS  " + "  |  ".join(parts)
 
     def _hud_msg(self) -> str:
-        return " | ".join(m for m in (self._seed_hud(), self._race_hud()) if m)
+        return " | ".join(m for m in (self._rec_hud(), self._seed_hud(), self._race_hud()) if m)
+
+    # ---- lap records (drive/records.py) ----------------------------------
+    def _rec_note(self, text: str, secs: float) -> None:
+        self._rec_msg = text
+        self._rec_msg_until = self.n + int(round(secs / self.dt))
+
+    def _rec_lap(self, res: dict) -> None:
+        """The recorder's callback when a lap closes: the HUD note."""
+        from .records import lap_note
+        text, secs = lap_note(res)
+        self._rec_note(text, secs)
+        print(text)
+
+    def _rec_hud(self) -> str:
+        return self._rec_msg if (self._rec_msg and self.n < self._rec_msg_until) else ""
 
     def _swarm_step(self, key: str, d: int) -> None:
         ch = SWARM_MENU_CHOICES[key]
@@ -2624,6 +2658,11 @@ class Sim:
             top_deploy=float(getattr(v, "top_deploy", 0.0)),
             msg=self._hud_msg(),
         )
+        if self.recorder is not None:      # the class PB, and where the last lap landed
+            d["pb_lap"] = self.recorder.book.pb_time(self.recorder.key)
+            last = self.recorder.last
+            if last and last.get("pos") and self.n < self._rec_msg_until:
+                d["lap_rank"] = f"P{last['pos']}"
         if self.rivals:
             d["ghosts"] = [rv.ghost() for rv in self.rivals]
         if self.hud_cfg:
@@ -4054,6 +4093,84 @@ def _v30_race_vs_bot(verbose=True):
     return ok, dict(same=same, progress=bot_m, gap_s=gs, gap_m=dm, grid=grid_all)
 
 
+def _v31_records(tmp, verbose=True):
+    """Lap records (drive/records.py): a scripted 3-lap headless run with a
+    recorder on leaves the right top-5 file, re-simulating a lap from its
+    controls log reproduces its time BIT FOR BIT, and a lap with a reset in
+    it is not filed. The book lives in `tmp`: no player file is touched."""
+    from . import records as recm
+    root = os.path.join(tmp, "records")
+    tr = trk.make_arena()
+    drv = LapDriver(tr, margin=0.90)
+    sim = _build("arena", driver=drv, start_V=25.0, gear=3, start_s=tr.length - 30.0)
+    sim.s = tr.length - 30.0
+    key = recm.class_key("arena", CAR_DEFAULT, "stock", "patch")
+    book = recm.RecordBook(root)
+    notes = []
+    rec = recm.LapRecorder(book, key, dict(build_name="stock", build_json=None,
+                                           assists=dict(abs=False, tc=False, steer_aid=True,
+                                                        gearbox="auto")),
+                           expect_global_wet=sim.global_wet, dt=sim.dt,
+                           on_lap=lambda r: notes.append(recm.lap_note(r)[0]))
+    sim.recorder = rec
+    laps = []
+    for _ in range(int(200.0 / sim.dt)):
+        sim.step_physics(sim.dt)
+        if rec.n_laps > len(laps):
+            laps.append(rec.last)
+            if len(laps) == 3:
+                break
+    rec.flush()                                 # the filing thread is done
+    fresh = recm.RecordBook(root)               # read back from the FILE
+    filed = fresh.laps(key)
+    want = sorted(r["time"] for r in laps if r["valid"])
+    timer = [e[3] for e in sim.events_log if e[0] == "lap"]
+    path = book.path(key)
+    file_ok = (os.path.exists(path) and len(laps) == 3 and all(r["valid"] for r in laps)
+               and [lp["time"] for lp in filed] == want[:recm.TOP_N]
+               and sorted(timer) == want            # the SAME floats the timer saw
+               and all(len(lp["sectors"]) == len(tr.sector_s) for lp in filed)
+               and fresh.pb_time(key) == want[0]
+               and [r["pos"] for r in laps] == [1 + sorted([x["time"] for x in laps[:i + 1]]).index(r["time"])
+                                                for i, r in enumerate(laps)])
+    sizes = [recm.lap_size_bytes(lp) for lp in filed]
+    size_ok = max(sizes) <= 300 * 1024
+    rs = recm.resimulate(filed[len(filed) // 2])
+    replay_ok = rs["exact"] and rs["sectors_exact"]
+    # a lap with a reset in it is not a record
+    for _ in range(int(3.0 / sim.dt)):
+        sim.step_physics(sim.dt)
+    sim.reset(to_checkpoint=True)
+    n0 = rec.n_laps
+    for _ in range(int(90.0 / sim.dt)):
+        sim.step_physics(sim.dt)
+        if rec.n_laps > n0:
+            break
+    rec.flush()
+    reset_ok = (rec.n_laps == n0 + 1 and rec.last["valid"] is False and rec.last["why"] == "reset"
+                and len(recm.RecordBook(root).laps(key)) == len(filed))
+    # a LIVE setting change files the next lap under the new class (the
+    # engine is in the key) with the new assists, and drops the lap in hand
+    was = rec.recording
+    sim.apply_setting("engine")
+    sim.apply_setting("abs")
+    st = sim.settings
+    reset_ok = (reset_ok and was and not rec.recording
+                and rec.key == recm.class_key("arena", st.car, st.engine, st.wet)
+                and rec.meta["assists"]["abs"] == bool(st.abs) and rec._why == "engine changed")
+    ok = file_ok and size_ok and replay_ok and reset_ok
+    if verbose:
+        print(f"  V31 records     : 3 laps {[round(r['time'], 3) for r in laps]} -> file "
+              f"{[round(lp['time'], 3) for lp in filed]} ({file_ok}); "
+              f"{max(sizes) / 1024:.0f} KB/lap max ({size_ok}); re-sim of "
+              f"{rs['time'] if rs['time'] is None else round(rs['time'], 6)} s from the log, "
+              f"bit for bit {rs['exact']}, sectors {rs['sectors_exact']}; reset mid-lap -> "
+              f"not filed, a live engine / ABS change -> the new class and assists "
+              f"({reset_ok})  -> {'ok' if ok else 'FAIL'}")
+    return ok, dict(laps=[r["time"] for r in laps], kb=max(sizes) / 1024.0,
+                    replay=rs["time"], exact=rs["exact"], notes=notes)
+
+
 def _v20_determinism(tmp, verbose=True):
     """Two identical scripted runs, full precision, must be byte-identical."""
     import hashlib
@@ -4654,6 +4771,7 @@ def self_check(verbose=True) -> bool:
                      ("V28", lambda: _v28_open_map(verbose)),
                      ("V29", lambda: _v29_engine_tc(verbose)),
                      ("V30", lambda: _v30_race_vs_bot(verbose)),
+                     ("V31", lambda: _v31_records(tmp, verbose)),
                      ("V20", lambda: _v20_determinism(tmp, verbose)),
                      ("accel", lambda: _accel_end_to_end(tmp, verbose)),
                      ("V21", lambda: _v21_rtf(tmp, 60.0, verbose))):
@@ -4951,6 +5069,7 @@ def _apply_design(opts, design, lib=None) -> dict:
         opts.wing_inc = design.inc_deg
         opts.wing_cfg, opts.hud_cfg = None, None
         opts.mass_points = ()
+        opts.build_name, opts.build_json = f"{design.wing} panel", None
         return kw
     lib = lib or grg.library()
     kw = design.cfg_kwargs(lib)
@@ -4962,6 +5081,8 @@ def _apply_design(opts, design, lib=None) -> dict:
     # (drive/aero/wing.wing_mass -> CarBuild.mass_points). Empty slots give
     # an empty tuple, so a car with no wings is the car every rig measures.
     opts.mass_points = design.mass_points(lib)
+    #  what a lap record files as its build (drive/records.py)
+    opts.build_name, opts.build_json = design.name, design.to_json()
     return kw
 
 
@@ -5727,6 +5848,17 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     sim = Sim(veh, tr, inp, renderer=renderer, telem=telem, dt=opts.dt,
               wing=opts.wing, global_wet=global_wet, settings=settings)
     sim.has_garage = bool(garage)          # the menu offers the garage
+    sim.track_radius, sim.track_cw = float(opts.radius), bool(opts.cw)
+    #  lap records (drive/records.py): the ONE place runs/records/ is
+    #  attached -- scripted and headless runs never read player files
+    try:
+        from .records import session_recorder
+        sim.recorder, why = session_recorder(opts, settings, MU_WET_SCALE, on_lap=sim._rec_lap)
+        if why:
+            print(f"records: {why}")
+    except Exception as exc:               # noqa: BLE001 -- a broken record file
+        print(f"records unavailable ({type(exc).__name__}: {exc})")   # never stops a drive
+        sim.recorder = None
     if getattr(opts, "seed_lap", False):
         sim.seed_armed = True              # --seed-lap: K already pressed
         opts.seed_lap = False              # once; a restart is a fresh choice
@@ -5785,6 +5917,8 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     finally:
         if telem is not None:
             telem.close()
+        if sim.recorder is not None:
+            sim.recorder.close()           # the last lap is on disk before the next session reads it
     return sim
 
 
