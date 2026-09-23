@@ -48,11 +48,13 @@ python3 -m drive.drive --swarm 32 --swarm-car mx5 --swarm-fast --swarm-save neve
 | `BACKSPACE` | garage (3D panel editor) | `ESC` | pause menu / settings |
 
 `ESC` (or `OPTIONS` on the pad) pauses and opens the menu: every keyboard and
-pad control on screen, plus *Resume*, *Settings*, *Reset to last sector line*,
-*Full reset*, *Garage*, *Deploy swarm*, *Race vs bot* and *Quit*. `↑` `↓` / d-pad move, `←` `→` / d-pad
+pad control on screen, plus *Resume*, *Settings*, *Time trial* (on a map with
+a lap), *Reset to last sector line*, *Full reset*, *Garage*, *Deploy swarm*,
+*Race vs bot* and *Quit*. `↑` `↓` / d-pad move, `←` `→` / d-pad
 change a value on the settings page, `ENTER` / `✕`
 select, `ESC` / `○` / `OPTIONS` resume; `R`, `SHIFT+R` and `BACKSPACE` work as
-hotkeys inside it. The car does not move and the pad does not rumble while it
+hotkeys inside it. Every menu page also takes the **mouse**: point at a row,
+click it to run it, the wheel moves the cursor, a right click goes back. The car does not move and the pad does not rumble while it
 is up. `P` is still the plain pause for `O` single-stepping.
 
 ## Settings
@@ -152,7 +154,32 @@ cycles.
 * **Skidpad** — one constant-radius guide circle (`--radius`, `--cw`).
 * **Dragstrip** — 1500 m straight with 1/8 mile, 1/4 mile and km gates.
 
-## Time trial: your records
+## Time trial: the pre-race screen and your records
+
+A drive on a map with a lap (arena, open, the standard skidpad) starts on the
+**TIME TRIAL** page, not on the tarmac: the class you are about to be timed
+in, the build you are driving, the class's top 5 (time, build, assists, date)
+and the medal targets. The cursor opens on **RACE**, so an unchanged car is one
+press (`ENTER` / `✕` / a click): every car to the line, and the clock starts
+at the next crossing — the flying lap. **Build** opens *PICK A BUILD*: every
+build saved in the garage library, whatever map it was designed on, each with
+its best lap in this class (the car's own laps: an edited car that kept a
+saved build's name is a different car); `ENTER` restarts the session in it,
+and a car you were driving that is in no library file is saved there first
+as `<name> (autosave)`. **Edit** opens the garage on this build, and its
+`ENTER` comes back here. `ESC` is the pause menu; *Resume* drives on from
+where you are, and those laps count too. The pause menu's *Time trial* brings
+the page back any time.
+
+Each map remembers the build you last **drove** on it
+(`runs/records/last_builds.json`): launch, or change map, and the car you
+open with is that map's, not the last map's. Coming back from the garage
+keeps the car you just built, and `--build` / `--wing` win at launch. The
+switch never touches the garage's own file (`runs/garage_design.json`), so
+the car on the ramp is still there. The screen is never shown to a script, a
+headless run or `--ml-drive`.
+
+### Your records
 
 Every lap you drive on a map with a lap (arena, open, the standard 50 m
 skidpad) is recorded, and the valid ones go into that **class's top 5**,
@@ -210,7 +237,8 @@ wing rises off the deck onto its pylons and takes its incidence. `ENTER`
 drives that car on the current map; `BACKSPACE` in the drive comes back with
 the car still yours. The build is saved to `runs/garage_design.json` and is
 the car every later launch drives, until `--wing …` or `--build` says
-otherwise.
+otherwise -- or until you open a map you last drove in another build, which
+then comes back for that map (the TIME TRIAL section below).
 
 | garage key | | garage key | |
 |---|---|---|---|
@@ -821,6 +849,8 @@ drive/
   menu.py       pause / help / settings menu (ESC, OPTIONS) shared by the drive and the garage
   records.py    lap records: top 5 per class, the lap's trace, its controls log and
                 start state (re-simulated bit for bit), runs/records/
+  prerace.py    the TIME TRIAL page: class, build, top 5, medal targets; PICK a
+                saved build; the build each map opens with
   telemetry.py  fixed-schema CSV + sidecar json
   plots.py      overview, g-g, track map, laps, A/B compare
   drive.py      main loop, settings, garage <-> drive session loop, CLI,

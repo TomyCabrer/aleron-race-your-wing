@@ -1282,6 +1282,11 @@ class Sim:
         self.recorder = None
         self._rec_msg = ""
         self._rec_msg_until = -1
+        # the TIME TRIAL / pre-race page (drive/prerace.py, task 20): a
+        # prerace.PreRace when this session has one; a PICK on it leaves the
+        # build (name, json) here and restarts the session on it
+        self.prerace = None
+        self.prerace_pick = None
 
         self._bind_input()
         self._sample_surfaces()
@@ -1872,8 +1877,10 @@ class Sim:
     def _menu_show_main(self, idx: int = 0) -> None:
         """The pause page: resume / settings / resets / garage / quit."""
         items = [("Resume", "resume"),
-                 ("Settings: map, gearbox, ABS, aids, camera", "settings"),
-                 ("Reset to last sector line", "reset"),
+                 ("Settings: map, gearbox, ABS, aids, camera", "settings")]
+        if self.prerace is not None:
+            items.append(("Time trial: your top 5, medals, the build", "timetrial"))
+        items += [("Reset to last sector line", "reset"),
                  ("Full reset (skid marks + timing)", "full_reset")]
         if self.has_garage:
             items.append(("Garage: build the flank panel (3D)", "garage"))
@@ -2283,6 +2290,94 @@ class Sim:
     def _rec_hud(self) -> str:
         return self._rec_msg if (self._rec_msg and self.n < self._rec_msg_until) else ""
 
+    # ---- the TIME TRIAL / pre-race page (drive/prerace.py) ----------------
+    def open_prerace(self) -> bool:
+        """The pre-race screen: at a timed session's start, and the pause
+        menu's Time trial. False when this session has none."""
+        if self.prerace is None or self.renderer is None:
+            return False
+        if self.menu is None or not self.menu.open:
+            self._menu_open()
+        self._menu_show_prerace()
+        return self._menu_page == "prerace"
+
+    def _prerace_sync(self) -> None:
+        """The page shows the class the NEXT lap is filed in (a live engine
+        change moves it) and the engine the car has now."""
+        pr = self.prerace
+        if self.recorder is not None:
+            pr.key, pr.book = self.recorder.key, self.recorder.book
+        pr.titles["engine"] = engine_label(self.settings.engine, self.veh.car)
+
+    def _menu_show_prerace(self, idx: int = 0) -> None:
+        try:
+            self._prerace_sync()
+            pr = self.prerace
+            items, secs, sub = pr.items(), pr.sections(), pr.subtitle()
+        except Exception as exc:           # noqa: BLE001 -- a bad record file must
+            print(f"pre-race screen: {type(exc).__name__}: {exc}")   # not take the
+            self.prerace = None            # session down: the pause page instead
+            self._menu_show_main()
+            return
+        self.menu.show(items=items, sections=secs, subtitle=sub,
+                       note="", footer="ENTER / CROSS race   ESC / CIRCLE the pause menu   "
+                                       "or click a row", title="TIME TRIAL", idx=idx, columns=1)
+        self._menu_page = "prerace"
+
+    def _menu_show_prerace_pick(self, idx: int = 0) -> None:
+        from .prerace import PICK_HELP
+        pr = self.prerace
+        self.menu.show(items=pr.pick_items(), sections=PICK_HELP, subtitle=pr.pick_subtitle(),
+                       note="", footer="ENTER / CROSS drive it   ESC / CIRCLE back",
+                       title="PICK A BUILD", idx=idx, columns=1)
+        self._menu_page = "prerace_pick"
+
+    def start_timed(self) -> None:
+        """RACE: every car to the line and the clock from the next crossing;
+        this build becomes the map's default (`runs/records/last_builds.json`)."""
+        pr = self.prerace
+        if pr is not None and pr.build_json is not None:
+            pr.book.set_last_build(self.track.name, pr.build_name, pr.build_json)
+        self.reset(to_checkpoint=False)
+        self._rec_note("TIME TRIAL: the clock starts when you cross the line", 4.0)
+
+    def _prerace_event(self, action: str) -> bool:
+        """The pre-race and pick pages; False lets the hotkeys (R, SHIFT+R,
+        BACKSPACE) fall through to the pause menu's own handling."""
+        if action in ("reset", "full_reset", "garage"):
+            return False
+        pr = self.prerace
+        idx = self.menu.idx
+        if self._menu_page == "prerace":
+            if action == "resume":             # ESC: back to the pause page
+                self._menu_show_main()
+            elif action == "pr_race":
+                self._menu_close()
+                self.start_timed()
+            elif action == "pr_pick":
+                self._menu_show_prerace_pick()
+            elif action == "pr_edit" and self.has_garage:   # the garage, on this
+                self._menu_close()             # build; its ENTER comes back here
+                self.stop_reason = "garage"
+                self.quit = True
+            else:
+                self._menu_show_prerace(idx=idx)
+            return True
+        if action in ("resume", "pr_back"):
+            self._menu_show_prerace(idx=1)
+        elif action.startswith("pr_build:"):
+            name = action[len("pr_build:"):]
+            b = pr.builds.get(name)
+            if b is None or (name == pr.build_name and pr.saved()):
+                self._menu_show_prerace(idx=1)
+            else:                              # a new car: a new session on it
+                self.prerace_pick = (name, b)
+                self._menu_close()
+                self.restart()
+        else:
+            self._menu_show_prerace_pick(idx=idx)
+        return True
+
     def _swarm_step(self, key: str, d: int) -> None:
         ch = SWARM_MENU_CHOICES[key]
         cur = self.swarm_opts[key]
@@ -2333,6 +2428,8 @@ class Sim:
             action = self.menu.handle(ev)
             if action is None:
                 return
+        if self._menu_page in ("prerace", "prerace_pick") and self._prerace_event(action):
+            return
         if self._menu_page == "settings":
             idx = self.menu.idx
             if action in ("resume", "settings_back"):
@@ -2448,6 +2545,9 @@ class Sim:
             return
         elif action == "race":
             self._menu_show_race()
+            return
+        elif action == "timetrial" and self.prerace is not None:
+            self._menu_show_prerace()
             return
         self._menu_close()
         if action == "reset":
@@ -4171,6 +4271,115 @@ def _v31_records(tmp, verbose=True):
                     replay=rs["time"], exact=rs["exact"], notes=notes)
 
 
+def _v32_prerace(tmp, verbose=True):
+    """The pre-race screen as a menu flow, driven by events with no window
+    (V26's style): it opens on RACE, one press races, EDIT goes to the
+    garage, PICK lists the library's builds with their best time in this
+    class and a pick restarts the session on it, the pause menu's Time trial
+    reaches it, ESC backs out one page, and a click on a row fires it. And
+    the screen is not offered to a scripted / headless run."""
+    from types import SimpleNamespace
+    from . import records as recm, prerace as prm
+    root = os.path.join(tmp, "prerace")
+    book = recm.RecordBook(root)
+    key = recm.class_key("arena", CAR_DEFAULT, "sport", "patch")
+    b_cur = dict(version=2, name="my corsa", mirror=True, builtin=False,
+                 slots={"left": {"wing": "plate", "x": 0.97, "h": 0.9, "inc_deg": 0.0}})
+    b_wet = dict(b_cur, name="wet setup", slots={"left": {"wing": "fin"}})
+    js = {"my corsa": b_cur, "wet setup": b_wet}
+    for t, name in ((61.40, "my corsa"), (62.10, "wet setup"), (60.95, "my corsa")):
+        r = recm._fake_rec(t, [20.1, 20.4, 20.5])
+        r["build"] = dict(name=name, json=js[name])
+        book.insert(key, r)
+    sim = _build("arena", driver=lambda t, v, T_: Controls())
+    sim.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
+    sim.has_garage = True
+    sim.recorder = recm.LapRecorder(book, key, {}, 1.0, sim.dt)
+    sim.prerace = prm.PreRace(key, book, "my corsa", b_cur,
+                              builds={"my corsa": b_cur, "wet setup": b_wet})
+    ev = sim.handle_event
+
+    def goto(action):
+        acts = [a for _, a in sim.menu.items]
+        i = acts.index(action)
+        while sim.menu.idx != i:
+            ev("nav_down")
+
+    sim.run_headless(0.5)                          # the car has moved off the line
+    sim.open_prerace()
+    open_ok = (sim.menu.open and sim._menu_page == "prerace" and sim.paused
+               and sim.menu.action() == "pr_race")
+    ev("select")                                   # RACE: one press
+    race_ok = (not sim.menu.open and not sim.paused and sim.s == 0.0
+               and hypot(sim.veh.u, sim.veh.v) < 1e-9 and sim.lap.lap == 0
+               and recm.RecordBook(root).last_build("arena")["name"] == "my corsa")
+    ev("menu")                                     # pause menu -> Time trial
+    goto("timetrial")
+    ev("select")
+    tt_ok = sim.menu.open and sim._menu_page == "prerace"
+    goto("pr_pick")
+    ev("select")
+    items = sim.menu.items
+    pick_ok = (sim._menu_page == "prerace_pick"
+               and [a for _, a in items] == ["pr_build:my corsa", "pr_build:wet setup", "pr_back"]
+               and "1:00.950" in items[0][0] and "1:02.100" in items[1][0])
+    ev("menu")                                     # ESC: back to the pre-race page
+    back_ok = sim._menu_page == "prerace" and sim.menu.open
+    goto("pr_pick")
+    ev("select")
+    goto("pr_build:wet setup")
+    ev("select")
+    picked = (sim.quit and sim.stop_reason == "restart" and sim.prerace_pick is not None
+              and sim.prerace_pick[0] == "wet setup" and sim.prerace_pick[1] == b_wet)
+    sim.quit, sim.stop_reason, sim.prerace_pick = False, "", None
+    sim.open_prerace()
+    goto("pr_edit")
+    ev("select")
+    edit_ok = sim.quit and sim.stop_reason == "garage" and not sim.menu.open
+    sim.quit, sim.stop_reason = False, ""
+    sim.open_prerace()
+    ev("menu")                                     # ESC on the pre-race: the pause page
+    esc_ok = sim._menu_page == "main" and sim.menu.open
+    ev("menu")
+    # the mouse: draw the page offscreen, click the RACE row
+    mouse_ok = False
+    try:
+        import pygame
+        pygame.font.init()
+        surf = pygame.Surface((1280, 800))
+        sim.run_headless(0.3)
+        sim.open_prerace()
+        goto("pr_edit")
+        from .menu import CLICK_GUARD_DRAWS
+        for _ in range(CLICK_GUARD_DRAWS):         # a quarter second of frames
+            sim.menu.draw(surf)
+        x, y = sim.menu.row_centre(0)
+        ev(f"hover:{x}:{y}")
+        hov = sim.menu.idx == 0
+        ev(f"click:{x}:{y}")                       # the press arms RACE ...
+        armed = sim.menu.open
+        ev(f"release:{x}:{y}")                     # ... the release runs it
+        mouse_ok = (hov and armed and not sim.menu.open and sim.s == 0.0
+                    and not sim.paused)
+    except Exception as exc:                       # noqa: BLE001
+        print(f"    V32 mouse: {type(exc).__name__}: {exc}")
+    # who gets the screen
+    o = _Opts(headless=False, script=None, ml_drive=None, render=None)
+    s_ = Settings(path="", track="arena")
+    who_ok = (prm.wanted(o, s_) and not prm.wanted(_Opts(headless=True), s_)
+              and not prm.wanted(_Opts(script="lap"), s_)
+              and not prm.wanted(o, Settings(path="", track="dragstrip")))
+    ok = all((open_ok, race_ok, tt_ok, pick_ok, back_ok, picked, edit_ok, esc_ok,
+              mouse_ok, who_ok))
+    if verbose:
+        print(f"  V32 pre-race    : opens on RACE {open_ok}; one press races {race_ok}; "
+              f"Time trial {tt_ok}; pick lists builds + class bests {pick_ok}; "
+              f"ESC back {back_ok}; pick restarts on it {picked}; EDIT -> garage {edit_ok}; "
+              f"ESC -> pause page {esc_ok}; mouse hover + click {mouse_ok}; "
+              f"scripted / headless / dragstrip skip it {who_ok}")
+    return ok, dict(open=open_ok, race=race_ok, pick=pick_ok, mouse=mouse_ok)
+
+
 def _v20_determinism(tmp, verbose=True):
     """Two identical scripted runs, full precision, must be byte-identical."""
     import hashlib
@@ -4772,6 +4981,7 @@ def self_check(verbose=True) -> bool:
                      ("V29", lambda: _v29_engine_tc(verbose)),
                      ("V30", lambda: _v30_race_vs_bot(verbose)),
                      ("V31", lambda: _v31_records(tmp, verbose)),
+                     ("V32", lambda: _v32_prerace(tmp, verbose)),
                      ("V20", lambda: _v20_determinism(tmp, verbose)),
                      ("accel", lambda: _accel_end_to_end(tmp, verbose)),
                      ("V21", lambda: _v21_rtf(tmp, 60.0, verbose))):
@@ -5124,8 +5334,17 @@ def run_interactive_cli(opts) -> int:
 
     mode = "garage" if (opts.garage and grg is not None) else "drive"
     pad = None
+    #  the build a map opens with is the one last USED there (the pre-race
+    #  screen, drive/prerace.py): at launch -- unless --build / --wing named
+    #  one -- and whenever the map changes; never over a car the garage has
+    #  just built. The switch is in memory: runs/garage_design.json is the
+    #  garage's working car and only the garage writes it
+    seen_track = None
+    explicit = bool(getattr(opts, "build", None)) or any(
+        a.startswith("--wing") for a in sys.argv[1:])
     try:
         while True:
+            from_garage = False
             if mode == "garage":
                 g = grg.Garage((w, h), design, pad=pad, lib=lib)
                 action = g.run()
@@ -5136,10 +5355,31 @@ def run_interactive_cli(opts) -> int:
                 _apply_design(opts, design, lib)
                 print(f"garage -> drive: {design.summary(lib)}")
                 mode = "drive"
+                from_garage = True
+            if (grg is not None and design is not None and not from_garage
+                    and settings.track != seen_track
+                    and not (explicit and seen_track is None)):
+                d2 = _track_build(grg, lib, design, settings.track, opts)
+                if d2 is not None:
+                    design = d2
+                    _apply_design(opts, design, lib)
+            seen_track = settings.track
+            if grg is not None and design is not None:
+                _track_build_used(settings.track, design, opts)
             sim = _interactive_session(opts, pad=pad, settings=settings,
                                        garage=(grg is not None))
             pad = getattr(sim.inp, "pad", pad)
             opts.race_menu = dict(sim.race_opts, active=bool(sim.rivals))
+            pick = getattr(sim, "prerace_pick", None)
+            if pick and grg is not None:
+                #  the pre-race PICK: that saved build is the car from now on;
+                #  a car being driven that is in no library file is saved as
+                #  one first, so a pick never loses it
+                _autosave_build(design, lib)
+                design = grg.CarBuild.from_json(pick[1])
+                design.clamp(lib)
+                _apply_design(opts, design, lib)
+                print(f"pre-race: driving the build '{pick[0]}'")
             if sim.stop_reason == "garage" and grg is not None:
                 mode = "garage"
                 continue
@@ -5176,6 +5416,7 @@ def run_interactive_cli(opts) -> int:
                 opts.swarm_car = None
                 opts.swarm_saved = None
                 opts.swarm_menu = dict(launch)     # the page remembers its values
+                opts.prerace_skip = True           # back from the swarm: drive, not a timed start
                 continue
             if sim.stop_reason == "restart":
                 continue
@@ -5728,10 +5969,75 @@ def _resolve_design(opts):
                                                  inc_deg=getattr(opts, "wing_inc", 0.0)))
         design.clamp(lib)
         _apply_design(opts, design, lib)
+        opts.garage_lib = lib              # the pre-race page's PICK lists its builds
     except Exception as exc:
         print(f"garage unavailable ({exc})")
         grg = None
     return grg, design, lib
+
+
+def _player_session(opts) -> bool:
+    """A windowed, human-driven session: the only kind that reads or writes
+    the per-map builds (a player file). Not `--ml-drive`, not headless, not
+    `--render off / offscreen` (the pre-race screen's own rule)."""
+    return not (getattr(opts, "ml_drive", None) or getattr(opts, "headless", False)
+                or getattr(opts, "render", None) in ("off", "offscreen"))
+
+
+def _track_build_used(track, design, opts) -> None:
+    """This session drives `design` on `track`: it is that map's build from
+    now on (the plan's "the last build used on this track")."""
+    if not _player_session(opts):
+        return
+    try:
+        from .records import RecordBook
+        book = RecordBook()
+        js = design.to_json()
+        cur = book.last_build(track)
+        if not cur or cur.get("build") != js:
+            book.set_last_build(track, design.name, js)
+    except Exception as exc:               # noqa: BLE001 -- never stops a drive
+        print(f"pre-race: per-map build not saved ({type(exc).__name__}: {exc})")
+
+
+def _autosave_build(design, lib) -> None:
+    """Put a car that is in no library file into the library before a PICK
+    replaces it (as '<name> (autosave)', '... 2', ...)."""
+    try:
+        from .prerace import _same_build
+        js = design.to_json()
+        if any(_same_build(b, js) for b in lib.builds.values()):
+            return
+        base = f"{design.name} (autosave)"
+        name, k = base, 2
+        while name in lib.builds:
+            name, k = f"{base} {k}", k + 1
+        js["name"] = name
+        js["builtin"] = False
+        lib.save_build(js)
+        print(f"pre-race: the car you were driving is saved in the library as '{name}'")
+    except Exception as exc:               # noqa: BLE001
+        print(f"pre-race: could not autosave the car ({type(exc).__name__}: {exc})")
+
+
+def _track_build(grg, lib, design, track, opts):
+    """The build last USED on `track` (runs/records/last_builds.json), as a
+    CarBuild, when it differs from `design`; else None. A player file, so
+    only a player session reads it (`_player_session`)."""
+    if not _player_session(opts):
+        return None
+    try:
+        from .records import RecordBook
+        lb = RecordBook().last_build(track)
+        if not lb or lb["build"] == design.to_json():
+            return None
+        d2 = grg.CarBuild.from_json(lb["build"])
+        d2.clamp(lib)
+        print(f"pre-race: {track} opens with the build last used there, '{lb.get('name', '')}'")
+        return d2
+    except Exception as exc:               # noqa: BLE001 -- a bad file: keep the car
+        print(f"pre-race: no per-map build ({type(exc).__name__}: {exc})")
+        return None
 
 
 def _session_car(opts, settings):
@@ -5859,6 +6165,28 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     except Exception as exc:               # noqa: BLE001 -- a broken record file
         print(f"records unavailable ({type(exc).__name__}: {exc})")   # never stops a drive
         sim.recorder = None
+    #  the pre-race screen (drive/prerace.py): a timed session on a lap map
+    #  starts on it; the pause menu's Time trial reaches it any time
+    prerace_now = False
+    if sim.recorder is not None and renderer is not None:
+        try:
+            from .prerace import PreRace, wanted
+            lib = getattr(opts, "garage_lib", None)
+            sim.prerace = PreRace(sim.recorder.key, sim.recorder.book,
+                                  getattr(opts, "build_name", "") or "",
+                                  getattr(opts, "build_json", None),
+                                  builds=dict(getattr(lib, "builds", None) or {}),
+                                  titles=dict(track=trk.TRACK_TITLES.get(settings.track,
+                                                                         tr.title or tr.name),
+                                              car=cars.car_name(settings.car),
+                                              engine=engine_label(settings.engine, car),
+                                              surface=SURFACE_LABELS[settings.wet]),
+                                  can_edit=bool(garage))
+            prerace_now = wanted(opts, settings) and not getattr(opts, "prerace_skip", False)
+        except Exception as exc:           # noqa: BLE001
+            print(f"pre-race screen unavailable ({type(exc).__name__}: {exc})")
+            sim.prerace = None
+    opts.prerace_skip = False
     if getattr(opts, "seed_lap", False):
         sim.seed_armed = True              # --seed-lap: K already pressed
         opts.seed_lap = False              # once; a restart is a fresh choice
@@ -5912,6 +6240,8 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     if renderer is not None and opts.render != "offscreen" and not opts.headless:
         sim.sound_enabled = True
         sim._audio_apply()
+    if prerace_now:
+        sim.open_prerace()                 # RACE (ENTER / CROSS) is one press
     try:
         sim.run_interactive()
     finally:

@@ -165,6 +165,19 @@ def records_reason(track: str, radius: float = 50.0, cw: bool = False):
     return None
 
 
+def build_id(name, build_json) -> str:
+    """What a build's best lap is filed under: its CONTENT -- a hash of the
+    `CarBuild` JSON without its name and library flag -- so a car edited in
+    the garage that kept its name is a different build, and two names for one
+    car are one. A published one-panel car (no JSON) is known by its name."""
+    if isinstance(build_json, dict):
+        import hashlib
+        body = {k: v for k, v in build_json.items() if k not in ("name", "builtin")}
+        return "b:" + hashlib.sha1(json.dumps(body, sort_keys=True, default=repr)
+                                   .encode()).hexdigest()[:16]
+    return "n:" + str(name or "")
+
+
 def surface_global_wet(surface: str, wet_scale: float) -> float:
     """The global grip scale a surface setting runs at ('all' -> wet)."""
     return float(wet_scale) if surface == "all" else 1.0
@@ -589,12 +602,12 @@ class RecordBook:
         with self._lock:
             return list(self.load(key)["best_sectors"])
 
-    def build_best(self, key: str, name: str) -> float:
+    def build_best(self, key: str, name: str, build_json=None) -> float:
         """A build's best lap in the class (nan when it has none): the
         pre-race screen's PICK rows (task 20). Every valid lap updates it,
-        not only the top 5."""
+        not only the top 5; it is filed by `build_id` (the car, not its name)."""
         with self._lock:
-            t = self.load(key).get("build_bests", {}).get(str(name))
+            t = self.load(key).get("build_bests", {}).get(build_id(name, build_json))
         return float(t) if isinstance(t, (int, float)) and math.isfinite(t) else float("nan")
 
     def rank_of(self, key: str, t: float):
@@ -613,11 +626,12 @@ class RecordBook:
         with self._lock:
             d = self.load(key)
             self._merge_sectors(d, rec.get("sectors") or [])
-            name = str((rec.get("build") or {}).get("name", "") or "")
+            b = rec.get("build") if isinstance(rec.get("build"), dict) else {}
+            bid = build_id(b.get("name", ""), b.get("json"))
             bb = d.setdefault("build_bests", {})
             t = float(rec["time"])
-            if name and (name not in bb or t < bb[name]):
-                bb[name] = t
+            if bid != "n:" and (bid not in bb or t < bb[bid]):
+                bb[bid] = t
             pos = self.rank_of(key, t)
             if pos is not None:
                 d["laps"].insert(pos - 1, rec)

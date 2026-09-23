@@ -16,6 +16,16 @@ Command vocabulary (the strings `Menu.handle` understands):
                         'prev:<action>' / 'next:<action>', menu stays open
     select              run the highlighted item -> returns its action
     back / menu         close                    -> returns 'resume'
+    hover:X:Y           the MOUSE: the row under it becomes the cursor
+    click:X:Y           a left press ARMS the row under it ...
+    release:X:Y         ... and the release on that same row runs it (=
+                        select). A press within CLICK_GUARD_DRAWS frames of
+                        a page change is ignored, so the second click of a
+                        double-click cannot run a row of the page the first
+                        one opened. A right click is sent as 'menu' by the
+                        input layer, the wheel as nav_up / nav_down.
+
+A page with more rows than fit shows a scrolling window of them.
 
 Everything else is ignored so a caller can pass its whole command stream.
 """
@@ -35,6 +45,9 @@ C_ACCENT = (255, 140, 43)
 C_SEL_BG = (40, 44, 52)
 C_KEY = (217, 206, 85)
 C_SECTION = (79, 163, 255)
+
+#: frames after a show() before a mouse press arms a row (~0.25 s at 60 fps)
+CLICK_GUARD_DRAWS = 15
 
 NAV_HINT = [("UP / DOWN", "move"), ("LEFT / RIGHT", "change value"),
             ("ENTER", "select"), ("ESC", "back")]
@@ -92,6 +105,10 @@ class Menu:
         self._fonts = {}
         self._cache = {}
         self._surfs = {}                  # overlay / panel surfaces by size
+        self._rows = []                   # the item rows as drawn: (i, (x, y, w, h))
+        self._top = 0                     # first row of the scrolling window
+        self._armed = None                # the row a mouse press armed
+        self._draws = 0                   # frames drawn since the last show()
 
     # -- state --------------------------------------------------------------
     def show(self, items=None, sections=None, subtitle=None, note=None,
@@ -116,6 +133,8 @@ class Menu:
             self.columns = 1 if int(columns) <= 1 else 2
         self.idx = (int(idx) % len(self.items)) if self.items else 0
         self.open = True
+        self._armed = None
+        self._draws = 0
 
     def hide(self) -> None:
         self.open = False
@@ -148,7 +167,45 @@ class Menu:
         elif cmd in ("back", "menu"):
             self.open = False
             return "resume"
+        elif cmd.startswith(("hover:", "click:", "release:")):
+            i = self.hit(cmd)
+            if cmd.startswith("release:"):
+                armed, self._armed = self._armed, None
+                if i is None or i != armed:
+                    return None
+                self.idx = i
+                a = self.action()
+                self.open = False
+                return a or "resume"
+            if i is None:
+                return None
+            self.idx = i
+            if cmd.startswith("click:"):
+                self._armed = i if self._draws >= CLICK_GUARD_DRAWS else None
         return None
+
+    # -- the mouse ------------------------------------------------------------
+    def hit(self, cmd_or_xy):
+        """The item row under a point ('hover:X:Y', 'click:X:Y' or (x, y)),
+        as last drawn; None off every row (or before the first draw)."""
+        try:
+            if isinstance(cmd_or_xy, str):
+                _, xs, ys = cmd_or_xy.split(":")
+                x, y = float(xs), float(ys)
+            else:
+                x, y = float(cmd_or_xy[0]), float(cmd_or_xy[1])
+        except (ValueError, TypeError):
+            return None
+        for i, (rx, ry, rw, rh) in self._rows:
+            if rx <= x < rx + rw and ry <= y < ry + rh and i < len(self.items):
+                return i
+        return None
+
+    def row_centre(self, i: int):
+        """(x, y) in screen pixels of item row i as last drawn (it must be in
+        the visible window)."""
+        rx, ry, rw, rh = dict(self._rows)[i]
+        return int(rx + rw // 2), int(ry + rh // 2)
 
     # -- drawing --------------------------------------------------------------
     def _font(self, size: int, bold: bool = False):
@@ -234,7 +291,17 @@ class Menu:
             lines = self._wrap(self.note, f_lbl, w - col_px[c] - 24 * u)
             placed.append((c, col_h[c], None, [(ln, "") for ln in lines]))
             col_h[c] += (len(lines) + 1) * row_h
-        items_h = 96 * u + 36 * u * len(self.items) + (len(NAV_HINT) + 1) * row_h + 30 * u
+        # a list longer than the window scrolls: only `vis` rows are drawn,
+        # the window follows the cursor (the PICK page's library can grow)
+        hint_h = (len(NAV_HINT) + 1) * row_h + 30 * u
+        n = len(self.items)
+        cap = max(3, int((H - 16 * u - 96 * u - hint_h - 44 * u) // (36 * u)))
+        vis = min(n, cap)
+        if n > vis:
+            self._top = min(max(self._top, self.idx - vis + 1), self.idx, n - vis)
+        else:
+            self._top = 0
+        items_h = 96 * u + 36 * u * vis + hint_h
         h = max(items_h, 96 * u + max(col_h) + 44 * u)
         h = min(h, H - 16 * u)
         x0, y0 = (W - w) * 0.5, (H - h) * 0.5
@@ -262,9 +329,14 @@ class Menu:
         if self.subtitle:
             self._blit(screen, self.subtitle, x0 + 28 * u, y0 + 58 * u, f_lbl, C_DIM)
 
-        # items
+        # items (the visible window of them)
         y = y0 + 96 * u
-        for i, (label, _) in enumerate(self.items):
+        self._rows = []
+        self._draws += 1
+        top = self._top
+        for i in range(top, top + vis):
+            label = self.items[i][0]
+            self._rows.append((i, (int(x0 + 16 * u), int(y - 6 * u), int(items_w), int(34 * u))))
             sel = (i == self.idx)
             if sel:
                 pygame.draw.rect(screen, C_SEL_BG,
@@ -275,6 +347,10 @@ class Menu:
                                   int(4 * u), int(32 * u)))
             self._blit(screen, ("> " if sel else "  ") + label, x0 + 28 * u, y,
                        f_item, C_TEXT if sel else C_DIM)
+            if (i == top and top > 0) or (i == top + vis - 1 and top + vis < n):
+                more = f"^ {top} more" if i == top and top > 0 else f"v {n - top - vis} more"
+                self._blit(screen, more, x0 + 16 * u + items_w - f_lbl.size(more)[0] - 8 * u,
+                           y + 4 * u, f_lbl, C_DIM)
             y += 36 * u
         hint = NAV_HINT_PAD if any("PAD" in (t or "") or "DUALSENSE" in (t or "")
                                    for t, _ in self.sections) else NAV_HINT
@@ -369,6 +445,37 @@ def self_check(verbose: bool = True) -> bool:
     rep("draw budget", ms < 4.0, f"{ms:.2f} ms/frame warm ({cold:.0f} ms cold font scan)")
     px = scr.get_at((640, 400))[:3]
     rep("panel drawn over the frame", px != (27, 29, 33), str(px))
+    # the mouse: hover moves the cursor, a click runs the row, off-row
+    # points do nothing
+    x2, y2 = m.row_centre(2)
+    m.show(idx=0)
+    m.draw(scr)
+    m.handle(f"hover:{x2}:{y2}")
+    hov = m.idx == 2 and m.open
+    x1, y1 = m.row_centre(1)
+    early = (m.handle(f"click:{x1}:{y1}"), m.handle(f"release:{x1}:{y1}"))   # right after show
+    for _ in range(CLICK_GUARD_DRAWS):
+        m.draw(scr)
+    miss = m.handle("click:3:3") is None and m.handle("release:3:3") is None and m.open
+    drag = (m.handle(f"click:{x1}:{y1}"), m.handle(f"release:{x2}:{y2}"))    # off the row
+    got = (m.handle(f"click:{x1}:{y1}"), m.handle(f"release:{x1}:{y1}"))
+    rep("mouse: hover moves the cursor; press + release on one row runs it; a press "
+        "right after a page change, a miss or a drag off the row does nothing",
+        hov and early == (None, None) and miss and drag == (None, None)
+        and got == (None, "b") and not m.open,
+        f"hover {hov} early {early} miss {miss} drag {drag} click -> {got}")
+    many = Menu("PICK", [(f"build {k:02d}", f"b{k}") for k in range(40)])
+    many.show(idx=0)
+    many.draw(scr)
+    shown0 = [i for i, _ in many._rows]
+    many.show(idx=33)
+    many.draw(scr)
+    shown1 = [i for i, _ in many._rows]
+    bottom = max(r[1] + r[3] for _, r in many._rows)
+    rep("a long list scrolls: the window follows the cursor and stays on screen",
+        shown0[0] == 0 and 33 in shown1 and len(shown1) < 40 and bottom <= 800
+        and many.hit(many.row_centre(33)) == 33,
+        f"{len(shown1)} of 40 rows shown, {shown1[0]}..{shown1[-1]}, bottom {bottom} px")
     m.hide()
     scr.fill((27, 29, 33))
     m.draw(scr)

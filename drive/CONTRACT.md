@@ -48,6 +48,7 @@ from the repo root.
 | `drive/menu.py` | pause / help menu overlay (ESC, OPTIONS); pure UI | pygame only |
 | `drive/audio.py` | procedural car sound: `Synth` (numpy) + `CarSound` (one pygame.mixer channel); a render-loop consumer of `HudData`, never an input | numpy, pygame |
 | `drive/records.py` | lap records: the class key `track\|car\|engine\|surface`, `RecordBook` (top 5 per class, `runs/records/<class>.json`, best sectors, best medal, `last_builds.json`), `LapRecorder` (the `Sim` hooks: controls log, 50 Hz trace, the lap's exact start state), `resimulate` (a lap re-driven from its log, bit for bit) | numpy; `vehicle`, `powertrain`, `cars`, `corsa_c` (dataclass registry only); `drive.drive` / `track` lazily inside `resimulate` and the self-check. Never pygame, never `drive.ml` |
+| `drive/prerace.py` | the pre-race (TIME TRIAL) page's content: `PreRace` rows and help sections from a `RecordBook`, the medal table and the library's builds; `wanted(opts, settings)` (never a script, headless, `--ml-drive`, offscreen, the dragstrip); the PICK page rows. Pure UI logic: the `Sim` owns the menu and dispatches | `records`; `medals` lazily. Never pygame |
 | `drive/drive.py` | main loop, CLI, scripted runs | everything |
 | `drive/validate.py` | the whole acceptance suite | everything |
 
@@ -949,6 +950,10 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
   menu must not close it), and menu mode keeps refreshing the driving edge
   state silently (a circle held across the close must not toggle the wing).
   `menu_help(layout)` is the single source of the on-screen key tables.
+  In menu mode the keyboard half also turns the MOUSE into menu commands
+  (`_menu_mouse`): motion -> `hover:X:Y`, left click -> `click:X:Y`, right
+  click -> `menu` (back), the wheel -> `nav_up` / `nav_down`; with the menu
+  closed the mouse is ignored.
 * **Gearbox modes.** `GEARBOX_MODES = ('auto', 'manual', 'clutch')`,
   `gearbox_flags(mode) -> (auto_gearbox, auto_clutch)`, `GEARBOX_LABELS`,
   `GEARBOX_HUD` (`AUTO` / `MAN` / `MAN+CL`). `KeyboardInput`, `GamepadInput`
@@ -1038,6 +1043,10 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
   (`revert_pending`) restores it and a save meanwhile writes the running
   value, not the preview; `select` on a browsed row is `commit_pending` +
   restart.
+  `Menu.draw` records each item row's rectangle; `handle('hover:X:Y')`
+  moves the cursor to the row under the pointer and `handle('click:X:Y')`
+  runs it exactly as `select` would (`hit`, `row_centre`), so every page is
+  driven by the mouse as the garage's are.
   `show(..., title=, idx=, columns=)`: `idx` keeps the cursor when a page
   re-shows itself, `columns=1` stacks every help section (and the note) in
   one column to the right of the items, and the highlight / column origin
@@ -1273,7 +1282,9 @@ settings.power_scale`, and `Sim(..., settings=settings)` with `has_garage`
 True whenever `drive.garage` imports; with a real window it sets
 `sound_enabled` and calls `_audio_apply()`. The garage design saved in
 `runs/garage_design.json` is the car every plain launch drives unless a
-`--wing…` flag is explicit. `Sim.handle_event` also owns the view toggles
+`--wing…` flag is explicit -- or, on a map that has one, the build last used
+on that map (`last_builds.json`, the pre-race section below), which replaces
+it IN MEMORY: only the garage writes `garage_design.json`. `Sim.handle_event` also owns the view toggles
 (`camera`, `zoom_*`, `hud`, `vectors`, `gg`, `skid`) — renderer config only,
 never physics.
 
@@ -1406,6 +1417,36 @@ sector times come back BIT FOR BIT, and that a 3-lap scripted run leaves
 the right top 5. The class key is D1's; its file name writes `|` as `__`
 (Windows). `HudData.pb_lap` / `lap_rank` carry the class PB and the top-5
 place of a lap that just landed.
+
+**The pre-race page** (`drive/prerace.py`, task 20). `_interactive_session`
+builds `Sim.prerace` (a `PreRace` on the recorder's book and class, the
+build on opts, the library's builds via `opts.garage_lib`) whenever it has a
+recorder and a renderer, and when `prerace.wanted` holds opens it
+(`Sim.open_prerace`: menu page `'prerace'`, paused) before the loop starts;
+the pause menu's `timetrial` row reaches it any time. Its rows: `pr_race`
+(`Sim.start_timed`: `RecordBook.set_last_build(track, ...)`, then
+`reset(to_checkpoint=False)`), `pr_pick` (page `'prerace_pick'`,
+`pr_build:<name>` rows: a different build sets `Sim.prerace_pick = (name,
+json)` and `restart()`s; `run_interactive_cli` first saves a car that is in
+no library file as `'<name> (autosave)'` (`_autosave_build`), then makes the
+pick the design), `pr_edit` (only with a garage: `stop_reason = 'garage'`;
+the garage's ENTER starts a new session, which opens on the page). ESC on the
+page is the pause page (laps still count there); the hotkeys R / SHIFT+R /
+BACKSPACE fall through. The build a map opens with: every player session
+(`_player_session`: not `--ml-drive`, headless, `--render off/offscreen`)
+records the build it drives as its map's (`_track_build_used`,
+`last_builds.json`), and `run_interactive_cli` asks `_track_build` for that
+entry at launch (unless `--build` / `--wing` named one) and on a map change,
+never after the garage; the switch is in memory, `garage_design.json` is
+untouched. PICK rows show `RecordBook.build_best`, filed by
+`records.build_id` -- the build's CONTENT (a hash of its JSON without name
+and library flag), so an edited car that kept a saved build's name is not
+credited to it. The menu fires a mouse row on RELEASE over the row the press
+armed, and ignores a press within `CLICK_GUARD_DRAWS` frames of a page
+change (a double-click cannot run a row of the page its first click
+opened); a list longer than the window scrolls. After a swarm the next session skips the page
+(`opts.prerace_skip`). V32 drives all of it by events with no window, and a
+click through `Menu.draw` on an offscreen surface.
 
 `Sim` pause menu: `'menu'` -> `_menu_open()` sets `paused = True`, remembers
 whether `P` had paused already, and calls `inp.set_menu(True)`; while

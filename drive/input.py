@@ -349,6 +349,27 @@ MENU_KEYS = {
     pygame.K_BACKSPACE: "garage",
 }
 
+def _menu_mouse(ev):
+    """A mouse event while a menu is up -> a menu command, or None. The
+    pointer moves the cursor (`hover:X:Y`), a left press arms the row under
+    it (`click:X:Y`) and the release on the same row runs it (`release:X:Y`,
+    drive/menu.py), a right click is back, the wheel moves the cursor.
+    Nothing reaches the car: with the menu closed the mouse is ignored."""
+    if ev.type == pygame.MOUSEBUTTONDOWN:
+        if ev.button == 1:
+            return f"click:{int(ev.pos[0])}:{int(ev.pos[1])}"
+        if ev.button == 3:
+            return "menu"
+        return None                     # 4 / 5 are the legacy wheel: MOUSEWHEEL has it
+    if ev.type == pygame.MOUSEBUTTONUP:
+        return f"release:{int(ev.pos[0])}:{int(ev.pos[1])}" if ev.button == 1 else None
+    if ev.type == pygame.MOUSEMOTION:
+        return f"hover:{int(ev.pos[0])}:{int(ev.pos[1])}"
+    if ev.type == pygame.MOUSEWHEEL:
+        return "nav_up" if ev.y > 0 else ("nav_down" if ev.y < 0 else None)
+    return None
+
+
 # The same bindings as rows for the on-screen menu (drive/menu.py).
 MENU_HELP_KB = [
     ("UP / DOWN", "throttle / brake"),
@@ -370,6 +391,7 @@ MENU_HELP_KB = [
     ("TAB", "next map"),
     ("BACKSPACE", "garage (3D panel editor)"),
     ("ESC", "this menu / settings"),
+    ("mouse", "in a menu: point, click a row, wheel, right = back"),
 ]
 MENU_HELP_PAD = {
     "ps": [
@@ -671,6 +693,11 @@ class KeyboardInput:
             if ev.type == pygame.QUIT:
                 cmds.append("quit")
                 continue
+            if self.menu and self.key_sink is None:
+                m = _menu_mouse(ev)            # the pause menu takes the mouse
+                if m is not None:
+                    cmds.append(m)
+                    continue
             if ev.type != pygame.KEYDOWN:
                 continue
             if self.key_sink is not None:
@@ -1685,10 +1712,21 @@ def self_check(verbose: bool = True) -> bool:
     check_eq("menu: E / F swallowed (no shift, no wing)",
              (kb.poll_events(), kb.update(DT).gear_req, kb.wing_on), ([], 0, False))
     check_eq("menu: held keys read released", any(kb.held.values()), False)
+    pygame.event.post(pygame.event.Event(pygame.MOUSEMOTION, pos=(300, 200), rel=(1, 1),
+                                         buttons=(0, 0, 0)))
+    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(300, 210), button=1))
+    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(301, 211), button=1))
+    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(300, 210), button=3))
+    pygame.event.post(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-1))
+    check_eq("menu: the mouse -> hover / press / release / right = back / wheel",
+             kb.poll_events(), ["hover:300:200", "click:300:210", "release:301:211",
+                                "menu", "nav_down"])
     kb.set_menu(False)
     kb.set_keys(clear=True)
     pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_UP, mod=0))
     check_eq("menu closed: UP is a pedal again, not nav", kb.poll_events(), [])
+    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(300, 210), button=1))
+    check_eq("menu closed: the mouse is ignored", kb.poll_events(), [])
 
     if verbose:
         print("\n-- V29 gamepad absent: the keyboard-only path --")
