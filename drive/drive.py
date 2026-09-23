@@ -1298,6 +1298,7 @@ class Sim:
         self.progress_file = None
         self.tutorial = None
         self.tutorial_car = False
+        self.wing_tutor_start = False      # the Tutorial page's wing-design row (task 24)
 
         self._bind_input()
         self._sample_surfaces()
@@ -2480,9 +2481,11 @@ class Sim:
         self._menu_page = "tutorial_step"
 
     def _menu_show_tutorial(self, idx: int = 0) -> None:
-        """The pause menu's Tutorial page: start, continue, skip, end."""
+        """The pause menu's Tutorial page: start, continue, skip, end; and
+        the garage's wing-design tutorial."""
         from . import tutorial as tu
-        self.menu.show(items=tu.menu_items(self.tutorial, self.progress_file),
+        self.menu.show(items=tu.menu_items(self.tutorial, self.progress_file,
+                                           garage=self.has_garage),
                        sections=tu.step_list(self.tutorial, self.progress_file),
                        subtitle=tu.menu_row(self.progress_file, self.tutorial), note="",
                        footer="ENTER / CROSS select   ESC / CIRCLE back", title="TUTORIAL",
@@ -2570,6 +2573,11 @@ class Sim:
         elif action == "tut_end" and tut is not None:
             tut.end()
             self._tutorial_stop("tutorial ended - ESC > Tutorial continues it")
+        elif action == "wt_garage" and self.has_garage:
+            self.wing_tutor_start = True       # run_interactive_cli starts it
+            self._menu_close()                 # in the garage (drive/wing_tutorial.py)
+            self.stop_reason = "garage"
+            self.quit = True
         else:
             self._menu_show_tutorial(idx=idx)
         return True
@@ -5795,8 +5803,14 @@ def run_interactive_cli(opts) -> int:
             from_garage = False
             if mode == "garage":
                 g = grg.Garage((w, h), design, pad=pad, lib=lib)
+                #  the wing-design tutorial (drive/wing_tutorial.py) rides
+                #  on opts across the garage <-> drive round trips
+                g.progress = getattr(opts, "progress", None)
+                g.tutor = getattr(opts, "wing_tutor", None)
                 action = g.run()
                 design, pad = g.build, g.pad
+                t_ = g.tutor
+                opts.wing_tutor = t_ if (t_ is not None and t_.active) else None
                 if action != "drive":
                     break
                 design.save()
@@ -5850,6 +5864,10 @@ def run_interactive_cli(opts) -> int:
                 design.clamp(lib)
                 _apply_design(opts, design, lib)
                 print(f"pre-race: driving the build '{pick[0]}'")
+            if getattr(sim, "wing_tutor_start", False) and grg is not None:
+                from .wing_tutorial import WingTutor, saved_state
+                opts.wing_tutor = WingTutor(opts.progress,
+                                            start=saved_state(opts.progress)["step"])
             if sim.stop_reason == "garage" and grg is not None:
                 mode = "garage"
                 continue

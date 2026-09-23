@@ -140,6 +140,8 @@ GARAGE_HELP_KB = [
     ("A / L", "airfoil library / wing + build library"),
     ("R / C", "car defaults / reset camera"),
     ("ENTER", "drive this car"),
+    ("H", "wing tutorial's box: hide / show"),
+    ("mouse", "in this menu: point, click a row"),
     ("ESC", "this menu"),
 ]
 GARAGE_HELP_PAD = [
@@ -4204,6 +4206,11 @@ class Garage:
         self._prompt_kind = ""
         self._af_return = "car"
         self.status = ""
+        #  the wing-design tutorial (drive/wing_tutorial.py, task 24): a
+        #  WingTutor the frame and the menu query, or None; `progress` is the
+        #  player's runs/progress.json (drive/progress.py), None in a script
+        self.tutor = None
+        self.progress = None
 
     # the old attribute name
     @property
@@ -4219,15 +4226,22 @@ class Garage:
                          GARAGE_HELP_PAD))
         else:
             note = "no controller: pair the DualSense (CREATE+PS) - it hot-plugs"
+        tut_rows = []
+        if self.tutor is not None and self.tutor.active:
+            tut_rows = self.tutor.menu_rows()
+        elif self.progress is not None:
+            from .wing_tutorial import menu_row
+            tut_rows = [menu_row(self.progress, self.tutor)]
         self.menu.show(
             items=[("Resume", "resume"),
-                   (f"Design the {self.sel} wing  (mission -> section -> wing)", "design"),
-                   ("Airfoil library", "airfoils"),
-                   ("Wing & build library", "library"),
-                   ("Reset car to defaults", "defaults"),
-                   ("Reset camera", "camera"),
-                   ("Drive this car", "drive"),
-                   ("Quit", "quit")],
+                   (f"Design the {self.sel} wing  (mission -> section -> wing)", "design")]
+                  + tut_rows
+                  + [("Airfoil library", "airfoils"),
+                     ("Wing & build library", "library"),
+                     ("Reset car to defaults", "defaults"),
+                     ("Reset camera", "camera"),
+                     ("Drive this car", "drive"),
+                     ("Quit", "quit")],
             sections=secs, note=note,
             subtitle=self.build.summary(self.lib)[:120],
             footer="ESC / OPTIONS resume   R defaults   C camera   ENTER / CROSS select")
@@ -4250,6 +4264,14 @@ class Garage:
             self.open_airfoils()
         elif action == "library":
             self.open_library()
+        elif action in ("wt_start", "wt_resume"):
+            from .wing_tutorial import WingTutor, saved_state
+            start = saved_state(self.progress)["step"] if action == "wt_resume" else None
+            self.tutor = WingTutor(self.progress, start=start)
+            self.hint = f"wing tutorial {self.tutor.label()}: {self.tutor.step.title}"
+        elif self.tutor is not None and self.tutor.menu_action(action):
+            self.hint = "wing tutorial: " + ("ended" if not self.tutor.active
+                                             else self.tutor.step.title)
         elif action in ("drive", "quit"):
             return action
         return None
@@ -4792,8 +4814,20 @@ class Garage:
                     return self._menu_action(cmd)
                 if cmd:
                     return self._menu_action(self.menu.handle(cmd))
-            return None                                 # mouse etc. ignored
+                return None
+            from .input import _menu_mouse               # the drive's menu mapping:
+            cmd = _menu_mouse(ev)                        # point, press, release on
+            if cmd:                                      # the row, wheel, right = back
+                return self._menu_action(self.menu.handle(cmd))
+            return None
+        if (self.tutor is not None and ev.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP,
+                                                   pygame.MOUSEWHEEL)
+                and self.tutor.hit(getattr(ev, "pos", None) or pygame.mouse.get_pos())):
+            return None                                 # the tutorial's box takes its own clicks
         if ev.type == pygame.KEYDOWN:
+            if ev.key == pygame.K_h and self.tutor is not None and self.tutor.active:
+                self.tutor.hidden = not self.tutor.hidden
+                return None
             if self.page == "car":
                 return self._handle_car_key(ev)
             return self._handle_page_key(ev)
@@ -5033,6 +5067,8 @@ class Garage:
             action = None                  # a key / button carried in from the drive
         if action == "drive" and self.page != "car":
             self.close_page()
+        if self.tutor is not None:
+            self.tutor.update(self, action)
         # deploy preview: the same 0.45 s / 0.30 s actuator as vehicle.py
         if self.deploy_cmd > self.deploy:
             self.deploy = min(1.0, self.deploy + dt / 0.45)
@@ -5057,6 +5093,8 @@ class Garage:
         self.status = (f"XFOIL: {busy} ({self.lib.xfoil_pending} queued)" if busy else
                        ("XFOIL available" if self.lib.use_xfoil else "XFOIL not found: estimate polars"))
         self._draw_page()
+        if self.tutor is not None:
+            self.tutor.draw(self)
         self.menu.draw(self.screen)
         self.prompt.draw(self.screen, self.text)
         return action

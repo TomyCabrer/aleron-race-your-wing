@@ -304,7 +304,7 @@ then comes back for that map (the TIME TRIAL section below).
 | `M` | mirror left ↔ right | `T` | top wing: fixed / active (brake + steer) |
 | `SPACE` | deploy preview (0.45 s actuator) | `D` `A` `L` | design a wing (mission first) / airfoils / library |
 | `R` / `C` | car defaults / reset camera | `ENTER` | drive it |
-| `ESC` | menu | | |
+| `ESC` | menu (the mouse works in it) | `H` | the wing tutorial's box: hide / show |
 
 The published car is still here, bit-for-bit: the built-in wings `fin`
 (CL 0.70) and `plate` (CL 1.25) are the study's 0.35 m² panel with its fixed
@@ -313,6 +313,19 @@ runs the closed-form device exactly as before (the suite asserts the
 `VehicleConfig` is identical).
 
 ## Design the wings
+
+**New to it?** The garage's menu (`ESC` on the car, `OPTIONS` on the pad)
+has the **wing-design tutorial**, and so does the drive's *Tutorial* page:
+a guided first wing through the garage's own steps below, in plain words --
+what downforce and drag are, why a flank wing, what each number on the pages
+means -- with a box that says what to press next and an outline round the
+step or row it means (`H`, or the menu, hides it). Ten steps: open the designer, the mission, screening the
+section library, taking and fitting a section, the end plates, the
+planform, the results, fitting the wing to the car (`S`), saving the car as
+a build (`L`, `S`) and driving it (`ENTER`: the TIME TRIAL page opens on it,
+and *Build* lists it on every map). Every step is passed by your own press
+through the garage's own gates; the menu skips a step or ends it, and the
+next time it continues where it stopped (`runs/progress.json`).
 
 The designer (`D`, `L3` on the pad, or *Design the … wing* on the garage's
 pause menu) is a port of the car-wing procedure of the AeroBO design tool
@@ -912,6 +925,7 @@ drive/
   ghosts.py     the PB and ghost-2 ghosts, the live delta, the sector flash
   progress.py   runs/progress.json: the tutorial's (and the challenges') progress
   tutorial.py   the driving tutorial: 11 data-driven steps, the overlay, the pages
+  wing_tutorial.py  the wing-design tutorial: a guided pass through the garage's navigator
   telemetry.py  fixed-schema CSV + sidecar json
   plots.py      overview, g-g, track map, laps, A/B compare
   drive.py      main loop, settings, garage <-> drive session loop, CLI,

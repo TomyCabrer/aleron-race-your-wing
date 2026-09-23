@@ -375,7 +375,7 @@ def _pg_done(ctx, tut):
     if tut.skipped:
         rows.append(("skipped", ", ".join(tut.skipped)))
     nxt = [("Time trial", "ESC > Time trial: your top 5, medals, another build"),
-           ("Garage", "BACKSPACE: fit and design wings"),
+           ("Garage", "ESC > Tutorial > Wing-design tutorial: design your first wing"),
            ("Tutorial", "ESC > Tutorial takes it again, any time")]
     return "That is the whole loop: tweak the car, drive it, beat the number.", \
         [("DONE", rows), ("NEXT", nxt)]
@@ -666,13 +666,16 @@ def saved_state(progress) -> dict:
                 index=ids.index(step) if step in ids else None)
 
 
-def menu_items(tut=None, progress=None) -> list:
-    """The pause menu's Tutorial page."""
+def menu_items(tut=None, progress=None, garage: bool = False) -> list:
+    """The pause menu's Tutorial page (with a garage: the wing-design
+    tutorial's row, drive/wing_tutorial.py)."""
+    wing = [("Wing-design tutorial: a guided first wing, in the garage", "wt_garage")] \
+        if garage else []
     if tut is not None and tut.active:
         return [("Back to the drive", "tut_back"),
                 (f"Skip this step ({tut.step.title})", "tut_skip"),
                 ("Start over", "tut_start"),
-                ("End the tutorial (continue it later from here)", "tut_end")]
+                ("End the tutorial (continue it later from here)", "tut_end")] + wing
     sv = saved_state(progress)
     rows = []
     if sv["step"] is not None and sv["index"]:
@@ -682,8 +685,7 @@ def menu_items(tut=None, progress=None) -> list:
     else:
         rows.append(((("Take it again" if sv["done"] else "Start the driving tutorial")
                       + f" ({len(STEPS)} steps, about {MINUTES} minutes)"), "tut_start"))
-    rows.append(("Back", "tut_back"))
-    return rows
+    return rows + wing + [("Back", "tut_back")]
 
 
 def menu_row(progress=None, tut=None) -> str:
@@ -944,6 +946,9 @@ def self_check(verbose: bool = True) -> bool:
     rep("the menu page offers to continue there",
         rows[0] == ("Continue at step 6: The wing, lap 1: OFF", "tut_resume")
         and "continue at step 6" in menu_row(Progress(prog.path)), str(rows[0]))
+    rep("with a garage the page offers the wing-design tutorial too",
+        "wt_garage" in [a for _, a in menu_items(None, Progress(prog.path), garage=True)]
+        and "wt_garage" not in [a for _, a in rows])
     t2 = Tutorial(Progress(prog.path), start="wing_off")
     rep("... and a resumed tutorial starts there with the skipped steps kept",
         t2.step.id == "wing_off" and t2.skipped == ["steer", "turn1", "reset"])

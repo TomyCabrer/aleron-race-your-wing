@@ -53,6 +53,7 @@ from the repo root.
 | `drive/ghosts.py` | the time trial's two ghosts (the class PB; the D2 slot: reference bot / none / your P2..P5), clocked from the line (`sim.t - LapTimer.t_lap_start`); the live delta `tau - t_pb(p)`, `p` the centreline progress counted from the crossing on the ribbon only (the race gap's trail approach); the sector flash (purple / green / red, none for a lap that cannot count) | numpy, `records`; `drive.drive._Replay` and `medals` lazily. Never pygame |
 | `drive/progress.py` | `runs/progress.json` (kind `carsim-progress-1`): one section per feature (`tutorial`, task 25's `challenges`); `save(section)` merges with the file; a corrupt / foreign file is ignored with a note and moved aside as `.bad-<stamp>`, an unreadable one never written over | `records._atomic_json` lazily. Never pygame |
 | `drive/tutorial.py` | the driving tutorial: 11 data-driven `Step`s (`id, map, kind, title, text, hint, check(frame, mem), status, reset, setup, wing`), `frame_of(sim)` (what a predicate sees), the `Tutorial` state machine (`tick(sim)` -> 'restart' / 'page' / 'done'), the overlay payload, the page / menu rows, `wing_car` (the published plate for a car without a flank wing) | `corsa_c.G`; `records`, `medals` lazily. Never pygame, never `drive.drive` |
+| `drive/wing_tutorial.py` | the wing-design tutorial: 10 `WStep`s (`check(garage, mem, action)`, an `anchor` naming the garage widget the hint points at), `WingTutor` (`update` / `draw` / the garage menu's rows), `anchor_rect` (from the widgets' own `_rect` / `_hits`) | `garage_ui`, `prerace._same_build`, `progress` (via the object handed in); `garage` and pygame only lazily / in the self-check. Never `drive.drive` |
 | `drive/drive.py` | main loop, CLI, scripted runs | everything |
 | `drive/validate.py` | the whole acceptance suite | everything |
 
@@ -1468,6 +1469,24 @@ library's `plate` on both flanks, in memory, `opts.tutorial_car`; no
 per-map build is recorded for it) and re-applies the player's design at the
 next session; ending the tutorial on it restarts the session. The pre-race
 page is not opened while a tutorial runs. V34 drives it end to end headless.
+
+**The wing-design tutorial** (`drive/wing_tutorial.py`, task 24). The
+garage's hooks: `Garage.tutor` (a `WingTutor` or None) and
+`Garage.progress` (the player's progress file, None in a script);
+`Garage.frame` calls `tutor.update(self, action)` after the events and
+`tutor.draw(self)` after the page (before the menu); `_menu_open` adds its
+rows (`wt_start` / `wt_resume`, or `wt_skip` / `wt_hide` / `wt_end` while it
+runs) and `_menu_action` runs them; `H` toggles the box; a mouse event on the
+box (`WingTutor.hit`) is the box's, not the page's under it. The garage menu
+takes the mouse through `input._menu_mouse`. A tutor inside the design chain
+whose state is gone (a new garage: no stated mission; a re-opened design
+page: its section gates re-locked) walks back to the first step that is
+open (`WingTutor._rewind`). `run_interactive_cli` hands the garage
+`opts.progress` and `opts.wing_tutor` and keeps a running one on
+`opts.wing_tutor` across the garage <-> drive trips; the drive's Tutorial
+page's `wt_garage` row sets `Sim.wing_tutor_start` and goes to the garage,
+where it starts (or continues). The last step passes on the garage's
+`'drive'`.
 
 **The pre-race page** (`drive/prerace.py`, task 20). `_interactive_session`
 builds `Sim.prerace` (a `PreRace` on the recorder's book and class, the
