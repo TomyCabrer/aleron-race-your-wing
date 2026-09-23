@@ -206,6 +206,8 @@ C_GG_DOT = (255, 255, 255)
 C_PURPLE = (176, 78, 224)
 C_GREEN = (78, 194, 106)
 C_YELLOW = (217, 206, 85)
+#: the sector flash (drive/ghosts.py): best ever / better than the PB / worse
+C_FLASH = {'purple': C_PURPLE, 'green': C_GREEN, 'red': C_BAR_BRK}
 #: the medals (drive/medals.py), as the HUD and the results tag them
 C_MEDAL = {'author': C_PURPLE, 'gold': (240, 196, 60), 'silver': (200, 206, 216),
            'bronze': (205, 127, 50)}
@@ -640,6 +642,11 @@ class HudData:
     lap_rank: str = ''
     # --- medals (drive/medals.py): the medal the lap that just landed earned
     lap_medal: str = ''
+    # --- the live delta to the class PB and the sector flash (drive/ghosts.py);
+    # nan / '' = nothing drawn
+    delta_s: float = float('nan')
+    sector_flash: str = ''
+    flash_col: str = ''            # 'purple' | 'green' | 'red'
 
 
 # ======================================================================= #
@@ -1591,6 +1598,7 @@ class Renderer:
         self._draw_features()
         if self.cfg.show_skid and skid is not None:
             self._draw_skid(skid)
+        self._ghost_tops = []
         if aux.ghosts:
             self._draw_ghosts(aux.ghosts)
         if self._cam3 is not None:
@@ -1606,12 +1614,15 @@ class Renderer:
             if self.cfg.show_vectors:
                 self._draw_vectors(x, y, psi, aux)
             self._draw_wing(x, y, psi, aux)
+        if self._ghost_tops:
+            self._draw_ghost_tops()
         if self.cfg.hud != 'off':
             self._draw_hud(aux, ctl)
             if self.cfg.show_gg:
                 self._draw_gg(aux)
             if self.cfg.hud == 'full':
                 self._draw_minimap(x, y, aux)
+            self._draw_delta(aux)
         if aux.overlay:
             self._draw_overlay(aux.overlay)
         menu = getattr(aux, 'menu', None)
@@ -2148,6 +2159,7 @@ class Renderer:
         the road in chase mode too. Cheap: one polygon each, no wheels."""
         R2 = (self._view_radius() * 1.2) ** 2
         cx, cy = float(self.cam[0]), float(self.cam[1])
+        self._ghost_tops = []
         for g in ghosts:
             x, y, psi, col = g[0], g[1], g[2], g[3]
             if (x - cx) ** 2 + (y - cy) ** 2 > R2:
@@ -2156,12 +2168,42 @@ class Renderer:
             if len(pts) >= 3:
                 pygame.draw.polygon(self.screen, col, pts)
                 pygame.draw.polygon(self.screen, C_CAR_OUTLINE, pts, 1)
-                if len(g) > 4 and g[4]:    # a named ghost (the race's bot)
-                    top = min(p[1] for p in pts)
-                    cx_s = sum(p[0] for p in pts) / len(pts)
-                    lbl = self.f_lbl.render(str(g[4]), True, col)
-                    self.screen.blit(lbl, (int(cx_s - lbl.get_width() / 2),
-                                           int(top - lbl.get_height() - 2 * self.ui)))
+                self._ghost_tops.append((pts, col, str(g[4]) if len(g) > 4 and g[4] else ''))
+
+    def _draw_ghost_tops(self) -> None:
+        """After the car: every ghost's label (a named one: the PB, ghost 2,
+        the race's bots), and in the chase view its outline too, so a ghost
+        a few metres from the car is not lost under the 3-D body."""
+        for pts, col, label in getattr(self, '_ghost_tops', ()):
+            if self._cam3 is not None:
+                pygame.draw.polygon(self.screen, col, pts, max(2, int(round(2 * self.ui))))
+            if label:
+                top = min(p[1] for p in pts)
+                cx_s = sum(p[0] for p in pts) / len(pts)
+                lbl = self._txt(label, self.f_lbl, col)
+                self.screen.blit(lbl, (int(cx_s - lbl.get_width() / 2),
+                                       int(top - lbl.get_height() - 2 * self.ui)))
+        self._ghost_tops = []
+
+    def _draw_delta(self, aux) -> None:
+        """The live delta to the class PB, large at the top centre under the
+        timing panel (green ahead, red behind), and the sector flash under
+        it (drive/ghosts.py). Nothing when there is neither."""
+        d = getattr(aux, 'delta_s', float('nan'))
+        has_d = isinstance(d, (int, float)) and math.isfinite(d)
+        fl = getattr(aux, 'sector_flash', '') or ''
+        if not has_d and not fl:
+            return
+        r = self._rect(R_TIMING)
+        cx, y = r.centerx, r.bottom + 6 * self.ui
+        if has_d:
+            s = f'{d:+.2f}'
+            col = C_GREEN if d < 0.0 else (C_BAR_BRK if d > 0.0 else C_HUD_TEXT)
+            self._blit(s, cx - self.f_speed.size(s)[0] / 2, y, self.f_speed, col)
+            y += self.f_speed.get_linesize()
+        if fl:
+            col = C_FLASH.get(getattr(aux, 'flash_col', ''), C_HUD_TEXT)
+            self._blit(fl, cx - self.f_val.size(fl)[0] / 2, y, self.f_val, col)
 
     def _draw_overlay(self, lines) -> None:
         """A free-text panel, top-left, over everything but the menu."""
@@ -2998,6 +3040,7 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
 
     # ---- V22 frame budget -------------------------------------------------
     aux = _demo_hud()
+    aux.delta_s, aux.sector_flash, aux.flash_col = -0.23, 'S2  21.090  -0.123', 'purple'
     sk2 = SkidBuffer()
     # lay a dense mat of marks around the car so the 600-segment cap binds
     s0 = 300.0
@@ -3016,6 +3059,16 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
         px, py = tr.xy[i]
         st_n = _demo_state(px, py, float(tr.psi[i]), u=28.0, v=-0.6, r=0.25)
         rnd.update_camera(st_n, 1.0 / 60.0)
+        #  the busiest time-trial frame: the PB and ghost 2, a full race
+        #  grid of three bots, all in view and labelled, the delta and a flash
+        ps = float(tr.psi[i])
+        aux.ghosts = [(px + dx * math.cos(ps) - dy * math.sin(ps),
+                       py + dx * math.sin(ps) + dy * math.cos(ps), ps, col, lbl)
+                      for dx, dy, col, lbl in ((6.0, 1.5, (120, 220, 160), 'PB'),
+                                               (-5.0, -1.5, (205, 205, 215), 'REF'),
+                                               (12.0, -2.0, (255, 140, 43), 'bot1'),
+                                               (-10.0, 2.0, (110, 200, 255), 'bot2'),
+                                               (18.0, 1.0, (215, 120, 255), 'bot3'))]
         t0 = time.perf_counter()
         rnd.draw_frame(st_n, st_prev, 0.5, _demo_ctl(), aux, sk2)
         times.append((time.perf_counter() - t0) * 1e3)
@@ -3047,6 +3100,30 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
                   + (f', WRONG: {_bad}' if _bad else
                      '; a 2x regression fails quiet AND under x3 load'))
 
+    #  the delta and the flash are DRAWN: green ahead, red behind, the flash
+    #  in its colour, nothing at all without them (drive/ghosts.py)
+    def _count(r_, col):
+        a = pygame.surfarray.pixels3d(r_.screen)
+        rr = r_._rect(R_TIMING)
+        box = a[max(rr.x - 40, 0):rr.right + 40, rr.bottom:rr.bottom + int(90 * r_.ui)]
+        n_ = int(((box[..., 0] == col[0]) & (box[..., 1] == col[1])
+                  & (box[..., 2] == col[2])).sum())
+        del a
+        return n_
+    aux_d = _demo_hud()
+    counts = {}
+    for tag, dv, fl, fc in (('ahead', -0.23, '', ''), ('behind', 0.41, '', ''),
+                            ('flash', float('nan'), 'S2  21.090  -0.123', 'purple'),
+                            ('none', float('nan'), '', '')):
+        aux_d.delta_s, aux_d.sector_flash, aux_d.flash_col = dv, fl, fc
+        rnd.draw_frame(st_n, None, 0.0, _demo_ctl(), aux_d, sk2)
+        counts[tag] = (_count(rnd, C_GREEN), _count(rnd, C_BAR_BRK), _count(rnd, C_PURPLE))
+    ok_d = (counts['ahead'][0] > 40 and counts['behind'][1] > 40
+            and counts['flash'][2] > 20 and counts['none'][0] < counts['ahead'][0] // 4
+            and counts['none'][1] < counts['behind'][1] // 4)
+    rep('delta + sector flash drawn', ok_d,
+        f"green/red/purple px: ahead {counts['ahead']}, behind {counts['behind']}, "
+        f"flash {counts['flash']}, none {counts['none']}")
     hit = rnd._txt_hits / max(rnd._txt_hits + rnd._txt_miss, 1)
     rep('text cache hit rate', hit > 0.95,
         f'{rnd._txt_hits} hits / {rnd._txt_miss} misses = {hit * 100:.2f}%')
@@ -3185,6 +3262,17 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     aux_c.dev_left = aux_c.dev_right = True
     aux_c.top_on = True
     aux_c.wing_side, aux_c.wing_deploy, aux_c.top_deploy = 0, 0.0, 0.0
+    #  the chase budget with the time trial on: the PB 4 m ahead (under the
+    #  body), ghost 2 and three bots, the delta and a flash
+    pc = float(st_c.psi)
+
+    def _gh(dx, dy, col, lbl):
+        return (st_c.X + dx * math.cos(pc) - dy * math.sin(pc),
+                st_c.Y + dx * math.sin(pc) + dy * math.cos(pc), pc, col, lbl)
+    aux_c.ghosts = [_gh(4.0, 0.0, (120, 220, 160), 'PB'), _gh(-6.0, 1.5, (205, 205, 215), 'REF'),
+                    _gh(14.0, -2.0, (255, 140, 43), 'bot1'), _gh(20.0, 2.0, (110, 200, 255), 'bot2'),
+                    _gh(26.0, 0.0, (215, 120, 255), 'bot3')]
+    aux_c.delta_s, aux_c.sector_flash, aux_c.flash_col = 0.12, 'S1  20.440  +0.080', 'red'
     for _ in range(5):
         rndc.update_camera(st_c, 1.0 / 60.0)
     t_c = []
@@ -3248,7 +3336,18 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
                                        float(np.percentile(t_c, 99)),
                                        budget_mean=12.0, budget_p99=20.0)
     rep('chase: frame budget', _okc,
-        f'60 frames: {_whyc} (flat car_up is 2.1-2.4 ms)')
+        f'60 frames with 5 ghosts, the delta and a flash: {_whyc} (flat car_up is 2.1-2.4 ms)')
+    #  a PB ghost 4 m ahead lies UNDER the 3-D body: its outline and its
+    #  label are drawn after the car, so it is still seen (review of task 22)
+    for _ in range(5):
+        rndc.update_camera(st_c, 1.0 / 60.0)
+    rndc.draw_frame(st_c, None, 0.0, _demo_ctl(), aux_c, SkidBuffer())
+    a3 = pygame.surfarray.pixels3d(rndc.screen)
+    n_pb = int(((a3[..., 0] == 120) & (a3[..., 1] == 220) & (a3[..., 2] == 160)).sum())
+    del a3
+    rep('chase: a ghost under the car is still drawn (outline + label over it)', n_pb > 150,
+        f'{n_pb} px of the PB ghost 4 m ahead')
+    aux_c.ghosts, aux_c.delta_s, aux_c.sector_flash = [], float('nan'), ''
     shot5 = os.path.join(os.path.abspath(screenshot_dir), 'render_chase3d.png')
     rndc.screenshot(shot5)
     # mid-corner, armed: wing_side = -1 is a RIGHT turn, so the LEFT panel is

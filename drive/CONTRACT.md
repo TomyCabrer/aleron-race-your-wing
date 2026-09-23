@@ -50,6 +50,7 @@ from the repo root.
 | `drive/records.py` | lap records: the class key `track\|car\|engine\|surface`, `RecordBook` (top 5 per class, `runs/records/<class>.json`, best sectors, best medal, `last_builds.json`), `LapRecorder` (the `Sim` hooks: controls log, 50 Hz trace, the lap's exact start state), `resimulate` (a lap re-driven from its log, bit for bit) | numpy; `vehicle`, `powertrain`, `cars`, `corsa_c` (dataclass registry only); `drive.drive` / `track` lazily inside `resimulate` and the self-check. Never pygame, never `drive.ml` |
 | `drive/prerace.py` | the pre-race (TIME TRIAL) page's content: `PreRace` rows and help sections from a `RecordBook`, the medal table and the library's builds; `wanted(opts, settings)` (never a script, headless, `--ml-drive`, offscreen, the dragstrip); the PICK page rows. Pure UI logic: the `Sim` owns the menu and dispatches | `records`; `medals` lazily. Never pygame |
 | `drive/medals.py` | medal times per class (plan D4): author = the best valid, spin-free, full lap a reference driver sets headless in the class's STOCK car (`LapDriver` at margins 0.90 / 0.80 / 0.70 / 0.60, the `drive.ml` anchor, every bundled checkpoint for that car + track; aids off and on), gold / silver / bronze = author x 1.02 / 1.06 / 1.12. Owns `drive/data/medals.json` (`--build`) and `drive/data/reference_laps.json` (the author laps' 20 Hz traces, task 22's reference ghost). `targets`, `medal_for`, `reference_trace`; staleness by a hash of the track definitions, car specs and engine modes | numpy, `records` at module level; `drive.drive`, `track`, `cars` lazily; `drive.ml` only in the build's workers. Never pygame |
+| `drive/ghosts.py` | the time trial's two ghosts (the class PB; the D2 slot: reference bot / none / your P2..P5), clocked from the line (`sim.t - LapTimer.t_lap_start`); the live delta `tau - t_pb(p)`, `p` the centreline progress counted from the crossing on the ribbon only (the race gap's trail approach); the sector flash (purple / green / red, none for a lap that cannot count) | numpy, `records`; `drive.drive._Replay` and `medals` lazily. Never pygame |
 | `drive/drive.py` | main loop, CLI, scripted runs | everything |
 | `drive/validate.py` | the whole acceptance suite | everything |
 
@@ -1430,6 +1431,19 @@ three laps and the best kept. The table is generated, never typed:
 its self-check soft-fails with that command when a track, a car or the
 engine modes changed since.
 
+**Ghosts and the live delta** (`drive/ghosts.py`, task 22). A session with
+a recorder gets `Sim.ghosts`, a `GhostSet` on the recorder's book and class
+(`opts.ghost_slot` / `ghosts_on` carry the slot and the `J` toggle across a
+restart). `step_physics` hands it every `LapTimer` event (a crossing reloads,
+a sector flashes); `hud_data` calls `sync(recorder.key)` (a live engine
+change, a lap filed, a trace landed), prepends `ghost_tuples` to
+`HudData.ghosts` and sets `delta_s` and `sector_flash` / `flash_col`, which
+`render._draw_delta` draws at the top centre when the HUD is on. The ghosts
+are `_Replay`s, drawn by the existing ground-silhouette path. `records.
+resimulate(on_step=, on_event=)` lets V33 read the delta against a lap's own
+trace while it is re-driven: tolerance 5 ms, measured 0.17 ms. `J` ->
+`'ghosts'`. Nothing reaches the physics.
+
 **The pre-race page** (`drive/prerace.py`, task 20). `_interactive_session`
 builds `Sim.prerace` (a `PreRace` on the recorder's book and class, the
 build on opts, the library's builds via `opts.garage_lib`) whenever it has a
@@ -1481,8 +1495,9 @@ Keys: `↑` throttle, `↓` brake, `←/→` steer, `LSHIFT` fine, `Z` clutch,
 `SPACE` handbrake, `S` starter, `E`/`Q` shift up/down, `F` flank wing, `G`
 wing side (auto / left / right / both), `R` reset, `SHIFT+R` full reset, `P` pause, `O` single step,
 `[`/`]` slow-mo, `C` camera, `-`/`=`/`0` zoom, `H` HUD, `V` vectors, `B` g-g,
-`N`/`X` skid, `T` wet, `M` marker, `L` record, `K` arm a seed lap, `TAB` next
-map, `BACKSPACE` garage, `ESC` pause menu / settings. PS5 pad map: section 6.
+`N`/`X` skid, `T` wet, `M` marker, `L` record, `K` arm a seed lap, `J`
+ghosts, `TAB` next map, `BACKSPACE` garage, `ESC` pause menu / settings. PS5
+pad map: section 6.
 
 ## 9. Reconciliations (where the subsystem specs disagreed)
 

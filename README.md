@@ -44,7 +44,7 @@ python3 -m drive.drive --swarm 32 --swarm-car mx5 --swarm-fast --swarm-save neve
 | `S` | starter | `C` | camera |
 | `H` `V` `B` `N` `X` | HUD / vectors / g-g / skid / clear | `-` `=` `0` | zoom |
 | `M` `L` | telemetry marker / record | `TAB` | next map |
-| `K` | arm a seed lap for the swarm (named and saved at the line) | | |
+| `K` | arm a seed lap for the swarm (named and saved at the line) | `J` | ghosts on / off (time trial) |
 | `BACKSPACE` | garage (3D panel editor) | `ESC` | pause menu / settings |
 
 `ESC` (or `OPTIONS` on the pad) pauses and opens the menu: every keyboard and
@@ -178,6 +178,24 @@ keeps the car you just built, and `--build` / `--wing` win at launch. The
 switch never touches the garage's own file (`runs/garage_design.json`), so
 the car on the ramp is still there. The screen is never shown to a script, a
 headless run or `--ml-drive`.
+
+### Ghosts and the live delta
+
+From the moment you cross the line two ghosts run your lap with you, as flat
+silhouettes on the road (in the plan views and the chase view): **PB**, your
+best lap in the class, and **ghost 2** — by default the **reference bot**,
+the lap the class's author medal was set with; the pre-race page's *Ghost 2*
+row (`←` `→`) changes it to none or your P2 to P5 (P1 is the PB). They
+restart at every crossing, and a new PB races you from the very next lap;
+`J` hides them. In the chase view a ghost right under your car is drawn as
+an outline over it. At the top centre, under the timing panel,
+the **delta** to your PB is read by where you are on the track, not by time:
+`-0.23` in green is ahead, red behind (none off the road, e.g. out on the
+open map's pad). At each sector line the sector time flashes under it:
+**purple** is the best that sector has ever been driven in the class,
+**green** beats your PB lap's sector, **red** does not -- and no colour on a
+lap that cannot count (the out-lap, after all four wheels were off, after a
+reset).
 
 ### Medals
 
@@ -874,6 +892,7 @@ drive/
                 saved build; the build each map opens with
   medals.py     author / gold / silver / bronze per class, derived from headless
                 reference laps (data/medals.json, data/reference_laps.json)
+  ghosts.py     the PB and ghost-2 ghosts, the live delta, the sector flash
   telemetry.py  fixed-schema CSV + sidecar json
   plots.py      overview, g-g, track map, laps, A/B compare
   drive.py      main loop, settings, garage <-> drive session loop, CLI,

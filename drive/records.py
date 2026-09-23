@@ -574,7 +574,8 @@ class RecordBook:
                                   f"not written over")
                 self._merge_disk(key, d)
                 out = {k: v for k, v in d.items() if not k.startswith("_")}
-                out["laps"] = [lp for lp in d["laps"] if not lp.get("_pending")]
+                out["laps"] = [{k: v for k, v in lp.items() if not k.startswith("_")}
+                               for lp in d["laps"] if not lp.get("_pending")]
                 _atomic_json(p, out)
             except OSError as exc:
                 self.save_error = f"{type(exc).__name__}: {exc}"
@@ -999,12 +1000,15 @@ class LapRecorder:
             self._pool = None
 
     def _light(self, lap: dict, t: float, secs: list) -> dict:
-        """The part of a record the book ranks by (cheap: the line step)."""
+        """The part of a record the book ranks by (cheap: the line step),
+        plus the raw trace IN MEMORY (`_trace_arr`, never written): against
+        a busy physics loop the filing thread can take seconds to encode
+        (the GIL), and the ghost of a new PB has to race the very next lap."""
         m = self.meta
         return dict(version=1, time=t, sectors=list(secs), date=lap["date"], key=self.key,
                     build=dict(name=m.get("build_name", ""), json=m.get("build_json")),
                     assists=dict(m.get("assists", {})), settings=dict(m.get("settings", {})),
-                    _pending=True)
+                    _pending=True, _trace_arr=np.asarray(lap["trace"], dtype=np.float64))
 
     @staticmethod
     def _heavy(lap: dict) -> dict:
@@ -1090,7 +1094,7 @@ def physics_block(sim) -> dict:
 # ==================================================================== #
 #  REPLAY                                                              #
 # ==================================================================== #
-def resimulate(rec: dict, max_extra_s: float = 5.0) -> dict:
+def resimulate(rec: dict, max_extra_s: float = 5.0, on_step=None, on_event=None) -> dict:
     """Rebuild the lap's car and track, restore its start state and drive the
     controls log through a headless `Sim`. Returns the time and sectors the
     `LapTimer` sees and whether they match the record bit for bit."""
@@ -1131,11 +1135,15 @@ def resimulate(rec: dict, max_extra_s: float = 5.0) -> dict:
     for _ in range(n_max):
         sim.step_physics(sim.dt)
         for e in sim.events_log:
+            if on_event is not None:       # e.g. a GhostSet reading the replay
+                on_event(sim, e)
             if e[0] == "sector":
                 secs[int(e[1])] = float(e[3])
             elif e[0] == "lap":
                 got = float(e[3])
         sim.events_log.clear()
+        if on_step is not None:
+            on_step(sim)
         if got is not None:
             break
     n_sec = len(rec.get("sectors") or [])

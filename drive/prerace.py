@@ -46,6 +46,7 @@ PR_HELP = [("PRE-RACE", [
     ("RACE", "every car to the line; the clock starts at the next crossing"),
     ("Build", "pick another saved build (each with its best in this class)"),
     ("Edit", "the garage on this build; its ENTER comes back here"),
+    ("Ghost 2", "LEFT / RIGHT: the reference bot, none, or your P2..P5"),
     ("ESC", "the pause menu: Resume drives on from here (laps still count)"),
 ])]
 PICK_HELP = [("PICK A BUILD", [

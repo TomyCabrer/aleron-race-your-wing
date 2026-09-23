@@ -328,6 +328,7 @@ EDGE_KEYS = {
     pygame.K_m: "marker",
     pygame.K_l: "record",
     pygame.K_k: "seed_lap",         # arm: the next full valid lap is saved as a swarm seed
+    pygame.K_j: "ghosts",           # the time trial's PB / ghost-2 ghosts on / off
     pygame.K_TAB: "track_next",
     pygame.K_BACKSPACE: "garage",   # back to the 3D editor (drive --garage)
     pygame.K_ESCAPE: "menu",        # pause menu: controls + reset / quit
@@ -389,6 +390,7 @@ MENU_HELP_KB = [
     ("T", "wet toggle"),
     ("M / L", "telemetry marker / record"),
     ("TAB", "next map"),
+    ("J", "ghosts (PB / ghost 2) on / off"),
     ("BACKSPACE", "garage (3D panel editor)"),
     ("ESC", "this menu / settings"),
     ("mouse", "in a menu: point, click a row, wheel, right = back"),
@@ -437,7 +439,7 @@ R reset to last sector line | SHIFT+R full reset (clears skid marks and timing)
 P pause | O single physics step while paused | [ ] slow-mo 0.25x / 1.0x
 C camera cycle | - / = zoom | 0 auto zoom | H HUD cycle | V force vectors | B g-g | N skid | X clear skid
 T toggle wet (global mu_scale 1.0 <-> 0.632) | M telemetry marker | L toggle recording
-TAB next track | BACKSPACE garage (3D panel editor) | ESC menu (controls, reset, quit)
+TAB next track | J ghosts on / off | BACKSPACE garage (3D panel editor) | ESC menu (controls, reset, quit)
 PS5 pad: R2 throttle | L2 brake | L-stick steer | R1/L1 shift | CROSS handbrake | SQUARE clutch
          CIRCLE wing | TRIANGLE wing side | OPTIONS menu | CREATE reset | TOUCHPAD garage
          d-pad: up HUD, down vectors, left slow-mo, right normal | R3 camera | L3 auto zoom"""

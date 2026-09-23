@@ -1288,6 +1288,9 @@ class Sim:
         # build (name, json) here and restarts the session on it
         self.prerace = None
         self.prerace_pick = None
+        # the PB and ghost-2 ghosts, the live delta, the sector flash
+        # (drive/ghosts.py, task 22): a ghosts.GhostSet in a session with records
+        self.ghosts = None
 
         self._bind_input()
         self._sample_surfaces()
@@ -1385,6 +1388,8 @@ class Sim:
                     self._seed_line(e)
                 if self.recorder is not None:
                     self.recorder.event(self, e)
+                if self.ghosts is not None:
+                    self.ghosts.event(self, e)
         if s_prev is not None and self.rivals:
             ds = (s - s_prev)
             if tr.closed:
@@ -1852,6 +1857,10 @@ class Sim:
                 self._seed_note("SEED LAP ARMED - recording starts at the line", 4.0)
         elif ev == "clear_skid":
             self.skid.clear()
+        elif ev == "ghosts":
+            if self.ghosts is not None:
+                self.ghosts.enabled = not self.ghosts.enabled
+                self._rec_note("ghosts " + ("on" if self.ghosts.enabled else "off"), 2.0)
         elif ev == "garage":
             # hand the session to the 3D editor; the outer loop (run_interactive_cli)
             # re-enters it and comes back here with the car it built
@@ -2334,6 +2343,9 @@ class Sim:
         if self.recorder is not None:
             pr.key, pr.book = self.recorder.key, self.recorder.book
         pr.titles["engine"] = engine_label(self.settings.engine, self.veh.car)
+        if self.ghosts is not None:
+            from .ghosts import slot_label
+            pr.ghost_label = slot_label(self.ghosts.slot, pr.book, pr.key)
 
     def _menu_show_prerace(self, idx: int = 0) -> None:
         try:
@@ -2382,6 +2394,9 @@ class Sim:
                 self.start_timed()
             elif action == "pr_pick":
                 self._menu_show_prerace_pick()
+            elif action.endswith("set:pr_ghost") and self.ghosts is not None:
+                self.ghosts.step_slot(-1 if action.startswith("prev:") else +1)
+                self._menu_show_prerace(idx=idx)
             elif action == "pr_edit" and self.has_garage:   # the garage, on this
                 self._menu_close()             # build; its ENTER comes back here
                 self.stop_reason = "garage"
@@ -2793,6 +2808,16 @@ class Sim:
                 d["lap_medal"] = str(last["medal"])
         if self.rivals:
             d["ghosts"] = [rv.ghost() for rv in self.rivals]
+        if self.ghosts is not None:        # the PB and ghost 2, the delta, the flash
+            gs = self.ghosts
+            gs.sync(self.recorder.key if self.recorder is not None else None)
+            g = gs.ghost_tuples(self)
+            if g:
+                d["ghosts"] = g + d.get("ghosts", [])
+            d["delta_s"] = gs.delta(self)
+            f = gs.flash_now(self)
+            if f:
+                d["sector_flash"], d["flash_col"] = f
         if self.hud_cfg:
             d.update(self.hud_cfg)          # the garage build's wing geometry
         try:
@@ -4381,6 +4406,24 @@ def _v32_prerace(tmp, verbose=True):
     ev("menu")                                     # ESC on the pre-race: the pause page
     esc_ok = sim._menu_page == "main" and sim.menu.open
     ev("menu")
+    # task 22: the Ghost 2 row steps the slot (LEFT / RIGHT or ENTER) and J
+    # toggles the ghosts
+    from .ghosts import GhostSet
+    sim.ghosts = GhostSet(book, key, ref_fn=lambda k_: None)
+    sim.open_prerace()
+    goto("set:pr_ghost")
+    row0 = sim.menu.items[sim.menu.idx][0]
+    ev("nav_right")
+    ghost_ok = (sim.ghosts.slot == "none" and "none" in sim.menu.items[sim.menu.idx][0]
+                and "reference bot" in row0 and sim.menu.open)
+    ev("select")
+    ghost_ok = ghost_ok and sim.ghosts.slot == "top2" and sim.menu.open
+    ev("menu"); ev("menu")                         # the page, then the pause page
+    on0 = sim.ghosts.enabled
+    ev("ghosts")                                   # J
+    ghost_ok = ghost_ok and on0 and not sim.ghosts.enabled and not sim.menu.open
+    ev("ghosts")
+    sim.ghosts = None
     # the mouse: draw the page offscreen, click the RACE row
     mouse_ok = False
     try:
@@ -4410,14 +4453,73 @@ def _v32_prerace(tmp, verbose=True):
               and not prm.wanted(_Opts(script="lap"), s_)
               and not prm.wanted(o, Settings(path="", track="dragstrip")))
     ok = all((open_ok, race_ok, tt_ok, pick_ok, back_ok, picked, edit_ok, esc_ok,
-              mouse_ok, who_ok))
+              mouse_ok, who_ok, ghost_ok))
     if verbose:
         print(f"  V32 pre-race    : opens on RACE {open_ok}; one press races {race_ok}; "
               f"Time trial {tt_ok}; pick lists builds + class bests {pick_ok}; "
               f"ESC back {back_ok}; pick restarts on it {picked}; EDIT -> garage {edit_ok}; "
-              f"ESC -> pause page {esc_ok}; mouse hover + click {mouse_ok}; "
-              f"scripted / headless / dragstrip skip it {who_ok}")
+              f"ESC -> pause page {esc_ok}; ghost-2 row + J {ghost_ok}; mouse hover + click "
+              f"{mouse_ok}; scripted / headless / dragstrip skip it {who_ok}")
     return ok, dict(open=open_ok, race=race_ok, pick=pick_ok, mouse=mouse_ok)
+
+
+#: V33's tolerance on the live delta against the lap's own trace: the trace's
+#: time is stored to 1 ms and its distance to 1 mm, sampled at 50 Hz
+V33_DELTA_TOL_S = 0.005
+
+
+def _v33_ghost_delta(tmp, verbose=True):
+    """Ghosts and the live delta (drive/ghosts.py): record one arena lap,
+    re-simulate it from its controls log with a GhostSet whose PB IS that
+    lap, and read the delta and the PB ghost's pose every 20 ms. The delta
+    against a lap's own trace must stay within V33_DELTA_TOL_S of zero, the
+    ghost must drive on top of the car, and every sector must flash purple
+    (a lap's own sectors are the class's best). The book is in `tmp`."""
+    from . import records as recm, ghosts as gh
+    root = os.path.join(tmp, "ghosts")
+    tr = trk.make_arena()
+    sim = _build("arena", driver=LapDriver(tr, margin=0.90), start_V=25.0, gear=3,
+                 start_s=tr.length - 30.0)
+    sim.s = tr.length - 30.0
+    key = recm.class_key("arena", CAR_DEFAULT, "stock", "patch")
+    rec = recm.LapRecorder(recm.RecordBook(root), key, {}, sim.global_wet, sim.dt)
+    sim.recorder = rec
+    for _ in range(int(70.0 / sim.dt)):
+        sim.step_physics(sim.dt)
+        if rec.n_valid:
+            break
+    rec.close()
+    book = recm.RecordBook(root)
+    lap = book.pb(key)
+    gs = gh.GhostSet(book, key, slot="none")
+    deltas, gaps, flashes = [], [], []
+
+    def on_step(s_):
+        if gs._prog is None:               # the replay starts just past the line:
+            gs.event(s_, ("start", 0, s_.lap.t_lap_start, float("nan")))   # the crossing
+        if s_.n % 20 == 0:
+            d = gs.delta(s_)
+            if math.isfinite(d):
+                deltas.append(d)
+            g = gs.ghost_tuples(s_)
+            if g:
+                gaps.append(hypot(g[0][0] - s_.veh.x, g[0][1] - s_.veh.y))
+
+    def on_event(s_, e):
+        gs.event(s_, e)
+        if e[0] == "sector":
+            flashes.append(gs.flash_now(s_)[1])
+
+    rs = recm.resimulate(lap, on_step=on_step, on_event=on_event)
+    dmax = max((abs(d) for d in deltas), default=float("inf"))
+    gmax = max(gaps, default=float("inf"))
+    ok = (rs["exact"] and len(deltas) > 1000 and dmax <= V33_DELTA_TOL_S and gmax < 0.5
+          and flashes == ["purple"] * len(tr.sector_s))
+    if verbose:
+        print(f"  V33 ghost delta : own lap {lap['time']:.3f} s re-driven, {len(deltas)} reads: "
+              f"max |delta| {dmax * 1e3:.2f} ms (tol {V33_DELTA_TOL_S * 1e3:.0f} ms), PB ghost "
+              f"within {gmax:.3f} m of the car, sector flashes {flashes}  -> {'ok' if ok else 'FAIL'}")
+    return ok, dict(max_delta_s=dmax, max_gap_m=gmax, flashes=flashes)
 
 
 def _v20_determinism(tmp, verbose=True):
@@ -5022,6 +5124,7 @@ def self_check(verbose=True) -> bool:
                      ("V30", lambda: _v30_race_vs_bot(verbose)),
                      ("V31", lambda: _v31_records(tmp, verbose)),
                      ("V32", lambda: _v32_prerace(tmp, verbose)),
+                     ("V33", lambda: _v33_ghost_delta(tmp, verbose)),
                      ("V20", lambda: _v20_determinism(tmp, verbose)),
                      ("accel", lambda: _accel_end_to_end(tmp, verbose)),
                      ("V21", lambda: _v21_rtf(tmp, 60.0, verbose))):
@@ -5046,7 +5149,7 @@ F flank-wing toggle | G cycle wing side (auto / left / right / both = air brake)
 R reset to last sector line | SHIFT+R full reset
 P pause | O single physics step | [ ] slow-mo 0.25x / 1.0x
 C camera | - / = zoom | 0 auto zoom | H HUD | V vectors | B g-g | N skid | X clear
-T toggle wet | M telemetry marker | L toggle recording | K arm a SEED LAP for the swarm | TAB next map
+T toggle wet | M telemetry marker | L toggle recording | K arm a SEED LAP for the swarm | TAB next map | J ghosts
 BACKSPACE garage (3D panel editor) | ESC menu: settings (map, engine, gearbox, ABS, TC, aids, sound), reset, race vs bot, quit
 PS5 pad: R2 throttle | L2 brake | L-stick steer | R1/L1 shift | CROSS handbrake | SQUARE clutch
          CIRCLE wing | TRIANGLE wing side | OPTIONS menu | CREATE reset | TOUCHPAD garage
@@ -5410,6 +5513,9 @@ def run_interactive_cli(opts) -> int:
                                        garage=(grg is not None))
             pad = getattr(sim.inp, "pad", pad)
             opts.race_menu = dict(sim.race_opts, active=bool(sim.rivals))
+            gs = getattr(sim, "ghosts", None)
+            if gs is not None:             # the ghost slot and J survive a restart
+                opts.ghost_slot, opts.ghosts_on = gs.slot, gs.enabled
             pick = getattr(sim, "prerace_pick", None)
             if pick and grg is not None:
                 #  the pre-race PICK: that saved build is the car from now on;
@@ -6227,6 +6333,16 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
             print(f"pre-race screen unavailable ({type(exc).__name__}: {exc})")
             sim.prerace = None
     opts.prerace_skip = False
+    #  the ghosts and the live delta (drive/ghosts.py): with records only
+    if sim.recorder is not None:
+        try:
+            from .ghosts import GhostSet, SLOT_DEFAULT
+            sim.ghosts = GhostSet(sim.recorder.book, sim.recorder.key,
+                                  slot=getattr(opts, "ghost_slot", None) or SLOT_DEFAULT,
+                                  enabled=getattr(opts, "ghosts_on", True))
+        except Exception as exc:           # noqa: BLE001 -- a bad trace never stops a drive
+            print(f"ghosts unavailable ({type(exc).__name__}: {exc})")
+            sim.ghosts = None
     if getattr(opts, "seed_lap", False):
         sim.seed_armed = True              # --seed-lap: K already pressed
         opts.seed_lap = False              # once; a restart is a fresh choice
