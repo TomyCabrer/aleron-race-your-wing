@@ -1,6 +1,6 @@
 """drive/tutorial.py -- the driving tutorial (task 23).
 
-Eleven data-driven steps, `Step(id, map, kind, title, text, hint, check, ...)`:
+Thirteen data-driven steps, `Step(id, map, kind, title, text, hint, check, ...)`:
 
   1 pedals      arena    throttle to 50 km/h, then brake to a stop
   2 steer       arena    steer both ways at speed
@@ -12,7 +12,15 @@ Eleven data-driven steps, `Step(id, map, kind, title, text, hint, check, ...)`:
   8 wing_result (page)   the two laps' mean lateral g, and the difference
   9 timing      (page)   sectors, the PB ghost, the delta, the medals
  10 lap         arena    one valid lap
- 11 done        (page)   what next
+ 11 manual_intro (page)  OPTIONAL: the manual gearbox -- try it, or skip both
+ 12 manual      arena    OPTIONAL: up to 3rd by hand, then a downshift at speed
+ 13 done        (page)   what next (the wing-design tutorial is one press)
+
+Steps 11-12 are an optional GROUP (`Step.group`): the page's "Skip it" skips
+the whole group. Step 12 drives on the manual box (`Step.gearbox`): an
+automatic is switched to Manual (auto clutch) for the step and back after
+(drive.Sim._tutorial_gearbox; `Tutorial.gearbox_prev` remembers it, and a
+box the player changed meanwhile is theirs).
 
 A DRIVE step is an overlay box on the road (HudData.tutorial, drawn by
 render._draw_tutorial) with what to do, a live status line, a hint after
@@ -22,7 +30,8 @@ HUD's and the sim's state this frame (speed, lateral g, yaw rate, `s`, on the
 road, the wing toggle, the LapTimer events and the discrete commands since
 the last frame; `frame_of`) -- and `mem`, the step's own memory. The
 self-check drives every predicate with synthetic frames; drive.py's V34
-drives the whole tutorial headless with ScriptedInput.
+drives the whole tutorial headless with ScriptedInput, the manual box
+included.
 
 A PAGE step is a paused menu page (keyboard, pad, mouse, like every page):
 Continue, or End. ESC in a drive step opens the pause menu, whose Tutorial
@@ -63,8 +72,10 @@ STEER_YAW_DEG = 6.0         # deg/s each way (0.1 rad/s: a lane change, not a tw
 TURN1_PAST_M = 15.0         # step 3: this far past turn 1's exit
 MAX_DS_M = 30.0             # a jump in s bigger than this between frames is a teleport
 LAP_MIN_FRACTION = 0.95     # a lap is a lap ROUND the circuit (records.py's rule)
+MANUAL_TOP = 3              # step 12: up to this gear by hand ...
+MANUAL_DOWN_KMH = 30.0      # ... then a downshift at this speed or more (under braking)
 TUTORIAL_WING = "plate"     # the library's published flank panel (wing_car)
-MINUTES = 8                 # what the offer says it takes
+MINUTES = 10                # what the offer says it takes
 
 KEYS = "ESC / OPTIONS: the tutorial menu (skip a step, end)"
 
@@ -85,6 +96,10 @@ class Step:
     reset: bool = False        # the step starts on the line, standing
     setup: object = None       # (track, mem) -> None, once when the step starts
     wing: bool = False         # needs a car with a flank wing
+    gearbox: str | None = None  # drives on this box ('manual'): an automatic is
+    #                             switched for the step and back after
+    group: str = ""            # an OPTIONAL group: its page offers "Skip it",
+    #                             which skips every step of the group
 
 
 def _num(x) -> bool:
@@ -284,6 +299,46 @@ def _st_lap(f, m):
     return f"lap {100.0 * max(m.get('dist', 0.0), 0.0) / max(f.L, 1.0):3.0f} %   {f.lap_time:6.1f} s"
 
 
+# -- 12 the manual gearbox (optional) -------------------------------------------------
+def _chk_manual(f, m):
+    """Up to MANUAL_TOP by hand, then a downshift at MANUAL_DOWN_KMH or more
+    (under braking, before a corner): the two things the automatic did. A
+    gear is read only while one is in (a shift passes through neutral), so
+    3 -> N -> 2 is one downshift. Only a change UP counts toward the top
+    gear. A reset (R keeps the speed and may land in any gear) starts the
+    reading over; the automatic's own shifts count for nothing -- a spell
+    on it clears the top gear too."""
+    if f.gearbox == "auto":
+        m["why"] = ("the gearbox is on Automatic: ESC > Settings > Gearbox > Manual, "
+                    "or ESC > Tutorial skips this step")
+        m.pop("g", None)
+        m["top"] = 0
+        return False
+    if str(m.get("why", "")).startswith("the gearbox"):
+        m["why"] = ""
+    if "reset" in f.cmds:
+        m.pop("g", None)
+    g = f.gear
+    if g >= 1:
+        last, top = m.get("g"), m.get("top", 0)
+        if last is None:
+            top = max(top, 1) if g == 1 else top   # a reading from 1st is a start
+        elif g > last:
+            top = max(top, g)                      # a change up, by hand
+        elif g < last and top >= MANUAL_TOP and f.V_kmh >= MANUAL_DOWN_KMH:
+            m["down"] = True
+        m["g"], m["top"] = g, top
+    return bool(m.get("down"))
+
+
+def _st_manual(f, m):
+    g = str(f.gear) if f.gear >= 1 else ("R" if f.gear < 0 else "N")
+    top = m.get("top", 0)
+    if top < MANUAL_TOP:
+        return f"gear {g}   up with E (R1) at the lights: {max(top, 1)} of {MANUAL_TOP}"
+    return f"gear {g}   now brake, and down with Q (L1) above {MANUAL_DOWN_KMH:.0f} km/h"
+
+
 # -- the pages ---------------------------------------------------------------------
 def _onoff(v) -> str:
     return "on" if v else "off"
@@ -365,6 +420,26 @@ def _pg_timing(ctx, tut):
     return note, secs
 
 
+def _pg_manual(ctx, tut):
+    gb = getattr(getattr(ctx, "settings", None), "gearbox", "auto")
+    mine = ("Your gearbox is already manual, so nothing changes." if gb != "auto" else
+            "For the next step the box is on MANUAL; it goes back to Automatic after "
+            "(ESC > Settings > Gearbox keeps manual for good).")
+    note = ("Optional. With the manual box you choose the gear: the right one for a "
+            "corner's exit, engine braking into it, and no change up in the middle of "
+            "a corner. " + mine)
+    keys = [("E / R1", "shift up"), ("Q / L1", "shift down"),
+            ("shift lights", "the LEDs over the rev bar: all lit = change up now"),
+            ("the gear", "the big number next to the speed; N while it changes")]
+    how = [("up", "foot flat, at the shift lights: the box lifts for the change"),
+           ("down", "under braking, one gear at a time, before you turn in;"),
+           ("", "the box blips the throttle to match the revs"),
+           ("pulling away", "in 1st; the box works the clutch, it cannot stall"),
+           ("clutch mode", "Settings > Gearbox > Manual + clutch pedal: Z (SQUARE)"),
+           ("", "is the clutch, you launch on it, it can stall; S restarts")]
+    return note, [("THE KEYS", keys), ("HOW", how)]
+
+
 def _pg_done(ctx, tut):
     from .records import fmt_time
     lap = tut.results.get("lap")
@@ -373,10 +448,13 @@ def _pg_done(ctx, tut):
     if off and on:
         rows.append(("the wing", f"{on['ay'] - off['ay']:+.2f} g on the skidpad"))
     if tut.skipped:
-        rows.append(("skipped", ", ".join(tut.skipped)))
-    nxt = [("Time trial", "ESC > Time trial: your top 5, medals, another build"),
-           ("Garage", "ESC > Tutorial > Wing-design tutorial: design your first wing"),
-           ("Tutorial", "ESC > Tutorial takes it again, any time")]
+        titles = {s.id: s.title for s in tut.steps}
+        rows.append(("skipped", ", ".join(titles.get(k, k) for k in tut.skipped)))
+    nxt = [("Time trial", "ESC > Time trial: your top 5, medals, another build")]
+    if getattr(ctx, "garage", False):
+        nxt.append(("Wing design", "the row below: your first wing, step by step, in the garage"))
+    nxt += [("Gearbox", "ESC > Settings > Gearbox: Manual keeps it for good"),
+            ("Tutorial", "ESC > Tutorial takes it again, any time")]
     return "That is the whole loop: tweak the car, drive it, beat the number.", \
         [("DONE", rows), ("NEXT", nxt)]
 
@@ -420,6 +498,16 @@ STEPS = (
          "wheels off the road and the lap does not count.",
          hint="Brake before the corners, not in them. Any valid lap will do.",
          check=_chk_lap, status=_st_lap, reset=True),
+    Step("manual_intro", None, "page", "The manual gearbox (optional)", _pg_manual,
+         group="manual"),
+    Step("manual", "arena", "drive", "Manual gearbox (optional)",
+         "The box is on MANUAL. Pull away in 1st and shift UP with E (R1) each time "
+         "the shift lights fill, up to 3rd. Then brake and shift DOWN with Q (L1), "
+         "one gear, before a corner.",
+         hint="E / R1 up, Q / L1 down; the box works the clutch, it cannot stall. "
+              "Change down while braking, not in the corner. ESC > Tutorial skips it.",
+         check=_chk_manual, status=_st_manual, reset=True, gearbox="manual",
+         group="manual"),
     Step("done", None, "page", "Tutorial complete", _pg_done),
 )
 
@@ -455,6 +543,7 @@ def frame_of(sim, tut=None):
         closed=bool(sim.track.closed), on_track=bool(sim.on_track),
         lap_valid=bool(sim.lap.lap_valid), lap_time=float(sim.lap.lap_time),
         wing_on=bool(sim.wing_on), has_flank=bool(has_flank),
+        gear=int(getattr(v, "gear", 0)), gearbox=str(getattr(sim, "gearbox", "auto")),
         events=events, cmds=cmds, track=sim.track.name, rec_why=rec_why)
 
 
@@ -491,6 +580,13 @@ class Tutorial:
         self._t_now = 0.0
         self._sim = None                       # the session last ticked (its t restarts at 0)
         self._last = None
+        #: (the player's box, the one this tutorial set) while a Step.gearbox
+        #: step has switched it; drive.Sim._tutorial_gearbox puts it back.
+        #: Saved in the progress file as well (`set_gearbox_prev`): a run
+        #: that dies mid-step leaves it there for the next launch to undo
+        #: (`gearbox_left`)
+        self.gearbox_prev = None
+        self.gearbox_seen = None               # the step whose box was checked: once
         self._begin()
         self._save()
 
@@ -515,6 +611,15 @@ class Tutorial:
 
     def wants_wing(self) -> bool:
         return self.active and self.step.wing
+
+    def gearbox_wanted(self):
+        """The box the current step drives on (Step.gearbox), or None."""
+        st = self.step
+        return st.gearbox if (self.active and st.kind == "drive") else None
+
+    def set_gearbox_prev(self, v) -> None:
+        self.gearbox_prev = tuple(v) if v else None
+        self._save()
 
     def command(self, ev: str) -> None:
         """A discrete command the session saw (a reset). Kept to the next frame."""
@@ -597,10 +702,14 @@ class Tutorial:
             self._begin()
         self._save()
 
-    def skip(self) -> None:
+    def skip(self, group: bool = False) -> None:
+        """Skip this step; with `group`, every step of its optional group."""
+        g = self.step.group if group else ""
         self.flash = f"skipped: {self.step.title}"
         self._flash_until = self._t_now + DONE_FLASH_S
         self.advance(skipped=True)
+        while g and self.active and self.step.group == g:
+            self.advance(skipped=True)
 
     def end(self) -> None:
         """Stop here; the pause menu's Tutorial page continues from this step."""
@@ -616,6 +725,7 @@ class Tutorial:
         sec["step"] = None if self.done else self.step.id
         sec["results"] = dict(self.results)
         sec["skipped"] = list(self.skipped)
+        sec["gearbox_prev"] = list(self.gearbox_prev) if self.gearbox_prev else None
         self.progress.save(SECTION)
 
     # ---------------------------------------------------------------- #
@@ -637,8 +747,17 @@ class Tutorial:
         """(title, subtitle, note, sections, items) for a page step."""
         st = self.step
         note, secs = st.text(ctx, self) if callable(st.text) else (str(st.text), [])
-        items = [("Drive on", "tut_next")] if st.id == "done" else \
-            [("Continue", "tut_next"), ("End the tutorial", "tut_end")]
+        if st.id == "done":
+            items = [("Drive on", "tut_next")]
+            if getattr(ctx, "garage", False):
+                items.append(("Next: the wing-design tutorial (in the garage)", "tut_wing"))
+        elif st.group:                         # an optional group's page
+            items = [("Try it", "tut_next"),
+                     ("Skip it" + (" (the gearbox stays as it is)" if st.group == "manual"
+                                   else ""), "tut_skip_group"),
+                     ("End the tutorial", "tut_end")]
+        else:
+            items = [("Continue", "tut_next"), ("End the tutorial", "tut_end")]
         flash = self.flash if self._t_now < self._flash_until else ""
         sub = flash or f"step {self.label()}"
         return f"TUTORIAL {self.label()}  {st.title}", sub, note, secs, items
@@ -664,6 +783,18 @@ def saved_state(progress) -> dict:
     return dict(offered=bool(sec.get("offered")), done=bool(sec.get("done")),
                 step=step if step in ids else None,
                 index=ids.index(step) if step in ids else None)
+
+
+def gearbox_left(progress):
+    """(the player's box, the one a tutorial step set) that a run which did
+    not end cleanly (a crash, a kill, a closed terminal) left in the progress
+    file, or None. `run_interactive_cli` undoes it at launch."""
+    sec = progress.section(SECTION) if progress is not None else {}
+    gp = sec.get("gearbox_prev")
+    modes = ("auto", "manual", "clutch")
+    if isinstance(gp, list) and len(gp) == 2 and all(x in modes for x in gp):
+        return tuple(gp)
+    return None
 
 
 def menu_items(tut=None, progress=None, garage: bool = False) -> list:
@@ -698,12 +829,22 @@ def menu_row(progress=None, tut=None) -> str:
     return "Tutorial: learn to drive" + (" (done)" if sv["done"] else "")
 
 
-OFFER_ITEMS = [(f"Start the driving tutorial ({len(STEPS)} steps, about {MINUTES} minutes)",
-                "tut_start"),
-               ("Not now (the pause menu has it: ESC > Tutorial)", "tut_later")]
-OFFER_NOTE = ("New here? The tutorial drives you through the pedals, the steering, "
-              "a corner, the reset, the assists, what the flank wing does on the "
-              "skidpad, the timing and the medals, and one valid lap.")
+def offer_items(garage: bool = False) -> list:
+    """The first launch's WELCOME rows; with a garage, the wing-design
+    tutorial too (drive/wing_tutorial.py)."""
+    rows = [(f"Start the driving tutorial ({len(STEPS)} steps, about {MINUTES} minutes)",
+             "tut_start")]
+    if garage:
+        rows.append(("Wing-design tutorial: design a wing, in the garage", "wt_garage"))
+    return rows + [("Not now (the pause menu has both: ESC > Tutorial)", "tut_later")]
+
+
+OFFER_ITEMS = offer_items()
+OFFER_NOTE = ("New here? The driving tutorial takes you through the pedals, the "
+              "steering, a corner, the reset, the assists, what the flank wing does on "
+              "the skidpad, the timing and the medals, one valid lap and, if you like, "
+              "the manual gearbox. The wing-design tutorial, in the garage, walks you "
+              "through designing your own wing.")
 
 
 def wing_car(grg, design, lib):
@@ -731,7 +872,7 @@ def wing_car(grg, design, lib):
 def _frame(**kw):
     f = dict(t=0.0, V_kmh=0.0, ay_g=0.0, yaw_deg=0.0, s=0.0, L=1249.2, closed=True,
              on_track=True, lap_valid=True, lap_time=0.0, wing_on=False, has_flank=True,
-             events=[], cmds=[], track="arena", rec_why="")
+             gear=1, gearbox="manual", events=[], cmds=[], track="arena", rec_why="")
     f.update(kw)
     return SimpleNamespace(**f)
 
@@ -871,14 +1012,45 @@ def self_check(verbose: bool = True) -> bool:
                               rec_why="the wet toggle (T) is on"), m)
     rep("lap: a lap the records refused does not pass, and says why",
         not refused and "not recorded (the wet toggle" in m["why"], m["why"])
+    # --- 12 the manual gearbox
+    m = {}
+    seq = [(1, 0.0), (1, 30.0), (0, 40.0), (2, 45.0), (0, 70.0), (3, 72.0), (3, 90.0)]
+    r = [_chk_manual(_frame(gear=g, V_kmh=v), m) for g, v in seq]
+    up_st = _st_manual(_frame(gear=3, V_kmh=90.0), m)
+    r += [_chk_manual(_frame(gear=0, V_kmh=60.0), m), _chk_manual(_frame(gear=2, V_kmh=55.0), m)]
+    rep("manual: up to 3rd through neutral is not done, then 3 -> N -> 2 at speed is",
+        not any(r[:-1]) and r[-1] and "down with Q" in up_st, up_st)
+    m = {}
+    for g, v in ((1, 10.0), (2, 50.0), (3, 80.0)):
+        _chk_manual(_frame(gear=g, V_kmh=v), m)
+    slow = _chk_manual(_frame(gear=1, V_kmh=0.0, cmds=["reset"]), m)      # R: stopped in 1st
+    rep("manual: a reset (stopped, back in 1st) is not a downshift", not slow and m["top"] == 3)
+    m = {}
+    for g, v in ((1, 10.0), (2, 50.0), (3, 80.0)):
+        _chk_manual(_frame(gear=g, V_kmh=v), m)
+    r_fast = _chk_manual(_frame(gear=1, V_kmh=87.0, cmds=["reset"]), m)   # R mid-shift, at speed
+    r_next = _chk_manual(_frame(gear=1, V_kmh=86.0), m)
+    _chk_manual(_frame(gear=4, V_kmh=90.0, gearbox="auto"), m)             # the automatic's 4th
+    back = [_chk_manual(_frame(gear=g, V_kmh=v), m) for g, v in ((4, 90.0), (3, 70.0))]
+    rep("manual: R at speed in any gear, or a spell on the automatic, is no downshift",
+        not r_fast and not r_next and not any(back) and m["top"] == 0, str(m))
+    m = {}
+    low = [_chk_manual(_frame(gear=g, V_kmh=v), m) for g, v in ((1, 20.0), (2, 45.0), (1, 35.0))]
+    auto = _chk_manual(_frame(gear=3, V_kmh=90.0, gearbox="auto"), m)
+    rep("manual: a downshift before 3rd is not it; on Automatic it says how to switch",
+        not any(low) and not auto and "Settings > Gearbox" in m["why"], m["why"])
     # --- the steps are well formed
     ids = [s.id for s in STEPS]
-    form = (len(set(ids)) == len(ids) == 11
+    form = (len(set(ids)) == len(ids) == 13
             and all((s.kind == "drive") == (s.check is not None) for s in STEPS)
             and all(s.map in (None, "arena", "skidpad") for s in STEPS)
             and all(s.hint for s in STEPS if s.kind == "drive")
-            and STEPS[-1].kind == "page")
-    rep("11 steps, every drive step has a predicate and a hint", form, " ".join(ids))
+            and STEPS[-1].kind == "page"
+            and [s.id for s in STEPS if s.group] == ["manual_intro", "manual"]
+            and STEPS[ids.index("manual_intro")].kind == "page"
+            and [s.id for s in STEPS if s.gearbox] == ["manual"])
+    rep("13 steps, every drive step has a predicate and a hint; the manual pair "
+        "is an optional group", form, " ".join(ids))
 
     # --- the state machine, on a fake sim, with a temporary progress file
     from .progress import Progress
@@ -918,7 +1090,7 @@ def self_check(verbose: bool = True) -> bool:
     rep("progress is saved at each step", Progress(prog.path).section(SECTION).get("step") == "steer")
     ov = tut.overlay()
     rep("the overlay: the step, the done flash, the keys",
-        ov and "2/11" in ov["head"] and ov["flash"].startswith("done: Throttle") and "ESC" in ov["foot"],
+        ov and "2/13" in ov["head"] and ov["flash"].startswith("done: Throttle") and "ESC" in ov["foot"],
         str(ov))
     tut.tick(ar)
     ar.t = 8.0 + HINT_AFTER_S + 1.0
@@ -934,7 +1106,7 @@ def self_check(verbose: bool = True) -> bool:
         abs=True, tc=False, steer_aid=True, gearbox="auto"), key=None))
     rep("the assists page: four assists, Continue / End",
         len(secs[0][1]) == 4 and [a for _, a in items] == ["tut_next", "tut_end"]
-        and "5/11" in title, title)
+        and "5/13" in title, title)
     tut.advance()
     rep("the wing step wants a flank wing and the skidpad", tut.wants_wing()
         and tut.tick(ar) == "restart")
@@ -961,6 +1133,38 @@ def self_check(verbose: bool = True) -> bool:
     t2.results["wing_on"] = dict(ay=0.82, t=16.3)
     rep("... and says 'about the same' inside WING_SAME_G, not a gain",
         "About the same" in _pg_wing(None, t2)[0])
+    # the optional group: its page offers Skip, which skips both steps
+    t2.i = [s.id for s in STEPS].index("manual_intro")
+    t2._begin()
+    ctx_ = SimpleNamespace(settings=SimpleNamespace(gearbox="auto"), key=None, garage=True)
+    _t, _s, note_m, secs_m, items_m = t2.page(ctx_)
+    rep("the manual page: optional, keys and how, Try / Skip / End",
+        [a for _, a in items_m] == ["tut_next", "tut_skip_group", "tut_end"]
+        and "Optional" in note_m and "Automatic after" in note_m
+        and [t_ for t_, _ in secs_m] == ["THE KEYS", "HOW"], note_m[:60])
+    t2.advance()
+    rep("the manual drive step wants the manual box; a page wants none",
+        t2.step.id == "manual" and t2.gearbox_wanted() == "manual")
+    t2.set_gearbox_prev(("auto", "manual"))
+    left = gearbox_left(Progress(prog.path))
+    t2.set_gearbox_prev(None)
+    rep("the switch is in the progress file while it lasts (a crash is undone at launch)",
+        left == ("auto", "manual") and gearbox_left(Progress(prog.path)) is None, str(left))
+    t2.i -= 1
+    t2._begin()
+    t2.skip(group=True)
+    rep("Skip it on the page skips the whole group, to the done page",
+        t2.step.id == "done" and t2.gearbox_wanted() is None
+        and t2.skipped[-2:] == ["manual_intro", "manual"], f"{t2.step.id} {t2.skipped}")
+    _t, _s, note_d, secs_d, items_d = t2.page(ctx_)
+    no_g = t2.page(SimpleNamespace(settings=None, key=None, garage=False))[4]
+    rep("the done page: the wing-design tutorial is a row with a garage; skipped "
+        "steps by title", [a for _, a in items_d] == ["tut_next", "tut_wing"]
+        and [a for _, a in no_g] == ["tut_next"]
+        and "Manual gearbox (optional)" in secs_d[0][1][-1][1], str(secs_d[0][1][-1]))
+    rep("the WELCOME offer: the wing-design tutorial with a garage",
+        [a for _, a in offer_items(True)] == ["tut_start", "wt_garage", "tut_later"]
+        and [a for _, a in OFFER_ITEMS] == ["tut_start", "tut_later"])
     t2.i = len(STEPS) - 1
     t2._begin()
     t2.advance()

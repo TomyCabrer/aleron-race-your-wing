@@ -56,7 +56,7 @@ from the repo root.
 | `drive/medals.py` | medal times per class (plan D4): author = the best valid, spin-free, full lap a reference driver sets headless in the class's STOCK car (`LapDriver` at margins 0.90 / 0.80 / 0.70 / 0.60, the `drive.ml` anchor, every bundled checkpoint for that car + track; aids off and on), gold / silver / bronze = author x 1.02 / 1.06 / 1.12. Owns `drive/data/medals.json` (`--build`) and `drive/data/reference_laps.json` (the author laps' 20 Hz traces, task 22's reference ghost). `targets`, `medal_for`, `reference_trace`; staleness by a hash of the track definitions, car specs and engine modes | numpy, `records` at module level; `drive.drive`, `track`, `cars` lazily; `drive.ml` only in the build's workers. Never pygame |
 | `drive/ghosts.py` | the time trial's two ghosts (the class PB; the D2 slot: reference bot / none / your P2..P5), clocked from the line (`sim.t - LapTimer.t_lap_start`); the live delta `tau - t_pb(p)`, `p` the centreline progress counted from the crossing on the ribbon only (the race gap's trail approach); the sector flash (purple / green / red, none for a lap that cannot count) | numpy, `records`; `drive.drive._Replay` and `medals` lazily. Never pygame |
 | `drive/progress.py` | `runs/progress.json` (kind `carsim-progress-1`): one section per feature (`tutorial`, task 25's `challenges`); `save(section)` merges with the file; a corrupt / foreign file is ignored with a note and moved aside as `.bad-<stamp>`, an unreadable one never written over | `records._atomic_json` lazily. Never pygame |
-| `drive/tutorial.py` | the driving tutorial: 11 data-driven `Step`s (`id, map, kind, title, text, hint, check(frame, mem), status, reset, setup, wing`), `frame_of(sim)` (what a predicate sees), the `Tutorial` state machine (`tick(sim)` -> 'restart' / 'page' / 'done'), the overlay payload, the page / menu rows, `wing_car` (the published plate for a car without a flank wing) | `corsa_c.G`; `records`, `medals` lazily. Never pygame, never `drive.drive` |
+| `drive/tutorial.py` | the driving tutorial: 13 data-driven `Step`s (`id, map, kind, title, text, hint, check(frame, mem), status, reset, setup, wing, gearbox, group`; task 31's optional manual-gearbox pair), `frame_of(sim)` (what a predicate sees), the `Tutorial` state machine (`tick(sim)` -> 'restart' / 'page' / 'done'), the overlay payload, the page / menu rows, `wing_car` (the published plate for a car without a flank wing) | `corsa_c.G`; `records`, `medals` lazily. Never pygame, never `drive.drive` |
 | `drive/wing_tutorial.py` | the wing-design tutorial: 10 `WStep`s (`check(garage, mem, action)`, an `anchor` naming the garage widget the hint points at), `WingTutor` (`update` / `draw` / the garage menu's rows), `anchor_rect` (from the widgets' own `_rect` / `_hits`) | `garage_ui`, `prerace._same_build`, `progress` (via the object handed in); `garage` and pygame only lazily / in the self-check. Never `drive.drive` |
 | `drive/challenges.py` | challenges (`drive/data/challenges/*.json`, kind `carsim-challenge-1`): `validate`, `load_all`, the constraint checker (`build_stats`, `refusals`), `stars_for`, the per-step `Meter` (lap_time, stop_distance, skid_ay, drag_time, trap_speed) and `ChallengeRun` (the Sim's hooks, best + stars into `runs/progress.json`), the reference runs (`measure`; `--measure` / `--write` derive every threshold as ref x 1.12 / 1.06 / 1.02), the page rows | `records`, `progress` (via the object handed in); `drive.drive`, `garage`, `track`, `vehicle`, `aero.library` lazily. Never pygame |
 | `drive/race_grid.py` | the race grid (plan D3): `GRID_MAX` (5, measured), `grid_slot(i)` (rows of two, 7 m apart), the slot colours, `bred_meta` (what a swarm writes into a checkpoint about the car it bred in), `own_car(meta, cfg, lib)` (that car rebuilt: stock or yours with ballast and wing masses, the garage build's aero, the engine) | `cars`, `vehicle`; `garage` lazily. Never pygame, never `drive.ml` |
@@ -1534,6 +1534,22 @@ library's `plate` on both flanks, in memory, `opts.tutorial_car`; no
 per-map build is recorded for it) and re-applies the player's design at the
 next session; ending the tutorial on it restarts the session. The pre-race
 page is not opened while a tutorial runs. V34 drives it end to end headless.
+Task 31: steps 11-12 are an optional group (`Step.group`; the page's *Skip
+it*, action `'tut_skip_group'`, skips both). Step 12 has `Step.gearbox =
+'manual'`: `Sim._tutorial_gearbox(tut)`, first thing in `_tutorial_tick`,
+switches an AUTOMATIC to it as the settings page would
+(`Sim._gearbox_live`: saved, the lap discarded, the recorder retargeted) and
+records `Tutorial.gearbox_prev = (prev, set)`; when no step wants it (passed,
+skipped, ended, started over -- `release=True` -- a challenge pick, or a quit:
+`_tutorial_gearbox_restore` in `_challenge_switch` and in
+`run_interactive_cli`'s `finally`) the player's box comes back. It is
+looked at once a step (`Tutorial.gearbox_seen`), and a player's own change
+(`apply_setting('gearbox')`) clears `gearbox_prev`: that box stays. The pair
+is also saved in the progress file's `tutorial` section, and
+`run_interactive_cli` undoes a switch left there by a run that died
+(`tutorial.gearbox_left`). The done page's `'tut_wing'` and the WELCOME page's
+`'wt_garage'` (both only with a garage) finish / leave and go to the garage
+with `Sim.wing_tutor_start` (`Sim._wing_tutor_go`).
 
 **The wing-design tutorial** (`drive/wing_tutorial.py`, task 24). The
 garage's hooks: `Garage.tutor` (a `WingTutor` or None) and

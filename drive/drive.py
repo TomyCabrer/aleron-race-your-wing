@@ -1784,6 +1784,9 @@ class Sim:
         s = self.settings
         s.cycle(key, d)
         restart = False
+        tut = self.tutorial
+        if key == "gearbox" and tut is not None and tut.gearbox_prev is not None:
+            tut.set_gearbox_prev(None)         # the player chose a box: it stays theirs
         if self.recorder is not None and key not in ("sound", "camera", "shake", "graphics"):
             self.recorder.discard(f"{key} changed")   # the lap cannot be replayed
             self.recorder.retarget(s, self._pending)   # the engine is in the class,
@@ -2556,6 +2559,7 @@ class Sim:
         tut = self.tutorial
         if tut is None:
             return
+        self._tutorial_gearbox(tut)            # a manual-box step (task 31)
         if not tut.active:
             self.tutorial = None
             return
@@ -2568,10 +2572,37 @@ class Sim:
         elif act == "page":
             self._menu_show_tutorial_step()
 
+    def _tutorial_gearbox(self, tut, release: bool = False) -> None:
+        """A step that drives on the manual box (tutorial.Step.gearbox) puts an
+        AUTOMATIC on it for the step, as the settings page would (saved, the
+        lap discarded, the class retargeted); the player's own box comes back
+        when the step is over -- passed, skipped, ended, started over, or a
+        quit (run_interactive_cli). A box the player changed meanwhile is
+        theirs and stays. `release`: this tutorial is being dropped."""
+        want = None if release else tut.gearbox_wanted()
+        if want and tut.gearbox_prev is None and tut.gearbox_seen != tut.i:
+            tut.gearbox_seen = tut.i           # once a step: a box chosen after is theirs
+            if self.settings.gearbox == "auto":
+                tut.set_gearbox_prev(("auto", want))
+                self._gearbox_live(want, "tutorial: the manual gearbox")
+        elif not want and tut.gearbox_prev is not None:
+            if _tutorial_gearbox_restore(tut, self.settings):
+                self._gearbox_live(self.settings.gearbox, "tutorial: the gearbox back")
+
+    def _gearbox_live(self, mode: str, why: str) -> None:
+        self.settings.gearbox = mode
+        self.set_gearbox(mode)
+        if self.recorder is not None:
+            self.recorder.discard("gearbox changed")   # the lap cannot be replayed
+            self.recorder.retarget(self.settings, self._pending)
+        self._save_settings()
+        self._rec_note(f"{why}: {GEARBOX_LABELS[mode]}", 3.0)
+
     def _tutorial_ctx(self):
         from types import SimpleNamespace
         return SimpleNamespace(settings=self.settings,
-                               key=getattr(self.recorder, "key", None))
+                               key=getattr(self.recorder, "key", None),
+                               garage=bool(self.has_garage))
 
     def _menu_show_tutorial_step(self, idx: int = 0) -> None:
         """A page step: paused, Continue / End. No window: it continues."""
@@ -2606,7 +2637,8 @@ class Sim:
             return
         if self.menu is None or not self.menu.open:
             self._menu_open()
-        self.menu.show(items=tu.OFFER_ITEMS, sections=tu.step_list(),
+        self.menu.show(items=tu.offer_items(garage=bool(self.has_garage)),
+                       sections=tu.step_list(),
                        subtitle="carsim: a Corsa, a flank wing, a stopwatch", note=tu.OFFER_NOTE,
                        footer="ENTER / CROSS select   ESC / CIRCLE not now   or click a row",
                        title="WELCOME", idx=0, columns=1)
@@ -2614,6 +2646,8 @@ class Sim:
 
     def _tutorial_begin(self, start=None) -> None:
         from .tutorial import Tutorial
+        if self.tutorial is not None:          # start over: the old run's box back
+            self._tutorial_gearbox(self.tutorial, release=True)
         self.tutorial = Tutorial(self.progress_file, start=start)
         self._menu_close()
         self._rec_note(f"TUTORIAL {self.tutorial.label()}: {self.tutorial.step.title}", 4.0)
@@ -2621,8 +2655,12 @@ class Sim:
     def _tutorial_stop(self, why: str) -> None:
         """The tutorial is over (finished or ended): the session drives on;
         a session on the tutorial's wing car restarts on the player's own."""
+        if self.tutorial is not None:
+            self._tutorial_gearbox(self.tutorial, release=True)
         self.tutorial = None
-        if self.menu is not None and self.menu.open:
+        #  a row's select has already hidden the menu: close the PAGE (the
+        #  pause, the input's menu mode), not only what is on screen
+        if self.menu is not None and (self.menu.open or self._menu_page != "main"):
             self._menu_close()
         self._rec_note(why, 4.0)
         if self.tutorial_car:
@@ -2645,12 +2683,25 @@ class Sim:
             elif action == "tut_end":
                 tut.end()
                 self._tutorial_stop("tutorial ended - ESC > Tutorial continues it")
+            elif action == "tut_skip_group":   # an optional group's "Skip it"
+                tut.skip(group=True)
+                self._menu_close()
+                if not tut.active:
+                    self._tutorial_stop("TUTORIAL DONE")
+            elif action == "tut_wing" and self.has_garage:   # the done page: on to
+                tut.advance()                  # the wing-design tutorial, in the garage
+                self._tutorial_stop("TUTORIAL DONE - now the wing-design tutorial")
+                self._wing_tutor_go()
             else:
                 self._menu_show_tutorial_step(idx=idx)
             return True
         if page == "tutorial_offer":
             if action == "tut_start":
                 self._tutorial_begin()
+            elif action == "wt_garage" and self.has_garage:
+                self.progress_file.section("tutorial")["offered"] = True
+                self.progress_file.save("tutorial")
+                self._wing_tutor_go()
             elif action in ("tut_later", "resume"):
                 self.progress_file.section("tutorial")["offered"] = True
                 self.progress_file.save("tutorial")
@@ -2681,13 +2732,19 @@ class Sim:
             tut.end()
             self._tutorial_stop("tutorial ended - ESC > Tutorial continues it")
         elif action == "wt_garage" and self.has_garage:
-            self.wing_tutor_start = True       # run_interactive_cli starts it
-            self._menu_close()                 # in the garage (drive/wing_tutorial.py)
-            self.stop_reason = "garage"
-            self.quit = True
+            self._wing_tutor_go()
         else:
             self._menu_show_tutorial(idx=idx)
         return True
+
+    def _wing_tutor_go(self) -> None:
+        """To the garage, where run_interactive_cli starts the wing-design
+        tutorial (drive/wing_tutorial.py)."""
+        self.wing_tutor_start = True
+        if self.menu is not None and self.menu.open:
+            self._menu_close()
+        self.stop_reason = "garage"
+        self.quit = True
 
     # ---- challenges (drive/challenges.py) ---------------------------------
     def _challenge_stats(self, ch) -> dict:
@@ -5035,6 +5092,22 @@ def _v34_tutorial(tmp, verbose=True):
             if k not in drivers:
                 drivers[k] = LapDriver(tr, 0.85, wing_on=(sid == "wing_on"))
             return drivers[k](t, veh, tr)
+        if sid == "manual":                        # by hand: up at 5200 rpm to 3rd,
+            pf = drivers.setdefault((id(tr), "manual"), PathFollower(40.0))
+            c = pf(t, veh, tr)                     # then brake and one down at speed
+            V = hypot(veh.u, veh.v) * 3.6
+            box["gb"] = box["sim"].gearbox
+            brk = box.setdefault(("braking", id(tut.mem)), [False])   # this step's own:
+            if tut.mem.get("top", 0) >= 3 and V >= 70.0:                # 3rd seen since
+                brk[0] = True                                           # its reset
+            if brk[0]:
+                c.throttle, c.brake = 0.0, 0.7
+                c.gear_req = -1 if (veh.gear == 3 and V < 60.0) else 0
+            else:
+                c.throttle, c.brake = 1.0, 0.0
+                c.gear_req = +1 if (1 <= veh.gear < 3 and veh.rpm > 5200.0) else 0
+            c.auto_gearbox = False
+            return c
         return Controls(brake=1.0)                 # a page: stand still
 
     def new_sim(track):
@@ -5042,6 +5115,7 @@ def _v34_tutorial(tmp, verbose=True):
         s_.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
         s_.progress_file = prog
         s_.tutorial = box.get("tut")
+        box["sim"] = s_
         return s_
 
     sim = new_sim("arena")
@@ -5064,7 +5138,7 @@ def _v34_tutorial(tmp, verbose=True):
     maps, passed, pages, heads = [sim.track.name], [], [], set()
     sim_t, frames = 0.0, 0
     ids = [s_.id for s_ in tu.STEPS]
-    while tut is not None and tut.active and sim_t < V34_MAX_SIM_S:
+    while tut is not None and tut.active and sim_t + sim.t < V34_MAX_SIM_S:
         if sim.quit:
             if sim.stop_reason != "restart":
                 break
@@ -5102,12 +5176,14 @@ def _v34_tutorial(tmp, verbose=True):
     sv = tu.saved_state(Progress(path))
     res = Progress(path).section("tutorial").get("results", {})
     off, on, lap = res.get("wing_off"), res.get("wing_on"), res.get("lap")
+    #  the manual step drove on the manual box, and the automatic came back
+    gb_ok = box.get("gb") == "manual" and sim.settings.gearbox == "auto" == sim.gearbox
     measured = bool(off and on and lap and math.isfinite(off["ay"]) and off["ay"] > 0.3
                     and on["ay"] > 0.3 and 40.0 < lap["t"] < 120.0)
     ok = (row_ok and page_ok and start_ok and passed == drive_ids and pages == page_ids
           and maps == ["arena", "skidpad", "arena"] and tut is not None and tut.done
           and not tut.skipped and sv["done"] and measured and heads == set(drive_ids)
-          and sim.tutorial is None)
+          and sim.tutorial is None and gb_ok)
     wall = time.perf_counter() - t_wall
     if verbose:
         print(f"  V34 tutorial    : menu row {row_ok}, page {page_ok}, started {start_ok}; "
@@ -5115,7 +5191,8 @@ def _v34_tutorial(tmp, verbose=True):
               f"{len(page_ids)}, maps {' -> '.join(maps)}; wing off "
               f"{off['ay'] if off else float('nan'):.3f} g / on "
               f"{on['ay'] if on else float('nan'):.3f} g, lap "
-              f"{lap['t'] if lap else float('nan'):.3f} s; done + saved {sv['done']}; "
+              f"{lap['t'] if lap else float('nan'):.3f} s; manual box for its step and "
+              f"back {gb_ok}; done + saved {sv['done']}; "
               f"{sim_t:.0f} s sim in {wall:.1f} s  -> {'ok' if ok else 'FAIL'}")
         if not ok:
             print(f"    passed {passed}  pages {pages}  heads {sorted(heads)}  "
@@ -6212,6 +6289,16 @@ def run_interactive_cli(opts) -> int:
             for n in opts.progress.notes:
                 print(f"progress: {n}")
             opts.tutorial_offer = not saved_state(opts.progress)["offered"]
+            from .tutorial import gearbox_left
+            gp = gearbox_left(opts.progress)   # the last run died in the manual step
+            if gp is not None:
+                if settings.gearbox == gp[1]:
+                    settings.gearbox = gp[0]
+                    settings.save()
+                    print(f"tutorial: gearbox back to {GEARBOX_LABELS[gp[0]]} "
+                          "(the last run ended inside the manual step)")
+                opts.progress.section("tutorial")["gearbox_prev"] = None
+                opts.progress.save("tutorial")
         except Exception as exc:           # noqa: BLE001 -- never stops a drive
             print(f"progress unavailable ({type(exc).__name__}: {exc})")
             opts.progress = None
@@ -6337,6 +6424,8 @@ def run_interactive_cli(opts) -> int:
             break
     finally:
         _challenge_restore(opts, settings)     # quit mid-challenge: the player's class back
+        if _tutorial_gearbox_restore(getattr(opts, "tutorial", None), settings):
+            settings.save()                    # quit mid manual step: the player's box back
         pygame.quit()
     return 0
 
@@ -6997,6 +7086,21 @@ def _challenge_class(settings) -> str:
     return "|".join((settings.track, settings.car, settings.engine, settings.wet))
 
 
+def _tutorial_gearbox_restore(tut, settings) -> bool:
+    """The player's own box back after a tutorial step switched it
+    (Tutorial.gearbox_prev); True when `settings` changed. A box the player
+    changed since is theirs."""
+    gp = getattr(tut, "gearbox_prev", None)
+    if not gp:
+        return False
+    tut.set_gearbox_prev(None)
+    prev, set_to = gp
+    if settings.gearbox != set_to:
+        return False
+    settings.gearbox = prev
+    return True
+
+
 def _challenge_restore(opts, settings, keep_changed: str | None = None) -> None:
     """The challenge is over: the player's own track / car / engine / surface
     (and radius / cw) back. `keep_changed` (the challenge's class): a field the
@@ -7022,6 +7126,8 @@ def _challenge_switch(sim, opts, settings) -> None:
     tut = getattr(opts, "tutorial", None)
     if pick and tut is not None:
         tut.end()
+        if _tutorial_gearbox_restore(tut, settings):
+            settings.save()
         opts.tutorial = None
         tut = None
     ending = getattr(sim, "challenge_end", False) or (

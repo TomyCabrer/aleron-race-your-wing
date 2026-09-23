@@ -158,13 +158,20 @@ cycles.
 
 ## The driving tutorial
 
-The first launch offers it (**WELCOME**: start it, or *Not now*); the pause
+The first launch offers it (**WELCOME**: start it, go straight to the
+wing-design tutorial, or *Not now*); the pause
 menu's *Tutorial* has it any time after that, and continues it where you
-left off. Eleven steps, about eight minutes: throttle and brake, steering,
+left off. Thirteen steps, about ten minutes: throttle and brake, steering,
 turn 1 of the arena from the line, the reset (`R`), what the assists do, then
 the **flank wing on the skidpad** — a flying lap with it off, one with it
 on (`F` / `○`), and the two laps' mean lateral g side by side — then the
-timing, the ghosts and the medals, and one valid lap of the arena. A box on
+timing, the ghosts and the medals, one valid lap of the arena and --
+**optional**, its page has *Skip it* -- the **manual gearbox**: the keys
+(`E` / `Q`, `R1` / `L1`), the shift lights, when to change down, the clutch
+mode; then up to 3rd by hand and one downshift at speed, on a box the
+tutorial switches to Manual for that step and back to Automatic after (a box
+you changed yourself meanwhile stays yours). The last page's *Next: the
+wing-design tutorial* takes you into the garage for it. A box on
 the left says what to do, how far you are, why an attempt did not count and,
 after 20 s, a hint; the explanations are pages that wait for `ENTER`. The
 tutorial moves you to the map each step is on (while it runs, `TAB` cannot
@@ -1017,7 +1024,7 @@ drive/
                 reference laps (data/medals.json, data/reference_laps.json)
   ghosts.py     the PB and ghost-2 ghosts, the live delta, the sector flash
   progress.py   runs/progress.json: the tutorial's (and the challenges') progress
-  tutorial.py   the driving tutorial: 11 data-driven steps, the overlay, the pages
+  tutorial.py   the driving tutorial: 13 data-driven steps, the overlay, the pages
   wing_tutorial.py  the wing-design tutorial: a guided pass through the garage's navigator
   challenges.py the challenges: files, rules, stars, the per-step meter, the references
                 (data/challenges/*.json)
