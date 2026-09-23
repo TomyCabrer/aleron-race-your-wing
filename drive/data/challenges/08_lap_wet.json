@@ -1,0 +1,35 @@
+{
+  "kind": "carsim-challenge-1",
+  "id": "lap_wet",
+  "title": "Wet arena",
+  "blurb": "The arena wet all over, stock engine: one valid lap. Everything happens at 63 % of the grip.",
+  "class": "arena|corsa|stock|all",
+  "constraints": {
+    "max_ballast": 0
+  },
+  "goal": {
+    "metric": "lap_time",
+    "threshold": 81.68745454415672
+  },
+  "stars": {
+    "2": {
+      "threshold": 77.3113409078626
+    },
+    "3": {
+      "threshold": 74.39393181699987,
+      "efficiency": {
+        "max_cda": 0.7
+      }
+    }
+  },
+  "ref": {
+    "driver": "lapdriver:0.90",
+    "build": "none",
+    "value": 72.9352272715685,
+    "x": [
+      1.12,
+      1.06,
+      1.02
+    ]
+  }
+}

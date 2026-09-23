@@ -1,0 +1,36 @@
+{
+  "kind": "carsim-challenge-1",
+  "id": "brake_100",
+  "title": "Stop from 100",
+  "blurb": "Accelerate past 100 km/h, then stop as short as you can: the distance runs from 100 km/h down to a standstill.",
+  "class": "dragstrip|corsa|stock|none",
+  "constraints": {
+    "max_ballast": 100
+  },
+  "goal": {
+    "metric": "stop_distance",
+    "v0_kmh": 100.0,
+    "threshold": 47.81984945940469
+  },
+  "stars": {
+    "2": {
+      "threshold": 45.25807180979373
+    },
+    "3": {
+      "threshold": 43.55022004338642,
+      "efficiency": {
+        "max_wing_mass": 0
+      }
+    }
+  },
+  "ref": {
+    "driver": "brake:1.0:100",
+    "build": "none",
+    "value": 42.69629416018276,
+    "x": [
+      1.12,
+      1.06,
+      1.02
+    ]
+  }
+}

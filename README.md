@@ -50,7 +50,7 @@ python3 -m drive.drive --swarm 32 --swarm-car mx5 --swarm-fast --swarm-save neve
 `ESC` (or `OPTIONS` on the pad) pauses and opens the menu: every keyboard and
 pad control on screen, plus *Resume*, *Settings*, *Time trial* (on a map with
 a lap), *Reset to last sector line*, *Full reset*, *Garage*, *Deploy swarm*,
-*Race vs bot*, *Tutorial* and *Quit*. `↑` `↓` / d-pad move, `←` `→` / d-pad
+*Race vs bot*, *Tutorial*, *Challenges* and *Quit*. `↑` `↓` / d-pad move, `←` `→` / d-pad
 change a value on the settings page, `ENTER` / `✕`
 select, `ESC` / `○` / `OPTIONS` resume; `R`, `SHIFT+R` and `BACKSPACE` work as
 hotkeys inside it. Every menu page also takes the **mouse**: point at a row,
@@ -170,6 +170,27 @@ leave it). A car with no flank wing drives the two wing laps with the
 published plate fitted (only for those laps; nothing is saved). `ESC` >
 *Tutorial* skips a step, starts over or ends it. Progress is kept in
 `runs/progress.json`; a script or a headless run never reads it.
+
+## Challenges
+
+ESC > *Challenges*: eight set pieces, each with **three stars** --
+**Stop from 100**, **Wet stop from 80**, **Hold the circle** (mean lateral g
+over a flying lap of the skidpad, flank wings only), **Wet circle**,
+**Quarter mile** (402 m from standing), **Speed at 1000 m**, **Arena, sport
+engine** and **Wet arena** (a lap each). Each runs in its own map, car,
+engine and surface (yours come back when you end it); its page shows the
+goal, the three thresholds, the RULES the build must meet (the wing area a
+slot, the wings' weight, the ballast, the slots allowed, the drag area with
+every wing out) checked against the car you have now -- a build that breaks
+one is refused with what to change -- and your best. One star passes, two
+is a tighter number, three is tighter still **and** an efficiency rule (no
+wings, no ballast, less drag...). A box on the road says what to do and how
+the attempt is going; R starts it again. Every threshold is derived from a
+measured headless run (a scripted driver on a reference build in that
+class) with the medals' multipliers: 1.12 / 1.06 / 1.02 of it, so the
+reference earns three stars by 2 %. `python3 -m drive.challenges --measure`
+runs them, `--write` puts the numbers in `drive/data/challenges/*.json`. Your
+stars are kept in `runs/progress.json`.
 
 ## Time trial: the pre-race screen and your records
 
@@ -926,6 +947,8 @@ drive/
   progress.py   runs/progress.json: the tutorial's (and the challenges') progress
   tutorial.py   the driving tutorial: 11 data-driven steps, the overlay, the pages
   wing_tutorial.py  the wing-design tutorial: a guided pass through the garage's navigator
+  challenges.py the challenges: files, rules, stars, the per-step meter, the references
+                (data/challenges/*.json)
   telemetry.py  fixed-schema CSV + sidecar json
   plots.py      overview, g-g, track map, laps, A/B compare
   drive.py      main loop, settings, garage <-> drive session loop, CLI,

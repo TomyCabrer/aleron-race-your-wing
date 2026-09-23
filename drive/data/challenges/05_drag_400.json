@@ -1,0 +1,36 @@
+{
+  "kind": "carsim-challenge-1",
+  "id": "drag_400",
+  "title": "Quarter mile",
+  "blurb": "From standing to 402 m. The clock starts when the car moves; wheelspin and wing drag both cost time.",
+  "class": "dragstrip|corsa|sport|none",
+  "constraints": {
+    "max_ballast": 0
+  },
+  "goal": {
+    "metric": "drag_time",
+    "distance_m": 402.336,
+    "threshold": 18.142098193955825
+  },
+  "stars": {
+    "2": {
+      "threshold": 17.17020007642248
+    },
+    "3": {
+      "threshold": 16.522267998066912,
+      "efficiency": {
+        "max_cda": 0.67
+      }
+    }
+  },
+  "ref": {
+    "driver": "straight:1.0",
+    "build": "none",
+    "value": 16.19830195888913,
+    "x": [
+      1.12,
+      1.06,
+      1.02
+    ]
+  }
+}

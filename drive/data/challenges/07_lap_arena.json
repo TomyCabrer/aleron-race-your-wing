@@ -1,0 +1,35 @@
+{
+  "kind": "carsim-challenge-1",
+  "id": "lap_arena",
+  "title": "Arena, sport engine",
+  "blurb": "One valid lap of the arena with the 150 hp engine and the wet patches. Up to 15 kg of wing; 3 stars with 10.5 kg or less.",
+  "class": "arena|corsa|sport|patch",
+  "constraints": {
+    "max_wing_mass": 15
+  },
+  "goal": {
+    "metric": "lap_time",
+    "threshold": 66.95739438644162
+  },
+  "stars": {
+    "2": {
+      "threshold": 63.370391115739395
+    },
+    "3": {
+      "threshold": 60.97905560193791,
+      "efficiency": {
+        "max_wing_mass": 10.5
+      }
+    }
+  },
+  "ref": {
+    "driver": "lapdriver:0.90",
+    "build": "plate",
+    "value": 59.78338784503716,
+    "x": [
+      1.12,
+      1.06,
+      1.02
+    ]
+  }
+}

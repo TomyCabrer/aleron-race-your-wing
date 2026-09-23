@@ -1,0 +1,36 @@
+{
+  "kind": "carsim-challenge-1",
+  "id": "brake_wet",
+  "title": "Wet stop from 80",
+  "blurb": "The whole strip is wet. Past 80 km/h, then stop: the grip is 63 % of the dry, so squeeze the brake.",
+  "class": "dragstrip|corsa|stock|all",
+  "constraints": {
+    "max_ballast": 100
+  },
+  "goal": {
+    "metric": "stop_distance",
+    "v0_kmh": 80.0,
+    "threshold": 45.23456191491871
+  },
+  "stars": {
+    "2": {
+      "threshold": 42.811281812333775
+    },
+    "3": {
+      "threshold": 41.19576174394382,
+      "efficiency": {
+        "max_ballast": 0
+      }
+    }
+  },
+  "ref": {
+    "driver": "brake:1.0:80",
+    "build": "none",
+    "value": 40.38800170974884,
+    "x": [
+      1.12,
+      1.06,
+      1.02
+    ]
+  }
+}

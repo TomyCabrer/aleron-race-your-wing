@@ -1299,6 +1299,15 @@ class Sim:
         self.tutorial = None
         self.tutorial_car = False
         self.wing_tutor_start = False      # the Tutorial page's wing-design row (task 24)
+        # challenges (drive/challenges.py, task 25): `challenge` is the one
+        # being driven (a ChallengeRun: its meter sees every step, event and
+        # reset); `challenge_pick` / `challenge_end` ask run_interactive_cli
+        # for a session in its class / back out of it; `challenge_build` is
+        # (build json, library) for the constraint check, player sessions only
+        self.challenge = None
+        self.challenge_pick = None
+        self.challenge_end = False
+        self.challenge_build = None
 
         self._bind_input()
         self._sample_surfaces()
@@ -1398,6 +1407,8 @@ class Sim:
                     self.recorder.event(self, e)
                 if self.ghosts is not None:
                     self.ghosts.event(self, e)
+                if self.challenge is not None:
+                    self.challenge.event(self, e)
         if s_prev is not None and self.rivals:
             ds = (s - s_prev)
             if tr.closed:
@@ -1434,6 +1445,8 @@ class Sim:
         self.t = self.n * dt               # t = n*dt, NEVER accumulated
         if self.recorder is not None:
             self.recorder.after_step(self)
+        if self.challenge is not None:
+            self.challenge.step(self)          # the challenge's meter (challenges.py)
         self._log(self.n)
 
     def _emit_skid(self):
@@ -1535,6 +1548,8 @@ class Sim:
             self.recorder.discard("reset")     # a teleport is not a lap
         if self.tutorial is not None:
             self.tutorial.command("reset")     # the tutorial's R step and retries
+        if self.challenge is not None:
+            self.challenge.reset()             # a teleport ends the attempt
         tr = self.track
         s0 = 0.0
         V0 = 0.0
@@ -1864,6 +1879,8 @@ class Sim:
             self._sample_surfaces()
             if self.recorder is not None:
                 self.recorder.discard("the wet toggle (T)")
+            if self.challenge is not None:
+                self.challenge.reset()         # a surface change ends the attempt
         elif ev == "marker":
             if self.telem is not None:
                 self.telem.mark("marker")
@@ -1912,6 +1929,9 @@ class Sim:
         if self.progress_file is not None:
             from .tutorial import menu_row
             items.append((menu_row(self.progress_file, self.tutorial), "tutorial"))
+        if self.progress_file is not None and self.challenge_build is not None:
+            from .challenges import menu_row as ch_row
+            items.append((ch_row(self.progress_file, self.challenge), "challenges"))
         items += [("Reset to last sector line", "reset"),
                  ("Full reset (skid marks + timing)", "full_reset")]
         if self.has_garage:
@@ -2582,6 +2602,73 @@ class Sim:
             self._menu_show_tutorial(idx=idx)
         return True
 
+    # ---- challenges (drive/challenges.py) ---------------------------------
+    def _challenge_stats(self, ch) -> dict:
+        """The current build's stats in the challenge's car."""
+        from .challenges import build_stats
+        from .records import split_key
+        js, lib = self.challenge_build
+        return build_stats(js, lib, cars.get(split_key(ch["class"])[1]),
+                           self.settings.ballast)
+
+    def _menu_show_challenges(self, idx: int = 0) -> None:
+        """The CHALLENGES page: every challenge with its stars and best."""
+        from . import challenges as chm
+        self._ch_all = chm.load_all()
+        self.menu.show(items=chm.list_items(self._ch_all, self.progress_file, self.challenge),
+                       sections=chm.LIST_HELP, subtitle=chm.menu_row(self.progress_file,
+                                                                     self.challenge),
+                       note="", footer="ENTER / CROSS open   ESC / CIRCLE back   or click a row",
+                       title="CHALLENGES", idx=idx, columns=1)
+        self._menu_page = "challenges"
+
+    def _menu_show_challenge(self, cid: str, idx: int = 0) -> None:
+        """One challenge: its class, goal, stars, rules against THIS build,
+        your best; Start, or why it cannot."""
+        from . import challenges as chm
+        ch = self._ch_all[cid]
+        try:
+            stats = self._challenge_stats(ch)
+        except Exception as exc:           # noqa: BLE001 -- a bad build: say so
+            stats, why = None, [f"the build cannot be read ({type(exc).__name__})"]
+        else:
+            why = chm.refusals(ch["constraints"], stats)
+        items, secs, note = chm.detail(ch, stats, why, self.progress_file)
+        self.menu.show(items=items, sections=secs, subtitle=chm.class_text(ch), note=note,
+                       footer="ENTER / CROSS select   ESC / CIRCLE back", title=ch["title"].upper(),
+                       idx=idx, columns=1)
+        self._menu_page = "challenge"
+        self._ch_cur = cid
+
+    def _challenge_event(self, action: str) -> bool:
+        if action in ("reset", "full_reset", "garage"):
+            return False
+        idx = self.menu.idx
+        if self._menu_page == "challenges":
+            if action in ("resume", "ch_back"):
+                self._menu_show_main()
+                self.menu.idx = [a for _, a in self.menu.items].index("challenges")
+            elif action.startswith("ch:") and action[3:] in getattr(self, "_ch_all", {}):
+                self._menu_show_challenge(action[3:])
+            elif action == "ch_end" and self.challenge is not None:
+                self.challenge_end = True      # run_interactive_cli restores the class
+                self._menu_close()
+                self.restart()
+            else:
+                self._menu_show_challenges(idx=idx)
+            return True
+        if action in ("resume", "ch_list"):
+            ids = list(getattr(self, "_ch_all", {}))
+            cur = getattr(self, "_ch_cur", None)
+            self._menu_show_challenges(idx=ids.index(cur) if cur in ids else 0)
+        elif action.startswith("ch_go:"):
+            self.challenge_pick = action[len("ch_go:"):]
+            self._menu_close()
+            self.restart()                     # a session in its class
+        else:
+            self._menu_show_challenge(self._ch_cur, idx=idx)
+        return True
+
     def _swarm_step(self, key: str, d: int) -> None:
         ch = SWARM_MENU_CHOICES[key]
         cur = self.swarm_opts[key]
@@ -2635,6 +2722,8 @@ class Sim:
         if self._menu_page in ("prerace", "prerace_pick") and self._prerace_event(action):
             return
         if self._menu_page.startswith("tutorial") and self._tutorial_event(action):
+            return
+        if self._menu_page in ("challenges", "challenge") and self._challenge_event(action):
             return
         if self._menu_page == "settings":
             idx = self.menu.idx
@@ -2757,6 +2846,9 @@ class Sim:
             return
         elif action == "tutorial" and self.progress_file is not None:
             self._menu_show_tutorial()
+            return
+        elif action == "challenges" and self.challenge_build is not None:
+            self._menu_show_challenges()
             return
         self._menu_close()
         if action == "reset":
@@ -2988,6 +3080,8 @@ class Sim:
                 d["sector_flash"], d["flash_col"] = f
         if self.tutorial is not None:      # the tutorial's box (drive/tutorial.py)
             d["tutorial"] = self.tutorial.overlay()
+        if self.challenge is not None and not d.get("tutorial"):
+            d["tutorial"] = self.challenge.overlay(self)   # the same box (challenges.py)
         if self.hud_cfg:
             d.update(self.hud_cfg)          # the garage build's wing geometry
         try:
@@ -4696,6 +4790,78 @@ def _v33_ghost_delta(tmp, verbose=True):
 V34_MAX_SIM_S = 900.0
 
 
+def _v35_challenges(tmp, verbose=True):
+    """Challenges (drive/challenges.py). ACHIEVABILITY: every challenge's
+    reference run is driven again, headless, exactly as a session builds the
+    car and with the meter attached through the Sim's own hooks; it must earn
+    THREE stars, on a build that meets the challenge's rules and its 3-star
+    efficiency bound, and give back the very value the file's thresholds were
+    derived from (so the thresholds are the ones a measured run derives, not
+    typed). And the page flow, by events with no window: ESC > Challenges
+    lists them, a build that breaks a rule is refused with the reason and no
+    Start, an allowed one starts (a restart in the challenge's class)."""
+    from types import SimpleNamespace
+    from . import challenges as chm
+    from .aero.library import Library
+    from .progress import Progress
+    t_wall = time.perf_counter()
+    lib = Library(os.path.join(tmp, "chal_lib"), use_xfoil=False)
+    allc = chm.load_all()
+    rows, all_ok, sim_s = [], len(allc) == 8, 0.0
+    for cid, ch in allc.items():
+        r = chm.measure(ch, lib)
+        v, ref = r["value"], ch["ref"]["value"]
+        same = math.isfinite(v) and abs(v - ref) <= 1e-9 * max(1.0, abs(ref))
+        good = r["stars"] == 3 and not r["refusals"] and same
+        all_ok = all_ok and good
+        sim_s += r["t_sim"]
+        rows.append(f"{cid} {chm.fmt_value(ch['goal']['metric'], v)} "
+                    f"[{chm.stars_text(r['stars'])}]" + ("" if good else " FAIL"))
+    # --- the page flow
+    sim = _build("arena", driver=lambda t, v, T_: Controls())
+    sim.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
+    sim.progress_file = Progress(os.path.join(tmp, "chal_progress.json"))
+    top = dict(version=2, name="tall", mirror=True, builtin=False,
+               slots={"left": {"wing": "plate"}, "top": {"wing": "rear-s1223", "x": -0.9,
+                                                          "h": 1.55, "inc_deg": 6.0}})
+    sim.challenge_build = (top, lib)
+    ev = sim.handle_event
+
+    def goto(action):
+        i = [a for _, a in sim.menu.items].index(action)
+        while sim.menu.idx != i:
+            ev("nav_down")
+
+    ev("menu")
+    row_ok = "challenges" in [a for _, a in sim.menu.items]
+    goto("challenges")
+    ev("select")
+    listed = [a for _, a in sim.menu.items if a.startswith("ch:")]
+    list_ok = sim._menu_page == "challenges" and len(listed) == 8
+    goto("ch:skid_dry")
+    ev("select")
+    refused = (sim._menu_page == "challenge" and "CANNOT START" in (sim.menu.note or "")
+               and "top wing is not allowed" in sim.menu.note
+               and not any(a.startswith("ch_go:") for _, a in sim.menu.items))
+    ev("menu")                                     # ESC: back to the list
+    back_ok = sim._menu_page == "challenges"
+    sim.challenge_build = (chm.ref_build("plate"), lib)
+    goto("ch:skid_dry")
+    ev("select")
+    goto("ch_go:skid_dry")
+    ev("select")
+    started = sim.quit and sim.stop_reason == "restart" and sim.challenge_pick == "skid_dry"
+    flow_ok = row_ok and list_ok and refused and back_ok and started
+    ok = all_ok and flow_ok
+    wall = time.perf_counter() - t_wall
+    if verbose:
+        print(f"  V35 challenges  : {len(allc)} references, each 3 stars on its own rules and "
+              f"value = the file's: {all_ok}; {', '.join(rows)}; pages: row {row_ok}, list "
+              f"{list_ok}, a top wing refused with the reason {refused}, ESC {back_ok}, start "
+              f"{started}; {sim_s:.0f} s sim in {wall:.1f} s  -> {'ok' if ok else 'FAIL'}")
+    return ok, dict(rows=rows, sim_s=sim_s)
+
+
 def _v34_tutorial(tmp, verbose=True):
     """The driving tutorial (drive/tutorial.py), end to end, headless: it is
     started from the pause menu's Tutorial page, every drive step is driven
@@ -5424,6 +5590,7 @@ def self_check(verbose=True) -> bool:
                      ("V32", lambda: _v32_prerace(tmp, verbose)),
                      ("V33", lambda: _v33_ghost_delta(tmp, verbose)),
                      ("V34", lambda: _v34_tutorial(tmp, verbose)),
+                     ("V35", lambda: _v35_challenges(tmp, verbose)),
                      ("V20", lambda: _v20_determinism(tmp, verbose)),
                      ("accel", lambda: _accel_end_to_end(tmp, verbose)),
                      ("V21", lambda: _v21_rtf(tmp, 60.0, verbose))):
@@ -5824,7 +5991,15 @@ def run_interactive_cli(opts) -> int:
             if tut is not None and tut.map_wanted() and settings.track != tut.map_wanted():
                 settings.track = tut.map_wanted()   # the step's map: TAB cannot leave it
                 settings.save()
+            #  a challenge (drive/challenges.py) runs in its class; a class
+            #  changed from the settings page ends it
+            chal = getattr(opts, "challenge", None)
+            if chal is not None and _challenge_class(settings) != chal["class"]:
+                print(f"challenge '{chal['title']}': the class changed; it is over")
+                _challenge_restore(opts, settings, keep_changed=chal["class"])
+                chal = None
             if (grg is not None and design is not None and not from_garage
+                    and chal is None
                     and settings.track != seen_track
                     and not (explicit and seen_track is None)):
                 d2 = _track_build(grg, lib, design, settings.track, opts)
@@ -5849,6 +6024,7 @@ def run_interactive_cli(opts) -> int:
                                        garage=(grg is not None))
             t_ = getattr(sim, "tutorial", None)    # started, or still running
             opts.tutorial = t_ if (t_ is not None and t_.active) else None
+            _challenge_switch(sim, opts, settings)
             pad = getattr(sim.inp, "pad", pad)
             opts.race_menu = dict(sim.race_opts, active=bool(sim.rivals))
             gs = getattr(sim, "ghosts", None)
@@ -5910,6 +6086,7 @@ def run_interactive_cli(opts) -> int:
                 continue
             break
     finally:
+        _challenge_restore(opts, settings)     # quit mid-challenge: the player's class back
         pygame.quit()
     return 0
 
@@ -6528,6 +6705,60 @@ def _track_build(grg, lib, design, track, opts):
         return None
 
 
+def _challenge_class(settings) -> str:
+    """The class key the settings drive (plan D1)."""
+    return "|".join((settings.track, settings.car, settings.engine, settings.wet))
+
+
+def _challenge_restore(opts, settings, keep_changed: str | None = None) -> None:
+    """The challenge is over: the player's own track / car / engine / surface
+    (and radius / cw) back. `keep_changed` (the challenge's class): a field the
+    player changed during it (TAB, the settings page) is kept."""
+    prev = getattr(opts, "challenge_prev", None)
+    if prev:
+        cls = keep_changed.split("|") if keep_changed else None
+        for i, k in enumerate(("track", "car", "engine", "wet")):
+            if cls is None or getattr(settings, k) == cls[i]:
+                setattr(settings, k, prev[k])
+        settings.save()
+        opts.radius, opts.cw = prev.get("_radius", opts.radius), prev.get("_cw", opts.cw)
+    opts.challenge, opts.challenge_prev = None, None
+
+
+def _challenge_switch(sim, opts, settings) -> None:
+    """After a session: a challenge was picked (move the settings to its
+    class, remembering the player's own) or ended (put them back). A
+    challenge and the driving tutorial shut each other off: a pick ends the
+    tutorial (ESC > Tutorial continues it), a tutorial started over a
+    challenge ends the challenge."""
+    pick = getattr(sim, "challenge_pick", None)
+    tut = getattr(opts, "tutorial", None)
+    if pick and tut is not None:
+        tut.end()
+        opts.tutorial = None
+        tut = None
+    ending = getattr(sim, "challenge_end", False) or (
+        tut is not None and not pick and getattr(opts, "challenge", None) is not None)
+    if ending and not pick:
+        _challenge_restore(opts, settings)
+        return
+    if not pick:
+        return
+    from .challenges import load_all
+    ch = load_all().get(pick)
+    if ch is None:
+        return
+    if getattr(opts, "challenge_prev", None) is None:
+        opts.challenge_prev = dict(track=settings.track, car=settings.car,
+                                   engine=settings.engine, wet=settings.wet,
+                                   _radius=opts.radius, _cw=opts.cw)
+    settings.track, settings.car, settings.engine, settings.wet = ch["class"].split("|")
+    settings.save()
+    opts.radius, opts.cw = 50.0, False     # the standard skidpad
+    opts.challenge = ch
+    opts.prerace_skip = True
+
+
 def _session_car(opts, settings):
     """The track, the car and the VehicleConfig kwargs ONE session drives --
     shared by the interactive session and the swarm, so the swarm's cars are
@@ -6686,6 +6917,25 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     opts.tutorial_offer = False            # once a launch
     if sim.tutorial is not None:
         prerace_now = False                # the tutorial has the car
+    #  challenges (drive/challenges.py): a player session with a garage can
+    #  list them; a session started for one drives it
+    lib = getattr(opts, "garage_lib", None)
+    if sim.progress_file is not None and lib is not None:
+        sim.challenge_build = (getattr(opts, "build_json", None), lib)
+    chal = getattr(opts, "challenge", None)
+    if chal is not None and sim.challenge_build is not None:
+        try:
+            from .challenges import ChallengeRun, build_stats, refusals
+            stats = build_stats(sim.challenge_build[0], lib, car, settings.ballast)
+            why = refusals(chal["constraints"], stats)
+            sim.challenge = ChallengeRun(chal, tr, stats, sim.progress_file)
+            prerace_now = False
+            if why:                        # listed and endable, never counted
+                sim.challenge.refused = why[0]
+                print(f"challenge '{chal['title']}' refused: {why[0]}")
+                sim._rec_note(f"CHALLENGE refused: {why[0]}", 8.0)
+        except Exception as exc:           # noqa: BLE001 -- never stops a drive
+            print(f"challenge unavailable ({type(exc).__name__}: {exc})")
     #  the ghosts and the live delta (drive/ghosts.py): with records only
     if sim.recorder is not None:
         try:

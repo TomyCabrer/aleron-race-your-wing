@@ -54,6 +54,7 @@ from the repo root.
 | `drive/progress.py` | `runs/progress.json` (kind `carsim-progress-1`): one section per feature (`tutorial`, task 25's `challenges`); `save(section)` merges with the file; a corrupt / foreign file is ignored with a note and moved aside as `.bad-<stamp>`, an unreadable one never written over | `records._atomic_json` lazily. Never pygame |
 | `drive/tutorial.py` | the driving tutorial: 11 data-driven `Step`s (`id, map, kind, title, text, hint, check(frame, mem), status, reset, setup, wing`), `frame_of(sim)` (what a predicate sees), the `Tutorial` state machine (`tick(sim)` -> 'restart' / 'page' / 'done'), the overlay payload, the page / menu rows, `wing_car` (the published plate for a car without a flank wing) | `corsa_c.G`; `records`, `medals` lazily. Never pygame, never `drive.drive` |
 | `drive/wing_tutorial.py` | the wing-design tutorial: 10 `WStep`s (`check(garage, mem, action)`, an `anchor` naming the garage widget the hint points at), `WingTutor` (`update` / `draw` / the garage menu's rows), `anchor_rect` (from the widgets' own `_rect` / `_hits`) | `garage_ui`, `prerace._same_build`, `progress` (via the object handed in); `garage` and pygame only lazily / in the self-check. Never `drive.drive` |
+| `drive/challenges.py` | challenges (`drive/data/challenges/*.json`, kind `carsim-challenge-1`): `validate`, `load_all`, the constraint checker (`build_stats`, `refusals`), `stars_for`, the per-step `Meter` (lap_time, stop_distance, skid_ay, drag_time, trap_speed) and `ChallengeRun` (the Sim's hooks, best + stars into `runs/progress.json`), the reference runs (`measure`; `--measure` / `--write` derive every threshold as ref x 1.12 / 1.06 / 1.02), the page rows | `records`, `progress` (via the object handed in); `drive.drive`, `garage`, `track`, `vehicle`, `aero.library` lazily. Never pygame |
 | `drive/drive.py` | main loop, CLI, scripted runs | everything |
 | `drive/validate.py` | the whole acceptance suite | everything |
 
@@ -1487,6 +1488,31 @@ open (`WingTutor._rewind`). `run_interactive_cli` hands the garage
 page's `wt_garage` row sets `Sim.wing_tutor_start` and goes to the garage,
 where it starts (or continues). The last step passes on the garage's
 `'drive'`.
+
+**Challenges** (`drive/challenges.py`, task 25). A player session with a
+garage library has `Sim.challenge_build = (opts.build_json, lib)`, and with
+it the pause page's `challenges` row (pages `'challenges'` and `'challenge'`,
+`_challenge_event`). Start sets `Sim.challenge_pick` and restarts;
+`run_interactive_cli` (`_challenge_switch`) remembers the player's
+track / car / engine / surface (and radius / cw) in `opts.challenge_prev`,
+moves the settings to the challenge's class, and `_interactive_session`
+attaches a `ChallengeRun` when the build passes `refusals` (else a HUD note).
+Its hooks: `step_physics` calls `challenge.event(self, e)` per LapTimer
+event and `challenge.step(self)` after every step (after `n` / `t`);
+`reset` calls `challenge.reset()`; `hud_data` puts `challenge.overlay(self)`
+in `HudData.tutorial` when no tutorial has the box. Every step,
+`ChallengeRun._void` drops the attempt in progress when the session is out
+of the class (a live engine change, the T toggle -- `handle_event('wet')`
+also resets it), in slow motion or single-stepped. A build refused at the
+session start still gets its run (`refused`: listed, endable, never
+counted). A class changed elsewhere (TAB, the settings page) ends it and
+`_challenge_restore` puts back every class field the player did not change;
+`ch_end` and quitting (the `finally` of `run_interactive_cli`) put all of
+them back. A challenge pick ends the driving tutorial and a tutorial
+started during a challenge ends the challenge. No per-map build switch
+while a challenge runs. The drag area counts EACH fitted flank panel's own
+D/q (G can put both out). V35 re-runs every
+reference (3 stars, the file's value exactly) and the page flow.
 
 **The pre-race page** (`drive/prerace.py`, task 20). `_interactive_session`
 builds `Sim.prerace` (a `PreRace` on the recorder's book and class, the
