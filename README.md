@@ -179,6 +179,26 @@ switch never touches the garage's own file (`runs/garage_design.json`), so
 the car on the ramp is still there. The screen is never shown to a script, a
 headless run or `--ml-drive`.
 
+### Medals
+
+Every class has four target times, all DERIVED from a lap that was really
+driven: the **author** time is the best valid lap a reference driver sets,
+headless, in that class's stock car (no wings, no ballast) — the scripted
+LapDriver at four levels of care, the ML driver's hand-written anchor, and
+every bundled bot bred for that car and map, each with the aids off and on —
+and **gold / silver / bronze** are 2 / 6 / 12 % slower. A reference lap has to
+be a full lap with no spin in it. The pre-race page shows the targets; every
+valid lap you drive says which medal it earned (`GOLD`, and `GOLD!` the
+first time you earn it in the class), and the best you have earned in a class is kept with its
+records. The dragstrip has no lap, so no medals. The table lives in
+`drive/data/medals.json`; after a change to a track, a car or the engine
+modes it is regenerated with
+
+```
+python3 -m drive.medals --build        # ~25 min on 6 cores; --only skidpad for one map
+python3 -m drive.medals --show         # the table
+```
+
 ### Your records
 
 Every lap you drive on a map with a lap (arena, open, the standard 50 m
@@ -189,8 +209,9 @@ different table. Your garage build and ballast are **not** in the class —
 designing the car is the game — but each lap remembers the build it was set
 in (its name and the whole build) and the assists you had on (ABS, TC, steer
 aid, gearbox). The HUD shows the class **PB** under LAP / LAST / BEST, and
-when a lap lands the bottom line says where: `NEW PB 1:00.729 (-0.412) P1 of
-top 5`, `LAP 1:01.204 P3 of top 5`, or `outside the top 5`.
+when a lap lands the bottom line says where and what it earned: `NEW PB
+1:00.729 (-0.412) P1/5 GOLD!`, `LAP 1:01.204 P3/5 SILVER`, `LAP 1:05.000
+outside the top 5 BRONZE` (`!` is your best medal yet in the class).
 
 A lap is only a record if the timer calls it valid (not all four wheels off
 the track), it went **round** (every sector line in order and at least 95 %
@@ -851,6 +872,8 @@ drive/
                 start state (re-simulated bit for bit), runs/records/
   prerace.py    the TIME TRIAL page: class, build, top 5, medal targets; PICK a
                 saved build; the build each map opens with
+  medals.py     author / gold / silver / bronze per class, derived from headless
+                reference laps (data/medals.json, data/reference_laps.json)
   telemetry.py  fixed-schema CSV + sidecar json
   plots.py      overview, g-g, track map, laps, A/B compare
   drive.py      main loop, settings, garage <-> drive session loop, CLI,

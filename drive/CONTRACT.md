@@ -49,6 +49,7 @@ from the repo root.
 | `drive/audio.py` | procedural car sound: `Synth` (numpy) + `CarSound` (one pygame.mixer channel); a render-loop consumer of `HudData`, never an input | numpy, pygame |
 | `drive/records.py` | lap records: the class key `track\|car\|engine\|surface`, `RecordBook` (top 5 per class, `runs/records/<class>.json`, best sectors, best medal, `last_builds.json`), `LapRecorder` (the `Sim` hooks: controls log, 50 Hz trace, the lap's exact start state), `resimulate` (a lap re-driven from its log, bit for bit) | numpy; `vehicle`, `powertrain`, `cars`, `corsa_c` (dataclass registry only); `drive.drive` / `track` lazily inside `resimulate` and the self-check. Never pygame, never `drive.ml` |
 | `drive/prerace.py` | the pre-race (TIME TRIAL) page's content: `PreRace` rows and help sections from a `RecordBook`, the medal table and the library's builds; `wanted(opts, settings)` (never a script, headless, `--ml-drive`, offscreen, the dragstrip); the PICK page rows. Pure UI logic: the `Sim` owns the menu and dispatches | `records`; `medals` lazily. Never pygame |
+| `drive/medals.py` | medal times per class (plan D4): author = the best valid, spin-free, full lap a reference driver sets headless in the class's STOCK car (`LapDriver` at margins 0.90 / 0.80 / 0.70 / 0.60, the `drive.ml` anchor, every bundled checkpoint for that car + track; aids off and on), gold / silver / bronze = author x 1.02 / 1.06 / 1.12. Owns `drive/data/medals.json` (`--build`) and `drive/data/reference_laps.json` (the author laps' 20 Hz traces, task 22's reference ghost). `targets`, `medal_for`, `reference_trace`; staleness by a hash of the track definitions, car specs and engine modes | numpy, `records` at module level; `drive.drive`, `track`, `cars` lazily; `drive.ml` only in the build's workers. Never pygame |
 | `drive/drive.py` | main loop, CLI, scripted runs | everything |
 | `drive/validate.py` | the whole acceptance suite | everything |
 
@@ -1417,6 +1418,17 @@ sector times come back BIT FOR BIT, and that a 3-lap scripted run leaves
 the right top 5. The class key is D1's; its file name writes `|` as `__`
 (Windows). `HudData.pb_lap` / `lap_rank` carry the class PB and the top-5
 place of a lap that just landed.
+
+**Medals** (`drive/medals.py`, task 21). `Sim._rec_lap` (the recorder's
+lap callback) asks `medals.medal_for(key, time)` for every VALID lap, puts it
+on the lap's HUD note and `HudData.lap_medal`, and keeps the class's best in
+its records file (`RecordBook.set_best_medal(..., save=False)`, written by
+the recorder's filing thread: `LapRecorder.save_later`). The pre-race page
+shows the class's targets and your best medal. V31 checks the medals of its
+three laps and the best kept. The table is generated, never typed:
+`python3 -m drive.medals --build` (26 min on 6 workers for 816 runs), and
+its self-check soft-fails with that command when a track, a car or the
+engine modes changed since.
 
 **The pre-race page** (`drive/prerace.py`, task 20). `_interactive_session`
 builds `Sim.prerace` (a `PreRace` on the recorder's book and class, the

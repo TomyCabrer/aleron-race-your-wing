@@ -653,9 +653,11 @@ class RecordBook:
                 bs[i] = float(s)
         d["best_sectors"] = bs
 
-    def set_best_medal(self, key: str, medal: str, order: tuple = MEDAL_ORDER) -> bool:
+    def set_best_medal(self, key: str, medal: str, order: tuple = MEDAL_ORDER,
+                       save: bool = True) -> bool:
         """Keep the best medal ever earned in the class (`order` best first).
-        True when it improved."""
+        True when it improved. `save=False` leaves the write to the caller
+        (the recorder's filing thread)."""
         with self._lock:
             d = self.load(key)
             cur = d.get("best_medal")
@@ -665,7 +667,8 @@ class RecordBook:
                 return False
             d["best_medal"] = medal
             self.version += 1
-            self.save(key)
+            if save:
+                self.save(key)
             return True
 
     # ---- the pre-race screen's per-track default build (task 20) ------
@@ -968,6 +971,18 @@ class LapRecorder:
             if self.on_lap is not None:
                 self.on_lap(res2)
 
+    def save_later(self, key: str) -> None:
+        """Write the class file off the physics step (the filing thread, in
+        order after any lap it is filing); at once when not threaded."""
+        if self.threaded:
+            if self._pool is None:
+                from concurrent.futures import ThreadPoolExecutor
+                self._pool = ThreadPoolExecutor(max_workers=1,
+                                                thread_name_prefix="carsim-records")
+            self._futs.append(self._pool.submit(self.book.save, key))
+        else:
+            self.book.save(key)
+
     def flush(self, timeout: float | None = None) -> None:
         """Wait until every lap handed to the filing thread is on disk."""
         for f in list(self._futs):
@@ -1013,23 +1028,25 @@ def fmt_time(t) -> str:
 
 
 def lap_note(res: dict) -> tuple:
-    """A closed lap's HUD line and how long it stays: (text, seconds)."""
+    """A closed lap's HUD line and how long it stays: (text, seconds). Short:
+    the bottom bar holds ~45 characters, and the PB, the place and the medal
+    are also in the timing panel."""
     t = res.get("time")
     if not res.get("valid"):
         why = res.get("why") or "invalid"
-        return f"LAP {fmt_time(t)}  not recorded ({why})", 5.0
+        return f"LAP {fmt_time(t)} not recorded ({why})", 5.0
     pos, pb0 = res.get("pos"), res.get("pb_before")
     if res.get("save_error"):
-        return (f"LAP {fmt_time(t)}  P{pos} of top {TOP_N} - NOT SAVED "
-                f"({res['save_error'][:60]})" if pos else
-                f"LAP {fmt_time(t)}  - records not saved ({res['save_error'][:60]})"), 8.0
+        return f"LAP {fmt_time(t)} NOT SAVED ({res['save_error'][:40]})", 8.0
+    medal = res.get("medal")
+    tag = (f" {str(medal).upper()}" + ("!" if res.get("medal_best") else "")) if medal else ""
     if pos == 1:
-        gain = (f"  ({float(t) - pb0:+.3f})" if isinstance(pb0, float) and math.isfinite(pb0)
-                else "  (first lap in this class)")
-        return f"NEW PB {fmt_time(t)}{gain}  P1 of top {TOP_N}", 8.0
+        gain = (f" ({float(t) - pb0:+.3f})" if isinstance(pb0, float) and math.isfinite(pb0)
+                else " (first)")
+        return f"NEW PB {fmt_time(t)}{gain} P1/{TOP_N}{tag}", 8.0
     if pos is not None:
-        return f"LAP {fmt_time(t)}  P{pos} of top {TOP_N}  (PB {fmt_time(pb0)})", 6.0
-    return f"LAP {fmt_time(t)}  outside the top {TOP_N}  (PB {fmt_time(pb0)})", 5.0
+        return f"LAP {fmt_time(t)} P{pos}/{TOP_N}{tag}", 6.0
+    return f"LAP {fmt_time(t)} outside the top {TOP_N}{tag}", 5.0
 
 
 def assists_of(settings) -> dict:

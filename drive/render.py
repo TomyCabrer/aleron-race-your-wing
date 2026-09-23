@@ -206,6 +206,9 @@ C_GG_DOT = (255, 255, 255)
 C_PURPLE = (176, 78, 224)
 C_GREEN = (78, 194, 106)
 C_YELLOW = (217, 206, 85)
+#: the medals (drive/medals.py), as the HUD and the results tag them
+C_MEDAL = {'author': C_PURPLE, 'gold': (240, 196, 60), 'silver': (200, 206, 216),
+           'bronze': (205, 127, 50)}
 
 # --- the 3-D chase view's own palette (the same hues garage.py shades) ----
 C_CAR_DARK = (160, 146, 56)   # nose / tail caps
@@ -635,6 +638,8 @@ class HudData:
     # BEST, and the top-5 place the last lap took ('P2'), briefly
     pb_lap: float = 0.0
     lap_rank: str = ''
+    # --- medals (drive/medals.py): the medal the lap that just landed earned
+    lap_medal: str = ''
 
 
 # ======================================================================= #
@@ -2621,6 +2626,10 @@ class Renderer:
         if rank:
             self._blit(f'{rank} of top 5', r.x + 130 * u, r.y + 76 * u, self.f_lbl,
                        C_GREEN)
+        medal = getattr(aux, 'lap_medal', '') or ''
+        if medal:
+            self._blit(medal.upper(), r.x + 250 * u, r.y + 76 * u, self.f_lbl,
+                       C_MEDAL.get(medal, C_HUD_TEXT))
 
         # --- loads / utilisation ------------------------------------------
         r = self._panel(R_LOADS)

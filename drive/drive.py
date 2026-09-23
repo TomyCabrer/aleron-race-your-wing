@@ -1282,6 +1282,7 @@ class Sim:
         self.recorder = None
         self._rec_msg = ""
         self._rec_msg_until = -1
+        self._rec_tag_until = -1           # the lap's place / medal tags: THAT lap's note only
         # the TIME TRIAL / pre-race page (drive/prerace.py, task 20): a
         # prerace.PreRace when this session has one; a PICK on it leaves the
         # build (name, json) here and restarts the session on it
@@ -2281,11 +2282,36 @@ class Sim:
         self._rec_msg_until = self.n + int(round(secs / self.dt))
 
     def _rec_lap(self, res: dict) -> None:
-        """The recorder's callback when a lap closes: the HUD note."""
+        """The recorder's callback when a lap closes: the medal it earned
+        (drive/medals.py) and the HUD note."""
         from .records import lap_note
+        if res.get("valid") and "medal" not in res:
+            res["medal"], res["medal_best"] = self._lap_medal(res)
         text, secs = lap_note(res)
         self._rec_note(text, secs)
+        self._rec_tag_until = self._rec_msg_until
         print(text)
+
+    def _lap_medal(self, res: dict):
+        """(the medal a valid lap earned or None, True when it is the class's
+        best yet). The thresholds are drive/medals.py's; the best is kept in
+        the class file, written by the recorder's filing thread."""
+        try:
+            from . import medals
+            m = medals.medal_for(res["key"], res["time"])
+        except Exception:                  # noqa: BLE001 -- medals are optional
+            return None, False
+        best = False
+        if m and self.recorder is not None:
+            book = self.recorder.book
+            #  the PB before this lap already earned a medal, stored or not
+            #  (a table rebuilt since): that is the one to beat
+            m0 = medals.medal_for(res["key"], res.get("pb_before"))
+            changed = bool(m0) and book.set_best_medal(res["key"], m0, medals.MEDALS, save=False)
+            best = book.set_best_medal(res["key"], m, medals.MEDALS, save=False)
+            if best or changed:
+                self.recorder.save_later(res["key"])
+        return m, best
 
     def _rec_hud(self) -> str:
         return self._rec_msg if (self._rec_msg and self.n < self._rec_msg_until) else ""
@@ -2761,8 +2787,10 @@ class Sim:
         if self.recorder is not None:      # the class PB, and where the last lap landed
             d["pb_lap"] = self.recorder.book.pb_time(self.recorder.key)
             last = self.recorder.last
-            if last and last.get("pos") and self.n < self._rec_msg_until:
+            if last and last.get("pos") and self.n < self._rec_tag_until:
                 d["lap_rank"] = f"P{last['pos']}"
+            if last and last.get("medal") and self.n < self._rec_tag_until:
+                d["lap_medal"] = str(last["medal"])
         if self.rivals:
             d["ghosts"] = [rv.ghost() for rv in self.rivals]
         if self.hud_cfg:
@@ -4210,9 +4238,9 @@ def _v31_records(tmp, verbose=True):
     rec = recm.LapRecorder(book, key, dict(build_name="stock", build_json=None,
                                            assists=dict(abs=False, tc=False, steer_aid=True,
                                                         gearbox="auto")),
-                           expect_global_wet=sim.global_wet, dt=sim.dt,
-                           on_lap=lambda r: notes.append(recm.lap_note(r)[0]))
-    sim.recorder = rec
+                           expect_global_wet=sim.global_wet, dt=sim.dt)
+    rec.on_lap = lambda r: (sim._rec_lap(r), notes.append(sim._rec_msg))   # the session's
+    sim.recorder = rec                                                      # own callback
     laps = []
     for _ in range(int(200.0 / sim.dt)):
         sim.step_physics(sim.dt)
@@ -4258,7 +4286,19 @@ def _v31_records(tmp, verbose=True):
     reset_ok = (reset_ok and was and not rec.recording
                 and rec.key == recm.class_key("arena", st.car, st.engine, st.wet)
                 and rec.meta["assists"]["abs"] == bool(st.abs) and rec._why == "engine changed")
-    ok = file_ok and size_ok and replay_ok and reset_ok
+    # the medal each lap earned (drive/medals.py, task 21) is on its note, and
+    # the class's best is kept in its file
+    try:
+        from . import medals as mdl
+        want_m = [mdl.medal_for(key, r["time"]) for r in laps]
+        order = [m for m in mdl.MEDALS if m in want_m]
+        medal_ok = (mdl.targets(key) is not None and any(want_m)   # never vacuous
+                    and [r.get("medal") for r in laps] == want_m
+                    and all((m or "").upper() in n for m, n in zip(want_m, notes))
+                    and recm.RecordBook(root).load(key)["best_medal"] == (order[0] if order else None))
+    except Exception as exc:               # noqa: BLE001
+        want_m, medal_ok = [f"{type(exc).__name__}: {exc}"], False
+    ok = file_ok and size_ok and replay_ok and reset_ok and medal_ok
     if verbose:
         print(f"  V31 records     : 3 laps {[round(r['time'], 3) for r in laps]} -> file "
               f"{[round(lp['time'], 3) for lp in filed]} ({file_ok}); "
@@ -4266,7 +4306,7 @@ def _v31_records(tmp, verbose=True):
               f"{rs['time'] if rs['time'] is None else round(rs['time'], 6)} s from the log, "
               f"bit for bit {rs['exact']}, sectors {rs['sectors_exact']}; reset mid-lap -> "
               f"not filed, a live engine / ABS change -> the new class and assists "
-              f"({reset_ok})  -> {'ok' if ok else 'FAIL'}")
+              f"({reset_ok}); medals {want_m}, best kept ({medal_ok})  -> {'ok' if ok else 'FAIL'}")
     return ok, dict(laps=[r["time"] for r in laps], kb=max(sizes) / 1024.0,
                     replay=rs["time"], exact=rs["exact"], notes=notes)
 

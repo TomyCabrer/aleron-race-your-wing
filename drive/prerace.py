@@ -88,6 +88,14 @@ def _medal_table(key: str):
         return None
 
 
+def _medal_for(key: str, t):
+    try:
+        from . import medals
+        return medals.medal_for(key, t)
+    except Exception:                      # noqa: BLE001
+        return None
+
+
 def assists_text(a: dict) -> str:
     """The lap's assists as short tags: 'ABS TC AID AUTO'."""
     if not isinstance(a, dict):
@@ -164,6 +172,10 @@ class PreRace:
         if tg and tg.get("author"):
             best = self.book.load(self.key).get("best_medal")
             pb = self.book.pb_time(self.key)
+            m_pb = _medal_for(self.key, pb)
+            order = rec.MEDAL_ORDER
+            if m_pb in order and (best not in order or order.index(m_pb) < order.index(best)):
+                best = m_pb                # a PB set before the table: it still counts
             mrows = [(m, rec.fmt_time(tg[m])) for m in ("author", "gold", "silver", "bronze")]
             mrows.append(("yours", (best or "none yet") + (f"  (PB {rec.fmt_time(pb)})"
                                                             if math.isfinite(pb) else "")))
