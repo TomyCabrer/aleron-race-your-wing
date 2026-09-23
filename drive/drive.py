@@ -1291,6 +1291,13 @@ class Sim:
         # the PB and ghost-2 ghosts, the live delta, the sector flash
         # (drive/ghosts.py, task 22): a ghosts.GhostSet in a session with records
         self.ghosts = None
+        # the driving tutorial (drive/tutorial.py, task 23): a player session
+        # has `progress_file` (runs/progress.json; `progress` above is the
+        # race's metres); `tutorial` is the running one, `tutorial_car` = this
+        # session drives the tutorial's wing car
+        self.progress_file = None
+        self.tutorial = None
+        self.tutorial_car = False
 
         self._bind_input()
         self._sample_surfaces()
@@ -1525,6 +1532,8 @@ class Sim:
         """
         if self.recorder is not None:
             self.recorder.discard("reset")     # a teleport is not a lap
+        if self.tutorial is not None:
+            self.tutorial.command("reset")     # the tutorial's R step and retries
         tr = self.track
         s0 = 0.0
         V0 = 0.0
@@ -1612,6 +1621,8 @@ class Sim:
                 nstep = 0
             else:
                 nstep = self.pump(dt_wall)
+            if self.tutorial is not None:
+                self._tutorial_tick()
 
             w = time.perf_counter() - t_wall0
             self._rtf_wall = w
@@ -1838,6 +1849,13 @@ class Sim:
             self.time_scale = 1.0
         elif ev == "wing":
             self.wing_on = not self.wing_on
+            #  the keyboard folds F into its own copy too (input.py), and the
+            #  two are OR'd in step_physics: on a car that starts ARMED (a
+            #  garage build, --wing) F could never switch the wing off, while
+            #  the HUD said OFF. The harness's toggle is the one truth.
+            kb = getattr(self.inp, "kb", None)
+            if kb is not None and hasattr(kb, "wing_on"):
+                kb.wing_on = False
         elif ev == "wing_side":
             self.wing_side_mode = {0: +1, +1: -1, -1: 2, 2: 0}[self.wing_side_mode]
         elif ev == "wet":
@@ -1890,6 +1908,9 @@ class Sim:
                  ("Settings: map, gearbox, ABS, aids, camera", "settings")]
         if self.prerace is not None:
             items.append(("Time trial: your top 5, medals, the build", "timetrial"))
+        if self.progress_file is not None:
+            from .tutorial import menu_row
+            items.append((menu_row(self.progress_file, self.tutorial), "tutorial"))
         items += [("Reset to last sector line", "reset"),
                  ("Full reset (skid marks + timing)", "full_reset")]
         if self.has_garage:
@@ -2374,7 +2395,8 @@ class Sim:
         """RACE: every car to the line and the clock from the next crossing;
         this build becomes the map's default (`runs/records/last_builds.json`)."""
         pr = self.prerace
-        if pr is not None and pr.build_json is not None:
+        if pr is not None and pr.build_json is not None and not self.tutorial_car:
+            #  (the tutorial's plate car is in memory only: never a map's default)
             pr.book.set_last_build(self.track.name, pr.build_name, pr.build_json)
         self.reset(to_checkpoint=False)
         self._rec_note("TIME TRIAL: the clock starts when you cross the line", 4.0)
@@ -2417,6 +2439,139 @@ class Sim:
                 self.restart()
         else:
             self._menu_show_prerace_pick(idx=idx)
+        return True
+
+    # ---- the driving tutorial (drive/tutorial.py) --------------------------
+    def _tutorial_tick(self) -> None:
+        """Once per frame after the physics: the tutorial reads the sim and
+        says what the session must do (another map, a page, nothing)."""
+        tut = self.tutorial
+        if tut is None:
+            return
+        if not tut.active:
+            self.tutorial = None
+            return
+        if self.menu is not None and self.menu.open:
+            return                             # a page is up: nothing moves
+        act = tut.tick(self)
+        if act == "restart" and not self.quit:
+            self._rec_note(f"tutorial: to the {tut.map_wanted()}", 3.0)
+            self.restart()                     # run_interactive_cli moves the map
+        elif act == "page":
+            self._menu_show_tutorial_step()
+
+    def _tutorial_ctx(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(settings=self.settings,
+                               key=getattr(self.recorder, "key", None))
+
+    def _menu_show_tutorial_step(self, idx: int = 0) -> None:
+        """A page step: paused, Continue / End. No window: it continues."""
+        tut = self.tutorial
+        if self.renderer is None:
+            tut.advance()
+            return
+        if self.menu is None or not self.menu.open:
+            self._menu_open()
+        title, sub, note, secs, items = tut.page(self._tutorial_ctx())
+        self.menu.show(items=items, sections=secs, subtitle=sub, note=note,
+                       footer="ENTER / CROSS continue   ESC / CIRCLE continue   or click a row",
+                       title=title, idx=idx, columns=1)
+        self._menu_page = "tutorial_step"
+
+    def _menu_show_tutorial(self, idx: int = 0) -> None:
+        """The pause menu's Tutorial page: start, continue, skip, end."""
+        from . import tutorial as tu
+        self.menu.show(items=tu.menu_items(self.tutorial, self.progress_file),
+                       sections=tu.step_list(self.tutorial, self.progress_file),
+                       subtitle=tu.menu_row(self.progress_file, self.tutorial), note="",
+                       footer="ENTER / CROSS select   ESC / CIRCLE back", title="TUTORIAL",
+                       idx=idx, columns=1)
+        self._menu_page = "tutorial"
+
+    def open_tutorial_offer(self) -> None:
+        """The first launch: offer the tutorial (once; runs/progress.json)."""
+        from . import tutorial as tu
+        if self.renderer is None or self.progress_file is None:
+            return
+        if self.menu is None or not self.menu.open:
+            self._menu_open()
+        self.menu.show(items=tu.OFFER_ITEMS, sections=tu.step_list(),
+                       subtitle="carsim: a Corsa, a flank wing, a stopwatch", note=tu.OFFER_NOTE,
+                       footer="ENTER / CROSS select   ESC / CIRCLE not now   or click a row",
+                       title="WELCOME", idx=0, columns=1)
+        self._menu_page = "tutorial_offer"
+
+    def _tutorial_begin(self, start=None) -> None:
+        from .tutorial import Tutorial
+        self.tutorial = Tutorial(self.progress_file, start=start)
+        self._menu_close()
+        self._rec_note(f"TUTORIAL {self.tutorial.label()}: {self.tutorial.step.title}", 4.0)
+
+    def _tutorial_stop(self, why: str) -> None:
+        """The tutorial is over (finished or ended): the session drives on;
+        a session on the tutorial's wing car restarts on the player's own."""
+        self.tutorial = None
+        if self.menu is not None and self.menu.open:
+            self._menu_close()
+        self._rec_note(why, 4.0)
+        if self.tutorial_car:
+            self.restart()
+
+    def _tutorial_event(self, action: str) -> bool:
+        """The tutorial's pages; False lets the hotkeys (R, SHIFT+R,
+        BACKSPACE) fall through to the pause menu's own handling."""
+        if action in ("reset", "full_reset", "garage"):
+            return False
+        page, tut, idx = self._menu_page, self.tutorial, self.menu.idx
+        if page == "tutorial_step":            # a page step: ESC continues too
+            if tut is None:
+                self._menu_close()
+            elif action in ("tut_next", "resume"):
+                tut.advance()
+                self._menu_close()
+                if not tut.active:
+                    self._tutorial_stop("TUTORIAL DONE - ESC > Time trial for your records")
+            elif action == "tut_end":
+                tut.end()
+                self._tutorial_stop("tutorial ended - ESC > Tutorial continues it")
+            else:
+                self._menu_show_tutorial_step(idx=idx)
+            return True
+        if page == "tutorial_offer":
+            if action == "tut_start":
+                self._tutorial_begin()
+            elif action in ("tut_later", "resume"):
+                self.progress_file.section("tutorial")["offered"] = True
+                self.progress_file.save("tutorial")
+                if self.prerace is not None and self.recorder is not None:
+                    self._menu_show_prerace()  # what the session would have opened on
+                else:
+                    self._menu_close()
+            else:
+                self.open_tutorial_offer()
+            return True
+        if action in ("resume", "tut_back"):   # the pause menu's Tutorial page
+            if action == "tut_back" and tut is not None and tut.active:
+                self._menu_close()
+            else:
+                self._menu_show_main()
+                self.menu.idx = [a for _, a in self.menu.items].index("tutorial")
+        elif action == "tut_skip" and tut is not None:
+            tut.skip()
+            self._menu_close()
+            if not tut.active:
+                self._tutorial_stop("TUTORIAL DONE")
+        elif action == "tut_start":
+            self._tutorial_begin()
+        elif action == "tut_resume":
+            from .tutorial import saved_state
+            self._tutorial_begin(saved_state(self.progress_file)["step"])
+        elif action == "tut_end" and tut is not None:
+            tut.end()
+            self._tutorial_stop("tutorial ended - ESC > Tutorial continues it")
+        else:
+            self._menu_show_tutorial(idx=idx)
         return True
 
     def _swarm_step(self, key: str, d: int) -> None:
@@ -2470,6 +2625,8 @@ class Sim:
             if action is None:
                 return
         if self._menu_page in ("prerace", "prerace_pick") and self._prerace_event(action):
+            return
+        if self._menu_page.startswith("tutorial") and self._tutorial_event(action):
             return
         if self._menu_page == "settings":
             idx = self.menu.idx
@@ -2589,6 +2746,9 @@ class Sim:
             return
         elif action == "timetrial" and self.prerace is not None:
             self._menu_show_prerace()
+            return
+        elif action == "tutorial" and self.progress_file is not None:
+            self._menu_show_tutorial()
             return
         self._menu_close()
         if action == "reset":
@@ -2818,6 +2978,8 @@ class Sim:
             f = gs.flash_now(self)
             if f:
                 d["sector_flash"], d["flash_col"] = f
+        if self.tutorial is not None:      # the tutorial's box (drive/tutorial.py)
+            d["tutorial"] = self.tutorial.overlay()
         if self.hud_cfg:
             d.update(self.hud_cfg)          # the garage build's wing geometry
         try:
@@ -4522,6 +4684,134 @@ def _v33_ghost_delta(tmp, verbose=True):
     return ok, dict(max_delta_s=dmax, max_gap_m=gmax, flashes=flashes)
 
 
+#: V34's ceiling on the tutorial's sim time (it takes ~200 s)
+V34_MAX_SIM_S = 900.0
+
+
+def _v34_tutorial(tmp, verbose=True):
+    """The driving tutorial (drive/tutorial.py), end to end, headless: it is
+    started from the pause menu's Tutorial page, every drive step is driven
+    by ScriptedInput (the pedals, a weave, LapDriver through turn 1, round the
+    skidpad and round the arena), R and F are pressed as events, every page
+    is continued with ENTER, and when a step asks for another map the session
+    is rebuilt there, as run_interactive_cli does -- one frame at a time,
+    exactly as run_interactive runs it (events, 1/FPS of physics, the tick).
+    Every drive step must PASS its own predicate (nothing skipped), the maps
+    must go arena -> skidpad -> arena, and the progress file (a temporary
+    one) must say done, with both wing circles and the lap measured."""
+    from types import SimpleNamespace
+    from . import tutorial as tu
+    from .progress import Progress
+    t_wall = time.perf_counter()
+    path = os.path.join(tmp, "tutorial", "progress.json")
+    prog = Progress(path)
+    per = max(1, int(round(1.0 / (FPS * DT_PHYS))))
+    box: dict = {}
+    drivers: dict = {}
+
+    def driver(t, veh, tr):
+        tut = box.get("tut")
+        sid = tut.step.id if (tut is not None and tut.active) else ""
+        if sid == "pedals":
+            return Controls(brake=1.0) if tut.mem.get("fast") else Controls(throttle=1.0)
+        if sid == "steer":                         # the centreline, plus a weave
+            pf = drivers.setdefault((id(tr), "weave"), PathFollower(9.0))
+            c = pf(t, veh, tr)
+            c.delta += 0.06 * sin(2.0 * math.pi * 0.4 * t)
+            return c
+        if sid in ("turn1", "reset", "wing_off", "wing_on", "lap"):
+            k = (id(tr), sid == "wing_on")
+            if k not in drivers:
+                drivers[k] = LapDriver(tr, 0.85, wing_on=(sid == "wing_on"))
+            return drivers[k](t, veh, tr)
+        return Controls(brake=1.0)                 # a page: stand still
+
+    def new_sim(track):
+        s_ = _build(track, wing=("plate" if track == "skidpad" else "off"), driver=driver)
+        s_.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
+        s_.progress_file = prog
+        s_.tutorial = box.get("tut")
+        return s_
+
+    sim = new_sim("arena")
+    ev = sim.handle_event
+
+    def goto(action):
+        i = [a for _, a in sim.menu.items].index(action)
+        while sim.menu.idx != i:
+            ev("nav_down")
+
+    ev("menu")                                     # ESC > Tutorial > Start
+    row_ok = "tutorial" in [a for _, a in sim.menu.items]
+    goto("tutorial")
+    ev("select")
+    page_ok = sim._menu_page == "tutorial" and sim.menu.open
+    goto("tut_start")
+    ev("select")
+    tut = box["tut"] = sim.tutorial
+    start_ok = tut is not None and tut.step.id == "pedals" and not sim.menu.open
+    maps, passed, pages, heads = [sim.track.name], [], [], set()
+    sim_t, frames = 0.0, 0
+    ids = [s_.id for s_ in tu.STEPS]
+    while tut is not None and tut.active and sim_t < V34_MAX_SIM_S:
+        if sim.quit:
+            if sim.stop_reason != "restart":
+                break
+            sim_t += sim.t
+            sim = new_sim(tut.map_wanted() or sim.track.name)
+            maps.append(sim.track.name)
+            continue
+        sid = tut.step.id
+        if sim.menu is not None and sim.menu.open:
+            if sim._menu_page != "tutorial_step":
+                break
+            pages.append(sid)
+            sim.inp.events.append("select")        # ENTER: Continue
+        elif sid == "reset" and tut._t0 is not None and sim.t - tut._t0 > 2.0:
+            sim.inp.events.append("reset")         # R
+        elif sid == "wing_off" and sim.wing_on or sid == "wing_on" and not sim.wing_on:
+            sim.inp.events.append("wing")          # F
+        for e in sim.inp.poll_events():            # run_interactive's frame
+            sim.handle_event(e)
+        if not sim.paused:
+            for _ in range(per):
+                sim.step_physics(sim.dt)
+        i0 = tut.i
+        sim._tutorial_tick()
+        if tut.i != i0 and tu.STEPS[i0].kind == "drive":
+            passed.append(ids[i0])
+        frames += 1
+        if frames % 15 == 0 and tut.active and tut.step.kind == "drive":
+            o = sim.hud_data().tutorial
+            if o and o.get("head"):
+                heads.add(tut.step.id if tut.step.title in o["head"] else "?")
+    sim_t += sim.t
+    drive_ids = [s_.id for s_ in tu.STEPS if s_.kind == "drive"]
+    page_ids = [s_.id for s_ in tu.STEPS if s_.kind == "page"]
+    sv = tu.saved_state(Progress(path))
+    res = Progress(path).section("tutorial").get("results", {})
+    off, on, lap = res.get("wing_off"), res.get("wing_on"), res.get("lap")
+    measured = bool(off and on and lap and math.isfinite(off["ay"]) and off["ay"] > 0.3
+                    and on["ay"] > 0.3 and 40.0 < lap["t"] < 120.0)
+    ok = (row_ok and page_ok and start_ok and passed == drive_ids and pages == page_ids
+          and maps == ["arena", "skidpad", "arena"] and tut is not None and tut.done
+          and not tut.skipped and sv["done"] and measured and heads == set(drive_ids)
+          and sim.tutorial is None)
+    wall = time.perf_counter() - t_wall
+    if verbose:
+        print(f"  V34 tutorial    : menu row {row_ok}, page {page_ok}, started {start_ok}; "
+              f"drive steps passed {len(passed)}/{len(drive_ids)}, pages {len(pages)}/"
+              f"{len(page_ids)}, maps {' -> '.join(maps)}; wing off "
+              f"{off['ay'] if off else float('nan'):.3f} g / on "
+              f"{on['ay'] if on else float('nan'):.3f} g, lap "
+              f"{lap['t'] if lap else float('nan'):.3f} s; done + saved {sv['done']}; "
+              f"{sim_t:.0f} s sim in {wall:.1f} s  -> {'ok' if ok else 'FAIL'}")
+        if not ok:
+            print(f"    passed {passed}  pages {pages}  heads {sorted(heads)}  "
+                  f"step {tut.step.id if tut else None}  mem {tut.mem if tut else None}")
+    return ok, dict(passed=passed, maps=maps, results=res, sim_s=sim_t)
+
+
 def _v20_determinism(tmp, verbose=True):
     """Two identical scripted runs, full precision, must be byte-identical."""
     import hashlib
@@ -5125,6 +5415,7 @@ def self_check(verbose=True) -> bool:
                      ("V31", lambda: _v31_records(tmp, verbose)),
                      ("V32", lambda: _v32_prerace(tmp, verbose)),
                      ("V33", lambda: _v33_ghost_delta(tmp, verbose)),
+                     ("V34", lambda: _v34_tutorial(tmp, verbose)),
                      ("V20", lambda: _v20_determinism(tmp, verbose)),
                      ("accel", lambda: _accel_end_to_end(tmp, verbose)),
                      ("V21", lambda: _v21_rtf(tmp, 60.0, verbose))):
@@ -5485,6 +5776,20 @@ def run_interactive_cli(opts) -> int:
     seen_track = None
     explicit = bool(getattr(opts, "build", None)) or any(
         a.startswith("--wing") for a in sys.argv[1:])
+    #  the driving tutorial (drive/tutorial.py): runs/progress.json is a
+    #  player file, opened by a player session only; offered on its first launch
+    opts.progress, opts.tutorial_offer = None, False
+    if _player_session(opts):
+        try:
+            from .progress import Progress
+            from .tutorial import saved_state
+            opts.progress = Progress()
+            for n in opts.progress.notes:
+                print(f"progress: {n}")
+            opts.tutorial_offer = not saved_state(opts.progress)["offered"]
+        except Exception as exc:           # noqa: BLE001 -- never stops a drive
+            print(f"progress unavailable ({type(exc).__name__}: {exc})")
+            opts.progress = None
     try:
         while True:
             from_garage = False
@@ -5499,6 +5804,12 @@ def run_interactive_cli(opts) -> int:
                 print(f"garage -> drive: {design.summary(lib)}")
                 mode = "drive"
                 from_garage = True
+            tut = getattr(opts, "tutorial", None)
+            if tut is not None and not tut.active:
+                tut = opts.tutorial = None
+            if tut is not None and tut.map_wanted() and settings.track != tut.map_wanted():
+                settings.track = tut.map_wanted()   # the step's map: TAB cannot leave it
+                settings.save()
             if (grg is not None and design is not None and not from_garage
                     and settings.track != seen_track
                     and not (explicit and seen_track is None)):
@@ -5507,10 +5818,23 @@ def run_interactive_cli(opts) -> int:
                     design = d2
                     _apply_design(opts, design, lib)
             seen_track = settings.track
-            if grg is not None and design is not None:
+            #  the tutorial's wing laps need a flank wing: a car without one
+            #  drives them with the library's plate (in memory, never saved)
+            tut_car = None
+            if tut is not None and tut.wants_wing():
+                from .tutorial import wing_car
+                tut_car = wing_car(grg, design, lib)
+            if tut_car is not None:
+                _apply_design(opts, tut_car, lib)
+            elif getattr(opts, "tutorial_car", False) and design is not None:
+                _apply_design(opts, design, lib)   # the player's own car back
+            opts.tutorial_car = tut_car is not None
+            if grg is not None and design is not None and tut_car is None:
                 _track_build_used(settings.track, design, opts)
             sim = _interactive_session(opts, pad=pad, settings=settings,
                                        garage=(grg is not None))
+            t_ = getattr(sim, "tutorial", None)    # started, or still running
+            opts.tutorial = t_ if (t_ is not None and t_.active) else None
             pad = getattr(sim.inp, "pad", pad)
             opts.race_menu = dict(sim.race_opts, active=bool(sim.rivals))
             gs = getattr(sim, "ghosts", None)
@@ -6333,6 +6657,17 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
             print(f"pre-race screen unavailable ({type(exc).__name__}: {exc})")
             sim.prerace = None
     opts.prerace_skip = False
+    #  the driving tutorial (drive/tutorial.py): a player session has the
+    #  progress file; a running tutorial comes back on every restart
+    sim.progress_file = getattr(opts, "progress", None)
+    tut = getattr(opts, "tutorial", None)
+    sim.tutorial = tut if (tut is not None and tut.active and sim.progress_file is not None) else None
+    sim.tutorial_car = bool(getattr(opts, "tutorial_car", False))
+    offer_now = (bool(getattr(opts, "tutorial_offer", False)) and sim.progress_file is not None
+                 and renderer is not None and sim.tutorial is None)
+    opts.tutorial_offer = False            # once a launch
+    if sim.tutorial is not None:
+        prerace_now = False                # the tutorial has the car
     #  the ghosts and the live delta (drive/ghosts.py): with records only
     if sim.recorder is not None:
         try:
@@ -6396,7 +6731,9 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     if renderer is not None and opts.render != "offscreen" and not opts.headless:
         sim.sound_enabled = True
         sim._audio_apply()
-    if prerace_now:
+    if offer_now:
+        sim.open_tutorial_offer()          # the first launch: WELCOME
+    elif prerace_now:
         sim.open_prerace()                 # RACE (ENTER / CROSS) is one press
     try:
         sim.run_interactive()

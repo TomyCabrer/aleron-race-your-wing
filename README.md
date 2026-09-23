@@ -50,7 +50,7 @@ python3 -m drive.drive --swarm 32 --swarm-car mx5 --swarm-fast --swarm-save neve
 `ESC` (or `OPTIONS` on the pad) pauses and opens the menu: every keyboard and
 pad control on screen, plus *Resume*, *Settings*, *Time trial* (on a map with
 a lap), *Reset to last sector line*, *Full reset*, *Garage*, *Deploy swarm*,
-*Race vs bot* and *Quit*. `↑` `↓` / d-pad move, `←` `→` / d-pad
+*Race vs bot*, *Tutorial* and *Quit*. `↑` `↓` / d-pad move, `←` `→` / d-pad
 change a value on the settings page, `ENTER` / `✕`
 select, `ESC` / `○` / `OPTIONS` resume; `R`, `SHIFT+R` and `BACKSPACE` work as
 hotkeys inside it. Every menu page also takes the **mouse**: point at a row,
@@ -153,6 +153,23 @@ cycles.
   counts crossings made on the road.
 * **Skidpad** — one constant-radius guide circle (`--radius`, `--cw`).
 * **Dragstrip** — 1500 m straight with 1/8 mile, 1/4 mile and km gates.
+
+## The driving tutorial
+
+The first launch offers it (**WELCOME**: start it, or *Not now*); the pause
+menu's *Tutorial* has it any time after that, and continues it where you
+left off. Eleven steps, about eight minutes: throttle and brake, steering,
+turn 1 of the arena from the line, the reset (`R`), what the assists do, then
+the **flank wing on the skidpad** — a flying lap with it off, one with it
+on (`F` / `○`), and the two laps' mean lateral g side by side — then the
+timing, the ghosts and the medals, and one valid lap of the arena. A box on
+the left says what to do, how far you are, why an attempt did not count and,
+after 20 s, a hint; the explanations are pages that wait for `ENTER`. The
+tutorial moves you to the map each step is on (while it runs, `TAB` cannot
+leave it). A car with no flank wing drives the two wing laps with the
+published plate fitted (only for those laps; nothing is saved). `ESC` >
+*Tutorial* skips a step, starts over or ends it. Progress is kept in
+`runs/progress.json`; a script or a headless run never reads it.
 
 ## Time trial: the pre-race screen and your records
 
@@ -893,6 +910,8 @@ drive/
   medals.py     author / gold / silver / bronze per class, derived from headless
                 reference laps (data/medals.json, data/reference_laps.json)
   ghosts.py     the PB and ghost-2 ghosts, the live delta, the sector flash
+  progress.py   runs/progress.json: the tutorial's (and the challenges') progress
+  tutorial.py   the driving tutorial: 11 data-driven steps, the overlay, the pages
   telemetry.py  fixed-schema CSV + sidecar json
   plots.py      overview, g-g, track map, laps, A/B compare
   drive.py      main loop, settings, garage <-> drive session loop, CLI,

@@ -51,6 +51,8 @@ from the repo root.
 | `drive/prerace.py` | the pre-race (TIME TRIAL) page's content: `PreRace` rows and help sections from a `RecordBook`, the medal table and the library's builds; `wanted(opts, settings)` (never a script, headless, `--ml-drive`, offscreen, the dragstrip); the PICK page rows. Pure UI logic: the `Sim` owns the menu and dispatches | `records`; `medals` lazily. Never pygame |
 | `drive/medals.py` | medal times per class (plan D4): author = the best valid, spin-free, full lap a reference driver sets headless in the class's STOCK car (`LapDriver` at margins 0.90 / 0.80 / 0.70 / 0.60, the `drive.ml` anchor, every bundled checkpoint for that car + track; aids off and on), gold / silver / bronze = author x 1.02 / 1.06 / 1.12. Owns `drive/data/medals.json` (`--build`) and `drive/data/reference_laps.json` (the author laps' 20 Hz traces, task 22's reference ghost). `targets`, `medal_for`, `reference_trace`; staleness by a hash of the track definitions, car specs and engine modes | numpy, `records` at module level; `drive.drive`, `track`, `cars` lazily; `drive.ml` only in the build's workers. Never pygame |
 | `drive/ghosts.py` | the time trial's two ghosts (the class PB; the D2 slot: reference bot / none / your P2..P5), clocked from the line (`sim.t - LapTimer.t_lap_start`); the live delta `tau - t_pb(p)`, `p` the centreline progress counted from the crossing on the ribbon only (the race gap's trail approach); the sector flash (purple / green / red, none for a lap that cannot count) | numpy, `records`; `drive.drive._Replay` and `medals` lazily. Never pygame |
+| `drive/progress.py` | `runs/progress.json` (kind `carsim-progress-1`): one section per feature (`tutorial`, task 25's `challenges`); `save(section)` merges with the file; a corrupt / foreign file is ignored with a note and moved aside as `.bad-<stamp>`, an unreadable one never written over | `records._atomic_json` lazily. Never pygame |
+| `drive/tutorial.py` | the driving tutorial: 11 data-driven `Step`s (`id, map, kind, title, text, hint, check(frame, mem), status, reset, setup, wing`), `frame_of(sim)` (what a predicate sees), the `Tutorial` state machine (`tick(sim)` -> 'restart' / 'page' / 'done'), the overlay payload, the page / menu rows, `wing_car` (the published plate for a car without a flank wing) | `corsa_c.G`; `records`, `medals` lazily. Never pygame, never `drive.drive` |
 | `drive/drive.py` | main loop, CLI, scripted runs | everything |
 | `drive/validate.py` | the whole acceptance suite | everything |
 
@@ -1443,6 +1445,29 @@ are `_Replay`s, drawn by the existing ground-silhouette path. `records.
 resimulate(on_step=, on_event=)` lets V33 read the delta against a lap's own
 trace while it is re-driven: tolerance 5 ms, measured 0.17 ms. `J` ->
 `'ghosts'`. Nothing reaches the physics.
+
+**The driving tutorial** (`drive/tutorial.py`, `drive/progress.py`, task 23).
+A player session (`_player_session`) opens `runs/progress.json` once per
+launch in `run_interactive_cli` (`opts.progress`) and, when its `tutorial`
+section was never offered, the first session opens the WELCOME page (menu
+page `'tutorial_offer'`; `Sim.open_tutorial_offer`) instead of the pre-race
+page. `Sim.progress_file` is None in any other run, and with it the pause page's
+`tutorial` row. A running `Tutorial` rides on `opts.tutorial` across
+restarts and is `Sim.tutorial`; `Sim._tutorial_tick()` runs once per frame in
+`run_interactive` after the physics (skipped while a menu is up) and acts on
+`Tutorial.tick(sim)`: `'restart'` (the step's map is another one:
+`run_interactive_cli` sets `settings.track` to it before the next session,
+so TAB cannot leave it), `'page'` (menu page `'tutorial_step'`, paused;
+Continue / ESC advance, End stops). Its hooks: `Sim.reset` passes
+`command('reset')`; `hud_data` sets `HudData.tutorial` (the overlay dict,
+`render._draw_tutorial`, drawn in `R_TUTOR` whether the HUD is on or not).
+A step that starts on the line calls `sim.reset(to_checkpoint=False)` once,
+and that reset is not the player's. The wing steps need a flank wing:
+`run_interactive_cli` gives a car without one `tutorial.wing_car` (the
+library's `plate` on both flanks, in memory, `opts.tutorial_car`; no
+per-map build is recorded for it) and re-applies the player's design at the
+next session; ending the tutorial on it restarts the session. The pre-race
+page is not opened while a tutorial runs. V34 drives it end to end headless.
 
 **The pre-race page** (`drive/prerace.py`, task 20). `_interactive_session`
 builds `Sim.prerace` (a `PreRace` on the recorder's book and class, the

@@ -104,6 +104,12 @@ is true of the two cells it swept and false of the two it did not.
 | `21-medals.md` | **21** | author / gold / silver / bronze for all **81** lap classes, DERIVED from 816 headless reference runs (LapDriver at four margins, the anchor, the bundled bots; aids off and on), author = the best full, spin-free lap; 1.02 / 1.06 / 1.12. The first build had five far-too-easy medals (a spun 43 s lap on a 20 s skidpad) and three classes with none: careful margins and the spin rule fixed both. Each valid lap says its medal; the best is kept; staleness hashes the tracks, cars, engines AND the reference drivers |
 | `22-ghosts.md` | **22** | the PB ghost and ghost 2 (reference bot / none / P2..P5), clocked from the line, drawn plan-view and chase (a ghost under the car shows as an outline); the live **delta** by counted track progress, green / red at the top centre; the purple / green / red sector flash. V33: the delta against a lap's own trace re-driven from its log stays within **0.17 ms** (tol 5 ms). Review: the delta vanished exactly when you were beating your PB (a wrap heuristic) -- fixed; a GIL convoy made a new PB's ghost appear seconds late -- it now races from the next lap |
 
+### Steam plan, Phase B (`PLAN-steam-engagement.md`, tasks 23-27)
+
+| note | task | one line |
+|---|---|---|
+| `23-tutorial.md` | **23** | the **driving tutorial**: 11 data-driven steps (pedals, steering, arena turn 1, R, the assists, **the flank wing on the skidpad** -- a flying lap off, one on, the mean lateral g of each and the difference -- the timing and medals, one valid lap); a box on the road for the driving steps, paused pages for the rest; offered once on the first launch (WELCOME), always in ESC > Tutorial (skip / start over / end / continue); `runs/progress.json` (new `drive/progress.py`, one section per feature). V34 drives all of it headless. Review: F could not switch off a wing that started armed (older bug, the keyboard's own copy of the toggle was OR'd in) -- fixed; stale flash / hint clocks across restarts, a start-over showing old numbers -- fixed |
+
 ### Wave 7
 
 | note | one line |

@@ -172,6 +172,9 @@ R_PEDALS = (12, 668, 300, 120)
 R_MINIMAP = (860, 640, 180, 140)
 R_GG = (1068, 588, 200, 200)
 R_WARN = (440, 760, 400, 22)
+#: the driving tutorial's box (drive/tutorial.py): left, between the state
+#: panel and the pedals, clear of the car; its height follows the text
+R_TUTOR = (12, 340, 430, 318)
 
 # --- colours (est; dark ground so the yellow car and orange device read) --
 C_BG = (27, 29, 33)
@@ -647,6 +650,9 @@ class HudData:
     delta_s: float = float('nan')
     sector_flash: str = ''
     flash_col: str = ''            # 'purple' | 'green' | 'red'
+    # --- the driving tutorial's box (drive/tutorial.py Tutorial.overlay): a
+    # dict of head / text / status / warn / hint / flash / foot; None = none
+    tutorial: dict | None = None
 
 
 # ======================================================================= #
@@ -1321,6 +1327,7 @@ class Renderer:
         # --- per-track precomputation --------------------------------------
         self._prep_track()
         self._panels = {}
+        self._wraps = {}                   # (text, font, px) -> wrapped lines
         self._gg_trail = deque(maxlen=GG_TRAIL_N)
         self._gg_t = -1.0
         self._frame_ms = 0.0
@@ -1625,6 +1632,9 @@ class Renderer:
             self._draw_delta(aux)
         if aux.overlay:
             self._draw_overlay(aux.overlay)
+        tut = getattr(aux, 'tutorial', None)
+        if tut:
+            self._draw_tutorial(tut)
         menu = getattr(aux, 'menu', None)
         if menu is not None and getattr(menu, 'open', False):
             menu.draw(sc)                  # ESC / OPTIONS: controls + reset
@@ -2204,6 +2214,83 @@ class Renderer:
         if fl:
             col = C_FLASH.get(getattr(aux, 'flash_col', ''), C_HUD_TEXT)
             self._blit(fl, cx - self.f_val.size(fl)[0] / 2, y, self.f_val, col)
+
+    def _wrap_px(self, text, font, w):
+        """Word-wrap to `w` px; cached, the tutorial's text is the same every
+        frame."""
+        key = (text, id(font), int(w))
+        got = self._wraps.get(key)
+        if got is None:
+            got, line = [], ''
+            for word in str(text).split():
+                cand = f'{line} {word}' if line else word
+                if line and font.size(cand)[0] > w:
+                    got.append(line)
+                    line = word
+                else:
+                    line = cand
+            if line:
+                got.append(line)
+            if len(self._wraps) > 256:
+                self._wraps.clear()
+            self._wraps[key] = got
+        return got
+
+    def _draw_tutorial(self, tu) -> None:
+        """The driving tutorial's box (drive/tutorial.py): the step, what to
+        do, the live status, why the last attempt did not count, the hint,
+        the "done:" flash and the keys. Drawn whether the HUD is on or not,
+        under the menu; the lines that do not fit R_TUTOR are dropped from
+        the text up, the status and the keys always stay."""
+        u = self.ui
+        x0, y0, w0, hmax = (v * u for v in R_TUTOR)
+        pad = 10 * u
+        tw = w0 - 2 * pad
+        lbl, val = self.f_lbl, self.f_val
+        rows = []                              # (text, font, colour, drop order)
+        if tu.get('flash'):
+            rows.append((tu['flash'], lbl, C_GREEN, 0))
+        if tu.get('text') or tu.get('status'):
+            rows.append((tu.get('head', 'TUTORIAL'), lbl, C_YELLOW, 0))
+            rows += [(ln, lbl, C_HUD_TEXT, 1 if i else 0)
+                     for i, ln in enumerate(self._wrap_px(tu.get('text', ''), lbl, tw))]
+            if tu.get('status'):
+                s_ = tu['status']              # wrapped only when too wide: the spaced
+                rows += [(ln, val, C_HUD_TEXT, 0)   # columns of a line that fits survive
+                         for ln in ([s_] if val.size(s_)[0] <= tw else self._wrap_px(s_, val, tw))]
+            if tu.get('warn'):
+                rows += [(ln, lbl, C_BAR_BRK, 2 if i else 0)
+                         for i, ln in enumerate(self._wrap_px(tu['warn'], lbl, tw))]
+            if tu.get('hint'):
+                rows += [(ln, lbl, C_HUD_DIM, 3)
+                         for ln in self._wrap_px('hint: ' + tu['hint'], lbl, tw)]
+            if tu.get('foot'):
+                s_ = tu['foot']
+                rows += [(ln, lbl, C_HUD_DIM, 0)
+                         for ln in ([s_] if lbl.size(s_)[0] <= tw else self._wrap_px(s_, lbl, tw))]
+        if not rows:
+            return
+        hs = [r_[1].get_linesize() for r_ in rows]
+        # too tall: the hint goes first, then the warning's tail, then the text's
+        while sum(hs) + 2 * pad > hmax and any(r_[3] for r_ in rows):
+            top = max(r_[3] for r_ in rows)
+            i = max(k for k, r_ in enumerate(rows) if r_[3] == top)
+            del rows[i], hs[i]
+        h = int(sum(hs) + 2 * pad)
+        h8 = min((h + 7) // 8 * 8, int(hmax))  # a handful of panel sizes, cached
+        key = ('tutor', int(w0), h8)
+        panel = self._panels.get(key)
+        if panel is None:
+            panel = pygame.Surface((int(w0), h8), pygame.SRCALPHA)
+            panel.fill((*C_HUD_BG, 215))
+            pygame.draw.rect(panel, (60, 64, 70, 230), panel.get_rect(), 1)
+            pygame.draw.rect(panel, (*C_YELLOW, 255), (0, 0, int(3 * u), h8))
+            self._panels[key] = panel
+        self.screen.blit(panel, (int(x0), int(y0)))
+        y = y0 + pad
+        for (s, f, col, _), hh in zip(rows, hs):
+            self._blit(s, x0 + pad, y, f, col)
+            y += hh
 
     def _draw_overlay(self, lines) -> None:
         """A free-text panel, top-left, over everything but the menu."""
@@ -3124,6 +3211,43 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     rep('delta + sector flash drawn', ok_d,
         f"green/red/purple px: ahead {counts['ahead']}, behind {counts['behind']}, "
         f"flash {counts['flash']}, none {counts['none']}")
+    #  the tutorial's box (drive/tutorial.py): drawn in its place, inside
+    #  R_TUTOR however long the text, nothing without it
+    def _count_tut(r_):
+        a = pygame.surfarray.pixels3d(r_.screen)
+        x0_, y0_, w_, h_ = (int(v * r_.ui) for v in R_TUTOR)
+        inside = a[x0_:x0_ + w_, y0_:y0_ + h_]
+        below = a[x0_:x0_ + w_, y0_ + h_:min(y0_ + h_ + 40, a.shape[1])]
+        right = a[x0_ + w_:x0_ + w_ + int(200 * r_.ui), y0_:y0_ + h_]
+        m_in = int(((inside[..., 0] == C_YELLOW[0]) & (inside[..., 1] == C_YELLOW[1])
+                    & (inside[..., 2] == C_YELLOW[2])).sum())
+        m_out = int(((below[..., 0] == C_YELLOW[0]) & (below[..., 1] == C_YELLOW[1])
+                     & (below[..., 2] == C_YELLOW[2])).sum())
+        for c_ in (C_HUD_TEXT, C_HUD_DIM):     # no line runs out of the box, right
+            m_out += int(((right[..., 0] == c_[0]) & (right[..., 1] == c_[1])
+                          & (right[..., 2] == c_[2])).sum())
+        del a
+        return m_in, m_out
+    tut_counts = {}
+    long_txt = ' '.join(['Drive one full lap and keep all four wheels on the road.'] * 12)
+    for tag, tu in (('box', dict(head='TUTORIAL 3/11   Turn 1', text='From the line, take '
+                                 'the first corner without leaving the road.',
+                                 status='turn 1:  120 m to go', warn='', hint='Brake on the '
+                                 'straight BEFORE the corner.', flash='done: Steering',
+                                 foot='ESC / OPTIONS: the tutorial menu (skip a step, end)')),
+                    ('long', dict(head='TUTORIAL 10/11   One valid lap', text=long_txt,
+                                  status='to the line: the lap starts there   now 0.85 g'
+                                         '   (this car has no flank wing)',
+                                  warn=long_txt, hint=long_txt, flash='', foot=long_txt)),
+                    ('none', None)):
+        aux_d.delta_s, aux_d.sector_flash, aux_d.tutorial = float('nan'), '', tu
+        rnd.draw_frame(st_n, None, 0.0, _demo_ctl(), aux_d, sk2)
+        tut_counts[tag] = _count_tut(rnd)
+    aux_d.tutorial = None
+    ok_t = (tut_counts['box'][0] > 150 and tut_counts['long'][0] > 150
+            and tut_counts['long'][1] == 0 and tut_counts['none'][0] < 10)
+    rep('tutorial box drawn, fits R_TUTOR', ok_t,
+        f"yellow px in / below the box: {tut_counts}")
     hit = rnd._txt_hits / max(rnd._txt_hits + rnd._txt_miss, 1)
     rep('text cache hit rate', hit > 0.95,
         f'{rnd._txt_hits} hits / {rnd._txt_miss} misses = {hit * 100:.2f}%')
