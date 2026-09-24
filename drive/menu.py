@@ -109,14 +109,22 @@ class Menu:
         self._top = 0                     # first row of the scrolling window
         self._armed = None                # the row a mouse press armed
         self._draws = 0                   # frames drawn since the last show()
+        self.art = None                   # a page's own drawing (show(art=))
+        self.art_h = 0.0
 
     # -- state --------------------------------------------------------------
     def show(self, items=None, sections=None, subtitle=None, note=None,
-             footer=None, title=None, idx=0, columns=None) -> None:
+             footer=None, title=None, idx=0, columns=None, art=None,
+             art_h: float = 0.0) -> None:
         """Open (or re-open) the menu. `idx` keeps the cursor where it was
         when a settings page re-shows itself after a value is cycled;
         `columns=1` stacks every help section (and the note) in one column
-        to the right of the items, for pages with long item labels."""
+        to the right of the items, for pages with long item labels.
+        `art(screen, rect)` is the page's own drawing (the LAP RESULTS
+        page's card), given `art_h` px at the top of the first help column;
+        every show() sets it, so the next page never inherits it."""
+        self.art = art
+        self.art_h = float(art_h) if art is not None else 0.0
         if items is not None:
             self.items = list(items)
         if sections is not None:
@@ -276,10 +284,17 @@ class Menu:
         w = min(1160 * u, W - 16 * u)
         items_w = max(310 * u, max((f_item.size("> " + lbl)[0] for lbl, _ in self.items),
                                    default=0) + 24 * u)
+        n_rows = len(self.items)
+        cap0 = max(3, int((H - 16 * u - 96 * u - (len(NAV_HINT) + 1) * row_h - 30 * u
+                           - 44 * u) // (36 * u)))
+        if n_rows > cap0:                 # a list that scrolls: room for "v N more"
+            items_w += f_lbl.size(f"v {n_rows} more")[0] + 12 * u   # beside the widest label
         items_w = min(items_w, w - 56 * u)
         c0 = max(350 * u, 28 * u + items_w + 22 * u)
         col_px = (c0, c0 + 410 * u)
         col_h = [0.0, 0.0]
+        if self.art is not None:          # the page's drawing heads column 0
+            col_h[0] = self.art_h + 14 * u
         placed = []                       # (col, y_offset, title, rows)
         one = (self.columns == 1)
         for title, rows in self.sections:
@@ -379,6 +394,14 @@ class Menu:
                     self._blit(screen, key, x, yy, f_lbl, C_DIM)
                 yy += row_h
 
+        if self.art is not None:
+            try:
+                self.art(screen, pygame.Rect(int(x0 + col_px[0]), int(y0 + 96 * u),
+                                             int(w - col_px[0] - 24 * u), int(self.art_h)))
+            except Exception as exc:      # noqa: BLE001 -- a page's drawing never
+                self.art = None           # takes the menu down
+                print(f"menu: the page's drawing failed ({type(exc).__name__}: {exc})")
+
         if self.footer:
             self._blit(screen, self.footer, x0 + 28 * u, y0 + h - 30 * u, f_lbl, C_DIM)
 
@@ -476,6 +499,24 @@ def self_check(verbose: bool = True) -> bool:
         shown0[0] == 0 and 33 in shown1 and len(shown1) < 40 and bottom <= 800
         and many.hit(many.row_centre(33)) == 33,
         f"{len(shown1)} of 40 rows shown, {shown1[0]}..{shown1[-1]}, bottom {bottom} px")
+    # a page's own drawing (the LAP RESULTS page's card): handed its rect at
+    # the top of the first help column, the sections below it; the next
+    # show() without one clears it; one that raises is dropped, not fatal
+    got = []
+    m.show(items=[("Back", "b")], sections=[("LIST", [("a", "b")])], columns=1,
+           art=lambda s_, r_: got.append(tuple(r_)), art_h=120)
+    m.draw(scr)
+    placed_ok = bool(got) and got[0][3] == 120 and got[0][2] > 300
+    m.show(items=[("Back", "b")])
+    m.draw(scr)
+    cleared = m.art is None and len(got) == 1
+
+    def _boom(s_, r_):
+        raise ValueError("x")
+    m.show(items=[("Back", "b")], art=_boom, art_h=40)
+    m.draw(scr)
+    rep("a page's own drawing: its rect, cleared by the next page, a failure dropped",
+        placed_ok and cleared and m.art is None, str(got[:1]))
     m.hide()
     scr.fill((27, 29, 33))
     m.draw(scr)

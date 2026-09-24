@@ -86,6 +86,7 @@ saved). Scripted and headless runs never read the file.
 | Sound | Off / Low / Medium / High (`--sound`) | at once |
 | Shake | On / Off: the camera shakes a little on the kerbs and more off the road | at once |
 | Graphics | Full / Low detail (a slower PC) / Classic (the plain look, no scenery) | at once |
+| Last lap | the last lap's results: `ENTER` opens **LAP RESULTS** -- its card, and this session's laps | |
 | Garage | opens the 3D panel editor | |
 
 **Engine.** The real car is a 75 hp 1.2 that takes 15 s to 100 km/h, and from
@@ -235,7 +236,11 @@ its colour (purple = the class's best ever, green = better than that PB lap's,
 red = slower), its place in the top 5 and its medal. A **new PB** drops in
 with *NEW PB* pulsing gold and a four-note chime; a new best medal has a
 three-note one (both synthesised, like the engine: no sound files). A lap
-that does not count gets a short card that says why. A tyre that slides
+that does not count gets a short card that says why. The card is in the
+HUD's own look (the rounded panels, as wide as the timing panel above it,
+the medal as a tag, a bar under each sector in its colour), and it is kept:
+**Settings > Last lap** opens the *LAP RESULTS* page with the last card
+itself and this session's last ten laps. A tyre that slides
 throws **smoke** off its contact patch (a fixed pool, so a long slide costs no
 more than a short one), and the camera **shakes** a little with a wheel on a
 kerb or over the edge, more off the road (Settings > *Shake* turns it off).

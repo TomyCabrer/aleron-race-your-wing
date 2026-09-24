@@ -235,8 +235,10 @@ R_WARN = (440, 760, 400, 22)
 #: the driving tutorial's box (drive/tutorial.py): left, between the state
 #: panel and the pedals, clear of the car; its height follows the text
 R_TUTOR = (12, 340, 430, 318)
-#: the lap's results card (drive/results.py): top centre, under the delta
-R_RESULTS = (440, 196, 400, 140)
+#: the lap's results card (drive/results.py): top centre under the delta, as
+#: wide as the timing panel above it; its height follows its rows (at most h)
+R_RESULTS = (460, 196, 360, 140)
+CARD_BAR = 4             # px at ui 1: the bar under each sector of the card
 #: camera shake on the kerbs and off the road (task 27): the view moves by
 #: at most SHAKE_PX pixels, a deterministic mix of three frequencies
 SHAKE_PX = 2.5
@@ -3841,63 +3843,152 @@ class Renderer:
             self._blit(fl, cx - self.f_val.size(fl)[0] / 2, y, self.f_val, col)
 
     def _draw_results(self, rc) -> None:
-        """The lap's results card (drive/results.py): the time, the delta to
-        the PB, the sectors in their colours, the place and the medal; a NEW
-        PB drops in with its header pulsing gold."""
-        from .results import drop, pulse
+        """The lap's results card over the drive (drive/results.py), at
+        R_RESULTS: it drops in, and a NEW PB's header and edge pulse gold."""
+        from .results import drop
         u = self.ui
         age = float(rc.get('age', 0.0))
-        x0, y0, w0, h0 = (v * u for v in R_RESULTS)
+        x0, y0 = R_RESULTS[0] * u, R_RESULTS[1] * u
+        _w, h = self.card_size(rc)
+        y0 -= (1.0 - drop(age)) * (h + y0)
+        self.draw_card(rc, x0, y0, age)
+
+    def card_size(self, rc) -> tuple:
+        """(w, h) px of the results card for `rc`: the timing panel's width,
+        the height its rows take."""
+        u = self.ui
+        w = int(R_RESULTS[2] * u)
+        pad = 10 * u
+        la = self.f_lbl.get_linesize()
         if not rc.get('valid'):
-            h0 = 58 * u
-        y0 -= (1.0 - drop(age)) * (h0 + y0)
-        key = ('results', int(w0), int(h0))
+            return w, int(2 * pad + la * (1 + len(self._card_why(rc, w - 2 * pad))))
+        h = 2 * pad + la + self.f_gear.get_linesize()
+        if rc.get('sectors'):
+            h += 4 * u + la + 3 * u + max(2, int(round(CARD_BAR * u)))
+        return w, int(h)
+
+    def _card_why(self, rc, tw):
+        """The reason a lap did not count, wrapped to the card: at most three
+        lines, a word too long for a line cut with '...' (cached)."""
+        s = f"{rc.get('time', '')}   {rc.get('why', '') or 'not counted'}"
+        key = ('card_why', s, int(tw))
+        got = self._wraps.get(key)
+        if got is None:
+            got = []
+            for ln in self._wrap_px(s, self.f_lbl, tw)[:3]:
+                if self.f_lbl.size(ln)[0] > tw:
+                    lo, hi = 0, len(ln)            # the longest prefix + '...' that fits
+                    while lo < hi:
+                        mid = (lo + hi + 1) // 2
+                        if self.f_lbl.size(ln[:mid] + '...')[0] <= tw:
+                            lo = mid
+                        else:
+                            hi = mid - 1
+                    ln = ln[:lo] + '...'
+                got.append(ln)
+            self._wraps[key] = got
+        return got
+
+    def draw_card(self, rc, x0, y0, age=None, surf=None):
+        """`surf`: draw there instead of the renderer's screen (a menu drawn
+        onto another surface)."""
+        if surf is not None and surf is not self.screen:
+            old, self.screen = self.screen, surf
+            try:
+                return self._draw_card(rc, x0, y0, age)
+            finally:
+                self.screen = old
+        return self._draw_card(rc, x0, y0, age)
+
+    def _draw_card(self, rc, x0, y0, age=None):
+        """The results card with its top-left at (x0, y0), in the HUD panels'
+        own look (`_hud_panel_surface`: rounded, top-lit, hairlined). Header
+        row: LAP / NEW PB / LAP NOT COUNTED, and the medal as a tag in its
+        colour; then the time, large, with the delta (green / red) and the
+        place; then each sector over a bar in its colour (purple = the
+        class's best ever, green = better than the PB lap's, red = slower,
+        grey = nothing to compare with). `age` (s since the lap) pulses a
+        NEW PB's header and edge gold for results.PULSE_S; None = settled,
+        as the LAP RESULTS page shows it. Returns the card's rect."""
+        from .results import pulse
+        u = self.ui
+        w, h = self.card_size(rc)
+        key = ('card', w, h)
         panel = self._panels.get(key)
         if panel is None:
-            panel = pygame.Surface((int(w0), int(h0)), pygame.SRCALPHA)
-            panel.fill((*C_HUD_BG, 225))
-            pygame.draw.rect(panel, (60, 64, 70, 230), panel.get_rect(), 1)
+            panel = _hud_panel_surface(w, h, u)
             self._panels[key] = panel
-        self.screen.blit(panel, (int(x0), int(y0)))
+        sc = self.screen
+        sc.blit(panel, (int(x0), int(y0)))
+        rect = pygame.Rect(int(x0), int(y0), w, h)
         pad = 10 * u
-        cx = x0 + w0 / 2
-        y = y0 + pad * 0.6
+        la = self.f_lbl.get_linesize()
+        x, y = x0 + pad, y0 + pad
+        valid = bool(rc.get('valid'))
+        gold = C_MEDAL['gold']
+        d = str(rc.get('delta', '') or '')
+        numeric = d.startswith(('+', '-'))
         if rc.get('new_pb'):
-            p = int(round(pulse(age) * 4)) / 4.0          # 5 shades: the cache holds
-            col = tuple(int(a + (b - a) * p) for a, b in zip(C_HUD_TEXT, C_YELLOW))
-            s = 'NEW PB'
-        elif not rc.get('valid'):
-            col, s = C_HUD_DIM, 'LAP NOT COUNTED'
+            p = 1.0 if age is None else int(round(pulse(age) * 4)) / 4.0   # 5 shades: cached
+            col, head = _lerp_col(C_HUD_TEXT, gold, p), 'NEW PB'
+            if p > 0.0:
+                pygame.draw.rect(sc, _lerp_col(C_HUD_EDGE, gold, p), rect,
+                                 width=max(1, int(round(u))),
+                                 border_radius=max(3, int(round(HUD_RADIUS * u))))
+        elif not valid:
+            col, head = C_BAR_BRK, 'LAP NOT COUNTED'
         else:
-            col, s = C_HUD_DIM, 'LAP'
-        self._blit(s, cx - self.f_val.size(s)[0] / 2, y, self.f_val, col)
-        y += self.f_val.get_linesize()
-        t = str(rc.get('time', ''))
-        if not rc.get('valid'):
-            why = f"{t}   {rc.get('why', '')}"
-            self._blit(why, cx - self.f_lbl.size(why)[0] / 2, y, self.f_lbl, C_HUD_TEXT)
-            return
-        self._blit(t, cx - self.f_gear.size(t)[0] / 2, y, self.f_gear, C_HUD_TEXT)
-        y += self.f_gear.get_linesize()
-        d = str(rc.get('delta', ''))
-        dcol = {-1: C_GREEN, 1: C_BAR_BRK}.get(rc.get('delta_sign', 0), C_HUD_TEXT)
-        tail = '   '.join(v for v in (str(rc.get('pos', '')),
-                                      str(rc.get('medal', '')).upper()) if v)
-        wd, wt = self.f_val.size(d)[0], self.f_val.size(tail)[0]
-        xl = cx - (wd + (12 * u if tail else 0) + wt) / 2
-        self._blit(d, xl, y, self.f_val, dcol)
-        if tail:
-            self._blit(tail, xl + wd + 12 * u, y, self.f_val,
-                       C_MEDAL.get(str(rc.get('medal', '')), C_HUD_TEXT))
-        y += self.f_val.get_linesize()
+            col, head = C_HUD_DIM, 'LAP'
+        self._blit(head, x, y, self.f_lbl, col)
+        medal = str(rc.get('medal', '') or '')
+        t = medal.upper()
+        pw = int(self.f_lbl.size(t)[0] + 12 * u) if (valid and medal) else 0
+        if valid and d and not numeric:        # "first lap in this class": words, up
+            xw = x + self.f_lbl.size(head)[0] + 10 * u   # here, cut to what clears the tag
+            room = (x0 + w - pad - pw - 6 * u) - xw
+            for s_ in (d, 'first in class', 'first'):
+                if self.f_lbl.size(s_)[0] <= room:
+                    self._blit(s_, xw, y, self.f_lbl, C_HUD_DIM)
+                    break
+        if valid and medal:
+            tag = pygame.Rect(int(x0 + w - pad - pw), int(y), pw, int(la))
+            pygame.draw.rect(sc, C_MEDAL.get(medal, C_HUD_TEXT), tag,
+                             border_radius=max(2, tag.h // 2))
+            self._blit(t, tag.x + 6 * u, tag.y, self.f_lbl, C_HUD_BG)
+        y += la
+        if not valid:
+            for ln in self._card_why(rc, w - 2 * pad):
+                self._blit(ln, x, y, self.f_lbl, C_HUD_TEXT)
+                y += la
+            return rect
+        lg = self.f_gear.get_linesize()
+        self._blit(str(rc.get('time', '')), x, y, self.f_gear, C_HUD_TEXT)
+        yb = y + lg - self.f_val.get_linesize() - 3 * u     # on the time's baseline
+        xr = x0 + w - pad
+        pos = str(rc.get('pos', '') or '')
+        if pos:
+            xr -= self.f_val.size(pos)[0]
+            self._blit(pos, xr, yb, self.f_val, C_HUD_TEXT)
+            xr -= 14 * u
+        if numeric:
+            dcol = {-1: C_GREEN, 1: C_BAR_BRK}.get(rc.get('delta_sign', 0), C_HUD_TEXT)
+            self._blit(d, xr - self.f_val.size(d)[0], yb, self.f_val, dcol)
+        y += lg
         secs = rc.get('sectors') or []
         if secs:
-            ws = [self.f_lbl.size(s_)[0] for s_, _ in secs]
-            gap = 10 * u
-            xs = cx - (sum(ws) + gap * (len(ws) - 1)) / 2
-            for (s_, c_), w_ in zip(secs, ws):
-                self._blit(s_, xs, y, self.f_lbl, C_FLASH.get(c_, C_HUD_TEXT))
-                xs += w_ + gap
+            y += 4 * u
+            n = len(secs)
+            gap = 8 * u
+            cw = (w - 2 * pad - gap * (n - 1)) / n
+            bh = max(2, int(round(CARD_BAR * u)))
+            for i, (s_, c_) in enumerate(secs):
+                cx = x + i * (cw + gap)
+                c = C_FLASH.get(c_)
+                self._blit(s_, cx, y, self.f_lbl, c or C_HUD_TEXT)
+                pygame.draw.rect(sc, c or C_REV_OFF,
+                                 (int(cx), int(y + la + 3 * u), int(cw), bh),
+                                 border_radius=max(1, bh // 2))
+        return rect
 
     def _wrap_px(self, text, font, w):
         """Word-wrap to `w` px; cached, the tutorial's text is the same every
@@ -3964,11 +4055,12 @@ class Renderer:
         h8 = min((h + 7) // 8 * 8, int(hmax))  # a handful of panel sizes, cached
         key = ('tutor', int(w0), h8)
         panel = self._panels.get(key)
-        if panel is None:
-            panel = pygame.Surface((int(w0), h8), pygame.SRCALPHA)
-            panel.fill((*C_HUD_BG, 215))
-            pygame.draw.rect(panel, (60, 64, 70, 230), panel.get_rect(), 1)
-            pygame.draw.rect(panel, (*C_YELLOW, 255), (0, 0, int(3 * u), h8))
+        if panel is None:                      # the HUD panels' own look, and a
+            panel = _hud_panel_surface(int(w0), h8, u)   # yellow strip inside the
+            rad = max(3, int(round(HUD_RADIUS * u)))     # left edge, clear of its corners
+            pygame.draw.rect(panel, (*C_YELLOW, 255),
+                             (int(3 * u), rad, max(2, int(3 * u)), max(h8 - 2 * rad, 1)),
+                             border_radius=max(1, int(1.5 * u)))
             self._panels[key] = panel
         self.screen.blit(panel, (int(x0), int(y0)))
         y = y0 + pad
@@ -5372,6 +5464,38 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     rep('results card: the sectors in their colours, the medal, nothing without it',
         all(v > 10 for v in counts_r['pb']) and counts_r['none'][0] < 10,
         f"purple / green / gold px {counts_r['pb']}, without {counts_r['none']}")
+    #  the card in the HUD panels' look: rounded (its corner pixel is the
+    #  frame's, not the panel's), inside R_RESULTS; a lap that did not count
+    #  is shorter; settled (the LAP RESULTS page) the NEW PB edge is gold
+    rc_ = dict(time='1:00.900', valid=True, delta='-0.500', delta_sign=-1,
+               sectors=[('S1 20.000', 'purple'), ('S2 20.300', 'green'), ('S3 20.600', 'red')],
+               medal='gold', pos='P1', new_pb=True)
+    void_ = dict(time='0:48.200', valid=False, why='all four wheels left the road')
+    w_c, h_c = rnd.card_size(rc_)
+    rnd.screen.fill((0, 0, 255))
+    rect_c = rnd.draw_card(rc_, 20, 20)
+    corner = tuple(rnd.screen.get_at((rect_c.x, rect_c.y)))[:3]
+    edge = tuple(rnd.screen.get_at((rect_c.centerx, rect_c.bottom - 1)))[:3]
+    #  everything drawn stays inside card_size, for each kind of card, on
+    #  another surface too (the page's `surf`)
+    inside = True
+    for rc2 in (rc_, void_, dict(rc_, delta='first lap in this class', medal='bronze', pos='P5'),
+                dict(void_, why='snapshot failed (AttributeError: ' + 'x' * 120 + ')')):
+        sf = pygame.Surface(rnd.screen.get_size())
+        sf.fill((0, 0, 255))
+        r2 = rnd.draw_card(rc2, 40, 40, surf=sf)
+        a3 = pygame.surfarray.pixels3d(sf)
+        mask = ~((a3[..., 0] == 0) & (a3[..., 1] == 0) & (a3[..., 2] == 255))
+        xs_, ys_ = np.nonzero(mask)
+        del a3
+        inside = inside and len(xs_) > 0 and (xs_.min() >= r2.x and xs_.max() < r2.right
+                                              and ys_.min() >= r2.y and ys_.max() < r2.bottom)
+    rep('results card: the HUD panel look, inside R_RESULTS, settled edge gold, all inside',
+        corner == (0, 0, 255) and edge == C_MEDAL['gold'] and inside
+        and w_c == int(R_RESULTS[2] * rnd.ui) and h_c <= int(R_RESULTS[3] * rnd.ui)
+        and rnd.card_size(void_)[1] < h_c,
+        f'{w_c} x {h_c} px (void {rnd.card_size(void_)[1]}), corner {corner}, edge {edge}, '
+        f'every kind inside its card {inside}')
     offs = [shake_offset(k / 60.0, 1.0) for k in range(600)]
     mx = max(max(abs(a), abs(b)) for a, b in offs)
     rep('camera shake: subtle (<= SHAKE_PX), moving, none at strength 0',

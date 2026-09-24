@@ -1350,6 +1350,8 @@ class Sim:
         self.garage_lib = None             # the garage library: a bot's own build (task 26)
         self._results = None               # the last lap's results card (drive/results.py)
         self._results_n = 0
+        self._results_log = []             # the session's cards: Settings > Last lap (task 32)
+        self._results_count = 0            # ... numbered in the session
 
         self._bind_input()
         self._sample_surfaces()
@@ -2031,10 +2033,34 @@ class Sim:
                 (f"{'Shake':<11s}{'On' if s.shake else 'Off'}  (camera, kerbs / off road)",
                  "set:shake"),
                 (f"{'Graphics':<11s}{GRAPHICS_LABELS[s.graphics]}", "set:graphics")]
+        if self.recorder is not None:          # the lap's results card, again (task 32)
+            from .results import summary
+            last = self._results_log[-1] if self._results_log else None
+            rows.append((f"{'Last lap':<11s}{summary(last, short=True)}", "lap_results"))
         if self.has_garage:
             rows.append(("Garage (3D panel editor)", "garage"))
         rows.append(("Back", "settings_back"))
         return rows
+
+    def _menu_show_results(self) -> None:
+        """Settings > Last lap: the LAP RESULTS page -- the last lap's card
+        itself, settled, drawn by the renderer into the page (Menu.show's
+        `art`), and this session's laps; ESC / Back return to the row."""
+        from .results import page_rows
+        from .records import class_label
+        last = self._results_log[-1] if self._results_log else None
+        rnd = self.renderer
+        art, art_h = None, 0
+        if last is not None and hasattr(rnd, "draw_card"):
+            art_h = rnd.card_size(last)[1]
+            art = lambda scr, r, c=last: rnd.draw_card(c, r.x, r.y, surf=scr)   # noqa: E731
+        key = (last or {}).get("key") or getattr(self.recorder, "key", "") or ""
+        self.menu.show(items=[("Back", "results_back")],
+                       sections=[("THIS SESSION", page_rows(self._results_log, key))],
+                       subtitle=class_label(key) if key else "", note="",
+                       footer="ENTER / CROSS back   ESC / CIRCLE back", title="LAP RESULTS",
+                       idx=0, columns=1, art=art, art_h=art_h)
+        self._menu_page = "results"
 
     def _menu_show_settings(self, idx: int = 0) -> None:
         self.menu.show(items=self._settings_items(), sections=SETTINGS_HELP,
@@ -2418,13 +2444,18 @@ class Sim:
         self._rec_note(text, secs)
         self._rec_tag_until = self._rec_msg_until
         print(text)
-        if res.get("save_error") and res.get("pos") is not None:
+        if res.get("refiled") or (res.get("save_error") and res.get("pos") is not None):
             return      # the filing thread's repeat of a lap already carded: the note only
         #  the results card and the chime (drive/results.py, audio.py; task 27)
         try:
             from .results import card
+            from .results import LOG_N
             self._results = card(res, self.recorder.book if self.recorder else None)
             self._results_n = self.n
+            self._results_count += 1
+            self._results["n"] = self._results_count
+            self._results_log.append(self._results)
+            del self._results_log[:-LOG_N]
             if self.audio is not None:
                 if res.get("medal_best"):          # a new best medal is always a new PB
                     self.audio.chime("medal")      # too: the rarer one sounds
@@ -2879,10 +2910,21 @@ class Sim:
             return
         if self._menu_page in ("challenges", "challenge") and self._challenge_event(action):
             return
+        if self._menu_page == "results":       # Settings > Last lap (task 32)
+            if action in ("resume", "results_back"):
+                self._menu_show_settings()
+                self.menu.idx = [a for _, a in self.menu.items].index("lap_results")
+                return
+            if action not in ("reset", "full_reset", "garage"):   # the hotkeys fall through
+                self._menu_show_results()
+                return
         if self._menu_page == "settings":
             idx = self.menu.idx
             if action in ("resume", "settings_back"):
                 self._menu_show_main(idx=1)
+                return
+            if action == "lap_results":
+                self._menu_show_results()
                 return
             if action.startswith(("prev:", "next:")):
                 # LEFT / RIGHT: browse the row; nothing restarts here
@@ -5200,6 +5242,79 @@ def _v34_tutorial(tmp, verbose=True):
     return ok, dict(passed=passed, maps=maps, results=res, sim_s=sim_t)
 
 
+def _v37_results_page(tmp, verbose=True):
+    """Settings > Last lap and the LAP RESULTS page (task 32), by events with
+    no window: no row without a recorder; with one, laps carded through
+    `_rec_lap` (the filing thread's repeat of a failed save is NOT a second
+    card) keep their session number past LOG_N; ENTER opens the page with the
+    card drawn through the menu's art hook onto the surface it is given;
+    ESC and Back return to the row; R closes the menu and drives on."""
+    from types import SimpleNamespace
+    from .results import LOG_N
+    from . import records as rec
+    sim = _build("arena", driver=lambda t, v, tr: Controls(brake=1.0))
+    drawn = []
+    sim.renderer = SimpleNamespace(
+        cfg=SimpleNamespace(mode="car_up"),
+        card_size=lambda c: (360, 100),
+        draw_card=lambda c, x, y, age=None, surf=None: drawn.append((c.get("n"), surf)))
+    ev = sim.handle_event
+
+    def goto(action):
+        i = [a for _, a in sim.menu.items].index(action)
+        while sim.menu.idx != i:
+            ev("nav_down")
+
+    ev("menu")
+    goto("settings")
+    ev("select")
+    no_row = "lap_results" not in [a for _, a in sim.menu.items]
+    ev("menu")
+    ev("menu")                                     # closed
+    book = rec.RecordBook(os.path.join(tmp, "results_page"))
+    key = rec.class_key("arena", "corsa", "stock", "patch")
+    sim.recorder = SimpleNamespace(book=book, key=key, last=None, discard=lambda *a: None,
+                                   retarget=lambda *a: None)
+    n_laps = LOG_N + 3
+    for k in range(n_laps):
+        res = dict(time=70.0 - 0.1 * k, valid=True, pb_before=None, key=key,
+                   sectors=[], medal=None, medal_best=False, pos=None)
+        sim._rec_lap(res)
+        if k == 2:                                 # a failed save: the filing thread's repeat
+            sim._rec_lap(dict(res, save_error="PermissionError: x", refiled=True))
+    kept = [c.get("n") for c in sim._results_log]
+    numbered = kept == list(range(n_laps - LOG_N + 1, n_laps + 1))
+    ev("menu")
+    goto("settings")
+    ev("select")
+    row = [lbl for lbl, a in sim.menu.items if a == "lap_results"]
+    goto("lap_results")
+    ev("select")
+    page_ok = sim._menu_page == "results" and sim.menu.open
+    top = sim.menu.sections[0][1][0] if sim.menu.sections else ("", "")
+    surf = object()
+    try:
+        sim.menu.art(surf, SimpleNamespace(x=10, y=20))
+    except Exception:                              # noqa: BLE001
+        pass
+    art_ok = drawn[-1:] == [(n_laps, surf)] and sim.menu.art_h == 100
+    ev("menu")                                     # ESC: back to the row
+    back_ok = (sim._menu_page == "settings"
+               and sim.menu.items[sim.menu.idx][1] == "lap_results")
+    ev("select")
+    ev("reset")                                    # R on the page: closes, drives on
+    r_ok = not sim.menu.open and not sim.paused
+    ok = (no_row and numbered and bool(row) and page_ok and top[0] == f"lap {n_laps}"
+          and art_ok and back_ok and r_ok)
+    if verbose:
+        print(f"  V37 lap results : no row without records {no_row}; {n_laps} laps kept as "
+              f"{kept[0]}..{kept[-1]} (a refiled repeat not carded) {numbered}; row "
+              f"{row[0].split()[2] if row else None!r}; page {page_ok}, newest {top[0]!r}; the "
+              f"card via the art hook on the given surface {art_ok}; ESC back to the row "
+              f"{back_ok}; R drives on {r_ok}  -> {'ok' if ok else 'FAIL'}")
+    return ok, dict(kept=kept)
+
+
 def _v36_grid(tmp, verbose=True):
     """A FULL race grid (RACE_GRID_MAX bots, plan D3 slots). The user's car
     is bit-identical with and without it (V30's rule, with five cars); every
@@ -5917,6 +6032,7 @@ def self_check(verbose=True) -> bool:
                      ("V34", lambda: _v34_tutorial(tmp, verbose)),
                      ("V35", lambda: _v35_challenges(tmp, verbose)),
                      ("V36", lambda: _v36_grid(tmp, verbose)),
+                     ("V37", lambda: _v37_results_page(tmp, verbose)),
                      ("V20", lambda: _v20_determinism(tmp, verbose)),
                      ("accel", lambda: _accel_end_to_end(tmp, verbose)),
                      ("V21", lambda: _v21_rtf(tmp, 60.0, verbose))):

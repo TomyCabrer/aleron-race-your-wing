@@ -14,12 +14,18 @@ short card that says why.
 LapRecorder` -> `Sim._rec_lap`) and the book the lap was just filed in;
 `view(card, age_s)` is what `HudData.results` carries each frame (the card
 plus its age, or None once it is over). Pure: no pygame.
+
+The card is also kept (task 32): the session's last `LOG_N` cards, and
+Settings > Last lap (`summary`) opens the LAP RESULTS page -- the last card
+itself, settled (`render.Renderer.draw_card`), and this session's laps
+(`page_rows`).
 """
 from __future__ import annotations
 
 import math
 
 SHOW_S = 6.0           # s the card stays up
+LOG_N = 10             # cards a session keeps for the LAP RESULTS page
 PULSE_S = 2.5          # s the NEW PB header pulses
 DROP_S = 0.25          # s the card takes to drop in
 
@@ -35,7 +41,8 @@ def card(res: dict, book=None) -> dict:
     t = res.get("time")
     c = dict(time=fmt_time(t), valid=bool(res.get("valid")), why=str(res.get("why") or ""),
              delta="", delta_sign=0, sectors=[], medal=str(res.get("medal") or ""),
-             medal_best=bool(res.get("medal_best")), pos="", new_pb=False)
+             medal_best=bool(res.get("medal_best")), pos="", new_pb=False,
+             key=str(res.get("key") or ""))
     if not c["valid"]:
         return c
     pb0 = res.get("pb_before")
@@ -75,6 +82,49 @@ def card(res: dict, book=None) -> dict:
             col = "red"
         c["sectors"].append((f"S{i + 1} {s:6.3f}", col))
     return c
+
+
+ROW_CHARS = 60         # a list row's text at most (a long reason is cut, not run off the page)
+
+
+def _cut(s: str, n: int) -> str:
+    return s if len(s) <= n else s[:n - 3].rstrip() + "..."
+
+
+def summary(c, short: bool = False) -> str:
+    """One line for the page's list -- the time, the delta, the place, the
+    medal (NEW PB); or why it did not count. `short`: the Settings row (the
+    time, the delta, the medal), which must fit beside the other rows."""
+    if not c:
+        return "no timed lap yet"
+    if not c.get("valid"):
+        return f"{c.get('time', '')}  not counted" + (
+            "" if short else (f": {c['why']}" if c.get("why") else ""))
+    d = str(c.get("delta", "") or "")
+    d = d if d.startswith(("+", "-")) else "first in class"
+    medal = str(c.get("medal", "") or "").upper()
+    if short:
+        return "  ".join(p for p in (str(c.get("time", "")), d, medal) if p)
+    parts = [str(c.get("time", "")), d, str(c.get("pos", "") or ""), medal,
+             "NEW PB" if c.get("new_pb") else ""]
+    return "  ".join(p for p in parts if p)
+
+
+def page_rows(log, key: str = "") -> list:
+    """The LAP RESULTS page's list: the session's kept cards, newest first,
+    each with its lap number in the session (`n`, set when it was kept; the
+    list's own order for a card without one). A card filed in another class
+    than `key` (a live engine change mid-session) says whose engine."""
+    rows = []
+    for k, c in list(enumerate(list(log or []), 1))[-LOG_N:]:
+        n = c.get("n", k) if isinstance(c, dict) else k
+        txt = summary(c)
+        ck = str((c or {}).get("key", "") or "")
+        if key and ck and ck != key:
+            parts = ck.split("|")
+            txt += f"  ({parts[2]} engine)" if len(parts) == 4 else "  (another class)"
+        rows.append((f"lap {n}", _cut(txt, ROW_CHARS)))
+    return rows[::-1] or [("--", "no timed lap yet in this session")]
 
 
 def view(c, age_s: float):
@@ -144,6 +194,24 @@ def self_check(verbose: bool = True) -> bool:
                    sectors=[]), None)
     rep("the class's first lap: said so, a new PB", c4["delta"] == "first lap in this class"
         and c4["new_pb"])
+    rep("the settings row and the page's list: time, delta, place, medal; or why",
+        summary(c) == "1:00.900  -0.500  P1  GOLD  NEW PB"
+        and summary(c3) == "40.000  not counted: not a full lap"
+        and summary(c4).startswith("1:02.000  first in class  P1") and summary(None)
+        == "no timed lap yet" and c["key"] == key, summary(c4))
+    many = [c2] * (LOG_N + 3) + [c]
+    rows = page_rows(many)
+    rep("the page lists the last LOG_N laps, newest first",
+        len(rows) == LOG_N and rows[0] == (f"lap {LOG_N + 4}", summary(c))
+        and page_rows([])[0][0] == "--", str(rows[:2]))
+    kept = [dict(c2, n=21 + i) for i in range(LOG_N)]     # the Sim keeps LOG_N, numbered
+    other = dict(c2, key=key.replace("sport", "stock"), n=31)
+    rows2 = page_rows(kept[1:] + [other], key)
+    long_why = dict(c3, why="snapshot failed (AttributeError: " + "x" * 200 + ")")
+    rep("a kept card keeps its lap number; another class says so; a long reason is cut",
+        rows2[0] == ("lap 31", summary(other) + "  (stock engine)")
+        and rows2[-1][0] == "lap 22" and len(page_rows([long_why])[0][1]) <= ROW_CHARS
+        and summary(c, short=True) == "1:00.900  -0.500  GOLD", str(rows2[:2]))
     rep("the card lasts SHOW_S, drops in, pulses only for a new PB's first seconds",
         view(c, 1.0)["age"] == 1.0 and view(c, SHOW_S + 0.1) is None and view(None, 1.0) is None
         and drop(0.0) == 0.0 and drop(DROP_S) == 1.0 and pulse(PULSE_S + 0.1) == 0.0

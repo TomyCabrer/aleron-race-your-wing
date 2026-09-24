@@ -967,7 +967,7 @@ class LapRecorder:
         if res.get("pos") is not None and not err:
             self.n_saved += 1
         if err:
-            res2 = dict(res, save_error=err)
+            res2 = dict(res, save_error=err, refiled=True)   # the lap's SECOND call
             self.last = res2
             if self.on_lap is not None:
                 self.on_lap(res2)
