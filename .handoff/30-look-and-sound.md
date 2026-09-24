@@ -6,6 +6,9 @@ and outside the track looks, improve how the setting looks and polish
 details) and improve the sounds."* Numbered 30 so it cannot collide with the
 plan's 19–29.
 
+Committed unchanged as `a84f071` on the owner's approval (2026-09-24); the
+backup branch `gfx-base` (tip `25acf6d`, the same tree) was then deleted.
+
 Built by five agents in isolated worktrees (world, props, car + camera,
 effects, audio). Each part got an adversarial review, then two fix rounds
 with a fresh verifier each, and was then merged. Task 27 (smoke, shake,

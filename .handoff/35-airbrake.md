@@ -81,6 +81,9 @@ The tyres do nearly all of the stopping. It is a real, correct effect, just a
 small one with these wings (task 36's *Air brake from 150* makes it the
 difference between two stars and three).
 
+**The owner's decision (2026-09-24): keep it as it is.** The air brake stays a
+small, correct effect; no bigger wings, no physics change.
+
 ## V38
 
 V38 stops the tuned Corsa from 150 km/h on the dragstrip, with the plate on

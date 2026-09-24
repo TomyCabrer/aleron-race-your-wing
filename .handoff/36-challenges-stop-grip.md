@@ -75,8 +75,8 @@ predates this task: the open map's time trial and medals have always had
 it. The reference follows the centreline and is not affected.
 
 Fixing it changes the open map's surfaces, and with them every open-map
-record and the medal table (`drive.medals --build`, a long run). That is
-the owner's call.
+record and the medal table (`drive.medals --build`, a long run). **The
+owner's decision (2026-09-24): leave it.**
 
 ## What the review found
 
