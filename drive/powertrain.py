@@ -1069,6 +1069,17 @@ def _auto_target(p: PowertrainParams, s: PowertrainState, inp: PtInput,
                 return 1
         return None
     thr = min(max(inp.throttle, 0.0), 1.0)
+    if p.v_gov > 0.0:
+        # A GOVERNED vehicle (task 41, the bus): the gearbox schedules on the
+        # load the engine is actually allowed, not on the pedal -- which is
+        # what a bus TCU reading engine load off the CAN does. Scheduled on
+        # the pedal, the bus sat at its 80 km/h governor in 5th at 2324 rpm,
+        # 115 rpm under a full-pedal upshift line it could never reach; on
+        # the governed load it cruises in 6th at 1650 rpm. 0.0 on every
+        # ungoverned car, so this line is never reached on them.
+        f_gov = (p.v_gov - v_x) / p.v_gov_band
+        if f_gov < thr:
+            thr = f_gov if f_gov > 0.0 else 0.0
     braking = inp.brake > 0.3
 
     # --- up: never on the brakes, unless the driveline is about to overrev --
@@ -2195,8 +2206,8 @@ def self_check(p: PowertrainParams | None = None, car: CorsaC | None = None,
     note("t41_bus_upshifts_to_the_governor",
          f"gears {seen}, 0-50 km/h {t50 if t50 else float('nan'):.1f} s, max "
          f"{vmax * 3.6:.1f} km/h (governor {pb.v_gov * 3.6:.0f})",
-         "past 2nd, held at the governor",
-         len(seen) >= 4 and seen == sorted(seen) and t50 is not None
+         "every gear in order, top at the governor",
+         seen == list(range(1, len(pb.gear) + 1)) and t50 is not None
          and pb.v_gov - 1.5 < vmax <= pb.v_gov + 0.05)
     stuck, _v, _t = _bus_run(_dc.replace(pb, n_soft=120.0), 25.0)
     note("t41_why_n_soft_scales", f"the Corsa's 120 rpm band: gears {stuck}",

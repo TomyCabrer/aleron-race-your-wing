@@ -7119,7 +7119,8 @@ def build_parser():
                         "ESC > Race vs bot")
     p.add_argument("--race-car", dest="race_car", default=None, metavar="CAR[,CAR2,...]",
                    help="what each bot drives: 'own' (the car it was bred in, the "
-                        "default), 'same' (your car) or a stock corsa / mx5 / 540i, "
+                        "default), 'same' (your car) or a stock corsa / mx5 / 540i / "
+                        "express / bus, "
                         "per bot like --race")
     p.add_argument("--garage", action="store_true",
                    help="open the 3D editor first; ENTER / cross drives the "
@@ -7147,7 +7148,8 @@ def build_parser():
     p.add_argument("--swarm-car", dest="swarm_car", default=None,
                    choices=("same",) + tuple(cars.CAR_ORDER),
                    help="what the swarm breeds in: 'same' (your car, the default) or "
-                        "a stock corsa / mx5 / 540i on your settings, like --race-car")
+                        "a stock corsa / mx5 / 540i / express / bus on your settings, "
+                        "like --race-car")
     p.add_argument("--swarm-fast", dest="swarm_fast", action="store_true",
                    help="no replay: the next generation starts the moment one is "
                         "scored (V in the swarm window toggles it)")
