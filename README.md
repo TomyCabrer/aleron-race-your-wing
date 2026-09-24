@@ -213,7 +213,9 @@ ESC > *Challenges*: eight set pieces, each with **three stars**, about what
 the wings are for -- stopping and grip:
 * **the stops:** **Stop from 100**, **Wet stop from 80**, and **Air brake
   from 150** (the wing mode's AIR BRAKE puts all three wings out as you
-  brake);
+  brake). Each starts **rolling**, 20 % over its speed (120, 96 and 180
+  km/h): brake, and the distance counts from that speed to a standstill.
+  The box keeps your **LAST STOP** until the next one counts;
 * **the skidpad:** **Hold the circle** (mean lateral g over a flying lap,
   flank wings only) and **Wet circle**;
 * **the laps:** **Proving-ground lap**, **Arena, sport engine** and **Wet

@@ -1695,6 +1695,11 @@ class Sim:
             self.progress = 0.0
             self.trail_p, self.trail_t = [], []
             self._race_note(f"RACE vs {self._rivals_label()}: GO", 3.0)
+        roll = (self.challenge.rolling(tr, self.veh.pt_p)
+                if self.challenge is not None and not self.rivals else None)
+        if roll is not None:               # a stop challenge: R and SHIFT+R roll again (task 40)
+            to_checkpoint = False
+            s0, V0, gear = roll
         x, y = trk.point_at(tr, s0, 0.0)
         _, _, _, psi_c, _ = trk.project(tr, x, y)
         if self.gearbox == "clutch" and V0 < 0.5:
@@ -5262,7 +5267,9 @@ def _v35_challenges(tmp, verbose=True):
     derived from (so the thresholds are the ones a measured run derives, not
     typed). And the page flow, by events with no window: ESC > Challenges
     lists them, a build that breaks a rule is refused with the reason and no
-    Start, an allowed one starts (a restart in the challenge's class)."""
+    Start, an allowed one starts (a restart in the challenge's class). A
+    stop challenge starts rolling at its start_kmh (a lap stands), R rolls it
+    again, and its box keeps the LAST stop (task 40)."""
     from types import SimpleNamespace
     from . import challenges as chm
     from .aero.library import Library
@@ -5271,6 +5278,7 @@ def _v35_challenges(tmp, verbose=True):
     lib = Library(os.path.join(tmp, "chal_lib"), use_xfoil=False)
     allc = chm.load_all()
     rows, all_ok, sim_s = [], len(allc) == 8, 0.0
+    roll_ok = True
     for cid, ch in allc.items():
         r = chm.measure(ch, lib)
         v, ref = r["value"], ch["ref"]["value"]
@@ -5280,6 +5288,28 @@ def _v35_challenges(tmp, verbose=True):
         sim_s += r["t_sim"]
         rows.append(f"{cid} {chm.fmt_value(ch['goal']['metric'], v)} "
                     f"[{chm.stars_text(r['stars'])}]" + ("" if good else " FAIL"))
+        g_, (s_, V_, n_) = ch["goal"], r["start"]
+        roll_ok = roll_ok and (
+            (s_ == chm.START_S and abs(V_ * 3.6 - g_["start_kmh"]) < 1e-9 and n_ > 1)
+            if g_["metric"] == "stop_distance" else V_ == 0.0)
+    #  R mid-stop rolls again; after the stop the box's line keeps it
+    bc, rec = allc["brake_100"], {}
+
+    def probe(s_):
+        c_ = s_.challenge
+        if "R" not in rec and s_.t >= 0.5:
+            s_.reset(to_checkpoint=True)
+            rec["R"] = (s_.s, hypot(s_.veh.u, s_.veh.v) * 3.6)
+        elif "R" in rec and "armed" not in rec:
+            rec["armed"] = c_.meter.armed
+        if c_.last is not None:
+            rec["status"] = c_.overlay(s_)["status"]
+    r_ = chm.measure(bc, lib, probe=probe)
+    again_ok = (rec.get("R", (0, 0))[0] == chm.START_S
+                and abs(rec["R"][1] - bc["goal"]["start_kmh"]) < 1e-9 and rec.get("armed")
+                and rec.get("status", "").startswith(
+                    "LAST STOP " + chm.fmt_value("stop_distance", r_["value"]) + " [")
+                and rec["status"].endswith(f"R: again from {bc['goal']['start_kmh']:.0f} km/h"))
     # --- the page flow
     sim = _build("arena", driver=lambda t, v, T_: Controls())
     sim.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
@@ -5315,13 +5345,15 @@ def _v35_challenges(tmp, verbose=True):
     ev("select")
     started = sim.quit and sim.stop_reason == "restart" and sim.challenge_pick == "skid_dry"
     flow_ok = row_ok and list_ok and refused and back_ok and started
-    ok = all_ok and flow_ok
+    ok = all_ok and flow_ok and roll_ok and again_ok
     wall = time.perf_counter() - t_wall
     if verbose:
         print(f"  V35 challenges  : {len(allc)} references, each 3 stars on its own rules and "
               f"value = the file's: {all_ok}; {', '.join(rows)}; pages: row {row_ok}, list "
               f"{list_ok}, a top wing refused with the reason {refused}, ESC {back_ok}, start "
-              f"{started}; {sim_s:.0f} s sim in {wall:.1f} s  -> {'ok' if ok else 'FAIL'}")
+              f"{started}; stops start rolling {roll_ok}, R rolls again and the box keeps "
+              f"'{rec.get('status', '')}' {again_ok}; {sim_s:.0f} s sim in {wall:.1f} s  "
+              f"-> {'ok' if ok else 'FAIL'}")
     return ok, dict(rows=rows, sim_s=sim_s)
 
 
@@ -7891,6 +7923,8 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
             why = refusals(chal["constraints"], stats)
             sim.challenge = ChallengeRun(chal, tr, stats, sim.progress_file)
             prerace_now = False
+            if sim.challenge.rolling(tr, sim.veh.pt_p) is not None:
+                sim.reset()                # a stop challenge starts rolling (task 40)
             if why:                        # listed and endable, never counted
                 sim.challenge.refused = why[0]
                 print(f"challenge '{chal['title']}' refused: {why[0]}")

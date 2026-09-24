@@ -35,7 +35,9 @@ every LapTimer event, every reset):
   lap_time       s, lower   a valid lap that went round (95 % of the length
                             counted from the crossing -- the records' rule)
   stop_distance  m, lower   from the moment the car, having been faster,
-                            slows through v0 to under 0.1 m/s (dragstrip)
+                            slows through v0 to under 0.1 m/s (dragstrip).
+                            The car starts ROLLING at goal.start_kmh, and
+                            every reset (R, SHIFT+R) puts it back there
   skid_ay        g, higher  mean |lateral g| over a flying lap of the
                             skidpad, line to line, on the road throughout
   drag_time      s, lower   from standing (the car first moves) to
@@ -75,6 +77,7 @@ STOP_V = 0.10                  # m/s: stopped (BrakeDriver's own threshold)
 MOVE_V = 0.10                  # m/s: a drag run's clock starts
 STILL_V = 0.05                 # m/s: standing, ready for a drag run
 MAX_DS = 10.0                  # m a step: more is a teleport (LapTimer's guard)
+START_S = 2.5                  # m down the open strip: a stop's rolling start (drive._build's)
 T_MAX = {"lap_time": 260.0, "skid_ay": 120.0, "stop_distance": 60.0,
          "drag_time": 90.0, "trap_speed": 90.0}
 
@@ -134,6 +137,10 @@ def validate(d: dict) -> list:
         bad.append(f"{g['metric']} is not measured on the {track}")
     if met.get("param") and not _num(g.get(met["param"])):
         bad.append(f"{g['metric']} needs {met['param']}")
+    elif g["metric"] == "stop_distance" and not (
+            _num(g.get("start_kmh")) and g["v0_kmh"] < g["start_kmh"] <= 2.0 * g["v0_kmh"]):
+        bad.append("stop_distance needs start_kmh, above v0_kmh and at most twice it: "
+                   "the car starts rolling there")
     for k, v in d["constraints"].items():
         if k not in CONSTRAINT_KEYS:
             bad.append(f"unknown constraint {k!r}")
@@ -450,6 +457,7 @@ class ChallengeRun:
         self._cls = split_key(ch["class"])
         self._gw = MU_WET_SCALE if self._cls[3] == "all" else 1.0
         self.last = None               # (value, stars) of the last attempt
+        self._counted = False          # ... and whether it counted (the box's LAST STOP)
         self.note = ""
         self._seen = 0
 
@@ -490,6 +498,22 @@ class ChallengeRun:
     def reset(self) -> None:
         self.meter.reset()
 
+    def rolling(self, tr, pt_p):
+        """(s0, V0, gear) every reset puts the car at in a stop challenge
+        (task 40): rolling at the goal's start_kmh -- above v0, so the brake
+        is full before the distance counts -- START_S down the open strip, in
+        the gear the automatic holds there on full throttle. None = a
+        standing start (every other metric)."""
+        g = self.ch["goal"]
+        if g["metric"] != "stop_distance" or not _num(g.get("start_kmh")):
+            return None
+        from . import powertrain as ptm
+        V0 = float(g["start_kmh"]) / 3.6
+        gear = next((k for k in range(1, len(pt_p.gear))
+                     if ptm.rpm_at_speed(pt_p, k, V0) < ptm.n_up_schedule(pt_p, k, 1.0)),
+                    len(pt_p.gear))
+        return (0.0 if tr.closed else START_S), V0, gear
+
     def class_why(self, sim) -> str:
         """'' while the session is still in the challenge's class, else why
         not (a live engine change, the T wet toggle ...): such a result is
@@ -508,13 +532,13 @@ class ChallengeRun:
         v = self.meter.results[-1]
         why = self.class_why(sim)
         if why:
-            self.last = (v, 0)
+            self.last, self._counted = (v, 0), False
             self.note = f"{self.ch['title']}: not counted -- {why}"
             return
         n = stars_for(self.ch, v, self.stats)
         metric = self.ch["goal"]["metric"]
         new_best = better(metric, v, self.best)
-        self.last = (v, n)
+        self.last, self._counted = (v, n), True
         self.note = (f"{self.ch['title']}: {fmt_value(metric, v)}  [{stars_text(n)}]"
                      + ("  NEW BEST" if new_best else ""))
         if new_best or n > self.stars:
@@ -525,6 +549,29 @@ class ChallengeRun:
                 sec = self.progress.section(SECTION)
                 sec[self.ch["id"]] = dict(best=self.best, stars=self.stars)
                 self.progress.save(SECTION)
+
+    def _status(self, sim) -> str:
+        """The box's live line, in the HUD's number font. A stop keeps its
+        LAST distance there until the next stop starts counting (task 40):
+        the green line above it is small, and the car stands still after."""
+        m, g = self.meter, self.ch["goal"]
+        if g["metric"] != "stop_distance" or m.counting:
+            return m.status(sim)
+        last = ""
+        if self.last is not None:
+            v, n = self.last
+            last = (f"LAST STOP {fmt_value('stop_distance', v)} "
+                    + (f"[{stars_text(n)}]" if self._counted else "(not counted)") + "   ")
+        why = self.class_why(sim) or (
+            "slow motion" if getattr(sim, "time_scale", 1.0) != 1.0 else "")
+        if why:                            # the attempt is void every step (step())
+            return last + f"not counting: {why}"
+        V = math.hypot(sim.veh.u, sim.veh.v) * 3.6
+        if m.armed or V >= float(g["v0_kmh"]):
+            return last + f"brake now: {V:3.0f} km/h"
+        if _num(g.get("start_kmh")) and not getattr(sim, "rivals", None):
+            return last + f"R: again from {g['start_kmh']:.0f} km/h"
+        return last + m.status(sim)       # a race resets to the line, standing
 
     def overlay(self, sim) -> dict:
         """The box (render._draw_tutorial's dict)."""
@@ -537,7 +584,7 @@ class ChallengeRun:
         best = (f"   best {fmt_value(metric, self.best)} [{stars_text(self.stars)}]"
                 if self.best is not None else "")
         return dict(head=f"CHALLENGE  {ch['title']}{best}", text=text,
-                    status=self.meter.status(sim),
+                    status=self._status(sim),
                     warn=(f"did not count: {self.meter.why}" if self.meter.why else ""),
                     hint="", flash=self.note,
                     foot="ESC > Challenges: end it, or another one")
@@ -701,7 +748,9 @@ def measure(ch: dict, lib, t_max: float | None = None, probe=None) -> dict:
     """Run the challenge's reference, headless, exactly as a session builds
     the car (`drive._session_car`), with the meter attached as a session's
     is, on the wing mode `ref.wing_mode` (a player's G; AUTO when absent).
-    `probe(sim)` after every step (V38). {value, stars, stats, t_sim}."""
+    `probe(sim)` after every step (V38). A stop challenge starts rolling,
+    through the Sim's own reset (task 40). {value, stars, stats, t_sim,
+    start: (s, V, gear) at the start}."""
     from types import SimpleNamespace
     from .records import split_key
     from . import track as trk
@@ -731,6 +780,9 @@ def measure(ch: dict, lib, t_max: float | None = None, probe=None) -> dict:
     sim.wing_side_mode = REF_WING_MODES[ref.get("wing_mode", "auto")]
     run = ChallengeRun(ch, tr, stats)
     sim.challenge = run
+    if run.rolling(tr, veh.pt_p) is not None:
+        sim.reset()                        # a stop rolls from start_kmh, as a session's does
+    start = (float(sim.s), math.hypot(veh.u, veh.v), int(veh.gear))
     n = int(round((t_max or T_MAX[ch["goal"]["metric"]]) / sim.dt))
     for _ in range(n):
         sim.step_physics(sim.dt)
@@ -740,6 +792,7 @@ def measure(ch: dict, lib, t_max: float | None = None, probe=None) -> dict:
             break
     v = run.last[0] if run.last else float("nan")
     return dict(value=v, stars=(run.last[1] if run.last else 0), stats=stats, t_sim=sim.t,
+                start=start,
                 refusals=refusals(ch["constraints"], stats)
                 + refusals(ch["stars"]["3"]["efficiency"], stats))
 
@@ -829,6 +882,46 @@ def self_check(verbose: bool = True) -> bool:
     rep("a bad file: every fault named", any("engine" in w for w in why)
         and any("unknown constraint" in w for w in why)
         and any("tighten" in w for w in why), "; ".join(why))
+    # --- a stop challenge starts rolling (task 40)
+    from . import track as _trk
+    from .powertrain import PowertrainParams
+    stops = [c for c in allc.values() if c["goal"]["metric"] == "stop_distance"]
+    rep("every stop challenge starts rolling, above its v0",
+        len(stops) == 3 and all(c["goal"]["v0_kmh"] < c["goal"]["start_kmh"] for c in stops),
+        ", ".join(f"{c['id']} {c['goal']['start_kmh']:.0f} > {c['goal']['v0_kmh']:.0f}"
+                  for c in stops))
+    why_s = []
+    for sk in (None, stops[0]["goal"]["v0_kmh"], 3.0 * stops[0]["goal"]["v0_kmh"]):
+        d_ = json.loads(json.dumps(stops[0]))
+        d_["goal"].pop("start_kmh", None)
+        if sk is not None:
+            d_["goal"]["start_kmh"] = sk
+        why_s.append(validate(d_))
+    rep("a stop with no start_kmh, or one not above v0 (or over twice it), is refused",
+        all(any("start_kmh" in w for w in w_) for w_ in why_s), str(why_s))
+    pt = PowertrainParams()
+    strip = _trk.make_track("dragstrip", surfaces=False)
+    pose = ChallengeRun(stops[0], strip, {}).rolling(strip, pt)
+    lap = next(c for c in allc.values() if c["goal"]["metric"] == "lap_time")
+    rep("the rolling pose: start_kmh down the strip in the automatic's gear; a lap stands",
+        pose is not None and pose[0] == START_S
+        and abs(pose[1] * 3.6 - stops[0]["goal"]["start_kmh"]) < 1e-9
+        and 1 < pose[2] <= len(pt.gear)
+        and ChallengeRun(lap, strip, {}).rolling(strip, pt) is None, str(pose))
+    from types import SimpleNamespace as _NS
+    run_s = ChallengeRun(stops[0], strip, {})
+    _c = stops[0]["class"].split("|")
+    fs = _NS(track=strip, settings=_NS(car=_c[1], engine=_c[2], wet=_c[3]), global_wet=1.0,
+             time_scale=1.0, paused=False, rivals=[],
+             veh=_NS(u=stops[0]["goal"]["start_kmh"] / 3.6, v=0.0))
+    st_go = run_s._status(fs)
+    fs.global_wet = 0.5
+    st_wet = run_s._status(fs)
+    fs.global_wet, fs.rivals, fs.veh.u = 1.0, [object()], 0.0
+    st_race = run_s._status(fs)
+    rep("the stop's line: brake now; T on says why it cannot count; a race promises no roll",
+        st_go.startswith("brake now") and st_wet == "not counting: the wet toggle (T) is on"
+        and "again from" not in st_race, f"{st_go!r} / {st_wet!r} / {st_race!r}")
     tmp = tempfile.mkdtemp(prefix="carsim_chal_")
     with open(os.path.join(tmp, "a.json"), "w") as fh:
         fh.write("{not json")
