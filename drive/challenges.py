@@ -159,6 +159,11 @@ def validate(d: dict) -> list:
     ref = d["ref"]
     if not isinstance(ref, dict) or not isinstance(ref.get("driver"), str):
         bad.append("ref needs a driver")
+    elif ref.get("wing_mode", "auto") not in REF_WING_MODES:
+        bad.append(f"ref.wing_mode must be one of {sorted(REF_WING_MODES)}")
+    elif not (isinstance(ref.get("build", "none"), dict)
+              or ref.get("build", "none") in REF_BUILDS):
+        bad.append(f"ref.build must be one of {list(REF_BUILDS)} or a build JSON")
     elif _num(ref.get("value")) and all(_num(t) for t in (t1, t2, t3)):
         want = derived(g["metric"], ref["value"])
         if any(abs(a - b) > 1e-9 * max(1.0, abs(b)) for a, b in zip((t1, t2, t3), want)):
@@ -651,15 +656,31 @@ def detail(ch, stats, why, progress) -> tuple:
 # ==================================================================== #
 #  THE REFERENCE RUNS                                                  #
 # ==================================================================== #
-def ref_build(name: str) -> dict:
-    """The reference builds: 'none' (no wings) or 'plate' (the published
-    plate on both flanks, as the tutorial fits it)."""
+def ref_build(name) -> dict:
+    """The reference builds: 'none' (no wings), 'plate' (the published plate
+    on both flanks, as the tutorial fits it), 'tall' (the plate on both
+    flanks and the rear-s1223 top wing: every wing an air brake has; task
+    35), or a build JSON itself."""
+    if isinstance(name, dict):
+        return dict(name)
     base = dict(version=2, name=f"ref-{name}", mirror=True, builtin=False,
                 slots={"left": {"wing": "", "x": 0.97, "h": 0.9, "inc_deg": 0.0},
                        "top": {"wing": ""}})
-    if name == "plate":
+    if name in ("plate", "tall"):
         base["slots"]["left"]["wing"] = "plate"
+    if name == "tall":
+        base["slots"]["top"] = {"wing": "rear-s1223", "x": -0.9, "h": 1.55, "inc_deg": 6.0}
     return base
+
+
+#: a reference's wing mode (`ref.wing_mode`; drive/airbrake.py): the G key's
+#: mode the reference drives with, as a player would set it
+REF_WING_MODES = {"auto": 0, "air_brake": 3, "all": 2}
+REF_BUILDS = ("none", "plate", "tall")
+
+
+def _build_name(b) -> str:
+    return b if isinstance(b, str) else str((b or {}).get("name", "build"))
 
 
 def ref_driver(spec: str, tr, car, gw: float):
@@ -676,10 +697,11 @@ def ref_driver(spec: str, tr, car, gw: float):
     raise ValueError(f"no reference driver {spec!r}")
 
 
-def measure(ch: dict, lib, t_max: float | None = None) -> dict:
+def measure(ch: dict, lib, t_max: float | None = None, probe=None) -> dict:
     """Run the challenge's reference, headless, exactly as a session builds
     the car (`drive._session_car`), with the meter attached as a session's
-    is. {value, stars, stats, t_sim}."""
+    is, on the wing mode `ref.wing_mode` (a player's G; AUTO when absent).
+    `probe(sim)` after every step (V38). {value, stars, stats, t_sim}."""
     from types import SimpleNamespace
     from .records import split_key
     from . import track as trk
@@ -706,11 +728,14 @@ def measure(ch: dict, lib, t_max: float | None = None) -> dict:
                 global_wet=gw, settings=settings)
     if cfg.has_designed():
         sim.wing_on = True                 # a garage build starts armed, as a session's does
+    sim.wing_side_mode = REF_WING_MODES[ref.get("wing_mode", "auto")]
     run = ChallengeRun(ch, tr, stats)
     sim.challenge = run
     n = int(round((t_max or T_MAX[ch["goal"]["metric"]]) / sim.dt))
     for _ in range(n):
         sim.step_physics(sim.dt)
+        if probe is not None:
+            probe(sim)
         if run.last is not None:
             break
     v = run.last[0] if run.last else float("nan")
@@ -750,7 +775,7 @@ def main(argv=None) -> int:
         ch = json.load(open(p))
         r = measure(ch, lib)
         print(f"{ch['id']:<14s} {ch['class']:<28s} {ch['goal']['metric']:<13s} "
-              f"{ch['ref']['driver']:<22s} {ch['ref'].get('build', 'none'):<6s} -> "
+              f"{ch['ref']['driver']:<22s} {_build_name(ch['ref'].get('build', 'none')):<6s} -> "
               f"{fmt_value(ch['goal']['metric'], r['value']):>12s}  "
               f"({r['t_sim']:.1f} s sim)  cda {r['stats']['cda']:.3f} mass "
               f"{r['stats']['mass']:.1f}" + (f"  REFUSED: {r['refusals']}" if r["refusals"] else ""))

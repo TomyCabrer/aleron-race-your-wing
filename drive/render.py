@@ -667,6 +667,8 @@ class HudData:
     wing_on: bool = False
     wing_deploy: float = 0.0
     wing_side: int = 0
+    wing_mode: str = 'AUTO'       # the G key's mode (drive/airbrake.py, task 35)
+    air_brake: bool = False       # ... AIR BRAKE's wings out right now
     #: per-FLANK deploy (left = +y, right = -y). None = derive from the two
     #: above (the published one-panel law); both > 0 is the air brake a
     #: `Controls.wing_cmd` can command. `flank_deps()` reads them either way.
@@ -4913,8 +4915,9 @@ class Renderer:
         top_on = bool(getattr(aux, 'top_on', False))
         top_dep = float(getattr(aux, 'top_deploy', 0.0))
         any_on = on or top_dep > 0.01
-        self._blit('ACTIVE AERO', r.x + 10 * u, r.y + 6 * u, self.f_lbl,
-                   C_WING_ON if any_on else C_HUD_DIM)
+        wm = str(getattr(aux, 'wing_mode', 'AUTO') or 'AUTO')   # the G mode (task 35)
+        self._blit(f'AERO  {wm}', r.x + 10 * u, r.y + 6 * u, self.f_lbl,
+                   C_WING_ON if (any_on or getattr(aux, 'air_brake', False)) else C_HUD_DIM)
         self._blit('ARMED' if aux.wing_on else 'OFF', r.right - 10 * u - self.f_lbl.size('ARMED')[0],
                    r.y + 6 * u, self.f_lbl, C_WING_ON if aux.wing_on else C_HUD_DIM)
         legacy = bool(getattr(aux, 'wing_type', '')) and aux.wing_type != 'off'

@@ -35,8 +35,8 @@ python3 -m drive.drive --swarm 32 --swarm-car mx5 --swarm-fast --swarm-save neve
 
 | key | | key | |
 |---|---|---|---|
-| `↑` `↓` | throttle / brake | `F` | flank wing toggle |
-| `←` `→` | steer | `G` | wing side (auto / L / R / both = air brake) |
+| `↑` `↓` | throttle / brake | `F` | wings armed on / off |
+| `←` `→` | steer | `G` | wing mode: auto / air brake / all 3 / left / right |
 | `LSHIFT` | fine (half rates, 50% pedal) | `T` | wet toggle |
 | `Z` | clutch | `R` / `SHIFT+R` | reset / full reset |
 | `SPACE` | handbrake | `P` / `O` | pause / single step |
@@ -180,6 +180,29 @@ leave it). A car with no flank wing drives the two wing laps with the
 published plate fitted (only for those laps; nothing is saved). `ESC` >
 *Tutorial* skips a step, starts over or ends it. Progress is kept in
 `runs/progress.json`; a script or a headless run never reads it.
+
+## The wing mode and the air brake
+
+`G` (`△` on the pad) cycles the **wing mode**, shown on the aero panel
+(`AERO  AIR BRAKE`):
+* **AUTO**: the outer flank panel in a corner, the top wing by its own mode;
+* **AIR BRAKE**: AUTO, plus **all three wings out while you brake**;
+* **ALL 3**: all three out, all the time;
+* **LEFT / RIGHT**: one panel.
+
+`F` / `○` arms them, as before, and the mode is kept across a restart. With
+both flanks out their side forces cancel and their drags add, and the top
+wing adds downforce. A car whose two flanks are not a matching pair (one
+flank, or different panels without the mirror) keeps its flanks out of it,
+so it cannot pull sideways; its top wing still comes out.
+
+**It is a small effect with these wings.** Measured on the Corsa with the
+plate on both flanks and the rear-s1223 top wing, against no wing at all:
+braking at 100 km/h stops 0.4 % shorter, at 150 2.3 %, and from 200 with
+the wings already out 3.1 %. Against the same car in AUTO, whose active top
+wing already comes out under braking, the air brake adds the flanks' drag:
+0.7 % from 150. The flank panels make no downforce, and the tyres do almost
+all of the stopping.
 
 ## Challenges
 
@@ -531,7 +554,7 @@ uses the same map.
 |---|---|---|---|
 | `R2` / `L2` | throttle / brake | left stick | steer (expo 1.5, speed-limited) |
 | `R1` / `L1` | shift up / down | `✕` / `□` | handbrake / clutch (hold) |
-| `○` / `△` | wing toggle / wing side | `OPTIONS` / `CREATE` | pause menu / reset |
+| `○` / `△` | wings armed / wing mode | `OPTIONS` / `CREATE` | pause menu / reset |
 | d-pad `↑` `↓` | HUD / vectors | d-pad `←` `→` | slow-mo / normal |
 | `R3` / `L3` | camera / auto zoom | touchpad | garage |
 

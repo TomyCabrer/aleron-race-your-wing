@@ -214,7 +214,7 @@ PS_PAD_BUTTONS = {
     0: "handbrake",      # cross     held
     1: "wing",           # circle    flank-wing toggle
     2: "clutch",         # square    held
-    3: "wing_side",      # triangle  auto / left / right / both
+    3: "wing_side",      # triangle  the wing mode (drive/airbrake.py)
     4: "reset",          # create    back to the last sector line
     6: "menu",           # options   pause menu (controls + reset)
     7: "zoom_auto",      # L3
@@ -384,7 +384,7 @@ MENU_HELP_KB = [
     ("Z / SPACE", "clutch / handbrake (hold)"),
     ("S", "starter"),
     ("E / Q", "shift up / down"),
-    ("F / G", "flank wing / wing side"),
+    ("F / G", "wings armed / wing mode (air brake, all 3)"),
     ("R / SHIFT+R", "reset to sector / full reset"),
     ("P / O", "pause / single step"),
     ("[ / ]", "slow-mo 0.25x / 1x"),
@@ -406,8 +406,8 @@ MENU_HELP_PAD = {
         ("left stick", "steer"),
         ("R1 / L1", "shift up / down"),
         ("CROSS / SQUARE", "handbrake / clutch (hold)"),
-        ("CIRCLE", "flank wing"),
-        ("TRIANGLE", "wing side"),
+        ("CIRCLE", "wings armed on / off"),
+        ("TRIANGLE", "wing mode: auto, air brake, all 3"),
         ("CREATE", "reset to sector"),
         ("d-pad UP/DOWN", "HUD / vectors"),
         ("d-pad L/R", "slow-mo / normal"),
@@ -439,14 +439,14 @@ def menu_help(layout: str | None) -> list:
 KEY_HELP = """\
 ARROW UP throttle | ARROW DOWN brake | ARROW LEFT/RIGHT steer | LSHIFT fine (half rates, 50% pedal)
 Z clutch | SPACE handbrake | S starter | E shift up | Q shift down
-F flank-wing toggle | G cycle wing side (auto / left / right / both = air brake)
+F wings armed on / off | G wing mode: auto / air brake / all 3 / left / right
 R reset to last sector line | SHIFT+R full reset (clears skid marks and timing)
 P pause | O single physics step while paused | [ ] slow-mo 0.25x / 1.0x
 C camera cycle | - / = zoom | 0 auto zoom | H HUD cycle | V force vectors | B g-g | N skid | X clear skid
 T toggle wet (global mu_scale 1.0 <-> 0.632) | M telemetry marker | L toggle recording
 TAB next track | J ghosts on / off | BACKSPACE garage (3D panel editor) | ESC menu (controls, reset, quit)
 PS5 pad: R2 throttle | L2 brake | L-stick steer | R1/L1 shift | CROSS handbrake | SQUARE clutch
-         CIRCLE wing | TRIANGLE wing side | OPTIONS menu | CREATE reset | TOUCHPAD garage
+         CIRCLE wings armed | TRIANGLE wing mode | OPTIONS menu | CREATE reset | TOUCHPAD garage
          d-pad: up HUD, down vectors, left slow-mo, right normal | R3 camera | L3 auto zoom"""
 
 
@@ -619,7 +619,7 @@ class KeyboardInput:
 
         # Latched driver state.
         self.wing_on = bool(wing_on)
-        self.wing_side_mode = "auto"          # 'auto' | 'left' | 'right'; HUD only
+        self.wing_side_mode = "auto"          # unused: G's mode is drive.Sim's (task 35)
         self.paused = False
         self.menu = False                     # pause menu open: nav keys only
         #: a modal text entry (the seed lap's name prompt) takes every
@@ -744,8 +744,7 @@ class KeyboardInput:
         elif cmd == "wing":
             self.wing_on = not self.wing_on
         elif cmd == "wing_side":
-            order = ("auto", "left", "right")
-            self.wing_side_mode = order[(order.index(self.wing_side_mode) + 1) % 3]
+            pass                        # the wing MODE is the Sim's (drive/airbrake.py)
         elif cmd == "pause":
             self.paused = not self.paused
 
@@ -1688,8 +1687,8 @@ def self_check(verbose: bool = True) -> bool:
     kb.poll_events()
     check_eq("F again toggles it back", kb.update(DT).wing_on, False)
     pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_g, mod=0))
-    kb.poll_events()
-    check_eq("G cycles the wing side", kb.wing_side_mode, "left")
+    check_eq("G is handed on as 'wing_side' (the Sim cycles the wing mode)",
+             kb.poll_events(), ["wing_side"])
     pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_r,
                                          mod=pygame.KMOD_LSHIFT))
     check_eq("SHIFT+R -> 'full_reset'", kb.poll_events(), ["full_reset"])

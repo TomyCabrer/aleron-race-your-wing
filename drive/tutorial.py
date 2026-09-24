@@ -235,6 +235,12 @@ def _circle(f, m, want_on: bool) -> bool:
         m["why"] = "the wing is " + ("OFF: F (CIRCLE) switches it on" if want_on
                                      else "ON: F (CIRCLE) switches it off")
         return False
+    if want_on and getattr(f, "wing_mode", 0) not in (0, 3):
+        #  LEFT / RIGHT / ALL 3 (drive/airbrake.py) are not the corner's law:
+        #  the ON lap measures AUTO (AIR BRAKE is AUTO off the brake)
+        m["clean"] = False
+        m["why"] = "the wing mode is not AUTO: G (TRIANGLE) steps it back to AUTO"
+        return False
     if not f.on_track:
         m["clean"] = False
         m["why"] = "off the circle: this lap does not count, the next starts at the line"
@@ -544,6 +550,7 @@ def frame_of(sim, tut=None):
         lap_valid=bool(sim.lap.lap_valid), lap_time=float(sim.lap.lap_time),
         wing_on=bool(sim.wing_on), has_flank=bool(has_flank),
         gear=int(getattr(v, "gear", 0)), gearbox=str(getattr(sim, "gearbox", "auto")),
+        wing_mode=int(getattr(sim, "wing_side_mode", 0) or 0),
         events=events, cmds=cmds, track=sim.track.name, rec_why=rec_why)
 
 
@@ -872,7 +879,8 @@ def wing_car(grg, design, lib):
 def _frame(**kw):
     f = dict(t=0.0, V_kmh=0.0, ay_g=0.0, yaw_deg=0.0, s=0.0, L=1249.2, closed=True,
              on_track=True, lap_valid=True, lap_time=0.0, wing_on=False, has_flank=True,
-             gear=1, gearbox="manual", events=[], cmds=[], track="arena", rec_why="")
+             gear=1, gearbox="manual", wing_mode=0, events=[], cmds=[], track="arena",
+             rec_why="")
     f.update(kw)
     return SimpleNamespace(**f)
 
@@ -984,6 +992,12 @@ def self_check(verbose: bool = True) -> bool:
                         events=[("start", 0, 0.0, float("nan"))]), m)
     _chk_wing_on(_frame(t=0.05, s=200.0, L=Ls, wing_on=True, track="skidpad"), m)
     rep("wing lap: a teleport adds nothing", m["dist"] == 0.0 and m["counting"])
+    m = {}
+    _chk_wing_on(_frame(t=0.0, s=0.0, L=Ls, wing_on=True, track="skidpad",
+                        events=[("start", 0, 0.0, float("nan"))]), m)
+    _chk_wing_on(_frame(t=0.05, s=1.0, L=Ls, wing_on=True, wing_mode=2, track="skidpad"), m)
+    rep("wing lap ON: the ALL 3 / LEFT / RIGHT mode spoils it, with the key back to AUTO",
+        not m["clean"] and "G (TRIANGLE)" in m["why"], m["why"])
     # --- 10 the lap
     L = 1249.2
     m = {}

@@ -1288,10 +1288,13 @@ class Sim:
         self._seed_prompt = None
         self._ui_text = None
         self._prompt_was_paused = False
-        #: the G key: 0 auto (the car picks the outer flank), +1 left panel,
-        #: -1 right panel, 2 BOTH (air brake). Non-zero goes to the physics as
-        #: `Controls.wing_cmd` with the top wing left on its own law.
+        #: the G key's wing MODE (drive/airbrake.py, task 35): AUTO (0), AIR
+        #: BRAKE (3), ALL 3 (2), LEFT (+1), RIGHT (-1). Not AUTO goes to the
+        #: physics as `Controls.wing_cmd`, merged only when nothing else
+        #: commanded the wings (a script, a replay, a bot never are touched).
         self.wing_side_mode = 0
+        from .airbrake import AirBrake
+        self._airbrake = AirBrake()
         self.pose_prev = (self.veh.x, self.veh.y, self.veh.psi)
         self.events_log: list = []
         self.stop_reason = ""
@@ -1422,8 +1425,8 @@ class Sim:
         if self.wing_on and not ctl.wing_on:
             ctl.wing_on = True             # the harness's F toggle, OR'd in
         if self.wing_side_mode and ctl.wing_cmd is None:
-            ctl.wing_cmd = {1: (True, False, None), -1: (False, True, None),
-                            2: (True, True, None)}[self.wing_side_mode]
+            ctl.wing_cmd = self._airbrake.command(self.wing_side_mode, ctl,
+                                                  hypot(veh.u, veh.v), veh, dt)
         if self.recorder is not None:
             self.recorder.controls(self, ctl)   # quantised + logged (records.py)
         self.ctl = ctl
@@ -1931,8 +1934,11 @@ class Sim:
             kb = getattr(self.inp, "kb", None)
             if kb is not None and hasattr(kb, "wing_on"):
                 kb.wing_on = False
-        elif ev == "wing_side":
-            self.wing_side_mode = {0: +1, +1: -1, -1: 2, 2: 0}[self.wing_side_mode]
+        elif ev == "wing_side":                # G / TRIANGLE: the wing mode (task 35)
+            from .airbrake import next_mode, LABELS, WHAT
+            self.wing_side_mode = next_mode(self.wing_side_mode)
+            self._rec_note(f"wings {LABELS[self.wing_side_mode]}: "
+                           f"{WHAT[self.wing_side_mode]}", 3.0)
         elif ev == "wet":
             self.global_wet = (MU_WET_SCALE if self.global_wet == 1.0 else 1.0)
             self._sample_surfaces()
@@ -3317,6 +3323,8 @@ class Sim:
             car_name=cars.car_name(self.settings.car), mass_kg=v.car.m,
             F_top=float(getattr(v, "F_top", 0.0)), D_top=float(getattr(v, "D_top", 0.0)),
             top_deploy=float(getattr(v, "top_deploy", 0.0)),
+            wing_mode=_wing_mode_label(self.wing_side_mode),
+            air_brake=_air_brake_showing(self),
             msg=self._hud_msg(),
         )
         if self.recorder is not None:      # the class PB, and where the last lap landed
@@ -5375,6 +5383,105 @@ def _v40_swarm_numbers(tmp, verbose=True):
     return ok, dict(steps=got)
 
 
+def _wing_mode_label(m) -> str:
+    from .airbrake import LABELS
+    return LABELS.get(m, "AUTO")
+
+
+def _air_brake_showing(sim) -> bool:
+    from .airbrake import showing
+    return showing(sim.wing_side_mode, sim._airbrake, getattr(sim, "ctl", None), sim.veh.cfg)
+
+
+def _v38_airbrake(tmp, verbose=True):
+    """The wing mode's air brake (drive/airbrake.py, task 35). The Corsa
+    (tuned) with the plate on both flanks and the rear-s1223 top wing stops
+    from 150 km/h on the dragstrip -- full brake, ABS, built as a session
+    builds it (`challenges.measure`) -- in AUTO and in AIR BRAKE. In AIR
+    BRAKE no flank is out on the straight before the brake, all three
+    wings are out during the stop, and the stop is shorter; in AUTO no
+    command ever does (the published law, as every scripted run has it). ALL
+    3 keeps them out on the way up too. A build with ONE flank under AIR
+    BRAKE keeps its line (its flank is left out; the top wing still works)."""
+    from . import challenges as chm
+    from .aero.library import Library
+    lib = Library(os.path.join(tmp, "airbrake_lib"), use_xfoil=False)
+    base = dict(kind=chm.KIND, id="v38", title="V38", blurb="", class_="",
+                constraints={}, goal=dict(metric="stop_distance", v0_kmh=150.0,
+                                           threshold=1e9),
+                stars={"2": {"threshold": 1e9}, "3": {"threshold": 1e9, "efficiency": {}}},
+                ref=dict(driver="brake:1.0:150", build="tall", abs=True, tc=True))
+    base["class"] = "dragstrip|corsa|tuned|none"
+
+    def run(mode, build="tall"):
+        ch = dict(base, ref=dict(base["ref"], wing_mode=mode, build=build))
+        rec = dict(cmd_any=0, dep_before=0.0, all_out=0.0, psi0=None, dpsi=0.0, y_max=0.0)
+
+        def probe(sim):
+            v, c = sim.veh, sim.ctl
+            braking = float(getattr(c, "brake", 0.0)) > 0.3
+            if c.wing_cmd is not None:
+                rec["cmd_any"] += 1
+            if not braking and rec["psi0"] is None:    # the run up to the stop
+                rec["dep_before"] = max(rec["dep_before"], v.wing_deploy_l, v.wing_deploy_r)
+            if braking:
+                rec["all_out"] = max(rec["all_out"], min(v.wing_deploy_l, v.wing_deploy_r,
+                                                         v.top_deploy))
+                if rec["psi0"] is None:
+                    rec["psi0"] = v.psi
+                rec["dpsi"] = max(rec["dpsi"], abs(math.degrees(v.psi - rec["psi0"])))
+        r = chm.measure(ch, lib, probe=probe)
+        return r["value"], rec, r["t_sim"]
+
+    auto, ra, ta = run("auto")
+    air, rb, tb = run("air_brake")
+    _all, rc, tc_ = run("all")
+    one = dict(version=2, name="one flank", mirror=False, builtin=False,
+               slots={"left": {"wing": "plate", "x": 0.97, "h": 0.9, "inc_deg": 0.0},
+                      "top": {"wing": "rear-s1223", "x": -0.9, "h": 1.55, "inc_deg": 6.0}})
+    one_v, rd, _ = run("air_brake", one)
+    # trail-braking in a corner (the skidpad, the published plate pair):
+    # AIR BRAKE never switches the physics between its two deploy states, so
+    # no flank moves faster than its actuator (a switch made a panel jump)
+    def corner(mode):
+        pf = PathFollower(19.0)
+
+        def drv(t, v_, tr):
+            c = pf(t, v_, tr)
+            if 6.0 <= t < 6.6 or 8.0 <= t < 8.3:
+                c.throttle, c.brake = 0.0, 0.4
+            return c
+        s_ = _build("skidpad", wing="plate", driver=drv, start_V=19.0, gear=3)
+        s_.wing_on, s_.wing_side_mode = True, mode
+        prev, jump, peak = None, 0.0, 0.0
+        for _ in range(int(9.5 / s_.dt)):
+            s_.step_physics(s_.dt)
+            d_ = (s_.veh.wing_deploy_l, s_.veh.wing_deploy_r)
+            if prev is not None:
+                jump = max(jump, abs(d_[0] - prev[0]), abs(d_[1] - prev[1]))
+            peak = max(peak, min(d_))
+            prev = d_
+        return jump, peak
+    j_air, both_out = corner(3)
+    ok_smooth = j_air < 0.01 and both_out > 0.95
+    ok_auto = ra["cmd_any"] == 0 and math.isfinite(auto)
+    ok_air = (rb["dep_before"] < 0.01 and rb["cmd_any"] > 0 and rb["all_out"] > 0.95
+              and math.isfinite(air) and air < auto)
+    ok_all = rc["dep_before"] > 0.9 and tc_ > tb                # out on the way up: slower to 150
+    ok_one = math.isfinite(one_v) and rd["dpsi"] < 0.5
+    ok = ok_auto and ok_air and ok_all and ok_one and ok_smooth
+    if verbose:
+        print(f"  V38 air brake   : stop from 150 (tuned Corsa, plate x2 + rear-s1223, ABS): AUTO "
+              f"{auto:.2f} m (no wing command) {ok_auto}; AIR BRAKE {air:.2f} m "
+              f"({100.0 * (air - auto) / auto:+.1f} %), all three out {rb['all_out']:.2f}, no "
+              f"flank out before the brake {ok_air}; ALL 3 out on the way up {ok_all}; one flank "
+              f"under the "
+              f"air brake: heading within {rd['dpsi']:.2f} deg {ok_one}; trail-braking on the "
+              f"skidpad: both flanks out {both_out:.2f}, largest step {j_air:.4f} {ok_smooth}"
+              f"  -> {'ok' if ok else 'FAIL'}")
+    return ok, dict(auto=auto, air=air, one=one_v)
+
+
 def _v37_results_page(tmp, verbose=True):
     """Settings > Last lap and the LAP RESULTS page (task 32), by events with
     no window: no row without a recorder; with one, laps carded through
@@ -6166,6 +6273,7 @@ def self_check(verbose=True) -> bool:
                      ("V35", lambda: _v35_challenges(tmp, verbose)),
                      ("V36", lambda: _v36_grid(tmp, verbose)),
                      ("V37", lambda: _v37_results_page(tmp, verbose)),
+                     ("V38", lambda: _v38_airbrake(tmp, verbose)),
                      ("V40", lambda: _v40_swarm_numbers(tmp, verbose)),
                      ("V20", lambda: _v20_determinism(tmp, verbose)),
                      ("accel", lambda: _accel_end_to_end(tmp, verbose)),
@@ -6187,7 +6295,7 @@ def self_check(verbose=True) -> bool:
 KEYS_HELP = """\
 ARROW UP throttle | ARROW DOWN brake | ARROW LEFT/RIGHT steer | LSHIFT fine
 Z clutch | SPACE handbrake | S starter | E shift up | Q shift down
-F flank-wing toggle | G cycle wing side (auto / left / right / both = air brake)
+F wings armed on / off | G wing mode: auto / air brake / all 3 / left / right
 R reset to last sector line | SHIFT+R full reset
 P pause | O single physics step | [ ] slow-mo 0.25x / 1.0x
 C camera | - / = zoom | 0 auto zoom | H HUD | V vectors | B g-g | N skid | X clear
@@ -6615,6 +6723,7 @@ def run_interactive_cli(opts) -> int:
             _challenge_switch(sim, opts, settings)
             pad = getattr(sim.inp, "pad", pad)
             opts.race_menu = dict(sim.race_opts, active=bool(sim.rivals))
+            opts.wing_mode = getattr(sim, "wing_side_mode", 0)   # G survives a restart
             gs = getattr(sim, "ghosts", None)
             if gs is not None:             # the ghost slot and J survive a restart
                 opts.ghost_slot, opts.ghosts_on = gs.slot, gs.enabled
@@ -7631,6 +7740,9 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     if race_on:
         sim.start_race()
     sim.hud_cfg = getattr(opts, "hud_cfg", None)   # the build's wing geometry
+    from .airbrake import CYCLE as _WING_MODES
+    if getattr(opts, "wing_mode", 0) in _WING_MODES:
+        sim.wing_side_mode = opts.wing_mode        # the G mode, kept across a restart
     if cfg.has_designed():
         sim.wing_on = True                 # a garage build starts armed, as --wing does
     if not _HELP_PRINTED:
