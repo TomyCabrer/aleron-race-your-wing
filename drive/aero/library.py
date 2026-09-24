@@ -94,6 +94,9 @@ class Library:
                 try:
                     with open(os.path.join(self.dirs[d], f)) as fh:
                         rec = json.load(fh)
+                    if not isinstance(rec, dict):
+                        self.log.append(f"{d}/{f}: not a record ({type(rec).__name__}), skipped")
+                        continue
                     if d == "airfoils":
                         a = AirfoilSpec.from_json(rec)
                         store[a.name] = a
@@ -102,28 +105,49 @@ class Library:
                         store[w.name] = w
                     else:
                         store[str(rec.get("name", f[:-5]))] = rec
-                except (OSError, ValueError, KeyError, TypeError) as exc:
+                except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
                     self.log.append(f"{d}/{f}: {exc}")
 
     def _write(self, kind: str, name: str, obj: dict) -> str:
         path = os.path.join(self.dirs[kind], _safe(name) + ".json")
+        #  the file is named by the FOLDED name, so 'Kestrel Fast' and
+        #  'kestrel-fast' are one file. Callers take `unique_name` first; this
+        #  is the guard behind it: another record's file is never overwritten.
+        #  A built-in (re-seeded on every start) stays in memory only rather
+        #  than take a user's file.
+        try:
+            with open(path) as fh:
+                held = json.load(fh)
+            held = held.get("name") if isinstance(held, dict) else None
+        except (OSError, ValueError):
+            held = None
+        if held is not None and held != name:
+            if obj.get("builtin"):
+                self.log.append(f"{kind}/{os.path.basename(path)} holds '{held}': built-in '{name}' not written")
+                return path
+            raise ValueError(f"{os.path.basename(path)} already holds '{held}'")
         tmp = path + ".tmp"
         with open(tmp, "w") as f:
             json.dump(obj, f, indent=1)
         os.replace(tmp, path)
         return path
 
+    #  written first, then listed: a save that raises (a full disk, a
+    #  read-only runs/, the guard in `_write`) leaves no entry that is not on disk
     def save_airfoil(self, a: AirfoilSpec) -> str:
+        path = self._write("airfoils", a.name, a.to_json())
         self.airfoils[a.name] = a
-        return self._write("airfoils", a.name, a.to_json())
+        return path
 
     def save_wing(self, w: WingSpec) -> str:
+        path = self._write("wings", w.name, w.to_json())
         self.wings[w.name] = w
-        return self._write("wings", w.name, w.to_json())
+        return path
 
     def save_build(self, b: dict) -> str:
+        path = self._write("builds", b["name"], b)
         self.builds[b["name"]] = b
-        return self._write("builds", b["name"], b)
+        return path
 
     def delete(self, kind: str, name: str) -> bool:
         store = getattr(self, kind)
@@ -139,13 +163,15 @@ class Library:
         return True
 
     def unique_name(self, kind: str, base: str) -> str:
-        store = getattr(self, kind)
+        """`base`, else `base-2`, `base-3`...: the first whose FILE is free.
+        Compared folded (`_safe`), as the files are named."""
+        taken = {_safe(n) for n in getattr(self, kind)}
         base = base.strip() or "item"
-        if base not in store:
+        if _safe(base) not in taken:
             return base
         for i in range(2, 1000):
             n = f"{base}-{i}"
-            if n not in store:
+            if _safe(n) not in taken:
                 return n
         return f"{base}-{int(time.time())}"
 
@@ -350,6 +376,18 @@ def self_check(verbose: bool = True) -> bool:
         lib2 = Library(tmp, use_xfoil=False)
         rep("user wing persists", "mine" in lib2.wings and abs(lib2.wings["mine"].chord - 0.5) < 1e-9, "")
         rep("unique names", lib2.unique_name("wings", "mine") == "mine-2", lib2.unique_name("wings", "mine"))
+        try:
+            lib2.save_wing(w2.copy(name="Mine"))           # mine.json holds 'mine'
+            refused = False
+        except ValueError:
+            refused = True
+        with open(os.path.join(tmp, "builds", "junk.json"), "w") as fh:
+            fh.write("[]")
+        lib5 = Library(tmp, use_xfoil=False)
+        rep("names unique FOLDED, as the files are named; another record's file refused; a non-record skipped",
+            lib2.unique_name("wings", "MINE") == "MINE-2" and refused and "Mine" not in lib2.wings
+            and lib5.wings["mine"].name == "mine" and not lib5.builds and any("junk" in s for s in lib5.log),
+            lib2.unique_name("wings", "MINE"))
         lib2.delete("wings", "fin")
         rep("deleting a built-in re-seeds it", "fin" in lib2.wings, "")
         lib2.delete("wings", "mine")

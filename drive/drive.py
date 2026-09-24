@@ -225,12 +225,12 @@ RACE_GAP_KEEP_S = 300.0         # how much of it is kept
 C_RIVAL = (255, 140, 43)        # the ghost's colour: the HUD's accent orange
 C_RIVALS = race_grid.COLOURS         # bot 1..5: orange, blue, violet, rose, lime
 RACE_HELP = [("RACE VS BOT", [
-    ("Bot 1..3", "who drives each other car: the built-in driver, or a"),
-    ("", "checkpoint the swarm saved (drive/ml/checkpoints);"),
+    ("Bot 1..5", "who drives each other car: the built-in driver, or a"),
+    ("", "bot you saved in the swarm (K there);"),
     ("", "a slot opens once the one above it is filled"),
     ("car", "what that bot drives: your car, or a stock one"),
     ("Start", "every car to the line: bot 1 on your left, 2 on"),
-    ("", "your right, 3 a row back"),
+    ("", "your right, 3 and 4 a row back, 5 behind them"),
     ("Stop", "takes the bots off the track"),
     ("Test", "bot 1's lap time in EVERY car, at 1 ms, in the"),
     ("", "background: no window, keep driving meanwhile"),
@@ -242,8 +242,9 @@ RACE_HELP = [("RACE VS BOT", [
 RACE_NOTE = ("A bot is a second car with the ML driver at the wheel -- your car, or "
              "any car in the library, so one checkpoint can be tried in three "
              "machines. Bots are ghosts -- you drive through them -- so the race is "
-             "against their laps, not their bumpers. A bot restarts from the line "
-             "if it leaves the map or spins.")
+             "against their laps, not their bumpers. A bot that leaves the road or "
+             "spins rejoins, rolling, at the last sector line it passed after a "
+             "couple of seconds.")
 SWARM_NOTE = ("The swarm is a genetic algorithm over the ML driver: every generation "
               "the best cars are kept and the rest are bred from them, in your car "
               "or a stock one (Car). The window "
@@ -422,7 +423,8 @@ class Settings:
     tc: bool = True               # VehicleConfig.tc_on
     steer_aid: bool = True        # input.KeyboardInput.steer_limit
     wet: str = "patch"            # SURFACE_MODES
-    camera: str = "car_up"        # CAMERA_MODES
+    camera: str = "car_up"        # CAMERA_MODES (C cycles it; kept like the page's row)
+    hud: str = "minimal"          # 'full' | 'minimal' | 'off': H cycles it, kept for next launch
     sound: str = SOUND_DEFAULT    # SOUND_MODES -> audio.CarSound volume
     shake: bool = True            # the kerb / off-road camera shake (task 27)
     graphics: str = GRAPHICS_DEFAULT   # GRAPHICS_MODES -> render.look_config
@@ -430,35 +432,45 @@ class Settings:
     path: str = field(default=SETTINGS_PATH, repr=False, compare=False)
 
     KEYS = ("track", "car", "ballast", "ballast_at", "engine", "gearbox",
-            "abs", "tc", "steer_aid", "wet", "camera", "sound", "shake", "graphics",
+            "abs", "tc", "steer_aid", "wet", "camera", "hud", "sound", "shake", "graphics",
             "paint")
+    #  not fields (never saved): what went wrong with the file, for the screen
+    load_note = ""
+    save_note = ""
 
     def clamp(self) -> "Settings":
-        if self.track not in trk.TRACKS:
+        def ok(v, allowed):                # a hand-edited file: [] in a dict raises
+            return isinstance(v, str) and v in allowed
+
+        if not ok(self.track, trk.TRACKS):
             self.track = "arena"
-        if self.car not in cars.CARS:
+        if not ok(self.car, cars.CARS):
             self.car = CAR_DEFAULT
-        if self.ballast_at not in cars.BALLAST_LABELS:
+        if not ok(self.ballast_at, cars.BALLAST_LABELS):
             self.ballast_at = cars.BALLAST_DEFAULT
         try:
             self.ballast = min(max(float(self.ballast), 0.0), cars.BALLAST_MAX)
         except (TypeError, ValueError):
             self.ballast = 0.0
-        if self.engine not in ENGINE_MODES:
+        if not math.isfinite(self.ballast):     # NaN passes min / max
+            self.ballast = 0.0
+        if not ok(self.engine, ENGINE_MODES):
             self.engine = ENGINE_DEFAULT
-        if self.gearbox not in GEARBOX_MODES:
+        if not ok(self.gearbox, GEARBOX_MODES):
             self.gearbox = "auto"
-        if self.wet not in SURFACE_MODES:
+        if not ok(self.wet, SURFACE_MODES):
             self.wet = "patch"
-        if self.camera not in CAMERA_MODES:
+        if not ok(self.camera, CAMERA_MODES):
             self.camera = "car_up"
-        if self.sound not in SOUND_MODES:
+        if not ok(self.hud, ("full", "minimal", "off")):
+            self.hud = "minimal"
+        if not ok(self.sound, SOUND_MODES):
             self.sound = SOUND_DEFAULT
         self.abs = bool(self.abs)
         self.tc = bool(self.tc)
         self.steer_aid = bool(self.steer_aid)
         self.shake = bool(self.shake)
-        if self.graphics not in GRAPHICS_MODES:
+        if not ok(self.graphics, GRAPHICS_MODES):
             self.graphics = GRAPHICS_DEFAULT
         # a hand-edited file: only known cars wearing palette names survive
         p = self.paint if isinstance(self.paint, dict) else {}
@@ -519,26 +531,53 @@ class Settings:
         return d
 
     def save(self, path: str | None = None) -> str:
+        """Through a temp file and a rename, so a full disk or a crash never
+        leaves half a file; a failure is printed and kept in `save_note`."""
         path = path or self.path
+        if not path:
+            return path                    # a scripted session's settings: no file
+        tmp = f"{path}.{os.getpid()}.part"
         try:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            with open(path, "w") as f:
+            with open(tmp, "w") as f:
                 json.dump(self.as_dict(), f, indent=2)
+            os.replace(tmp, path)
+            self.save_note = ""
         except OSError as exc:
             print(f"settings: could not save {path} ({exc})")
+            self.save_note = f"settings NOT saved ({type(exc).__name__})"
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
         return path
 
     @classmethod
     def load(cls, path: str = SETTINGS_PATH) -> "Settings":
+        """The file, clamped. One that does not parse, or is not a table, is
+        moved aside to `<path>.bad` and the defaults are used; `load_note`
+        says so, for the screen (run_interactive_cli)."""
         s = cls(path=path)
+        name = os.path.basename(path)
         try:
             with open(path) as f:
                 d = json.load(f)
+            if not isinstance(d, dict):
+                raise ValueError("not a table")
             for k in cls.KEYS:
                 if k in d:
                     setattr(s, k, d[k])
-        except (OSError, ValueError, TypeError):
-            pass
+        except FileNotFoundError:
+            pass                           # the first launch
+        except OSError as exc:
+            s.load_note = f"{name} unreadable ({type(exc).__name__}) - defaults used"
+        except (ValueError, TypeError):
+            try:
+                os.replace(path, path + ".bad")
+                kept = f", kept as {name}.bad"
+            except OSError:
+                kept = ""
+            s.load_note = f"{name} was unreadable - defaults used{kept}"
         return s.clamp()
 
     def apply_cli(self, opts) -> "Settings":
@@ -651,11 +690,11 @@ SETTINGS_HELP = [
         ("BACKSPACE", "garage (while driving; touchpad on the pad)"),
     ]),
     ("CAR", [
-        ("Corsa C 1.2", "the study's car: every acceptance number is this one"),
-        ("MX-5 1.8 / 540i", "contrasting parameter sets - lighter/neutral and"),
-        ("", "heavy/powerful. BOTH ARE RWD AND DRIVE THEIR FRONT WHEELS:"),
-        ("", "powertrain.py is FWD-only, so their traction is fiction"),
-        ("", "and their torque curve is the Corsa's shape, scaled"),
+        ("Corsa C 1.2", "the reference car, the most closely measured;"),
+        ("", "front-wheel drive"),
+        ("MX-5 1.8 / 540i", "lighter and neutral / heavy and powerful;"),
+        ("", "both rear-wheel drive"),
+        ("", "each car has its own records and medals"),
         ("Paint", "per car, looks only: no class, ranking or medal"),
     ]),
     ("BALLAST", [
@@ -668,10 +707,9 @@ SETTINGS_HELP = [
         ("", "on the boot floor at 0.65 m, which RAISES it"),
     ]),
     ("ENGINE", [
-        ("Stock", "the 1.2 16V, 75 hp: every scripted number is this car"),
+        ("Stock", "the car's own engine, as it left the factory"),
         ("Tuned / Sport", "1.5x / 2x the torque curve, clutch uprated to suit;"),
-        ("", "TC keeps the fronts from spinning through 1st"),
-        ("", "the car's own engine curve is separate (powertrain.engine_curve)"),
+        ("", "TC keeps the driven wheels from spinning through 1st"),
     ]),
     ("GEARBOX", [
         ("Automatic", "the box shifts and works the clutch"),
@@ -714,11 +752,11 @@ SETTINGS_ROW_HELP = {
         ("Dragstrip", "1500 m straight: 1/8 mile, 1/4 mile, km"),
         ("TAB", "the next map, while driving")])],
     "set:car": [("CAR", [
-        ("Corsa C 1.2", "the study's car: every acceptance number"),
-        ("", "is this one"),
+        ("Corsa C 1.2", "the reference car, the most closely"),
+        ("", "measured; front-wheel drive"),
         ("MX-5 / 540i", "lighter and neutral / heavy and powerful;"),
-        ("", "both drive their FRONT wheels here (the"),
-        ("", "powertrain is FWD-only): traction is fiction")])],
+        ("", "both rear-wheel drive"),
+        ("Records", "each car has its own records and medals")])],
     "set:paint": [("PAINT", [
         ("Factory", "the car's own colour: the Corsa yellow,"),
         ("", "the MX-5 red, the 540i blue"),
@@ -735,10 +773,7 @@ SETTINGS_ROW_HELP = {
         ("", "(SEAT changes the mass and nothing else)"),
         ("Floor / Boot", "over the rear axle at 0.30 m, LOWERS the"),
         ("", "CG / the boot floor at 0.65 m, RAISES it")])],
-    "set:engine": [("ENGINE", [
-        ("Stock", "the 1.2 16V, 75 hp: every scripted number"),
-        ("Tuned / Sport", "1.5x / 2x the torque, the clutch to suit;"),
-        ("", "TC keeps the fronts from spinning in 1st")])],
+    #  "set:engine" is engine_help(): the Stock line is the running car's
     "set:gearbox": [("GEARBOX", [
         ("Automatic", "the box shifts and works the clutch"),
         ("Manual", "E / Q (R1 / L1) shift; the box does the"),
@@ -777,10 +812,20 @@ SETTINGS_ROW_HELP["set:ballast_at"] = SETTINGS_ROW_HELP["set:ballast"]
 SETTINGS_ROW_HELP["set:tc"] = SETTINGS_ROW_HELP["set:steer_aid"] = SETTINGS_ROW_HELP["set:abs"]
 
 
-SETTINGS_NOTE = ("Map, surface, car and ballast changes restart the session - a "
-                 "different CarSpec is a different tyre, roll block and gearbox - "
-                 "so LEFT / RIGHT only browse them and ENTER applies; the rest "
-                 "apply at once. Saved to runs/settings.json.")
+def engine_help(key: str, car=None) -> list:
+    """The Engine row's help: the Stock line is `key`'s (a cars.py key)
+    engine at the power the row shows (`engine_ps` on `car`, its spec)."""
+    hp = [engine_ps(m, car) for m in ENGINE_MODES]
+    return [("ENGINE", [
+        ("Stock", f"the {cars.car_name(key)}'s own engine, {hp[0]} hp"),
+        ("Tuned / Sport", f"{hp[1]} / {hp[2]} hp: 1.5x / 2x the torque,"),
+        ("", "the clutch to suit; TC keeps the driven"),
+        ("", "wheels from spinning in 1st")])]
+
+
+SETTINGS_NOTE = ("Map, surface, car and ballast restart the drive: LEFT / RIGHT "
+                 "preview them, ENTER applies. Everything else applies at once "
+                 "and is remembered.")
 
 
 # ==================================================================== #
@@ -1240,6 +1285,14 @@ class LapTimer:
         self._valid_run = True
         self.crossings: list = []          # (t_cross, kind, index)
 
+    def restart(self):
+        """SHIFT+R / RACE: the clock waits for the next crossing again, but
+        the session's BEST, LAST and sector bests stay on the HUD. `reset`
+        is the full wipe, for a new session."""
+        best, last, sec_best = self.best_lap, self.last_lap, self.sector_best
+        self.reset()
+        self.best_lap, self.last_lap, self.sector_best = best, last, sec_best
+
     # ---------------------------------------------------------------- #
     def _crossed(self, S, s_prev, s_now):
         """(hit, frac). frac is the fraction of THIS step at which s passed S."""
@@ -1346,6 +1399,10 @@ class NullSkidBuffer:
         return 0
 
 
+#: F / G on a car with nothing to deploy (Sim._wings_fitted)
+NO_WINGS_NOTE = "no wings fitted - BACKSPACE: the garage"
+
+
 # ==================================================================== #
 #  THE SIM                                                             #
 # ==================================================================== #
@@ -1400,6 +1457,7 @@ class Sim:
         self._s_prev = None
 
         self.lap = LapTimer(track)
+        self._reset_lap_at = None  # t_lap_start of the lap an R voided: the HUD's why
         # render.py owns SkidBuffer (CONTRACT section 7). Only build a real one
         # when something is going to draw it; otherwise emitting at 100 Hz for
         # a whole scripted run is cost with no reader.
@@ -1747,11 +1805,13 @@ class Sim:
         return n
 
     # ---------------------------------------------------------------- #
-    def reset(self, to_checkpoint: bool = False) -> None:
+    def reset(self, to_checkpoint: bool = False, standing: bool = False) -> None:
         """R = back to the last sector line; SHIFT+R = full reset.
 
         Both force the first-frame guard, because the wall-clock gap across a
-        reset is exactly the 0.5-2 s pause the guard exists for.
+        reset is exactly the 0.5-2 s pause the guard exists for. A full reset
+        in a time trial is a rolling start before the line (`_rolling_pose`)
+        unless `standing` asks for the line itself (the seed lap's).
         """
         if self.recorder is not None:
             self.recorder.discard("reset")     # a teleport is not a lap
@@ -1783,6 +1843,8 @@ class Sim:
         if roll is not None:               # a stop challenge: R and SHIFT+R roll again (task 40)
             to_checkpoint = False
             s0, V0, gear = roll
+        if not to_checkpoint and not standing:
+            s0, V0, gear = self._rolling_pose() or (s0, V0, gear)
         x, y = trk.point_at(tr, s0, 0.0)
         _, _, _, psi_c, _ = trk.project(tr, x, y)
         if self.gearbox == "clutch" and V0 < 0.5:
@@ -1794,14 +1856,43 @@ class Sim:
         self._first_frame = True
         self._sample_surfaces()
         if not to_checkpoint:
-            self.lap.reset()
+            self.lap.restart()             # the session's BEST stays on the HUD
             self.skid.clear()
             if self.renderer is not None and hasattr(self.renderer, "smoke"):
                 self.renderer.smoke.clear()
+        elif self.lap.t_lap_start is not None:
+            self.lap._valid_run = False    # a teleport mid-lap: never the BEST
+            self._reset_lap_at = self.lap.t_lap_start
         if self.seed_rows is not None:
             self.seed_rows = None          # a reset is not a lap; stays armed
             self._seed_note("seed lap: discarded (reset)"
                             + (" - still armed" if self.seed_armed else ""), 3.0)
+
+    def _rolling_pose(self):
+        """A time trial's full reset: (s0, V0, gear) 150 m before the line
+        (at most 15% of the lap) at the speed the run-in's tightest corner
+        takes at 0.8 g, capped at 22 m/s, in the gear the automatic holds
+        there on full throttle -- so the clock starts seconds later instead
+        of after a standing out-lap. None = a standing start: an open map,
+        the skidpad, the dragstrip, a race, a challenge, the tutorial, and
+        every scripted Sim (no recorder, no pre-race page)."""
+        tr, tut = self.track, self.tutorial
+        if (not tr.closed or tr.name not in trk.CIRCUITS or self.rivals
+                or self.challenge is not None
+                or (tut is not None and getattr(tut, "active", True))
+                or (self.prerace is None and self.recorder is None)):
+            return None
+        L = float(tr.length)
+        s0 = L - min(150.0, 0.15 * L)
+        k = np.abs(np.asarray(tr.kappa)[np.asarray(tr.s) >= s0])
+        k_max = float(k.max()) if k.size else 0.0
+        V0 = min(22.0, sqrt(0.8 * G / k_max)) if k_max > 1e-9 else 22.0
+        from . import powertrain as ptm
+        p = self.veh.pt_p
+        gear = next((g for g in range(1, len(p.gear))
+                     if ptm.rpm_at_speed(p, g, V0) < ptm.n_up_schedule(p, g, 1.0)),
+                    len(p.gear))
+        return s0, V0, gear
 
     def unpause(self):
         self.paused = False
@@ -2050,19 +2141,31 @@ class Sim:
             return
         if not self._pending:
             s.save()
-            return
-        shown = {k: getattr(s, k) for k in self._pending}
-        for k, v in self._pending.items():
-            setattr(s, k, v)
-        s.save()
-        for k, v in shown.items():
-            setattr(s, k, v)
+        else:
+            shown = {k: getattr(s, k) for k in self._pending}
+            for k, v in self._pending.items():
+                setattr(s, k, v)
+            s.save()
+            for k, v in shown.items():
+                setattr(s, k, v)
+        if getattr(s, "save_note", ""):    # a full disk, a read-only folder: on screen
+            self._rec_note(s.save_note, 4.0)
 
     def restart(self) -> None:
         """End this session so the outer loop builds a new one from the
         (already saved) settings, in the same window, with the same car."""
         self.stop_reason = "restart"
         self.quit = True
+
+    def _wings_missing(self) -> str:
+        """'' when the car has a wing for F / G to move (a flank panel, the
+        pair, the top wing), else the note that says there is none."""
+        from .airbrake import pair, top_fitted
+        cfg = self.veh.cfg
+        if (pair(cfg) or top_fitted(cfg) or getattr(cfg, "dev_left", None) is not None
+                or getattr(cfg, "dev_right", None) is not None):
+            return ""
+        return NO_WINGS_NOTE if self.has_garage else "no wings fitted"
 
     # ---------------------------------------------------------------- #
     def handle_event(self, ev: str) -> None:
@@ -2084,7 +2187,9 @@ class Sim:
             self.reset(to_checkpoint=False)
         elif ev == "track_next":
             # TAB: the next map, same car, same settings, new session
-            if self.apply_setting("track"):
+            if self.tutorial is not None and self.tutorial.active:
+                self._rec_note("the tutorial picks the map - ESC > end the tutorial first", 3.0)
+            elif self.apply_setting("track"):
                 self.restart()
         elif ev == "gearbox":
             self.apply_setting("gearbox")
@@ -2108,11 +2213,17 @@ class Sim:
             kb = getattr(self.inp, "kb", None)
             if kb is not None and hasattr(kb, "wing_on"):
                 kb.wing_on = False
+            self._rec_note(self._wings_missing()
+                           or ("wings ARMED" if self.wing_on else "wings OFF"), 3.0)
         elif ev == "wing_side":                # G / TRIANGLE: the wing mode (task 35)
             from .airbrake import next_mode, LABELS, WHAT
+            if self._wings_missing():
+                self._rec_note(self._wings_missing(), 3.0)   # nothing for a mode to move
+                return
             self.wing_side_mode = next_mode(self.wing_side_mode)
             self._rec_note(f"wings {LABELS[self.wing_side_mode]}: "
-                           f"{WHAT[self.wing_side_mode]}", 3.0)
+                           f"{WHAT[self.wing_side_mode]}"
+                           + ("" if self.wing_on else " (wings are OFF - F arms them)"), 3.0)
         elif ev == "wet":
             self.global_wet = (MU_WET_SCALE if self.global_wet == 1.0 else 1.0)
             self._sample_surfaces()
@@ -2120,6 +2231,9 @@ class Sim:
                 self.recorder.discard("the wet toggle (T)")
             if self.challenge is not None:
                 self.challenge.reset()         # a surface change ends the attempt
+            lost = " - this lap does not count" if self.recorder is not None else ""
+            self._rec_note((f"WET everywhere: {100 * MU_WET_SCALE:.0f}% grip (T again for dry)"
+                            if self.global_wet != 1.0 else "dry again (T)") + lost, 3.0)
         elif ev == "marker":
             if self.telem is not None:
                 self.telem.mark("marker")
@@ -2148,16 +2262,15 @@ class Sim:
     def _menu_subtitle(self) -> str:
         cfg = self.veh.cfg
         wing = (f"{cfg.wing} x_w {cfg.x_w:+.2f} h_w {cfg.h_w:.2f}"
-                if cfg.wing != "off" else "no flank panel")
+                if cfg.wing != "off" else "no wings")
         if getattr(cfg, "has_designed", lambda: False)():
             names = [getattr(w, "name", "") for w in (cfg.dev_left, cfg.dev_right, cfg.top)
                      if w is not None]
             wing = "garage build: " + ", ".join(dict.fromkeys(names))
-        c = self.veh.car
-        return (f"{self.track.title or self.track.name}   "
-                f"{cars.car_name(self.settings.car)} {c.m:.0f} kg "
-                f"{100 * c.wdist_f:.0f}% front   lap {self.lap.lap}   "
-                f"{wing}   {GEARBOX_HUD.get(self.gearbox, '')}   t {self.t:.1f} s")
+        run = self._pending.get("car", self.settings.car)   # not a car only browsed
+        title = self.track.title or trk.TRACK_TITLES.get(self.track.name, self.track.name)
+        return (f"{title}   {cars.car_name(run)}   lap {self.lap.lap}   "
+                f"{wing}   {GEARBOX_HUD.get(self.gearbox, '')}")
 
     def _menu_show_main(self, idx: int = 0) -> None:
         """The pause page: resume / settings / resets / garage / quit."""
@@ -2259,6 +2372,9 @@ class Sim:
         """The settings page's help for the highlighted row (task 37)."""
         items = self.menu.items if self.menu is not None else []
         act = items[idx][1] if 0 <= idx < len(items) else ""
+        if act == "set:engine":                # the car on the road, as the row shows it
+            return [SETTINGS_NAV] + engine_help(self._pending.get("car", self.settings.car),
+                                                self.veh.car)
         return [SETTINGS_NAV] + list(SETTINGS_ROW_HELP.get(act, []))
 
     def _menu_show_controls(self, idx: int = 0) -> None:
@@ -2780,14 +2896,17 @@ class Sim:
         self._menu_page = "prerace_pick"
 
     def start_timed(self) -> None:
-        """RACE: every car to the line and the clock from the next crossing;
-        this build becomes the map's default (`runs/records/last_builds.json`)."""
+        """RACE: the car rolling up to the line on a circuit (standing on it
+        elsewhere) and the clock from the next crossing; this build becomes
+        the map's default (`runs/records/last_builds.json`)."""
         pr = self.prerace
         if pr is not None and pr.build_json is not None and not self.tutorial_car:
             #  (the tutorial's plate car is in memory only: never a map's default)
             pr.book.set_last_build(self.track.name, pr.build_name, pr.build_json)
         self.reset(to_checkpoint=False)
-        self._rec_note("TIME TRIAL: the clock starts when you cross the line", 4.0)
+        self._rec_note("TIME TRIAL: rolling start - the clock starts at the line"
+                       if self.veh.u > 0.5 else
+                       "TIME TRIAL: the clock starts when you cross the line", 4.0)
 
     def _prerace_event(self, action: str) -> bool:
         """The pre-race and pick pages; False lets the hotkeys (R, SHIFT+R,
@@ -2895,7 +3014,8 @@ class Sim:
             self._menu_open()
         title, sub, note, secs, items = tut.page(self._tutorial_ctx())
         self.menu.show(items=items, sections=secs, subtitle=sub, note=note,
-                       footer="ENTER / CROSS continue   ESC / CIRCLE continue   or click a row",
+                       footer="ENTER / CROSS continue   ESC / CIRCLE tutorial menu   "
+                              "or click a row",
                        title=title, idx=idx, columns=1)
         self._menu_page = "tutorial_step"
 
@@ -2953,10 +3073,12 @@ class Sim:
         if action in ("reset", "full_reset", "garage"):
             return False
         page, tut, idx = self._menu_page, self.tutorial, self.menu.idx
-        if page == "tutorial_step":            # a page step: ESC continues too
-            if tut is None:
+        if page == "tutorial_step":            # a page step: ESC is the tutorial menu,
+            if tut is None:                    # whose Back returns to this page (tick)
                 self._menu_close()
-            elif action in ("tut_next", "resume"):
+            elif action == "resume":
+                self._menu_show_tutorial()
+            elif action == "tut_next":
                 tut.advance()
                 self._menu_close()
                 if not tut.active:
@@ -3127,7 +3249,10 @@ class Sim:
         if self.menu is None:
             from .menu import Menu
             self.menu = Menu("PAUSED")
-        self._menu_show_main()
+        if self.tutorial is not None and self.tutorial.active:
+            self._menu_show_tutorial()         # the tutorial menu (tutorial.KEYS)
+        else:
+            self._menu_show_main()
         self._menu_was_paused = self.paused
         self.paused = True
         sm = getattr(self.inp, "set_menu", None)
@@ -3182,6 +3307,8 @@ class Sim:
             self._menu_show_prerace(idx=self.menu.idx)          # Ghosts row says (J)
             return
         if ev in ("reset", "full_reset", "garage"):
+            if self._menu_page in ("tutorial_offer", "tutorial_step"):
+                return                     # WELCOME and a page step are answered, not skipped
             action = ev
         else:
             action = self.menu.handle(ev)
@@ -3281,7 +3408,7 @@ class Sim:
                 # standing start; the lap closes at the line and asks its name
                 self._menu_close()
                 self.seed_armed = False
-                self.reset(to_checkpoint=False)
+                self.reset(to_checkpoint=False, standing=True)
                 self._seed_open()
                 self._seed_note("SEED LAP: GO - recording from the line; "
                                 "cross it again to finish", 5.0)
@@ -3381,11 +3508,15 @@ class Sim:
             self.quit = True
 
     def _view_event(self, ev: str) -> None:
-        """Camera / HUD toggles. Renderer config only; never physics."""
+        """Camera / HUD toggles. Renderer config only; never physics. The
+        camera and the HUD level are settings too: the next session (TAB, a
+        restart, the garage, the next launch) comes back the way they were left."""
         cfg = self.renderer.cfg
         if ev == "camera":
             order = ("car_up", "chase", "world_up")
             cfg.mode = order[(order.index(cfg.mode) + 1) % 3] if cfg.mode in order else "car_up"
+            self.settings.camera = cfg.mode
+            self._save_settings()
         elif ev == "zoom_in":
             self.renderer.set_zoom(self.renderer.zoom_manual * 1.25)
         elif ev == "zoom_out":
@@ -3395,6 +3526,8 @@ class Sim:
         elif ev == "hud":
             order = ("full", "minimal", "off")
             cfg.hud = order[(order.index(cfg.hud) + 1) % 3] if cfg.hud in order else "full"
+            self.settings.hud = cfg.hud
+            self._save_settings()
         elif ev == "vectors":
             cfg.show_vectors = not cfg.show_vectors
         elif ev == "gg":
@@ -3542,6 +3675,20 @@ class Sim:
         exactly how V28 fails for a reason nobody can find.
         """
         v = self.veh
+        #  the RUNNING lap's validity, live (`lap.lap_valid` is the last lap's,
+        #  for LAST and the results): all four wheels off, an R, or the
+        #  recorder dropping the lap (a setting change, slow motion) voids it
+        #  now, not at the line. The out-lap has nothing to void.
+        lt, rec = self.lap, self.recorder
+        live_ok = lt.t_lap_start is None or (
+            lt._valid_run and (rec is None or getattr(rec, "recording", True)))
+        void_why = "" if live_ok else (getattr(rec, "_why", "") or (
+            "not recorded" if lt._valid_run
+            else "reset" if self._reset_lap_at == lt.t_lap_start else "off track"))
+        L = float(self.track.length)
+        out_lap_m = ((L - self.s) % L or L) if (self.track.closed
+                                                and lt.t_lap_start is None
+                                                and self.challenge is None) else None
         d = dict(
             V=hypot(v.u, v.v), V_kmh=hypot(v.u, v.v) * 3.6, rpm=v.rpm, gear=v.gear,
             ay_g=v.ay / G, ax_g=v.ax / G, yaw_rate_deg=degrees(v.r),
@@ -3555,7 +3702,7 @@ class Sim:
             lap=self.lap.lap, lap_time=self.lap.lap_time,
             last_lap=self.lap.last_lap, best_lap=self.lap.best_lap,
             sector=self.lap.sector, sector_times=list(self.lap.sector_times),
-            sector_best=list(self.lap.sector_best), lap_valid=self.lap.lap_valid,
+            sector_best=list(self.lap.sector_best), lap_valid=live_ok,
             on_track=self.on_track,
             mu_scale_car=sum(self.mu) / 4.0,
             rtf=self.rtf, dropped_frames=self.dropped_frames,
@@ -3647,10 +3794,15 @@ class Sim:
             d.update(self.hud_cfg)          # the garage build's wing geometry
         try:
             from .render import HudData
-            return HudData(**d)
+            h = HudData(**d)
         except Exception:
             from types import SimpleNamespace
-            return SimpleNamespace(**d)
+            h = SimpleNamespace(**d)
+        #  why the running lap is void, and the out-lap's metres to the line
+        #  (None = the clock is running): plain attributes, which the HUD
+        #  reads with getattr whether or not HudData declares them
+        h.lap_void_why, h.out_lap_m = void_why, out_lap_m
+        return h
 
 
 # ==================================================================== #
@@ -5202,9 +5354,11 @@ def _v32_prerace(tmp, verbose=True):
     sim.open_prerace()
     open_ok = (sim.menu.open and sim._menu_page == "prerace" and sim.paused
                and sim.menu.action() == "pr_race")
-    ev("select")                                   # RACE: one press
-    race_ok = (not sim.menu.open and not sim.paused and sim.s == 0.0
-               and hypot(sim.veh.u, sim.veh.v) < 1e-9 and sim.lap.lap == 0
+    ev("select")                                   # RACE: one press, a rolling start
+    s_roll = sim.track.length - min(150.0, 0.15 * sim.track.length)   # before the line
+    race_ok = (not sim.menu.open and not sim.paused and sim.s == s_roll
+               and hypot(sim.veh.u, sim.veh.v) > 5.0 and sim.lap.lap == 0
+               and sim.lap.t_lap_start is None
                and recm.RecordBook(root).last_build("arena")["name"] == "my corsa")
     ev("menu")                                     # pause menu -> Time trial
     goto("timetrial")
@@ -5282,7 +5436,7 @@ def _v32_prerace(tmp, verbose=True):
         ev(f"click:{x}:{y}")                       # the press arms RACE ...
         armed = sim.menu.open
         ev(f"release:{x}:{y}")                     # ... the release runs it
-        mouse_ok = (hov and armed and not sim.menu.open and sim.s == 0.0
+        mouse_ok = (hov and armed and not sim.menu.open and sim.s == s_roll
                     and not sim.paused)
     except Exception as exc:                       # noqa: BLE001
         print(f"    V32 mouse: {type(exc).__name__}: {exc}")
@@ -7176,6 +7330,10 @@ def run_interactive_cli(opts) -> int:
     settings.save()
     w, h = (int(v) for v in opts.size.lower().split("x"))
     grg, design, lib = _resolve_design(opts)
+    #  a player file that failed to load or save: the first session shows it
+    #  (_interactive_session), not only this terminal
+    opts.screen_notes = [n for n in (settings.load_note, settings.save_note,
+                                     getattr(opts, "garage_note", "")) if n]
 
     mode = "garage" if (opts.garage and grg is not None) else "drive"
     pad = None
@@ -7197,6 +7355,7 @@ def run_interactive_cli(opts) -> int:
             opts.progress = Progress()
             for n in opts.progress.notes:
                 print(f"progress: {n}")
+            opts.screen_notes += list(opts.progress.notes)
             opts.tutorial_offer = not saved_state(opts.progress)["offered"]
             from .tutorial import gearbox_left
             gp = gearbox_left(opts.progress)   # the last run died in the manual step
@@ -7210,6 +7369,7 @@ def run_interactive_cli(opts) -> int:
                 opts.progress.save("tutorial")
         except Exception as exc:           # noqa: BLE001 -- never stops a drive
             print(f"progress unavailable ({type(exc).__name__}: {exc})")
+            opts.screen_notes.append(f"progress unavailable ({type(exc).__name__})")
             opts.progress = None
     try:
         while True:
@@ -7224,9 +7384,9 @@ def run_interactive_cli(opts) -> int:
                 design, pad = g.build, g.pad
                 t_ = g.tutor
                 opts.wing_tutor = t_ if (t_ is not None and t_.active) else None
+                _save_design(design, opts)     # quitting from the garage keeps the car too
                 if action != "drive":
                     break
-                design.save()
                 _apply_design(opts, design, lib)
                 print(f"garage -> drive: {design.summary(lib)}")
                 mode = "drive"
@@ -7939,8 +8099,23 @@ def _resolve_design(opts):
         opts.garage_lib = lib              # the pre-race page's PICK lists its builds
     except Exception as exc:
         print(f"garage unavailable ({exc})")
+        opts.garage_note = f"garage unavailable ({type(exc).__name__}: {exc})"
         grg = None
     return grg, design, lib
+
+
+def _save_design(design, opts) -> None:
+    """The garage's working car to runs/garage_design.json. A failure never
+    stops the drive: it is printed, and the next session shows it."""
+    if design is None:
+        return
+    try:
+        design.save()
+    except OSError as exc:
+        print(f"garage: the car was NOT saved ({exc})")
+        notes = getattr(opts, "screen_notes", None)
+        if isinstance(notes, list):
+            notes.append(f"garage car NOT saved ({type(exc).__name__})")
 
 
 def _player_session(opts) -> bool:
@@ -7975,10 +8150,9 @@ def _autosave_build(design, lib) -> None:
         js = design.to_json()
         if any(_same_build(b, js) for b in lib.builds.values()):
             return
-        base = f"{design.name} (autosave)"
-        name, k = base, 2
-        while name in lib.builds:
-            name, k = f"{base} {k}", k + 1
+        #  free as a FILE name too: 'My Corsa (autosave)' and 'my corsa
+        #  (autosave)' are one file, which Library._write refuses to overwrite
+        name = lib.unique_name("builds", f"{design.name} (autosave)")
         js["name"] = name
         js["builtin"] = False
         lib.save_build(js)
@@ -8156,7 +8330,8 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
                 try:
                     if inp_mod.GamepadInput.available():
                         pad = inp_mod.GamepadInput(0, steer_limit=settings.steer_aid,
-                                                   k_us_deg=kb.k_us_deg)
+                                                   k_us_deg=kb.k_us_deg,
+                                                   lock_deg=kb.lock_deg)   # this car's lock
                 except Exception as exc:
                     print(f"gamepad found but not usable ({exc}) - keyboard only")
                     pad = None
@@ -8173,7 +8348,7 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
             rnd.set_car(car)               # the HUD's %mg and the g-g envelope
             rnd.set_paint(paint_rgb(settings))   # before the build: the prebuilt mesh
             cfgv = rnd.ViewConfig(size=(w, h), fps=opts.fps, mode=settings.camera,
-                                  **rnd.look_config(settings.graphics))
+                                  hud=settings.hud, **rnd.look_config(settings.graphics))
             renderer = rnd.Renderer(cfgv, tr,
                                     headless=(opts.render == "offscreen"
                                               or opts.headless))
@@ -8261,9 +8436,12 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
             if sim.challenge.rolling(tr, sim.veh.pt_p) is not None:
                 sim.reset()                # a stop challenge starts rolling (task 40)
             if why:                        # listed and endable, never counted
-                sim.challenge.refused = why[0]
-                print(f"challenge '{chal['title']}' refused: {why[0]}")
-                sim._rec_note(f"CHALLENGE refused: {why[0]}", 8.0)
+                #  on the HUD there is no "first row" (that is the challenge
+                #  page's): the garage is BACKSPACE while driving
+                w0 = why[0].replace("(the first row)", "(BACKSPACE)")
+                sim.challenge.refused = w0
+                print(f"challenge '{chal['title']}' refused: {w0}")
+                sim._rec_note(f"CHALLENGE refused: {w0}", 8.0)
         except Exception as exc:           # noqa: BLE001 -- never stops a drive
             print(f"challenge unavailable ({type(exc).__name__}: {exc})")
     #  the ghosts and the live delta (drive/ghosts.py): with records only
@@ -8337,6 +8515,16 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
         except Exception:                  # noqa: BLE001
             pass
         sim._audio_apply()
+    #  a player file that failed to load or save (settings, progress, the
+    #  garage car; run_interactive_cli), and the records' own load notes the
+    #  first time there is a book: on the screen once, not only the terminal
+    notes = list(getattr(opts, "screen_notes", None) or [])
+    opts.screen_notes = []
+    if sim.recorder is not None and not getattr(opts, "records_noted", False):
+        notes += list(getattr(sim.recorder.book, "notes", None) or [])
+        opts.records_noted = True
+    if notes:
+        sim._rec_note(" / ".join(notes)[:120], 6.0)
     if offer_now:
         sim.open_tutorial_offer()          # the first launch: WELCOME
     elif prerace_now:

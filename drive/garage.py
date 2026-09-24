@@ -517,6 +517,8 @@ class CarBuild:
 
     @classmethod
     def from_json(cls, d: dict) -> "CarBuild":
+        if not isinstance(d, dict):
+            return cls()                        # a wrong-shaped file: the empty car
         if int(d.get("version", 1)) < 2 and "slots" not in d:
             # a WingDesign file: the published panel on both flanks
             wd = WingDesign(wing=str(d.get("wing", "plate")), x_w=float(d.get("x_w", 0.97)),
@@ -525,12 +527,19 @@ class CarBuild:
             b = cls(left=Slot(name, wd.x_w, wd.h_w, wd.inc_deg), right=Slot(name, wd.x_w, wd.h_w, wd.inc_deg))
             return b
         sl = d.get("slots", {})
+        if not isinstance(sl, dict):
+            sl = {}
 
         def _slot(k, default):
             v = sl.get(k, {})
-            return Slot(str(v.get("wing", default.wing)), float(v.get("x", default.x)),
-                        float(v.get("h", default.h)), float(v.get("inc_deg", default.inc_deg)),
-                        str(v.get("mode", default.mode)))
+            if not isinstance(v, dict):
+                v = {}
+            try:
+                return Slot(str(v.get("wing", default.wing)), float(v.get("x", default.x)),
+                            float(v.get("h", default.h)), float(v.get("inc_deg", default.inc_deg)),
+                            str(v.get("mode", default.mode)))
+            except (TypeError, ValueError):        # a slot that is not numbers: the empty slot
+                return default
 
         base = cls()
         return cls(name=str(d.get("name", "my corsa")), left=_slot("left", base.left),
@@ -539,20 +548,38 @@ class CarBuild:
 
     def save(self, path: str = DESIGN_PATH) -> str:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w") as f:
+        tmp = path + ".tmp"                     # a crash mid-write keeps the last car whole
+        with open(tmp, "w") as f:
             json.dump(self.to_json(), f, indent=2)
+        os.replace(tmp, path)
         return path
 
     @classmethod
     def load(cls, path: str = DESIGN_PATH) -> "CarBuild | None":
+        """The last car built, or None. A file that is there but is not a
+        build is moved aside to `<path>.bad` (kept, not deleted), so the
+        garage opens and the next save writes a clean one."""
         try:
             with open(path) as f:
                 return cls.from_json(json.load(f))
-        except (OSError, ValueError, TypeError, KeyError):
+        except OSError:
+            return None
+        except (ValueError, TypeError, KeyError, AttributeError):
+            try:
+                os.replace(path, path + ".bad")
+            except OSError:
+                pass
             return None
 
     def copy(self) -> "CarBuild":
         return CarBuild.from_json(self.to_json())
+
+
+def _could_not_save(exc: Exception) -> str:
+    """The hint for a library / file write that failed (a full disk, a
+    read-only runs/, a name whose file another record holds): the garage
+    stays up and says so."""
+    return f"could not save: {getattr(exc, 'strerror', None) or exc}"
 
 
 def _dev_aero(spec: "WingSpec | None", slot: Slot):
@@ -1134,17 +1161,53 @@ class GarageView:
         self.screen.blit(s, r.topleft)
         return r
 
+    def _fit(self, s: str, font, w: float) -> str:
+        """`s` cut to `w` px in `font`, ending '...' when it had to be."""
+        if font.size(s)[0] <= w:
+            return s
+        while s and font.size(s + "...")[0] > w:
+            s = s[:-1]
+        return s.rstrip() + "..."
+
+    def _wrap_px(self, s: str, font, w: float) -> list:
+        """`s` as the lines that fit `w` px in `font`: itself when it fits
+        (its column spacing kept), else broken at the spaces."""
+        if font.size(s)[0] <= w:
+            return [s]
+        out, line = [], ""
+        for word in s.split():
+            trial = f"{line} {word}".strip()
+            if line and font.size(trial)[0] > w:
+                out.append(line)
+                line = word
+            else:
+                line = trial
+        if line:
+            out.append(line)
+        return [self._fit(ln, font, w) for ln in out]
+
     def _draw_info(self, build: CarBuild, lib: Library, key: str, deploy: float) -> None:
         u = self.ui
         r = self._panel((884, 12, 384, 470))
         x, y = r.x + 12 * u, r.y + 8 * u
+        wmax = r.right - 12 * u - x
+
+        def put(s, yy, font, col=C_TEXT) -> float:
+            """`s` at `yy`, wrapped to the panel (and at any newline in it):
+            the px its extra lines took."""
+            lines = [ln for part in s.split("\n") for ln in self._wrap_px(part, font, wmax)]
+            for i, ln in enumerate(lines):
+                self._txt(ln, x, yy + i * font.get_linesize(), font, col)
+            return (len(lines) - 1) * font.get_linesize()
+
         slot = build.slot(key)
         spec = lib.wings.get(slot.wing)
         on = spec is not None
-        self._txt(SLOT_LABEL[key] + ("   (mirrored)" if build.mirror and key != "top" else ""),
-                  x, y, self.f_lbl, C_PANEL_ON if on else C_TEXT_DIM)
+        self._txt(self._fit(SLOT_LABEL[key] + ("   (mirrored)" if build.mirror and key != "top" else ""),
+                            self.f_lbl, wmax), x, y, self.f_lbl, C_PANEL_ON if on else C_TEXT_DIM)
         y += 20 * u
-        self._txt((spec.name if on else "none")[:22], x, y, self.f_big, C_PANEL_ON if on else C_TEXT_DIM)
+        self._txt(self._fit(spec.name if on else "none", self.f_big, wmax), x, y, self.f_big,
+                  C_PANEL_ON if on else C_TEXT_DIM)
         y += 40 * u
         if on:
             src = "XFOIL" if not spec.aero.get("polar_is_estimate", True) else "estimate"
@@ -1154,7 +1217,9 @@ class GarageView:
                 geo = f"published panel S {spec.legacy.get('S', 0.35):.2f} m2 CL0 {spec.legacy['CL0']:.2f} L/D {spec.legacy['LD']:.1f}"
             rows = [(geo, C_TEXT_DIM)]
         else:
-            rows = [("W: put a library wing in this slot   D: design one", C_TEXT_DIM)]
+            rows = ([("Start here: W puts a ready-made wing\nin this slot", C_PANEL_ON)]
+                    if key != "top" else [])
+            rows += [("W  try a ready-made wing", C_TEXT_DIM), ("D  design your own", C_TEXT_DIM)]
         rows += [
             (f"station x    {slot.x:+.2f} m", C_TEXT),
             (f"             {station_label(slot.x)}", C_TEXT_DIM),
@@ -1164,7 +1229,7 @@ class GarageView:
         if key == "top":
             rows.append((f"deploys      {'brake + steer (active)' if slot.mode == 'active' else 'whenever armed (fixed)'}", C_TEXT))
         for s_, c in rows:
-            self._txt(s_[:52], x, y, self.f_val if c is C_TEXT else self.f_lbl, c)
+            y += put(s_, y, self.f_val if c is C_TEXT else self.f_lbl, c)
             y += 22 * u
         y += 6 * u
         if on and (spec.aero or spec.legacy):
@@ -1172,16 +1237,16 @@ class GarageView:
             dp = design_point(spec, slot.inc_deg, V=V, x_w=slot.x)
             if dp:
                 tag = "" if (spec.legacy or not spec.aero.get("polar_is_estimate", True)) else "  (ESTIMATE polar)"
-                self._txt(f"AT {V:.1f} m/s{tag}", x, y, self.f_lbl, C_TEXT_DIM)
+                y += put(f"AT {V:.1f} m/s{tag}", y, self.f_lbl, C_TEXT_DIM)
                 y += 20 * u
-                self._txt(f"CL {dp['CL']:.2f}  F {dp['F']:4.0f} N  D {dp['D']:3.0f} N  L/D {dp['LD']:.1f}",
-                          x, y, self.f_val)
+                y += put(f"CL {dp['CL']:.2f}  F {dp['F']:4.0f} N  D {dp['D']:3.0f} N  L/D {dp['LD']:.1f}",
+                         y, self.f_val)
                 y += 22 * u
                 if spec.role == "flank":
-                    self._txt(f"= {100 * dp['F'] / (CAR.m * G):.2f}% of mg  (x+b)/b x{(slot.x + CAR.b) / CAR.b:.2f}",
-                              x, y, self.f_lbl, C_TEXT_DIM)
+                    y += put(f"= {100 * dp['F'] / (CAR.m * G):.2f}% of mg  (x+b)/b x{(slot.x + CAR.b) / CAR.b:.2f}",
+                             y, self.f_lbl, C_TEXT_DIM)
                     y += 22 * u
-                    self._txt("corner-speed gain (crossover.gain)", x, y, self.f_lbl, C_TEXT_DIM)
+                    y += put("corner-speed gain (crossover.gain)", y, self.f_lbl, C_TEXT_DIM)
                     y += 20 * u
                     k = dp.get("k", 0.0)
                     for R in (50.0, 100.0, 130.0):
@@ -1193,26 +1258,26 @@ class GarageView:
                             over = gp > GAIN_CAP_PCT
                             s_ = f"  R={R:3.0f} m   {gp:+6.2f}%" + ("   > cap: REAR-ltd" if over else "")
                             c = C_WARN if over else (C_OK if gp > 0 else C_TEXT_DIM)
-                        self._txt(s_, x, y, self.f_val, c)
+                        y += put(s_, y, self.f_val, c)
                         y += 22 * u
                 else:
                     share_f = (slot.x + CAR.b) / CAR.L
-                    self._txt(f"downforce split  front {100 * share_f:.0f}%  rear {100 * (1 - share_f):.0f}%",
-                              x, y, self.f_lbl, C_OK if share_f > 0.3 else C_WARN)
+                    y += put(f"downforce split  front {100 * share_f:.0f}%  rear {100 * (1 - share_f):.0f}%",
+                             y, self.f_lbl, C_OK if share_f > 0.3 else C_WARN)
                     y += 22 * u
-                    self._txt(f"= {100 * dp['F'] / (CAR.m * G):.2f}% of mg; a front-limited car wants it forward",
-                              x, y, self.f_lbl, C_TEXT_DIM)
+                    y += put(f"= {100 * dp['F'] / (CAR.m * G):.2f}% of mg; a front-limited car wants it forward",
+                             y, self.f_lbl, C_TEXT_DIM)
                     y += 22 * u
                 if dp.get("stalled"):
-                    self._txt("STALLED at this incidence", x, y, self.f_val, C_WARN)
+                    y += put("STALLED at this incidence", y, self.f_val, C_WARN)
                     y += 22 * u
                 else:
-                    self._txt(f"stall margin {dp['stall_margin_deg']:.1f} deg", x, y, self.f_lbl,
-                              C_OK if dp["stall_margin_deg"] > 2.0 else C_WARN)
+                    y += put(f"stall margin {dp['stall_margin_deg']:.1f} deg", y, self.f_lbl,
+                             C_OK if dp["stall_margin_deg"] > 2.0 else C_WARN)
                     y += 22 * u
         y = r.bottom - 26 * u
-        self._txt(f"preview: {'DEPLOYED' if deploy > 0.5 else 'stowed'}   "
-                  f"{build.summary(lib)[:38]}", x, y, self.f_lbl,
+        self._txt(self._fit(f"preview: {'DEPLOYED' if deploy > 0.5 else 'stowed'}   {build.summary(lib)}",
+                            self.f_lbl, wmax), x, y, self.f_lbl,
                   C_PANEL_ON if deploy > 0.5 else C_TEXT_DIM)
 
     def _draw_help(self, pad_name, hint, status="") -> None:
@@ -1224,13 +1289,13 @@ class GarageView:
              "D design, A airfoils, L library", C_TEXT),
             ("mouse drag orbit | wheel zoom | LEFT/RIGHT x | UP/DOWN h | [ ] incidence | M mirror | "
              "T top mode | SPACE deploy preview | V vectors | R defaults | C camera", C_TEXT_DIM),
-            ("ENTER drive  |  ESC menu (controls, defaults, quit)", C_TEXT_DIM),
+            ("ENTER drive  |  ESC: wing tutorial, controls, defaults, quit", C_TEXT_DIM),
         ]
         if pad_name:
             lines[2] = (f"PS5 {pad_name}:  L-stick move | R-stick orbit | L1/R1 incidence | "
                         "TRIANGLE slot | SQUARE wing | CIRCLE deploy | L3 design | CROSS drive | "
                         "OPTIONS menu", C_OK)
-            lines.append(("ENTER drive  |  ESC menu (controls, defaults, quit)", C_TEXT_DIM))
+            lines.append(("ENTER drive  |  ESC: wing tutorial, controls, defaults, quit", C_TEXT_DIM))
         else:
             lines.append(("no controller: pair the DualSense over Bluetooth and press PS - "
                           "it hot-plugs here and in the drive", C_TEXT_DIM))
@@ -1805,11 +1870,19 @@ class Designer:
         if name:
             self.spec.name = name
         spec = self.spec
-        if spec.name in self.lib.wings and self.lib.wings[spec.name].builtin:
+        #  a built-in keeps its name, and so does another wing whose FILE this
+        #  name folds onto ('Flank-E423' is flank-e423.json): saved beside it
+        if (spec.name in self.lib.wings and self.lib.wings[spec.name].builtin) or (
+                spec.name not in self.lib.wings
+                and self.lib.unique_name("wings", spec.name) != spec.name):
             spec.name = self.lib.unique_name("wings", spec.name)
         spec.builtin = False
         spec.legacy = None
-        self.lib.save_wing(spec.copy())
+        try:
+            self.lib.save_wing(spec.copy())
+        except (OSError, ValueError) as exc:
+            self.msg = _could_not_save(exc)
+            return ""
         slot = self.slot
         slot.wing = spec.name
         self.g.build.sync_mirror(self.key)
@@ -2142,10 +2215,10 @@ class AirfoilPage:
         self.params = ui.ParamList([
             P("w", "RANKING WEIGHTS (AeroBO screen)", None, kind="label"),
             P("ld_cr", "L/D at design cl", lambda: self.weights["ld_cr"], self._w("ld_cr"), step=0.05, lo=0, hi=1),
-            P("cl_max", "cl_max", lambda: self.weights["cl_max"], self._w("cl_max"), step=0.05, lo=0, hi=1),
-            P("ld_max", "L/D max", lambda: self.weights["ld_max"], self._w("ld_max"), step=0.05, lo=0, hi=1),
+            P("cl_max", "max lift (cl_max)", lambda: self.weights["cl_max"], self._w("cl_max"), step=0.05, lo=0, hi=1),
+            P("ld_max", "efficiency (L/D max)", lambda: self.weights["ld_max"], self._w("ld_max"), step=0.05, lo=0, hi=1),
             P("thin", "thickness (thin)", lambda: self.weights["thin"], self._w("thin"), step=0.05, lo=0, hi=1),
-            P("cm", "low |cm|", lambda: self.weights["cm"], self._w("cm"), step=0.05, lo=0, hi=1),
+            P("cm", "pitching moment (|cm|)", lambda: self.weights["cm"], self._w("cm"), step=0.05, lo=0, hi=1),
             P("cl", "design cl", lambda: self.cl_design, self._set_cl, step=0.1, fine=0.02, lo=0.0, hi=2.0),
             P("sort", "sort by", lambda: self.sort, self._set_sort, kind="choice",
               choices=["score", "cl_max", "ld_cr", "name", "tc"]),
@@ -2552,8 +2625,8 @@ class MissionPage:
                    "are comparable. Change the circuit and",
                    "it has to be stated again.",
                    "",
-                   "BRAKING IS TYRE-LIMITED. corsa_c.py has",
-                   "no brake data -- it says so in capitals.",
+                   "Braking uses tyre grip only: brakes are",
+                   "not modelled separately.",
                    "A wing is compared against a wing under",
                    "one assumption; the absolute time is not",
                    "a claim about the real car."):
@@ -2590,6 +2663,12 @@ def _wrap(msg: str, n: int = 44) -> list:
     if line:
         out.append(line)
     return out
+
+
+#: the criteria rows name the thing first, its symbol after (scr.META
+#: keeps the symbol-first names for the bar chart and the docs)
+PLAIN_CRIT = {"clmax": "max lift (cl_max)", "cm": "pitching moment (|cm|)",
+              "ldmax": "efficiency (L/D max)"}
 
 
 DESIGN_TREE = (
@@ -2723,8 +2802,9 @@ class SectionModel:
         ]
         for k in scr.CRITERIA:
             label, why = scr.META[k]
+            label = PLAIN_CRIT.get(k, label)
             if k in dead:
-                label += "   (ranks nothing here)"
+                label += "  (ranks nothing)"          # short: the value sits on the same row
             rows.append(P(f"w.{k}", label, (lambda kk=k: float(self.weights.get(kk, 0.0))),
                           self._set_w(k), step=0.05, fine=0.01, lo=0.0, hi=1.0,
                           fmt="{:.2f}",
@@ -2833,8 +2913,8 @@ class SectionModel:
             j = sec.N_CST + i
             rows.append(P(f"wl{i}", f"w_lo[{i}]", self._get_x(j), self._set_x(j),
                           step=0.01, fine=0.002, lo=-1.0, hi=1.0, fmt="{:+.4f}",
-                          help="a CST weight of the LOWER surface. Swapping the two surfaces "
-                               "is a no-op here: normalise_loop orients whatever it is handed"))
+                          help="a CST shape weight of the LOWER surface: each one moves a "
+                               "stretch of it, nose to tail in order"))
         rows.append(P("tc", "t/c", self._get_x(2 * sec.N_CST), self._set_x(2 * sec.N_CST),
                       step=0.005, fine=0.001, lo=sec.TC_BOUNDS[0], hi=sec.TC_BOUNDS[1],
                       fmt="{:.4f}",
@@ -3059,7 +3139,7 @@ class SectionModel:
         lap selected also carries every candidate's lap delta. That costs the
         lattice (about 30 ms a candidate); a composite objective does not.
 
-        A section whose CST weights or thickness fall outside the design box
+        A section whose CST shape weights or thickness fall outside the design box
         is judged at the CLIPPED shape, which is not the section it came from.
         Those are counted and named rather than quietly ranked.
         """
@@ -3632,11 +3712,15 @@ class DesignPage:
         c = m.res["coords"]
         wu, wl = af.fit_cst(c, sec.N_CST)
         name = self.g.lib.unique_name("airfoils", f"{SLOT_ROLE[self.key]}-{tag}")
-        self.g.lib.save_airfoil(af.AirfoilSpec(
-            name=name, source="cst",
-            w_upper=[float(v) for v in wu], w_lower=[float(v) for v in wl],
-            notes=(f"designed on {self.g.mission.track} ({self.g.mission.surface}), "
-                   f"{m.objective}, target {m.target}")))
+        try:
+            self.g.lib.save_airfoil(af.AirfoilSpec(
+                name=name, source="cst",
+                w_upper=[float(v) for v in wu], w_lower=[float(v) for v in wl],
+                notes=(f"designed on {self.g.mission.track} ({self.g.mission.surface}), "
+                       f"{m.objective}, target {m.target}")))
+        except (OSError, ValueError) as exc:
+            self.msg = self.g.hint = _could_not_save(exc)
+            return ""
         m.fitted = True
         if m is self.af:
             self.wing.spec.airfoil = name
@@ -3891,16 +3975,9 @@ class DesignPage:
         r2 = ui.panel(screen, (bx, by + 310, bw, bh - 310))
         x, y = r2.x + 10, r2.y + 10
         bad = m.dead_weighted()
-        lines = ["THE WEIGHTS ARE THE QUESTION.", "",
-                 "A designer has no opinion about a CST",
-                 "weight before the search has run. What",
-                 "they do have an opinion about is this:",
-                 "how much of the score is the L/D this",
-                 "surface flies at, how much is the lift it",
-                 "reaches, how much is the depth a spar",
-                 "needs. So the weights are asked here, the",
-                 "library is ranked on them, and the search",
-                 "then maximises the same number.", "",
+        lines = ["THE WEIGHTS ARE THE QUESTION.", ""] + _wrap(
+                    "These sliders say what matters to you - grip, efficiency, stall "
+                    "safety. The library is ranked by them.", 42) + ["",
                  f"judged at cl {m.cl_design:.3f}" +
                  ("   (an end plate carries no design load)"
                   if m.target == "plate" else ""), ""]
@@ -4269,10 +4346,36 @@ class Garage:
                      ("Reset camera", "camera"),
                      ("Drive this car", "drive"),
                      ("Quit", "quit")],
-            sections=secs, note=note,
+            sections=secs, note=note, title="GARAGE",
             subtitle=self.build.summary(self.lib)[:120],
             footer="ESC / OPTIONS resume   R defaults   C camera   ENTER / CROSS select")
         self._menu_stick = StickNav()
+
+    def _first_wing_choice(self) -> bool:
+        """The first time a player opens the designer, ask ONCE: the guided
+        first wing (drive/wing_tutorial.py) or straight to the designer. Not
+        asked in a script (no progress), while the tutorial runs, or once it
+        has been started or finished; the answer is kept in the progress file
+        ('wing_tutorial'.offered). True when the choice is on screen."""
+        if self.progress is None or (self.tutor is not None and self.tutor.active):
+            return False
+        from .wing_tutorial import SECTION, saved_state
+        sv = saved_state(self.progress)
+        if sv["done"] or sv["step"] or self.progress.section(SECTION).get("offered"):
+            return False
+        self.menu.show(items=[("Guided first wing (recommended)", "wt_start"),
+                              ("Straight to the designer", "design_now")],
+                       title="YOUR FIRST WING", sections=[], note="",
+                       subtitle="the wing tutorial walks you through designing one, step by step",
+                       footer="ENTER / CROSS choose   ESC / OPTIONS back")
+        self._menu_stick = StickNav()
+        return True
+
+    def _first_wing_answered(self) -> None:
+        if self.progress is not None:
+            from .wing_tutorial import SECTION
+            self.progress.section(SECTION)["offered"] = True
+            self.progress.save(SECTION)
 
     def _menu_action(self, action: str | None) -> str | None:
         """Run a menu action; returns 'drive' / 'quit' for the loop, else None."""
@@ -4287,11 +4390,15 @@ class Garage:
             self.cam.reset()
         elif action == "design":
             self.open_mission()
+        elif action == "design_now":                 # the first-wing choice: no tutorial
+            self._first_wing_answered()
+            self.open_mission()
         elif action == "airfoils":
             self.open_airfoils()
         elif action == "library":
             self.open_library()
         elif action in ("wt_start", "wt_resume"):
+            self._first_wing_answered()
             from .wing_tutorial import WingTutor, saved_state
             start = saved_state(self.progress)["step"] if action == "wt_resume" else None
             self.tutor = WingTutor(self.progress, start=start)
@@ -4309,6 +4416,8 @@ class Garage:
         """STEP 1. Every route into designing a wing comes through here."""
         if key is not None:
             self.sel = key
+        if self._first_wing_choice():
+            return
         self.mission_page.update()
         self.page = "mission"
 
@@ -4459,15 +4568,28 @@ class Garage:
             from .aero.airfoil import AirfoilSpec
             name = f"naca{code}"
             if name not in self.lib.airfoils:
-                self.lib.save_airfoil(AirfoilSpec(name, "naca", code=code, notes="user NACA 4-digit"))
+                try:
+                    self.lib.save_airfoil(AirfoilSpec(name, "naca", code=code, notes="user NACA 4-digit"))
+                except (OSError, ValueError) as exc:
+                    self.hint = _could_not_save(exc)
+                    return
             self.af_page.open(self.af_page._re, keep=name)
             self.hint = f"section {name} added"
         elif kind == "build":
-            self.build.name = value[:32]
-            b = self.build.to_json()
-            self.lib.save_build(b)
+            #  the SAME name overwrites that build (it was asked for); a name
+            #  that only folds onto another build's file ('Kestrel Fast' /
+            #  'kestrel-fast') is saved beside it instead
+            name = value[:32]
+            new = name if name in self.lib.builds else self.lib.unique_name("builds", name)
+            self.build.name = new
+            try:
+                self.lib.save_build(self.build.to_json())
+            except (OSError, ValueError) as exc:
+                self.hint = _could_not_save(exc)
+                return
             self.lib_page.refresh()
-            self.hint = f"build '{value}' saved to the library"
+            self.hint = (f"build '{new}' saved to the library" if new == name
+                         else f"'{name}' already exists - saved as '{new}'")
 
     # -- slot editing (car page) ---------------------------------------------
     def _cycle_wing(self, d: int = 1) -> None:
@@ -4792,9 +4914,13 @@ class Garage:
             self.page = "car"
 
     def _save_build_quick(self) -> None:
-        name = self.build.name if self.build.name not in self.lib.builds else self.lib.unique_name("builds", self.build.name)
+        name = self.lib.unique_name("builds", self.build.name)     # never over another build
         self.build.name = name
-        self.lib.save_build(self.build.to_json())
+        try:
+            self.lib.save_build(self.build.to_json())
+        except (OSError, ValueError) as exc:
+            self.hint = _could_not_save(exc)
+            return
         self.lib_page.refresh()
         self.hint = f"build '{name}' saved"
 
@@ -5108,7 +5234,10 @@ class Garage:
                     if w.airfoil == name and not w.legacy:
                         ride = w.aero.get("ride_h")
                         self.lib.analyse_wing(w, ride_h=ride)
-                        self.lib.save_wing(w)
+                        try:
+                            self.lib.save_wing(w)
+                        except (OSError, ValueError) as exc:
+                            self.hint = _could_not_save(exc)
                 if self.designer is not None and self.designer.spec.airfoil == name:
                     self.designer.update()
                 self.af_page.on_polar(name)
@@ -5263,6 +5392,15 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     rep("a v1 WingDesign file upgrades to a build", up is not None and up.left.wing == "plate" and up.right.wing == "plate"
         and up.top.wing == "", str(up.left))
     rep("WingDesign.load refuses a v2 file", (b.save(path) and WingDesign.load(path) is None), "")
+    got = []
+    for body in ("[]", '{"version":2,"slots":[]}', '{"version":2,"slots":{"left":null}}',
+                 '{"version":2,"slots":{"left":{"x":"abc"}}}', "{not json"):
+        with open(path, "w") as f:
+            f.write(body)
+        got.append(type(CarBuild.load(path)).__name__)     # would raise before: garage disabled
+    rep("a wrong-shaped design file loads as the empty car or None; an unreadable one is kept as .bad",
+        got == ["CarBuild"] * 4 + ["NoneType"] and os.path.exists(path + ".bad")
+        and not os.path.exists(path), str(got))
 
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
@@ -5601,7 +5739,7 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     rep("the winner is loaded into the SHAPE",
         dp.af.x is not None and len(dp.af.x) == 2 * sec.N_CST + 2,
         f"{len(dp.af.x)} rows")
-    #  the CST weights are EDITABLE and moving one moves the section
+    #  the CST shape weights are EDITABLE and moving one moves the section
     dp.nav.select("af.section")
     dp.focus = "rows"
     dp.af.params.select_key("wu1")

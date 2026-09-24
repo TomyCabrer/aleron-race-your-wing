@@ -37,6 +37,8 @@ Everything else is ignored so a caller can pass its whole command stream.
 
 from __future__ import annotations
 
+import re
+
 import pygame
 
 FONT_NAMES = ("Menlo", "Monaco", "DejaVu Sans Mono", "Courier New")
@@ -60,6 +62,14 @@ NAV_HINT = [("UP / DOWN", "move"), ("LEFT / RIGHT", "change value"),
 NAV_HINT_PAD = [("UP / DOWN", "move  (d-pad, stick)"),
                 ("LEFT / RIGHT", "change value  (d-pad, stick)"),
                 ("ENTER", "select  (CROSS)"), ("ESC", "back  (CIRCLE, OPTIONS)")]
+
+
+def footer_says(footer: str, key: str) -> str | None:
+    """What a page's footer says `key` does, so the key legend agrees with it:
+    'ENTER / CROSS select   ESC / CIRCLE not now' -> 'not now' for 'ESC' (the
+    words up to the next run of 2+ spaces). None when the footer is silent."""
+    m = re.search(rf"\b{key} / [A-Z]+ (.+?)(?: {{2,}}|$)", footer or "")
+    return m.group(1).strip() if m else None
 
 
 class StickNav:
@@ -420,10 +430,18 @@ class Menu:
                                    for t, _ in secs) else NAV_HINT
         if not any(a.startswith("set:") for _, a in self.items):
             hint = [row for row in hint if not row[0].startswith("LEFT")]
+        # ENTER / ESC say what this page's footer says they do ('not now' on
+        # the welcome page), keeping the pad's "  (CIRCLE, ...)" tail
+        said = [(k, footer_says(self.footer, k) if k in ("ENTER", "ESC") else None, w)
+                for k, w in hint]
+        hint = [(k, s + (w[w.index("  ("):] if "  (" in w else "") if s else w)
+                for k, s, w in said]
+        # the key column fits its widest key ('LEFT / RIGHT' ran into its text)
+        hint_kw = max(96 * u, max((f_lbl.size(k)[0] for k, _ in hint), default=0) + 12 * u)
         y += 6 * u
         for key, what in hint:
             self._blit(screen, key, x0 + 28 * u, y, f_lbl, C_DIM)
-            self._blit(screen, what, x0 + 28 * u + 96 * u, y, f_lbl, C_DIM)
+            self._blit(screen, what, x0 + 28 * u + hint_kw, y, f_lbl, C_DIM)
             y += row_h
 
         # help columns; the key column widens to the section's longest key
@@ -548,6 +566,29 @@ def self_check(verbose: bool = True) -> bool:
         shown0[0] == 0 and 33 in shown1 and len(shown1) < 40 and bottom <= 800
         and many.hit(many.row_centre(33)) == 33,
         f"{len(shown1)} of 40 rows shown, {shown1[0]}..{shown1[-1]}, bottom {bottom} px")
+    # the key legend: its value column clears 'LEFT / RIGHT', and ENTER / ESC
+    # say what the page's footer says (the welcome page's ESC is 'not now')
+    lg = Menu("WELCOME", [("Car        Opel Corsa C", "set:car"), ("Back", "back")],
+              footer="ENTER / CROSS select   ESC / CIRCLE not now   or click a row")
+    lg.show()
+    seen = []
+    blit0 = lg._blit
+
+    def _rec(screen, s_, x, y, font, col=C_TEXT):
+        w_ = blit0(screen, s_, x, y, font, col)
+        seen.append((s_, int(x), int(y), w_))
+        return w_
+    lg._blit = _rec
+    lg.draw(scr)
+    at = {s_: (x, y, w_) for s_, x, y, w_ in seen}
+    lr, cv, esc = at.get("LEFT / RIGHT"), at.get("change value"), at.get("ESC")
+    esc_what = [s_ for s_, x, y, _ in seen if esc and y == esc[1] and s_ != "ESC"]
+    rep("key legend: the value column clears 'LEFT / RIGHT'; ENTER / ESC follow the footer",
+        bool(lr and cv) and cv[0] >= lr[0] + lr[2] + 8 and esc_what == ["not now"]
+        and footer_says("ESC / OPTIONS resume   R reset", "ESC") == "resume"
+        and footer_says("or click a row", "ENTER") is None,
+        f"'change value' at x {cv[0] if cv else None}, key ends "
+        f"{lr[0] + lr[2] if lr else None}, ESC row {esc_what}")
     # a page's own drawing (the LAP RESULTS page's card): handed its rect at
     # the top of the first help column, the sections below it; the next
     # show() without one clears it; one that raises is dropped, not fatal

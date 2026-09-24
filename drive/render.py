@@ -230,8 +230,10 @@ FONT_NAMES = ('Menlo', 'Monaco', 'DejaVu Sans Mono', 'Courier New')
 R_SPEED = (12, 12, 300, 150)
 R_TIMING = (460, 12, 360, 104)
 R_LOADS = (968, 12, 300, 230)
-R_STATE = (12, 180, 220, 150)
+R_STATE = (12, 180, 300, 150)   # 300 wide: the four-corner mu row is ~275 px
 R_WING = (1028, 260, 240, 124)
+#: the 'minimal' HUD's one-line wing chip, the aero panel's top line only
+R_WING_CHIP = (1028, 260, 240, 28)
 R_PEDALS = (12, 668, 300, 120)
 R_MINIMAP = (860, 640, 180, 140)
 R_GG = (1068, 588, 200, 200)
@@ -654,7 +656,8 @@ class ViewConfig:
     show_vectors: bool = True
     show_gg: bool = True
     show_skid: bool = True
-    hud: str = 'full'               # 'full' | 'minimal' | 'off'
+    hud: str = 'minimal'            # 'full' | 'minimal' | 'off': minimal is the
+                                    # race HUD, full adds the engineering panels
     # --- the look (drive/world.py, drive/props.py, drive/fx.py). Renderer
     # config only: nothing here is read by, or changes, the physics.
     scenery: bool = True            # sky, ground, run-off and the props
@@ -804,6 +807,11 @@ class HudData:
     results: dict | None = None
     wheels_xy: list = field(default_factory=list)
     shake: float = 0.0
+    # --- the timing panel: why the live lap stopped counting ('' = none
+    # given), and on the out lap the metres to the start line (None = a
+    # timed lap). The HUD reads both with getattr defaults as well.
+    lap_void_why: str = ''
+    out_lap_m: float | None = None
 
 
 # ======================================================================= #
@@ -2288,7 +2296,7 @@ class Renderer:
 
         W, H = int(cfg.size[0]), int(cfg.size[1])
         self.screen = pygame.display.set_mode((W, H))
-        pygame.display.set_caption('carsim - Corsa C flank-wing study')
+        pygame.display.set_caption('carsim')
         self.W, self.H = W, H
         self.ui = min(W / 1280.0, H / 800.0)
 
@@ -2373,8 +2381,8 @@ class Renderer:
         # from 26.5 ms to ~19, the rest being first-use font glyphs.
         car_mesh_cached(car_geom())
         self._ghost_mesh3(car_geom())
-        for r_ in (R_SPEED, R_TIMING, R_LOADS, R_STATE, R_WING, R_PEDALS,
-                   R_MINIMAP, R_GG, R_WARN):
+        for r_ in (R_SPEED, R_TIMING, R_LOADS, R_STATE, R_WING, R_WING_CHIP,
+                   R_PEDALS, R_MINIMAP, R_GG, R_WARN):
             rr_ = self._rect(r_)
             self._panels[r_] = _hud_panel_surface(rr_.w, rr_.h, self.ui)
         self._wraps = {}                   # (text, font, px) -> wrapped lines
@@ -2442,11 +2450,12 @@ class Renderer:
             x1, y1 = max(x1, bb[2]), max(y1, bb[3])
         rx, ry, rw, rh = [v * self.ui for v in R_MINIMAP]
         pad = 8 * self.ui
+        la = self.f_lbl.get_linesize()     # the track's name above the map, the car under it
         sx = (rw - 2 * pad) / max(x1 - x0, 1e-6)
-        sy = (rh - 2 * pad) / max(y1 - y0, 1e-6)
+        sy = (rh - 2 * pad - 2 * la) / max(y1 - y0, 1e-6)
         self._mm_k = min(sx, sy)
         self._mm_off = (rx + pad + 0.5 * ((rw - 2 * pad) - (x1 - x0) * self._mm_k),
-                        ry + pad + 0.5 * ((rh - 2 * pad) - (y1 - y0) * self._mm_k))
+                        ry + pad + la + 0.5 * ((rh - 2 * pad - 2 * la) - (y1 - y0) * self._mm_k))
         self._mm_bb = (x0, y0, x1, y1)
         step = max(1, self._N // 300)
         mm = tr.xy[::step]
@@ -2714,6 +2723,31 @@ class Renderer:
     def _blit(self, s, x, y, font=None, col=C_HUD_TEXT):
         self.screen.blit(self._txt(s, font, col), (int(x), int(y)))
 
+    def _blit_fit(self, s, x, y, font=None, col=C_HUD_TEXT, right=None):
+        """`_blit`, kept left of `right` px: `s` (or the first of a tuple of
+        ever shorter wordings that fits) in `font`, else in f_lbl, else the
+        last wording cut with '..'. A smaller font stays centred on the row.
+        The choice is cached per string."""
+        font = font or self.f_val
+        w = int(right - x) if right is not None else 1 << 20
+        key = ('fit', s, id(font), w)
+        got = self._wraps.get(key)
+        if got is None:
+            opts = (s,) if isinstance(s, str) else tuple(s)
+            got = next(((t, f) for t in opts for f in (font, self.f_lbl)
+                        if f.size(t)[0] <= w), None)
+            if got is None:
+                t = opts[-1]
+                while t and self.f_lbl.size(t + '..')[0] > w:
+                    t = t[:-1]
+                got = (t.rstrip() + '..', self.f_lbl)
+            if len(self._wraps) > 256:
+                self._wraps.clear()
+            self._wraps[key] = got
+        t, f = got
+        dy = (font.get_linesize() - f.get_linesize()) / 2 if f is not font else 0
+        self._blit(t, x, y + dy, f, col)
+
     def _panel(self, r):
         """One alpha-blended HUD background per rect, built once and reused:
         rounded corners, a faint top-lit gradient, a hairline border and a
@@ -2822,10 +2856,9 @@ class Renderer:
             self._draw_ghost_tops()
         if self.cfg.hud != 'off':
             self._draw_hud(aux, ctl)
-            if self.cfg.show_gg:
+            if self.cfg.show_gg and self.cfg.hud == 'full':
                 self._draw_gg(aux)
-            if self.cfg.hud == 'full':
-                self._draw_minimap(x, y, aux)
+            self._draw_minimap(x, y, aux)      # 'full' and 'minimal' alike
             self._draw_delta(aux)
         if aux.overlay:
             self._draw_overlay(aux.overlay)
@@ -4028,9 +4061,19 @@ class Renderer:
         medal = str(rc.get('medal', '') or '')
         t = medal.upper()
         pw = int(self.f_lbl.size(t)[0] + 12 * u) if (valid and medal) else 0
+        # what the next medal needs (drive/results.py 'next'), right-aligned
+        # left of the tag when it clears the header; the words give way to it
+        xn = x0 + w - pad - pw - 6 * u
+        nxt = rc.get('next')
+        if isinstance(nxt, str) and nxt:
+            nw = self.f_lbl.size(nxt)[0]
+            xe = x0 + w - pad - pw - (6 * u if pw else 0)
+            if nw <= xe - (x + self.f_lbl.size(head)[0] + 10 * u):
+                self._blit(nxt, xe - nw, y, self.f_lbl, C_HUD_DIM)
+                xn = xe - nw - 10 * u
         if valid and d and not numeric:        # "first lap in this class": words, up
             xw = x + self.f_lbl.size(head)[0] + 10 * u   # here, cut to what clears the tag
-            room = (x0 + w - pad - pw - 6 * u) - xw
+            room = xn - xw
             for s_ in (d, 'first in class', 'first'):
                 if self.f_lbl.size(s_)[0] <= room:
                     self._blit(s_, xw, y, self.f_lbl, C_HUD_DIM)
@@ -4922,22 +4965,39 @@ class Renderer:
 
         # --- timing --------------------------------------------------------
         r = self._panel(R_TIMING)
-        self._blit(f'LAP {aux.lap}', r.x + 10 * u, r.y + 6 * u, self.f_lbl,
-                   C_HUD_DIM)
-        self._blit(_fmt_t(aux.lap_time), r.x + 10 * u, r.y + 24 * u,
-                   self.f_val, C_HUD_TEXT if aux.lap_valid else C_BAR_BRK)
+        # the out lap (drive.py) is not timed: the metres to the start line
+        # stand where the lap time would, up to the LAST column
+        out_m = getattr(aux, 'out_lap_m', None)
+        out = isinstance(out_m, (int, float)) and math.isfinite(out_m)
+        self._blit('OUT LAP' if out else f'LAP {aux.lap}', r.x + 10 * u,
+                   r.y + 6 * u, self.f_lbl, C_HUD_DIM)
+        if out:
+            om = int(out_m)
+            self._blit_fit((f'{om} m to the line', f'{om} m to line', f'{om} m'),
+                           r.x + 10 * u, r.y + 24 * u, self.f_val, C_HUD_DIM,
+                           right=r.x + 124 * u)
+        else:
+            self._blit(_fmt_t(aux.lap_time), r.x + 10 * u, r.y + 24 * u,
+                       self.f_val, C_HUD_TEXT if aux.lap_valid else C_BAR_BRK)
         self._blit('LAST', r.x + 130 * u, r.y + 6 * u, self.f_lbl, C_HUD_DIM)
         self._blit(_fmt_t(aux.last_lap), r.x + 130 * u, r.y + 24 * u,
                    self.f_val)
         self._blit('BEST', r.x + 250 * u, r.y + 6 * u, self.f_lbl, C_HUD_DIM)
         self._blit(_fmt_t(aux.best_lap), r.x + 250 * u, r.y + 24 * u,
                    self.f_val, C_PURPLE)
-        secs = ' '.join(_fmt_t(v, short=True) for v in aux.sector_times[:3])
-        self._blit(f'S {secs}', r.x + 10 * u, r.y + 52 * u, self.f_lbl,
-                   C_HUD_DIM)
-        if not aux.lap_valid:
-            self._blit('INVALID', r.x + 250 * u, r.y + 52 * u, self.f_lbl,
-                       C_BAR_BRK)
+        why = str(getattr(aux, 'lap_void_why', '') or '')
+        if not aux.lap_valid and why and not out:
+            # why the live lap stopped counting, in the sectors' place (they
+            # no longer count either), cut to the panel
+            self._blit_fit(f'INVALID - {why}', r.x + 10 * u, r.y + 52 * u,
+                           self.f_lbl, C_BAR_BRK, right=r.right - 10 * u)
+        else:
+            secs = ' '.join(_fmt_t(v, short=True) for v in aux.sector_times[:3])
+            self._blit(f'S {secs}', r.x + 10 * u, r.y + 52 * u, self.f_lbl,
+                       C_HUD_DIM)
+            if not aux.lap_valid and not out:
+                self._blit('INVALID', r.x + 250 * u, r.y + 52 * u, self.f_lbl,
+                           C_BAR_BRK)
         # the class PB (drive/records.py) and, when a lap has just landed in
         # the top 5, the place it took
         pb = getattr(aux, 'pb_lap', 0.0)
@@ -4951,6 +5011,14 @@ class Renderer:
         if medal:
             self._blit(medal.upper(), r.x + 250 * u, r.y + 76 * u, self.f_lbl,
                        C_MEDAL.get(medal, C_HUD_TEXT))
+
+        # 'minimal' is the race HUD: speed, timing, a one-line wing chip and
+        # the warnings (the minimap is drawn by draw_frame); the engineering
+        # panels below are 'full' only
+        if minimal:
+            self._draw_wing_chip(aux)
+            self._draw_warn(aux)
+            return
 
         # --- loads / utilisation ------------------------------------------
         r = self._panel(R_LOADS)
@@ -4971,15 +5039,14 @@ class Renderer:
             col = C_GREEN if uval < 0.90 else (C_YELLOW if uval < 1.0
                                                else C_BAR_BRK)
             self._bar(bar, uval, col)
-        lb = aux.limited_by
-        lb_col = {'FRONT': C_YELLOW, 'REAR': C_BAR_BRK,
-                  'POWER': C_GREEN}.get(lb, C_HUD_TEXT)
-        self._blit(f'LIMITED BY {lb}', r.x + 10 * u, r.y + 196 * u,
-                   self.f_val, lb_col)
-
-        if minimal:
-            self._draw_warn(aux)
-            return
+        # what limits the car, only once it is near a limit and moving: a
+        # verdict at 0.2 utilisation or standing still is noise
+        if max(aux.util_f, aux.util_r) > 0.6 and aux.V > 5.0:
+            lb = aux.limited_by
+            lb_col = {'FRONT': C_YELLOW, 'REAR': C_BAR_BRK,
+                      'POWER': C_GREEN}.get(lb, C_HUD_TEXT)
+            self._blit(f'LIMITED BY {lb}', r.x + 10 * u, r.y + 196 * u,
+                       self.f_val, lb_col)
 
         # --- state ---------------------------------------------------------
         r = self._panel(R_STATE)
@@ -4999,9 +5066,12 @@ class Renderer:
         top_dep = float(getattr(aux, 'top_deploy', 0.0))
         any_on = on or top_dep > 0.01
         wm = str(getattr(aux, 'wing_mode', 'AUTO') or 'AUTO')   # the G mode (task 35)
-        self._blit(f'AERO  {wm}', r.x + 10 * u, r.y + 6 * u, self.f_lbl,
-                   C_WING_ON if (any_on or getattr(aux, 'air_brake', False)) else C_HUD_DIM)
-        self._blit('ARMED' if aux.wing_on else 'OFF', r.right - 10 * u - self.f_lbl.size('ARMED')[0],
+        # every line is measured: nothing runs past xr (f_lbl, then '..')
+        xr, xa = r.right - 6 * u, r.right - 10 * u - self.f_lbl.size('ARMED')[0]
+        self._blit_fit(f'AERO  {wm}', r.x + 10 * u, r.y + 6 * u, self.f_lbl,
+                       C_WING_ON if (any_on or getattr(aux, 'air_brake', False)) else C_HUD_DIM,
+                       right=xa - 6 * u)
+        self._blit('ARMED' if aux.wing_on else 'OFF', xa,
                    r.y + 6 * u, self.f_lbl, C_WING_ON if aux.wing_on else C_HUD_DIM)
         legacy = bool(getattr(aux, 'wing_type', '')) and aux.wing_type != 'off'
         has_l = bool(getattr(aux, 'dev_left', False)) or legacy
@@ -5010,13 +5080,15 @@ class Renderer:
         # each flank's own state; one panel out = the OUTER flank of the turn
         l_txt = ('L ' + ('>' if dep_l > 0.01 else '-')) if has_l else 'L  x'
         r_txt = ('R ' + ('<' if dep_r > 0.01 else '-')) if has_r else 'R  x'
-        self._blit(f'FLANK  {l_txt}  {r_txt}  {int(round(aux.wing_deploy * 100)):3d}%',
-                   r.x + 10 * u, r.y + 24 * u, self.f_val, C_WING_ON if on else C_HUD_DIM)
+        self._blit_fit(f'FLANK {l_txt} {r_txt} {int(round(aux.wing_deploy * 100)):3d}%',
+                       r.x + 10 * u, r.y + 24 * u, self.f_val, C_WING_ON if on else C_HUD_DIM,
+                       right=xr)
         fw = int(round(aux.F_wing / 10.0) * 10)              # 10 N quantum
         dw = int(round(aux.D_wing))
         pct = 100.0 * abs(aux.F_wing) / (_CAR.m * G)
-        self._blit(f'  F {fw:4d} N  D {dw:3d} N  {pct:4.2f}%mg', r.x + 10 * u, r.y + 46 * u,
-                   self.f_lbl, C_HUD_TEXT if on else C_HUD_DIM)
+        s_ = f'  F {fw:4d} N  D {dw:3d} N  {pct:4.2f}%mg'
+        self._blit_fit((s_, s_.strip(), ' '.join(s_.split())), r.x + 10 * u, r.y + 46 * u,
+                       self.f_lbl, C_HUD_TEXT if on else C_HUD_DIM, right=xr)
         if top_on:
             ft = int(round(float(aux.F_top) / 10.0) * 10)
             dt_ = int(round(float(aux.D_top)))
@@ -5025,22 +5097,25 @@ class Renderer:
             # and D through CZ / CD, so name it next to them
             mnt = {'pylon': 'PYL', 'endplate': 'EPL', 'none': '--'}.get(
                 str(getattr(aux, 'top_mount', 'pylon') or 'pylon'), 'PYL')
-            self._blit(f'TOP  {"v" if top_dep > 0.05 else "-"} {int(round(top_dep * 100)):3d}% '
-                       f'{mode} {mnt}',
-                       r.x + 10 * u, r.y + 64 * u, self.f_val, C_WING_ON if top_dep > 0.05 else C_HUD_DIM)
-            self._blit(f'  Fz {ft:4d} N  D {dt_:3d} N  {100.0 * float(aux.F_top) / (_CAR.m * G):4.2f}%mg',
-                       r.x + 10 * u, r.y + 86 * u, self.f_lbl,
-                       C_HUD_TEXT if top_dep > 0.05 else C_HUD_DIM)
+            self._blit_fit(f'TOP  {"v" if top_dep > 0.05 else "-"} {int(round(top_dep * 100)):3d}% '
+                           f'{mode} {mnt}',
+                           r.x + 10 * u, r.y + 64 * u, self.f_val,
+                           C_WING_ON if top_dep > 0.05 else C_HUD_DIM, right=xr)
+            s_ = f'  Fz {ft:4d} N  D {dt_:3d} N  {100.0 * float(aux.F_top) / (_CAR.m * G):4.2f}%mg'
+            self._blit_fit((s_, s_.strip(), ' '.join(s_.split())),
+                           r.x + 10 * u, r.y + 86 * u, self.f_lbl,
+                           C_HUD_TEXT if top_dep > 0.05 else C_HUD_DIM, right=xr)
         else:
             self._blit('TOP    none', r.x + 10 * u, r.y + 64 * u, self.f_val, C_HUD_DIM)
         names = [n for n in (getattr(aux, 'wing_left_name', ''), getattr(aux, 'wing_top_name', '')) if n]
         wt = getattr(aux, 'wing_type', '') or ''
         if names:
-            self._blit(' / '.join(names)[:34], r.x + 10 * u, r.y + 106 * u, self.f_lbl, C_HUD_DIM)
+            self._blit_fit(' / '.join(names), r.x + 10 * u, r.y + 106 * u, self.f_lbl,
+                           C_HUD_DIM, right=xr)
         elif wt:
-            self._blit(f'{wt} x_w {aux.x_w:+.2f} h_w {aux.h_w:.2f} '
-                       f'inc {aux.inc_deg:+.0f}', r.x + 10 * u, r.y + 106 * u,
-                       self.f_lbl, C_HUD_DIM)
+            self._blit_fit(f'{wt} x_w {aux.x_w:+.2f} h_w {aux.h_w:.2f} '
+                           f'inc {aux.inc_deg:+.0f}', r.x + 10 * u, r.y + 106 * u,
+                           self.f_lbl, C_HUD_DIM, right=xr)
 
         # --- pedals / steer -------------------------------------------------
         r = self._panel(R_PEDALS)
@@ -5056,8 +5131,8 @@ class Renderer:
             yy = r.y + (8 + 20 * j) * u
             self._blit(lbl, r.x + 8 * u, yy, self.f_lbl, C_HUD_DIM)
             self._bar((r.x + 46 * u, yy + 4 * u, 240 * u, 10 * u), v, col)
-        yy = r.y + 92 * u
-        mid = r.x + 150 * u
+        yy = r.y + 88 * u               # 88 / 102: the steer line's descenders
+        mid = r.x + 150 * u             # stay inside the panel
         half = 140 * u
         pygame.draw.rect(self.screen, (38, 40, 45),
                          (mid - half, yy, 2 * half, 12 * u))
@@ -5067,9 +5142,27 @@ class Renderer:
                           abs(half * f), 12 * u))
         self._blit(f'steer {math.degrees(dlt):6.2f} deg'
                    + ('  [aid]' if aux.steer_limited else ''),
-                   r.x + 8 * u, r.y + 106 * u, self.f_lbl, C_HUD_DIM)
+                   r.x + 8 * u, r.y + 102 * u, self.f_lbl, C_HUD_DIM)
 
         self._draw_warn(aux)
+
+    def _draw_wing_chip(self, aux):
+        """The 'minimal' HUD's wings: the aero panel's top line alone (the G
+        mode, ARMED / OFF) at R_WING_CHIP; nothing on a car with no wing."""
+        legacy = bool(getattr(aux, 'wing_type', '')) and aux.wing_type != 'off'
+        if not (getattr(aux, 'dev_left', False) or getattr(aux, 'dev_right', False)
+                or getattr(aux, 'top_on', False) or legacy):
+            return
+        u = self.ui
+        r = self._panel(R_WING_CHIP)
+        out = (aux.wing_deploy > 0.01 or float(getattr(aux, 'top_deploy', 0.0)) > 0.01
+               or getattr(aux, 'air_brake', False))
+        wm = str(getattr(aux, 'wing_mode', 'AUTO') or 'AUTO')
+        xa = r.right - 10 * u - self.f_lbl.size('ARMED')[0]
+        self._blit_fit(f'WINGS  {wm}', r.x + 10 * u, r.y + 6 * u, self.f_lbl,
+                       C_WING_ON if out else C_HUD_DIM, right=xa - 6 * u)
+        self._blit('ARMED' if aux.wing_on else 'OFF', xa, r.y + 6 * u, self.f_lbl,
+                   C_WING_ON if aux.wing_on else C_HUD_DIM)
 
     def _draw_warn(self, aux):
         msgs = []
@@ -5134,18 +5227,27 @@ class Renderer:
         p_, r_ = self._mm_xy(x, y), max(2, int(3 * self.ui))
         pygame.draw.circle(self.screen, C_MM_RING, p_, r_ + 1)
         pygame.draw.circle(self.screen, car_geom().colour, p_, r_)
+        # the captions sit in the rows _prep_track keeps clear of the map,
+        # each cut to the panel
+        u, xr = self.ui, r.right - 6 * self.ui
         name = getattr(self.track, 'title', '') or self.track.name
-        self._blit(name, r.x + 6 * self.ui, r.y + 4 * self.ui, self.f_lbl,
-                   C_HUD_DIM)
+        self._blit_fit(name, r.x + 6 * u, r.y + 4 * u, self.f_lbl, C_HUD_DIM,
+                       right=xr)
         # what you are driving, under the map: the car and the mass it is
         # carrying right now, because the Ballast setting is invisible
-        # otherwise and 200 kg is 20% of a Corsa
+        # otherwise and 200 kg is 20% of a Corsa. The mass keeps its place
+        # at the right; a long name loses its make, then its end
         cn = getattr(aux, 'car_name', '') or ''
         if cn:
             kg = float(getattr(aux, 'mass_kg', 0.0) or 0.0)
-            self._blit(f'{cn}' + (f'  {kg:.0f} kg' if kg > 0.0 else ''),
-                       r.x + 6 * self.ui, r.bottom - 16 * self.ui,
-                       self.f_lbl, C_HUD_DIM)
+            yb = r.bottom - 4 * u - self.f_lbl.get_linesize()
+            if kg > 0.0:
+                m_ = f'{kg:.0f} kg'
+                xr -= self.f_lbl.size(m_)[0]
+                self._blit(m_, xr, yb, self.f_lbl, C_HUD_DIM)
+                xr -= 8 * u
+            self._blit_fit((cn, cn.split(' ', 1)[-1]), r.x + 6 * u, yb,
+                           self.f_lbl, C_HUD_DIM, right=xr)
 
 
 def _hud_panel_surface(w: int, h: int, ui: float = 1.0) -> pygame.Surface:
@@ -5304,7 +5406,9 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')
     os.environ.setdefault('SDL_AUDIODRIVER', 'dummy')
     tr = trk.make_arena()
-    cfg = ViewConfig()
+    #  the FULL HUD (the default is 'minimal'): V22's busiest frame, the
+    #  caches and the screenshot below are measured with every panel up
+    cfg = ViewConfig(hud='full')
     rnd = Renderer(cfg, tr, headless=True)
     drv = pygame.display.get_driver()
     rep('V30 driver', drv == 'dummy', f'get_driver() = {drv!r}')
@@ -5458,6 +5562,51 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     rep('delta + sector flash drawn', ok_d,
         f"green/red/purple px: ahead {counts['ahead']}, behind {counts['behind']}, "
         f"flash {counts['flash']}, none {counts['none']}")
+    #  'minimal' (the default) is the race HUD: speed, timing, the one-line
+    #  wing chip (a car with wings only), the minimap -- none of the loads /
+    #  state / aero / pedals / g-g that 'full' adds; LIMITED BY only near a
+    #  limit and moving; and at 1280x800 every line of HUD text, the long
+    #  ones the fits are for included, lies inside a panel
+    seen = []
+    o_blit = rnd._blit
+
+    def _spy(s, x, y, font=None, col=C_HUD_TEXT):
+        bb = rnd._txt(s, font, col).get_bounding_rect()
+        seen.append((s, pygame.Rect(int(x) + bb.x, int(y) + bb.y, bb.w, bb.h)))
+        o_blit(s, x, y, font, col)
+    long_ = _demo_hud()
+    long_.lap_valid, long_.lap_void_why = False, 'all four wheels left the road at the hairpin'
+    long_.dev_left = long_.dev_right = long_.top_on = True
+    long_.wing_mode, long_.air_brake, long_.top_deploy = 'AIR BRAKE', True, 1.0
+    long_.F_wing, long_.D_wing, long_.F_top, long_.D_top = -1234.5, 999.0, 1234.0, 456.0
+    long_.wing_left_name, long_.wing_top_name = 'Gurney flap wide chord', 'Swan-neck top'
+    long_.car_name, long_.mass_kg = 'Opel Corsa C 1.2', 1243.0
+    slow_ = _demo_hud(V=3.0)
+    slow_.util_f, slow_.util_r = 0.3, 0.2
+    hud_txt, outside = {}, []
+    boxes = [rnd._rect(r_) for r_ in (R_SPEED, R_TIMING, R_LOADS, R_STATE, R_WING,
+                                       R_WING_CHIP, R_PEDALS, R_MINIMAP, R_GG, R_WARN)]
+    rnd._blit = _spy
+    try:
+        for mode_, a_ in (('minimal', long_), ('full', long_), ('minimal', _demo_hud()),
+                          ('full', slow_)):
+            cfg.hud, seen[:] = mode_, []
+            rnd.draw_frame(st_n, None, 0.0, _demo_ctl(), a_, sk2)
+            hud_txt[(mode_, a_ is long_, a_ is slow_)] = ' | '.join(s for s, _ in seen)
+            outside += [s for s, bx in seen if not any(b.contains(bx) for b in boxes)]
+    finally:
+        rnd._blit, cfg.hud = o_blit, 'full'
+    t_min, t_full = hud_txt[('minimal', True, False)], hud_txt[('full', True, False)]
+    eng = ('Fz  [N]', 'util_f', 'LIMITED BY', 'beta', 'FLANK', 'THR', 'steer', 'g-g')
+    ok_h = (ViewConfig().hud == 'minimal'
+            and not any(k in t_min for k in eng) and all(k in t_full for k in eng)
+            and 'WINGS  AIR BRAKE' in t_min and 'arena' in t_min and 'INVALID - ' in t_min
+            and 'WINGS' not in hud_txt[('minimal', False, False)]
+            and 'LIMITED BY' not in hud_txt[('full', False, True)] and not outside)
+    rep("HUD: 'minimal' is the race HUD, 'full' adds the engineering; text inside its panels",
+        ok_h, f"default {ViewConfig().hud!r}; minimal draws {len(t_min.split(' | '))} strings, "
+              f"full {len(t_full.split(' | '))}; LIMITED BY at 3 m/s "
+              f"{'LIMITED BY' in hud_txt[('full', False, True)]}; outside a panel {outside}")
     #  the tutorial's box (drive/tutorial.py): drawn in its place, inside
     #  R_TUTOR however long the text, nothing without it
     def _count_tut(r_):
@@ -5569,7 +5718,9 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     #  another surface too (the page's `surf`)
     inside = True
     for rc2 in (rc_, void_, dict(rc_, delta='first lap in this class', medal='bronze', pos='P5'),
-                dict(void_, why='snapshot failed (AttributeError: ' + 'x' * 120 + ')')):
+                dict(void_, why='snapshot failed (AttributeError: ' + 'x' * 120 + ')'),
+                dict(rc_, next='AUTHOR -0.485'),          # results.py's next medal
+                dict(rc_, delta='first lap in this class', next='SILVER -1.250 ' * 4)):
         sf = pygame.Surface(rnd.screen.get_size())
         sf.fill((0, 0, 255))
         r2 = rnd.draw_card(rc2, 40, 40, surf=sf)

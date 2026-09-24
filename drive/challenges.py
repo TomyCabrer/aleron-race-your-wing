@@ -267,7 +267,7 @@ def refusals(bounds: dict, stats: dict) -> list:
             if extra:
                 out.append(f"the {' and '.join(extra)} wing{'s are' if len(extra) > 1 else ' is'} "
                            f"not allowed here: take {'them' if len(extra) > 1 else 'it'} off "
-                           f"in the garage (BACKSPACE), or pick a build without")
+                           f"in the garage (the first row), or pick a build without")
         elif k == "max_wing_area":
             big = {s: a for s, a in stats["area"].items() if a > v + 1e-9}
             if big:
@@ -546,6 +546,12 @@ class ChallengeRun:
         self.last, self._counted = (v, n), True
         self.note = (f"{self.ch['title']}: {fmt_value(metric, v)}  [{stars_text(n)}]"
                      + ("  NEW BEST" if new_best else ""))
+        if n == 2:                         # fast enough for 3: say what the build lacks
+            t3 = thresholds(self.ch)[2]
+            if (v <= t3) if METRICS[metric]["lower"] else (v >= t3):
+                eff = refusals(self.ch["stars"]["3"]["efficiency"], self.stats)
+                if eff:
+                    self.note += "  -- 3rd star: " + eff[0]
         if new_best or n > self.stars:
             if new_best:
                 self.best = v
@@ -684,10 +690,17 @@ def detail(ch, stats, why, progress) -> tuple:
             ("3 stars", f"{fmt_value(metric, t3)} with "
                         + "; ".join(_bound_text(k, v) for k, v in eff.items()))]
     rules = constraints_text(ch) or [("rules", "none: any build")]
+    #  the reference drove with wings and this car has none: its third star
+    #  is out of reach (Air brake from 150's is all three wings out)
+    bare = (stats is not None and not stats["slots"]
+            and ch.get("ref", {}).get("build") not in (None, "none"))
+    if bare:
+        rules[:0] = [("note", "your car has no wings: the third star needs them"),
+                     ("", "Fix it in the garage (W fits a ready-made wing)")]
     if stats is not None:
-        rules.append(("your build", f"{stats['mass']:.1f} kg of wing, drag area "
-                                    f"{stats['cda']:.3f} m^2, wings in "
-                                    + (", ".join(stats['slots']) or "no slot")))
+        rules += [("wing mass", f"{stats['mass']:.1f} kg"),
+                  ("drag area", f"{stats['cda']:.3f} m^2"),
+                  ("wings in", ", ".join(stats["slots"]) or "no slot")]
     b, n = _best(progress, ch["id"])
     mine = [("best", (f"{fmt_value(metric, b)}  [{stars_text(n)}]" if b is not None
                       else "none yet"))]
@@ -695,13 +708,16 @@ def detail(ch, stats, why, progress) -> tuple:
                          "skid_ay": "lateral g", "drag_time": "the time",
                          "trap_speed": "the speed"}[metric].upper(), goal),
             ("RULES", rules), ("YOURS", mine)]
-    if why:
-        note = "CANNOT START: " + " -- and ".join(why)
-        items = [("Cannot start: change the build first (see below)", "ch_list"),
-                 ("Back", "ch_list")]
+    fix = ("Your car has no wings: the third star needs them - Fix it in the garage "
+           "(W fits a ready-made wing). " if bare else "")
+    if why:                                # what blocks the start comes first
+        note = "CANNOT START: " + " -- and ".join(why) + (". " + fix.rstrip() if fix else "")
+        items = [("Fix it in the garage", "garage"), ("Back", "ch_list")]
     else:
-        note = ch["blurb"] + " Your map, car, engine and surface come back when you end it."
-        items = [("Start", f"ch_go:{ch['id']}"), ("Back", "ch_list")]
+        note = fix + ch["blurb"] + " Your map, car, engine and surface come back when you end it."
+        items = ([("Start", f"ch_go:{ch['id']}")]
+                 + ([("Fix it in the garage", "garage")] if bare else [])
+                 + [("Back", "ch_list")])
     return items, secs, note
 
 
@@ -1063,6 +1079,32 @@ def self_check(verbose: bool = True) -> bool:
     rep("a result after a live engine change is not the challenge's",
         "not counted" in run.note and Progress(prog.path).section(SECTION)[ch["id"]]["stars"] == 2,
         run.note)
+    # a 3-star number on a build outside the 3-star bound: 2 stars, and why
+    run3 = ChallengeRun(ch, trl, dirty)
+    run3.meter._done(t3)
+    run3._collect(SimpleNamespace(track=csim.track, global_wet=csim.global_wet,
+                                  settings=SimpleNamespace(car=ck, engine=ek, wet=sk)))
+    rep("a 3-star number on a build outside the bound: 2 stars, the note says what it lacks",
+        run3.last == (t3, 2) and "[**-]" in run3.note
+        and run3.note.endswith("  -- 3rd star: " + refusals(eff, dirty)[0]),
+        run3.note)
+    # the page: a car with no wings is told the 3rd star needs them, a
+    # refused build gets the garage in one press, the build in three rows
+    ab, sd = allc["airbrake_150"], allc["skid_dry"]
+    it_ab, sec_ab, note_ab = detail(ab, clean, [], None)
+    it_sd, sec_sd, note_sd = detail(sd, dict(clean, slots=["top"]), ["x"], None)
+    r_ab, r_sd = dict(sec_ab)["RULES"], dict(sec_sd)["RULES"]
+    rep("no wings on a challenge driven with them: said first, the garage one row away",
+        "no wings" in r_ab[0][1] and note_ab.startswith("Your car has no wings")
+        and [a for _, a in it_ab] == ["ch_go:airbrake_150", "garage", "ch_list"]
+        and not any("no wings" in w for _, w in dict(detail(allc["brake_100"], clean, [],
+                                                            None)[1])["RULES"]),
+        str(r_ab[:2]))
+    rep("a refused build: 'Fix it in the garage' is the first row; the build in three rows",
+        it_sd[0] == ("Fix it in the garage", "garage")
+        and not any(a.startswith("ch_go:") for _, a in it_sd)
+        and r_sd[-3:] == [("wing mass", "0.0 kg"), ("drag area", "0.600 m^2"),
+                          ("wings in", "top")], str(r_sd[-3:]))
     # the per-step guard: an attempt with T, a live change or slow motion in it is dropped
     csim.settings.engine = ek
     run.meter.counting, run.meter.armed = True, True

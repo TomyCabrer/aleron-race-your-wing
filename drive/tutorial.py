@@ -34,8 +34,8 @@ drives the whole tutorial headless with ScriptedInput, the manual box
 included.
 
 A PAGE step is a paused menu page (keyboard, pad, mouse, like every page):
-Continue, or End. ESC in a drive step opens the pause menu, whose Tutorial
-page skips the step, starts over or ends the tutorial.
+Continue, or End. ESC, in a drive step or on a page, opens the pause menu
+on its Tutorial page: skip the step, start over, end the tutorial.
 
 A step names its MAP; when the session is on another one the tutorial asks
 for a restart and `drive.run_interactive_cli` moves the map (the session is
@@ -77,7 +77,7 @@ MANUAL_DOWN_KMH = 30.0      # ... then a downshift at this speed or more (under 
 TUTORIAL_WING = "plate"     # the library's published flank panel (wing_car)
 MINUTES = 10                # what the offer says it takes
 
-KEYS = "ESC / OPTIONS: the tutorial menu (skip a step, end)"
+KEYS = "ESC / OPTIONS: the tutorial menu (skip a step, start over, end)"
 
 
 # ==================================================================== #

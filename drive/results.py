@@ -42,7 +42,7 @@ def card(res: dict, book=None) -> dict:
     c = dict(time=fmt_time(t), valid=bool(res.get("valid")), why=str(res.get("why") or ""),
              delta="", delta_sign=0, sectors=[], medal=str(res.get("medal") or ""),
              medal_best=bool(res.get("medal_best")), pos="", new_pb=False,
-             key=str(res.get("key") or ""))
+             key=str(res.get("key") or ""), next="")
     if not c["valid"]:
         return c
     pb0 = res.get("pb_before")
@@ -52,6 +52,14 @@ def card(res: dict, book=None) -> dict:
         c["delta_sign"] = -1 if d < 0 else (1 if d > 0 else 0)
     else:
         c["delta"] = "first lap in this class"
+    if _num(t) and c["key"]:               # the medal the PB (this lap counted) goes for next
+        try:
+            from .prerace import next_medal
+            nx = next_medal(c["key"], min(float(t), float(pb0)) if _num(pb0) else float(t))
+            if nx is not None and nx[2] is not None:
+                c["next"] = f"next: {nx[0].upper()} -{nx[2]:.3f}"
+        except Exception:                  # noqa: BLE001 -- a card never stops the car
+            c["next"] = ""
     pos = res.get("pos")
     if isinstance(pos, int) and pos > 0:
         c["pos"] = f"P{pos}"
@@ -194,6 +202,11 @@ def self_check(verbose: bool = True) -> bool:
                    sectors=[]), None)
     rep("the class's first lap: said so, a new PB", c4["delta"] == "first lap in this class"
         and c4["new_pb"])
+    from .prerace import next_medal
+    nx = next_medal(key, 60.90)            # the PB after c, and after c2 (slower)
+    rep("the next medal from the PB this lap leaves: a new PB's own, a slower lap's the old one's",
+        c["next"] == (f"next: {nx[0].upper()} -{nx[2]:.3f}" if nx else "")
+        and c2["next"] == c["next"] and c3["next"] == "", f"{c['next']!r}")
     rep("the settings row and the page's list: time, delta, place, medal; or why",
         summary(c) == "1:00.900  -0.500  P1  GOLD  NEW PB"
         and summary(c3) == "40.000  not counted: not a full lap"

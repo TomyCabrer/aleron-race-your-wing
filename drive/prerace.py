@@ -133,6 +133,23 @@ def _medal_for(key: str, t):
         return None
 
 
+def next_medal(key: str, t, tg=None):
+    """The medal a PB of `t` s goes for next: (name, target s, gap s) -- the
+    easiest one not won yet (`t <= target` wins it, drive.medals' rule). No
+    PB yet (`t` not finite): bronze, the gap None. None when the author time
+    is beaten or the class has no targets. `tg`: the targets (default: the
+    medal table's)."""
+    tg = _medal_table(key) if tg is None else tg
+    if not tg or not all(isinstance(tg.get(m), (int, float)) for m in rec.MEDAL_ORDER):
+        return None
+    if not isinstance(t, (int, float)) or not math.isfinite(t):
+        return "bronze", float(tg["bronze"]), None
+    for m in reversed(rec.MEDAL_ORDER):    # bronze first: the nearest one up
+        if float(tg[m]) < t:
+            return m, float(tg[m]), float(t) - float(tg[m])
+    return None
+
+
 def assists_text(a: dict) -> str:
     """The lap's assists as short tags: 'ABS TC AID AUTO'."""
     if not isinstance(a, dict):
@@ -189,7 +206,10 @@ class PreRace:
         return rows
 
     def subtitle(self) -> str:
-        return f"{rec.class_label(self.key)}   build: {self.build_name or '(unnamed)'}"
+        ttl = self.titles                  # the proper names, when the session gave them
+        parts = [ttl.get(k) for k in ("track", "car", "engine", "surface")]
+        cls = "  ·  ".join(map(str, parts)) if all(parts) else rec.class_label(self.key)
+        return f"{cls}   build: {self.build_name or '(unnamed)'}"
 
     def sections(self) -> list:
         t, c, e, s = rec.split_key(self.key)
@@ -217,9 +237,17 @@ class PreRace:
             order = rec.MEDAL_ORDER
             if m_pb in order and (best not in order or order.index(m_pb) < order.index(best)):
                 best = m_pb                # a PB set before the table: it still counts
-            mrows = [(m, rec.fmt_time(tg[m])) for m in ("author", "gold", "silver", "bronze")]
+            mrows = [(m, rec.fmt_time(tg[m]) + ("  *" if math.isfinite(pb) and pb <= tg[m] else ""))
+                     for m in ("author", "gold", "silver", "bronze")]      # * = the PB has it
             mrows.append(("yours", (best or "none yet") + (f"  (PB {rec.fmt_time(pb)})"
                                                             if math.isfinite(pb) else "")))
+            nx = next_medal(self.key, pb, tg)
+            if nx is None:
+                mrows.append(("next", "all medals won"))
+            else:
+                mrows.append(("next", f"{nx[0].upper()} {rec.fmt_time(nx[1])}  "
+                                      + (f"({nx[2]:.3f} s to go)" if nx[2] is not None
+                                         else "(your first valid lap)")))
             secs.append(("MEDALS", mrows))
         else:
             secs.append(("MEDALS", [("--", "no reference lap for this class")]))
@@ -312,6 +340,21 @@ def self_check(verbose: bool = True) -> bool:
         len(top) == 4 and top[0][0].startswith("1  1:00.900") and "fast" in top[0][1]
         and "ABS AID MAN" in top[0][1], str(top[:2]))
     rep("medal block present (targets or '--')", "MEDALS" in secs, str(secs.get("MEDALS"))[:80])
+    med = secs.get("MEDALS") or [("--", "")]
+    rep("... with the next medal and its gap (or all won)", med[0][0] == "--"
+        or (med[-1][0] == "next" and ("s to go)" in med[-1][1] or "all medals" in med[-1][1])),
+        str(med[-2:]))
+    tg = dict(author=58.0, gold=59.0, silver=61.0, bronze=65.0)
+    rep("next medal: the nearest one up with the gap; bronze with no PB; none past the author",
+        next_medal(key, 60.5, tg) == ("gold", 59.0, 1.5) and next_medal(key, 70.0, tg)[0] == "bronze"
+        and next_medal(key, 59.0, tg)[0] == "author" and next_medal(key, 58.0, tg) is None
+        and next_medal(key, float("inf"), tg) == ("bronze", 65.0, None)
+        and next_medal(key, 60.0, {}) is None, str(next_medal(key, 60.5, tg)))
+    named = PreRace(key, book, "fast", b_fast, titles=dict(
+        track="Arena circuit", car="Linden Corsa", engine="Sport", surface="Dry, wet patches"))
+    rep("the subtitle: the proper names; the key's words without them",
+        named.subtitle().startswith("Arena circuit  ·  Linden Corsa  ·  Sport")
+        and pr.subtitle().startswith(rec.class_label(key)), named.subtitle())
     pick = pr.pick_items()
     acts = [a for _, a in pick]
     rep("pick lists every saved build with its best in this class",

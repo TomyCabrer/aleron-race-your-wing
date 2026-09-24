@@ -59,6 +59,15 @@ hotkeys inside it. Every menu page also takes the **mouse**: point at a row,
 click it to run it, the wheel moves the cursor, a right click goes back. The car does not move and the pad does not rumble while it
 is up. `P` is still the plain pause for `O` single-stepping.
 
+`H` cycles the HUD: **minimal** (the default race HUD: speed, gear, timing,
+minimap, a wing chip when wings are fitted), **full** (the engineering panels:
+loads, state, aero, pedals, g-g) and off. The HUD level and the camera (`C`)
+are remembered. In a time trial on a circuit, *RACE* and `SHIFT+R` put the car
+**rolling, 150 m before the line** (the HUD counts the out-lap down), keep BEST
+and the sector bests, and the running lap turns **INVALID** with its reason the
+moment it stops counting. Losing the window's focus or unplugging the pad
+opens the pause menu.
+
 ## Settings
 
 *Settings* on the pause menu is a second page; `ENTER` / `✕` cycles a value,

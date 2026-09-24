@@ -1787,6 +1787,33 @@ wing side (auto / left / right / both), `R` reset, `SHIFT+R` full reset, `P` pau
 ghosts, `TAB` next map, `BACKSPACE` garage, `ESC` pause menu / settings. PS5
 pad map: section 6.
 
+### Task 39 (player audit) -- interface additions
+
+* `Settings.hud` (`'minimal'` default; `full` / `minimal` / `off`) and `Settings.camera` are
+  written by `_view_event` (H / C) and passed to `ViewConfig`. `clamp` accepts only a str in
+  each choice's allowed set (else the default) and a finite ballast. `Settings.load` moves an
+  unparsable / non-table file to `<path>.bad` and sets `load_note`. `save` is tmp + `os.replace`
+  and sets `save_note` on `OSError`. Both notes are shown once on the first frame.
+* `LapTimer.restart()` resets the running lap and keeps `best_lap`, `last_lap`, `sector_best`.
+  `reset()` is still the full wipe. `Sim.reset(to_checkpoint=False)` uses `restart()`. A
+  checkpoint reset with the clock running sets `lap._valid_run = False`.
+* `Sim.reset(..., standing=False)`: a full reset uses `Sim._rolling_pose()` -> `(s0, V0, gear)`
+  only on `trk.CIRCUITS` in a time-trial session (prerace page or recorder) with no rivals,
+  challenge or active tutorial. `s0 = L - min(150, 0.15 L)`,
+  `V0 = min(22, sqrt(0.8 G / max|kappa| on [s0, L]))`. Otherwise it is a standing start at
+  `s = 0`. The seed lap passes `standing=True`.
+* `hud_data()`: `lap_valid` is now the RUNNING lap's (`True` on the out-lap). Plus
+  `lap_void_why` (`''` when valid) and `out_lap_m` (metres to the line before the first
+  crossing on a closed track, outside challenges; else `None`), set as attributes after
+  `HudData` is built. `lap.lap_valid` (LAST, results, challenges) is unchanged.
+* `render.ViewConfig.hud` defaults to `'minimal'`. `results.card()` always carries `next`
+  (from `prerace.next_medal(key, t)` -> `(name, target, gap)` or None).
+* During an active tutorial ESC opens the TUTORIAL page. On a page step only `tut_next`
+  advances. R / SHIFT+R / BACKSPACE are inert on WELCOME and page steps.
+* `input`: `WINDOWFOCUSLOST` and pad removal emit `menu` once (never while a menu is up).
+  Hot-plugged and launch pads get `lock_deg`. `aero.library` compares build names folded;
+  `unique_name` gives `-2`.
+
 ## 9. Reconciliations (where the subsystem specs disagreed)
 
 1. **Tyre model.** `numerics.txt` proposed a simplified single-shape-function

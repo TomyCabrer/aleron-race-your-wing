@@ -257,9 +257,11 @@ MENU_PAD_NAMES = {
     "ps": {"up": "nav_up", "down": "nav_down", "left": "nav_left",
            "right": "nav_right", "cross": "select", "circle": "back",
            "options": "menu", "create": "reset", "touchpad": "garage"},
+    # reset on Y, the button that resets while driving (DEFAULT_PAD_BUTTONS 3);
+    # BACK (4) shifts down there, so it was a reset in the menu only
     "generic": {"up": "nav_up", "down": "nav_down", "left": "nav_left",
                 "right": "nav_right", "a": "select", "b": "back",
-                "start": "menu", "back": "reset"},
+                "start": "menu", "y": "reset"},
 }
 
 
@@ -355,6 +357,11 @@ MENU_KEYS = {
 MENU_KEYS.update({getattr(pygame, f"K_{d}"): f"digit:{d}" for d in range(10)})
 MENU_KEYS.update({getattr(pygame, f"K_KP{d}"): f"digit:{d}" for d in range(10)})
 
+#: the window losing focus auto-pauses (KeyboardInput.poll_events); -1 on a
+#: pygame without window events never matches
+_FOCUS_LOST = getattr(pygame, "WINDOWFOCUSLOST", -1)
+
+
 def _menu_mouse(ev):
     """A mouse event while a menu is up -> a menu command, or None. The
     pointer moves the cursor (`hover:X:Y`), a left press arms the row under
@@ -398,7 +405,7 @@ MENU_HELP_KB = [
     ("J", "ghosts (PB / ghost 2) on / off"),
     ("BACKSPACE", "garage (3D panel editor)"),
     ("ESC", "this menu / settings"),
-    ("mouse", "in a menu: point, click a row, wheel, right = back"),
+    ("mouse", "click a row, wheel, right-click back"),
 ]
 MENU_HELP_PAD = {
     "ps": [
@@ -415,14 +422,18 @@ MENU_HELP_PAD = {
         ("touchpad", "garage (3D panel editor)"),
         ("OPTIONS", "this menu / settings"),
     ],
+    # what DEFAULT_PAD_BUTTONS does, named by GENERIC_BUTTON_NAMES (SDL's
+    # order: its 4-7 are BACK / GUIDE / START / L3 there); the self-check
+    # presses every row's buttons and holds them to what the row says
     "generic": [
         ("RT / LT", "throttle / brake"),
         ("left stick", "steer"),
-        ("RB / LB", "shift up / down"),
+        ("GUIDE / BACK", "shift up / down"),
         ("A / X", "handbrake / clutch (hold)"),
-        ("B", "flank wing"),
+        ("B", "wings armed on / off"),
         ("Y", "reset to sector"),
-        ("BACK / START", "full reset / this menu"),
+        ("L3", "full reset"),
+        ("START", "this menu / settings"),
     ],
 }
 MENU_NO_PAD = "no controller: pair the DualSense (CREATE+PS) - it hot-plugs"
@@ -699,6 +710,13 @@ class KeyboardInput:
         for ev in events:
             if ev.type == pygame.QUIT:
                 cmds.append("quit")
+                continue
+            if ev.type == _FOCUS_LOST:
+                # alt-tab / a notification took the window: pause in the menu
+                # rather than drive on blind. Once, and never while a menu is
+                # already up (a second 'menu' would close it again).
+                if not self.menu and "menu" not in cmds:
+                    cmds.append("menu")
                 continue
             if self.menu and self.key_sink is None:
                 m = _menu_mouse(ev)            # the pause menu takes the mouse
@@ -1009,8 +1027,10 @@ class GamepadInput:
 
     def _button(self, i: int) -> bool:
         try:
-            if self.layout == "ps" and 11 <= i <= 14 and i >= self.joy.get_numbuttons():
+            if 11 <= i <= 14 and i >= self.joy.get_numbuttons():
                 # some drivers report the d-pad as hat 0 instead of buttons
+                # (an XInput-style generic pad always does): both layouts
+                # name 11-14 up / down / left / right
                 hx, hy = self.joy.get_hat(0)
                 return {11: hy == 1, 12: hy == -1, 13: hx == -1, 14: hx == 1}[i]
             return bool(self.joy.get_button(i))
@@ -1281,21 +1301,26 @@ class BlendedInput:
             else:
                 print(f"gamepad: {pad.name} ({pad.layout} layout)")
 
-    def _hotplug(self) -> None:
+    def _hotplug(self) -> list[str]:
         """Attach a pad that appears after launch; drop one that goes away.
         pygame only refreshes the count while events are pumped, which the
-        keyboard half's queue drain does every frame."""
+        keyboard half's queue drain does every frame. A pad lost while
+        driving returns ['menu']: the car pauses instead of rolling on with
+        nobody at the wheel (nothing when the menu is already up)."""
         try:
             n = pygame.joystick.get_count() if pygame.joystick.get_init() else 0
             if n == 0 and not pygame.joystick.get_init():
                 pygame.joystick.init()
                 n = pygame.joystick.get_count()
         except pygame.error:
-            return
+            return []
         if self.pad is None and n > 0:
             try:
+                # the selected car's lock, as the launch path sets it
                 self.pad = GamepadInput(0, steer_limit=self.kb.steer_limit,
-                                        k_us_deg=self.kb.k_us_deg)
+                                        k_us_deg=self.kb.k_us_deg,
+                                        lock_deg=getattr(self.kb, "lock_deg",
+                                                         DELTA_LOCK_DEG))
                 print(f"gamepad connected: {self.pad.name} ({self.pad.layout} layout)")
                 if self.kb.menu:
                     self.pad.set_menu(True)
@@ -1305,6 +1330,9 @@ class BlendedInput:
         elif self.pad is not None and n == 0:
             print("gamepad disconnected - keyboard only")
             self.pad = None
+            if not self.kb.menu:
+                return ["menu"]
+        return []
 
     def feedback(self, aux) -> None:
         if self.pad is not None:
@@ -1366,7 +1394,9 @@ class BlendedInput:
         cmds = self.kb.poll_events()
         self._frames += 1
         if self.hotplug and self._frames % self.HOTPLUG_EVERY == 1:
-            self._hotplug()
+            for c in self._hotplug():          # a lost pad pauses: 'menu', once
+                if c not in cmds:
+                    cmds.append(c)
         if self.pad is not None:
             cmds.extend(self.pad.poll_events())
         return cmds
@@ -1461,7 +1491,8 @@ def default_input(steer_limit: bool = True, announce: bool = True,
     pad = None
     if GamepadInput.available():
         try:
-            pad = GamepadInput(0, steer_limit=steer_limit, k_us_deg=kb.k_us_deg)
+            pad = GamepadInput(0, steer_limit=steer_limit, k_us_deg=kb.k_us_deg,
+                               lock_deg=kb.lock_deg)
         except Exception as exc:        # a pad that enumerates but will not open
             print(f"gamepad found but not usable ({exc}) - keyboard only")
             pad = None
@@ -1733,6 +1764,17 @@ def self_check(verbose: bool = True) -> bool:
     check_eq("menu closed: UP is a pedal again, not nav", kb.poll_events(), [])
     pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(300, 210), button=1))
     check_eq("menu closed: the mouse is ignored", kb.poll_events(), [])
+    pygame.event.post(pygame.event.Event(_FOCUS_LOST))
+    pygame.event.post(pygame.event.Event(_FOCUS_LOST))
+    check_eq("focus lost while driving -> 'menu' once (auto-pause)", kb.poll_events(), ["menu"])
+    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, mod=0))
+    pygame.event.post(pygame.event.Event(_FOCUS_LOST))
+    check_eq("ESC and focus lost in one frame -> one 'menu' (not open-and-close)",
+             kb.poll_events(), ["menu"])
+    kb.set_menu(True)
+    pygame.event.post(pygame.event.Event(_FOCUS_LOST))
+    check_eq("focus lost with the menu up -> nothing (it stays open)", kb.poll_events(), [])
+    kb.set_menu(False)
 
     if verbose:
         print("\n-- V29 gamepad absent: the keyboard-only path --")
@@ -1997,6 +2039,116 @@ def self_check(verbose: bool = True) -> bool:
     check_eq("blend: set_menu reaches both halves", (bl.kb.menu, pad.menu, bl.layout),
              (True, True, "ps"))
     bl.set_menu(False)
+
+    if verbose:
+        print("\n-- the pad help rows: every button does what its row says --")
+    # what a help row claims, by its text: one command per button its key
+    # names (None: an axis row, checked above). A row edited or added without
+    # a line here fails, so the help cannot drift from the button maps again
+    # (the generic rows once named RB / LB, which shifted nothing).
+    claims = {
+        "throttle / brake": None, "steer": None,
+        "shift up / down": ("shift_up", "shift_down"),
+        "handbrake / clutch (hold)": ("handbrake", "clutch"),
+        "wings armed on / off": ("wing",),
+        "wing mode: auto, air brake, all 3": ("wing_side",),
+        "reset to sector": ("reset",),
+        "full reset": ("full_reset",),
+        "HUD / vectors": ("hud", "vectors"),
+        "slow-mo / normal": ("slowmo", "normal_speed"),
+        "camera / auto zoom": ("camera", "zoom_auto"),
+        "garage (3D panel editor)": ("garage",),
+        "this menu / settings": ("menu",),
+    }
+
+    def _row_names(key):
+        """'CROSS / SQUARE' -> ['cross', 'square'], 'd-pad L/R' -> ['left', 'right']."""
+        k = key.lower().replace("d-pad ", "")
+        return [{"l": "left", "r": "right"}.get(p.strip(), p.strip()) for p in k.split("/")]
+
+    def _does(p, stub, name):
+        """What pressing the button called `name` does while driving: its
+        edge, else the pedal it holds; None for a name the layout lacks."""
+        i = p._name_to_btn.get(name)
+        if i is None:
+            return None
+        stub.bt = [False] * len(stub.bt)
+        p.poll_events()
+        stub.bt[i] = True
+        ev = p.poll_events()
+        c = p.update(DT, 10.0)
+        stub.bt[i] = False
+        p.poll_events()
+        if ev:
+            return ev[0] if len(ev) == 1 else tuple(ev)
+        return "handbrake" if c.handbrake else ("clutch" if c.clutch else None)
+
+    class _StubGen(_StubPad):
+        """A generic pad; `n` buttons, the d-pad also on hat 0."""
+        def __init__(self, n=15):
+            super().__init__()
+            self.bt = [False] * n
+            self.hat = (0, 0)
+
+        def get_hat(self, i):
+            return self.hat
+
+    for lay, sh in (("ps", _StubPS()), ("generic", _StubGen())):
+        with contextlib.redirect_stdout(io.StringIO()):
+            ph = GamepadInput(joystick=sh, steer_limit=False, user_config=False)
+        bad = []
+        for key, what in MENU_HELP_PAD[lay]:
+            want = claims.get(what, "no claim listed")
+            if want is None:
+                continue
+            got = tuple(_does(ph, sh, nm) for nm in _row_names(key))
+            if got != want:
+                bad.append(f"{key} '{what}' -> {got}")
+        check_eq(f"{lay}: every help row's buttons do what the row says", bad, [])
+    for lay, names, drv in (("ps", PS_BUTTON_NAMES, PS_PAD_BUTTONS),
+                            ("generic", GENERIC_BUTTON_NAMES, DEFAULT_PAD_BUTTONS)):
+        mt = MENU_PAD_NAMES[lay]
+        by_cmd = {c: names.get(i) for i, c in drv.items()}
+        check_eq(f"{lay}: menu buttons exist; the menu / reset buttons are the driving ones",
+                 (set(mt) <= set(names.values()), mt.get(by_cmd["menu"]),
+                  mt.get(by_cmd["reset"])), (True, "menu", "reset"))
+    gh = _StubGen(11)                      # XInput-style count: the d-pad is hat 0 only
+    with contextlib.redirect_stdout(io.StringIO()):
+        pg = GamepadInput(joystick=gh, steer_limit=False, user_config=False)
+    pg.set_menu(True)
+    seen = []
+    for hat in ((0, -1), (0, 0), (-1, 0), (0, 0)):
+        gh.hat = hat
+        seen += pg.poll_events()
+    gh.bt[3] = True
+    seen += pg.poll_events()
+    check_eq("generic: the d-pad on hat 0 moves the menu, Y resets there",
+             seen, ["nav_down", "nav_left", "reset"])
+    # hot-plug (pygame's count and device faked): the new pad gets the car's
+    # lock; a pad pulled while driving pauses once, with the menu up nothing
+    saved = (pygame.joystick.get_count, pygame.joystick.Joystick)
+    lock_hp, lost, lost_menu = None, None, None
+    bh = BlendedInput(KeyboardInput(lock_deg=41.5), None, announce=False, hotplug=True)
+
+    def _recount(count):
+        pygame.joystick.get_count = lambda: count
+        bh._frames = BlendedInput.HOTPLUG_EVERY          # this poll recounts
+        with contextlib.redirect_stdout(io.StringIO()):
+            return bh.poll_events()
+    try:
+        pygame.joystick.Joystick = lambda i: _StubPS()
+        _recount(1)
+        lock_hp = bh.pad.lock_deg if bh.pad is not None else None
+        lost = _recount(0)
+        _recount(1)
+        bh.set_menu(True)
+        lost_menu = _recount(0)
+        bh.set_menu(False)
+    finally:
+        pygame.joystick.get_count, pygame.joystick.Joystick = saved
+    check_eq("hot-plug: the new pad gets the car's lock, not the Corsa's", lock_hp, 41.5)
+    check_eq("pad pulled while driving -> 'menu' once; with the menu up -> nothing",
+             (lost, lost_menu, bh.pad), (["menu"], [], None))
 
     if verbose:
         print("\n-- gearbox modes: auto / manual / clutch through the blend --")
