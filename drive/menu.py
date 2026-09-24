@@ -111,20 +111,24 @@ class Menu:
         self._draws = 0                   # frames drawn since the last show()
         self.art = None                   # a page's own drawing (show(art=))
         self.art_h = 0.0
+        self.typed = frozenset()          # rows that take typed digits (show(typed=))
 
     # -- state --------------------------------------------------------------
     def show(self, items=None, sections=None, subtitle=None, note=None,
              footer=None, title=None, idx=0, columns=None, art=None,
-             art_h: float = 0.0) -> None:
+             art_h: float = 0.0, typed=()) -> None:
         """Open (or re-open) the menu. `idx` keeps the cursor where it was
         when a settings page re-shows itself after a value is cycled;
         `columns=1` stacks every help section (and the note) in one column
         to the right of the items, for pages with long item labels.
         `art(screen, rect)` is the page's own drawing (the LAP RESULTS
         page's card), given `art_h` px at the top of the first help column;
-        every show() sets it, so the next page never inherits it."""
+        every show() sets it, so the next page never inherits it. `typed`:
+        the actions of the rows that take the keyboard's digits (a digit on
+        one returns 'type:<d>:<action>'); set by every show() too."""
         self.art = art
         self.art_h = float(art_h) if art is not None else 0.0
+        self.typed = frozenset(typed or ())
         if items is not None:
             self.items = list(items)
         if sections is not None:
@@ -168,6 +172,12 @@ class Menu:
             a = self.action()
             if a:
                 return ("prev:" if cmd == "nav_left" else "next:") + a
+        elif cmd.startswith("digit:"):
+            # a typed digit: only on a row the page said takes one; the
+            # menu stays open, the page re-shows itself
+            a = self.action()
+            if a and a in self.typed:
+                return f"type:{cmd[6:7]}:{a}"
         elif cmd == "select":
             a = self.action()
             self.open = False
@@ -517,6 +527,15 @@ def self_check(verbose: bool = True) -> bool:
     m.draw(scr)
     rep("a page's own drawing: its rect, cleared by the next page, a failure dropped",
         placed_ok and cleared and m.art is None, str(got[:1]))
+    # typed digits reach only the rows a page declares; the menu stays open
+    m.show(items=[("Cars", "set:n"), ("Back", "b")], typed=("set:n",))
+    on_row = m.handle("digit:7")
+    m.handle("nav_down")
+    off_row = m.handle("digit:7")
+    m.show(items=[("Cars", "set:n")])
+    undeclared = m.handle("digit:7")
+    rep("a digit on a typed row -> 'type:<d>:<action>'; nothing elsewhere",
+        on_row == "type:7:set:n" and off_row is None and undeclared is None and m.open)
     m.hide()
     scr.fill((27, 29, 33))
     m.draw(scr)

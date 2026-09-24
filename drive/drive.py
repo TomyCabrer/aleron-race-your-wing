@@ -111,8 +111,9 @@ SEED_LAP_COLS = ("t", "x", "y", "psi", "u", "v", "r", "beta", "ay", "util_f",
 SWARM_MENU_DEFAULTS = dict(pop=24, seed="none", gens=0, T=70.0, view="replay", save="ask",
                            car="same")
 #: `pop` and `T` are FREE values (drive/swarm_panel.py, task 26): any
-#: population in [4, 128] and any whole second in [20, 240], LEFT / RIGHT one
-#: step, ENTER a big one; the rest are lists
+#: population in [4, 128] and any whole second in [20, 240]; LEFT / RIGHT jump
+#: between fixed numbers, ENTER cycles them, the digits type one (task 34);
+#: the rest are lists
 SWARM_MENU_CHOICES = dict(seed=("none", "latest", "best"),
                           gens=(0, 3, 5, 10, 20, 50),
                           view=("replay", "fast"),
@@ -129,13 +130,15 @@ SWARM_SAVE_LABELS = {"ask": "ask on exit",
 SWARM_HELP = [("DEPLOY SWARM", [
     ("Car", "what they breed in: your car, or a stock one"),
     ("", "(then raced and tested in that same car)"),
-    ("Cars", "how many cars in each generation: 4 to 128,"),
-    ("", "LEFT / RIGHT one, ENTER eight at a time"),
+    ("Cars", "how many cars in each generation, 4 to 128:"),
+    ("", "LEFT / RIGHT 4 8 16 24 32 48 64 96 128,"),
+    ("", "or type it (0-9, BACKSPACE); ENTER sets it"),
     ("Seed", "what generation 0 is bred from: nothing,"),
     ("", "your last seed lap, or the last swarm saved"),
     ("Generations", "0 = keep going until ESC"),
-    ("Sim time", "seconds each car gets per generation: 20 to"),
-    ("", "240, LEFT / RIGHT 5 s, ENTER 20 s"),
+    ("Sim time", "seconds each car gets per generation, 20 to"),
+    ("", "240: LEFT / RIGHT 20 30 45 60 70 90 120 150"),
+    ("", "180 240, or type the seconds (0-9, BACKSPACE)"),
     ("Replay", "watch each generation as ghosts, or off:"),
     ("", "no cars drawn, the next one starts the moment"),
     ("", "one is scored -- many times faster"),
@@ -1301,6 +1304,7 @@ class Sim:
         self._menu_was_paused = False
         self._menu_page = "main"           # 'main' | 'settings' | 'swarm' | 'race'
         self.swarm_opts = dict(SWARM_MENU_DEFAULTS)   # the Deploy-swarm page
+        self._swarm_typed = None           # its digits typed on Cars / Sim time (task 34)
         self.swarm_launch = None           # set when the page fires 'Deploy'
         # the RACE VS BOT page. `rival` is the bot's car while a race is on;
         # its trail and the user's own feed the HUD's gap.
@@ -2101,23 +2105,31 @@ class Sim:
         return [(f"{'Car':<13s}{swarm_car_label(o.get('car', 'same'), self.settings.car)}",
                  "set:sw_car"),
                 (f"{'Aero':<13s}{aero}", "swarm_aero"),
-                (f"{'Cars':<13s}{o['pop']}   (4 - 128)", "set:sw_pop"),
+                (f"{'Cars':<13s}{self._swarm_row('pop')}   (4 - 128)", "set:sw_pop"),
                 (f"{'Seed':<13s}{seed}", "set:sw_seed"),
                 (f"{'Generations':<13s}{'until ESC' if not o['gens'] else o['gens']}",
                  "set:sw_gens"),
-                (f"{'Sim time':<13s}{o['T']:.0f} s per car   (20 - 240)", "set:sw_T"),
+                (f"{'Sim time':<13s}{self._swarm_row('T')} s per car   (20 - 240)", "set:sw_T"),
                 (f"{'Replay':<13s}{SWARM_VIEW_LABELS[o.get('view', 'replay')]}", "set:sw_view"),
                 (f"{'Save best':<13s}{SWARM_SAVE_LABELS[o.get('save', 'ask')]}", "set:sw_save"),
                 (f"{'Seed lap':<13s}{armed}", "swarm_arm"),
                 ("Deploy the swarm", "swarm_go"),
                 ("Back", "swarm_back")]
 
+    def _swarm_row(self, key: str) -> str:
+        """Cars / Sim time as the row shows it: the digits while typing."""
+        from .swarm_panel import row_value
+        ty = self._swarm_typed
+        return row_value(key, self.swarm_opts[key],
+                         ty.shown(key) if ty is not None else "")
+
     def _menu_show_swarm(self, idx: int = 0) -> None:
         self.menu.show(items=self._swarm_items(), sections=SWARM_HELP,
                        subtitle=self._menu_subtitle(), note=SWARM_NOTE,
-                       footer="LEFT / RIGHT change   ENTER / CROSS cycle, select   "
-                              "ESC / CIRCLE back",
-                       title="DEPLOY SWARM", idx=idx, columns=1)
+                       footer="LEFT / RIGHT change   0-9 type a number   "
+                              "ENTER / CROSS cycle, select   ESC / CIRCLE back",
+                       title="DEPLOY SWARM", idx=idx, columns=1,
+                       typed=("set:sw_pop", "set:sw_T"))
         self._menu_page = "swarm"
 
     # ---- the RACE VS BOT page, and the grid it fills --------------------
@@ -2851,13 +2863,17 @@ class Sim:
 
     def _swarm_step(self, key: str, d: int, coarse: bool = False) -> None:
         if key in ("pop", "T"):            # free values (drive/swarm_panel.py)
-            from .swarm_panel import step_value, clamp_pop, clamp_T, POP_MAX, T_MAX
+            from .swarm_panel import step_value, cycle_value
             cur = self.swarm_opts[key]
-            if coarse:                     # ENTER: a big step, round to the bottom
-                top = POP_MAX if key == "pop" else T_MAX
-                nxt = (cur + (8 if key == "pop" else 20.0)) if cur < top else 0
-                self.swarm_opts[key] = clamp_pop(nxt) if key == "pop" else clamp_T(nxt)
-            else:
+            ty = self._swarm_typed
+            if coarse and ty is not None and ty.shown(key):
+                ty.clear()                 # ENTER after typing: that number, set
+                return
+            if ty is not None:
+                ty.clear()
+            if coarse:                     # ENTER: the next fixed number, round
+                self.swarm_opts[key] = cycle_value(key, cur)
+            else:                          # LEFT / RIGHT: the next one that way
                 self.swarm_opts[key] = step_value(key, cur, d)
             return
         ch = SWARM_MENU_CHOICES[key]
@@ -2903,6 +2919,30 @@ class Sim:
         if ev == "quit":                   # window close
             self.quit = True
             return
+        if self._menu_page == "swarm" and self._swarm_typed is not None:   # task 34
+            row = self.menu.action() if self.menu is not None else None
+            if ev == "garage" and row in ("set:sw_pop", "set:sw_T"):
+                #  BACKSPACE on a number row takes a digit back (it is the
+                #  garage's hotkey everywhere else)
+                from .swarm_panel import clamp_pop, clamp_T
+                key = row[7:]
+                v = self._swarm_typed.backspace(key, self.swarm_opts[key])
+                if v is not None:
+                    self.swarm_opts[key] = clamp_pop(v) if key == "pop" else clamp_T(v)
+                self._menu_show_swarm(idx=self.menu.idx)
+                return
+            if ev in ("nav_up", "nav_down", "menu", "back") or ev.startswith("click:"):
+                was = bool(self._swarm_typed.buf)
+                self._swarm_typed.clear()      # a move ends the number being typed
+                if was and ev in ("nav_up", "nav_down"):
+                    self.menu.handle(ev)       # ... and the row drops its "_"
+                    self._menu_show_swarm(idx=self.menu.idx)
+                    return
+        if (ev == "garage" and self._menu_page == "swarm" and self.menu is not None
+                and self.menu.action() in ("set:sw_pop", "set:sw_T")):
+            from .swarm_panel import Typed      # BACKSPACE on a number row, first key
+            self._swarm_typed = Typed()
+            return self._menu_event(ev)
         if ev == "ghosts" and self._menu_page == "prerace" and self.ghosts is not None:
             self.ghosts.enabled = not self.ghosts.enabled      # J, on the page whose
             self._rec_note("ghosts " + ("on" if self.ghosts.enabled else "off"), 2.0)
@@ -2964,6 +3004,18 @@ class Sim:
                 if action[5:].startswith("set:sw_"):
                     self._swarm_step(action[12:], -1 if action[0] == "p" else +1)
                     self._menu_show_swarm(idx=idx)
+                return
+            if action.startswith("type:"):     # a digit on Cars / Sim time (task 34)
+                _t, ch, row = action.split(":", 2)
+                if row in ("set:sw_pop", "set:sw_T"):
+                    from .swarm_panel import Typed, clamp_pop, clamp_T
+                    key = row[7:]
+                    if self._swarm_typed is None:
+                        self._swarm_typed = Typed()
+                    v = self._swarm_typed.digit(key, ch)
+                    if v is not None:
+                        self.swarm_opts[key] = clamp_pop(v) if key == "pop" else clamp_T(v)
+                self._menu_show_swarm(idx=idx)
                 return
             if action.startswith("set:sw_"):
                 self._swarm_step(action[7:], +1, coarse=True)
@@ -3042,6 +3094,8 @@ class Sim:
             self._menu_show_settings()
             return
         elif action == "swarm":
+            if self._swarm_typed is not None:
+                self._swarm_typed.clear()      # a new visit: no number half-typed
             self._menu_show_swarm()
             return
         elif action == "race":
@@ -5264,6 +5318,63 @@ def _v34_tutorial(tmp, verbose=True):
     return ok, dict(passed=passed, maps=maps, results=res, sim_s=sim_t)
 
 
+def _v40_swarm_numbers(tmp, verbose=True):
+    """The Deploy-swarm page's Cars and Sim time (task 34), by events with no
+    window: LEFT / RIGHT jump between the fixed numbers, ENTER cycles them,
+    and the keyboard's digits type any value (the row shows the digits and
+    the clamped value); ENTER after typing sets it, without a cycle."""
+    from types import SimpleNamespace
+    sim = _build("arena", driver=lambda t, v, tr: Controls(brake=1.0))
+    sim.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
+    ev = sim.handle_event
+
+    def goto(action):
+        i = [a for _, a in sim.menu.items].index(action)
+        while sim.menu.idx != i:
+            ev("nav_down")
+
+    def row(action):
+        return next(lbl for lbl, a in sim.menu.items if a == action)
+
+    ev("menu")
+    goto("swarm")
+    ev("select")
+    goto("set:sw_pop")
+    o = sim.swarm_opts
+    got = [o["pop"]]
+    ev("nav_right"); got.append(o["pop"])
+    ev("nav_right"); got.append(o["pop"])
+    ev("nav_left"); got.append(o["pop"])
+    ev("select"); got.append(o["pop"])            # ENTER: the next fixed number
+    steps = got == [24, 32, 48, 32, 48]
+    for d in "128":
+        ev(f"digit:{d}")
+    typed = o["pop"] == 128 and "128_" in row("set:sw_pop")
+    ev("select")                                   # ENTER after typing: set, no cycle
+    kept = o["pop"] == 128 and sim._menu_page == "swarm"
+    ev("digit:3")
+    clamp = o["pop"] == 4 and "3_ = 4" in row("set:sw_pop")
+    ev("garage")                                   # BACKSPACE on the row: a digit back,
+    bs = not sim.quit and sim._menu_page == "swarm" and "_" not in row("set:sw_pop")
+    ev("digit:6"); ev("digit:4")                   # ... never the garage
+    ev("nav_down"); ev("nav_up")                   # a move ends the number:
+    moved = "_" not in row("set:sw_pop") and o["pop"] == 64
+    ev("digit:8")                                  # ... the next digit starts anew
+    clamp = clamp and bs and moved and o["pop"] == 8
+    goto("set:sw_T")
+    ev("digit:9"); ev("digit:0")
+    t_typed = o["T"] == 90.0 and "90_" in row("set:sw_T")
+    ev("nav_right")
+    t_step = o["T"] == 120.0
+    ok = steps and typed and kept and clamp and t_typed and t_step
+    if verbose:
+        print(f"  V40 swarm values: fixed numbers {got} {steps}; typed 128 {typed}; ENTER sets "
+              f"it {kept}; 3 -> 4 shown, BACKSPACE a digit (not the garage), a move ends the "
+              f"number {clamp}; sim time typed 90 {t_typed}, RIGHT -> 120 "
+              f"{t_step}  -> {'ok' if ok else 'FAIL'}")
+    return ok, dict(steps=got)
+
+
 def _v37_results_page(tmp, verbose=True):
     """Settings > Last lap and the LAP RESULTS page (task 32), by events with
     no window: no row without a recorder; with one, laps carded through
@@ -6055,6 +6166,7 @@ def self_check(verbose=True) -> bool:
                      ("V35", lambda: _v35_challenges(tmp, verbose)),
                      ("V36", lambda: _v36_grid(tmp, verbose)),
                      ("V37", lambda: _v37_results_page(tmp, verbose)),
+                     ("V40", lambda: _v40_swarm_numbers(tmp, verbose)),
                      ("V20", lambda: _v20_determinism(tmp, verbose)),
                      ("accel", lambda: _accel_end_to_end(tmp, verbose)),
                      ("V21", lambda: _v21_rtf(tmp, 60.0, verbose))):

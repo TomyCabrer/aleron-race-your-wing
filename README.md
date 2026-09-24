@@ -778,9 +778,11 @@ From the game: `ESC` → **Deploy swarm**. The page has *Car* (what the swarm
 breeds in: *same as mine*, or a stock Corsa, MX-5 or 540i on your settings —
 the RACE page's rule, `--swarm-car` on the command line; the bot is named
 after it, `swarm_<map>_<car>_…`, and a resume keeps it), *Cars* (any number
-from 4 to 128: `←` `→` one, `ENTER` eight), *Seed*
+from 4 to 128: `←` `→` jump 4 8 16 24 32 48 64 96 128, `ENTER` cycles them,
+or type the number on the keyboard), *Seed*
 (none / your last seed lap / best saved swarm), *Generations*, *Sim time* (any
-whole second from 20 to 240: `←` `→` 5 s, `ENTER` 20 s),
+whole second from 20 to 240: `←` `→` 20 30 45 60 70 90 120 150 180 240, or
+type it),
 *Replay* (watch every generation, or off), *Save best* (what `ESC` does with
 the best car: ask, always, never), *Seed lap* and *Deploy*. *Seed lap* puts
 you on the start line, recording from

@@ -17,9 +17,14 @@ medals and the PB at 1 ms, so the panel says so; the saved bot's lap is
 re-measured at 1 ms when it is saved (K / ESC), as before.
 
 Free values (the Deploy-swarm page): the population is any integer in
-[POP_MIN, POP_MAX] and the sim time any whole second in [T_MIN, T_MAX]:
-LEFT / RIGHT step by 1 (population) or 5 s (time) and a typed value is
-clamped into the range (`clamp_pop`, `clamp_T`, `step_value`).
+[POP_MIN, POP_MAX] and the sim time any whole second in [T_MIN, T_MAX]
+(`clamp_pop`, `clamp_T`). Reaching one is quick (task 34, the owner's "one
+by one to 128 takes a lot of time"): LEFT / RIGHT jump between FIXED
+NUMBERS (`POP_PRESETS`, `T_PRESETS`; `step_value`), ENTER cycles them
+(`cycle_value`), and on a keyboard the digits TYPE any value (`Typed`: up
+to three digits, BACKSPACE takes one back, clamped into the range as you
+type; ENTER sets it, and LEFT / RIGHT, another row or leaving the page end
+the number -- the next digit starts a new one).
 
 Pure functions of numbers and dicts: no pygame, no drive.ml, no file I/O
 (the PB is handed in by the caller, which is the one that may read a player
@@ -31,7 +36,10 @@ import math
 
 POP_MIN, POP_MAX = 4, 128
 T_MIN, T_MAX = 20.0, 240.0
-POP_STEP, T_STEP = 1, 5.0
+#: LEFT / RIGHT and ENTER go through these; the digits reach everything between
+POP_PRESETS = (4, 8, 16, 24, 32, 48, 64, 96, 128)
+T_PRESETS = (20.0, 30.0, 45.0, 60.0, 70.0, 90.0, 120.0, 150.0, 180.0, 240.0)
+TYPE_DIGITS = 3              # a typed number has at most this many digits
 ROWS = 8                     # generations the panel lists
 BAR = 18                     # characters of the widest bar
 MEDALS = ("author", "gold", "silver", "bronze")
@@ -51,12 +59,69 @@ def clamp_T(v) -> float:
         return 70.0
 
 
+def _pre(key):
+    return (POP_PRESETS, clamp_pop) if key == "pop" else (T_PRESETS, clamp_T)
+
+
 def step_value(key: str, cur, d: int):
-    """LEFT / RIGHT on the page's Cars (`pop`) or Sim time (`T`) row: one
-    step, clamped (no wrap: 128 + 1 stays 128)."""
-    if key == "pop":
-        return clamp_pop(clamp_pop(cur) + d * POP_STEP)
-    return clamp_T(clamp_T(cur) + d * T_STEP)
+    """LEFT / RIGHT on the page's Cars (`pop`) or Sim time (`T`) row: the
+    next fixed number that way -- from a typed value between two, its
+    neighbour on that side; no wrap (RIGHT on 128 stays 128)."""
+    pre, clamp = _pre(key)
+    c = clamp(cur)
+    if d > 0:
+        return clamp(next((p for p in pre if p > c), pre[-1]))
+    return clamp(next((p for p in reversed(pre) if p < c), pre[0]))
+
+
+def cycle_value(key: str, cur):
+    """ENTER / CROSS on the row: the next fixed number, round to the first."""
+    pre, clamp = _pre(key)
+    c = clamp(cur)
+    return clamp(next((p for p in pre if p > c), pre[0]))
+
+
+class Typed:
+    """Digits typed on a row (the keyboard's 0-9 on Cars / Sim time): the
+    number so far, shown on the row until the player acts -- ENTER sets it,
+    LEFT / RIGHT, another row or leaving the page end it (`clear`, the
+    page's side). Another row's digit, or a digit after TYPE_DIGITS, starts a
+    new number; no clock: what the row shows is what the next key extends."""
+
+    def __init__(self):
+        self.key, self.buf = None, ""
+
+    def digit(self, key: str, ch: str):
+        """Add one digit; returns the value typed (not yet clamped)."""
+        if key != self.key or len(self.buf) >= TYPE_DIGITS:
+            self.buf = ""
+        self.key = key
+        self.buf += str(ch)[:1] if str(ch)[:1].isdigit() else ""
+        return int(self.buf) if self.buf else None
+
+    def backspace(self, key: str, value):
+        """BACKSPACE on the row: one digit back -- of the number being typed,
+        or of the row's value when none is. Returns the value (None: empty)."""
+        if key != self.key or not self.buf:
+            self.key, self.buf = key, f"{float(value):.0f}"
+        self.buf = self.buf[:-1]
+        return int(self.buf) if self.buf else None
+
+    def shown(self, key: str) -> str:
+        """The digits to show on `key`'s row, or ''."""
+        return self.buf if key == self.key else ""
+
+    def clear(self) -> None:
+        self.key, self.buf = None, ""
+
+
+def row_value(key: str, value, typed: str) -> str:
+    """The row's number: the typed digits while typing (and the clamped
+    value when they are out of range), else the value."""
+    txt = f"{value:.0f}" if key == "T" else f"{value}"
+    if not typed:
+        return txt
+    return f"{typed}_" if int(typed) == float(value) else f"{typed}_ = {txt}"
 
 
 def _t(v) -> str:
@@ -162,13 +227,34 @@ def self_check(verbose: bool = True) -> bool:
         if verbose:
             print(f"  [{'ok' if passed else 'FAIL'}] {tag}" + (f": {msg}" if msg else ""))
 
-    rep("population: any integer in [4, 128], clamped, no wrap",
+    rep("population: any integer in [4, 128], clamped; LEFT / RIGHT the fixed numbers, no wrap",
         (clamp_pop(3), clamp_pop(4), clamp_pop(57), clamp_pop(128), clamp_pop(500),
-         step_value("pop", 128, +1), step_value("pop", 4, -1), step_value("pop", 57, +1),
-         clamp_pop("x")) == (4, 4, 57, 128, 128, 128, 4, 58, 24))
-    rep("sim time: whole seconds in [20, 240], 5 s a step, clamped",
+         step_value("pop", 128, +1), step_value("pop", 4, -1), step_value("pop", 24, +1),
+         step_value("pop", 57, +1), step_value("pop", 57, -1), clamp_pop("x"))
+        == (4, 4, 57, 128, 128, 128, 4, 32, 64, 48, 24))
+    rep("sim time: whole seconds in [20, 240]; LEFT / RIGHT the fixed numbers",
         (clamp_T(10), clamp_T(97.4), clamp_T(999), step_value("T", 240, +1),
-         step_value("T", 20, -1), step_value("T", 70, +1)) == (20.0, 97.0, 240.0, 240.0, 20.0, 75.0))
+         step_value("T", 20, -1), step_value("T", 70, +1), step_value("T", 97, -1))
+        == (20.0, 97.0, 240.0, 240.0, 20.0, 90.0, 90.0))
+    rep("ENTER cycles the fixed numbers, round to the first",
+        [cycle_value("pop", v) for v in (4, 24, 100, 128)] == [8, 32, 128, 4]
+        and cycle_value("T", 240) == 20.0 and cycle_value("T", 70) == 90.0)
+    ty = Typed()
+    seq = [ty.digit("pop", c) for c in "128"]
+    four = ty.digit("pop", "6")                          # a 4th digit: a new number
+    ty.digit("pop", "2")
+    row = ty.digit("T", "9")                             # another row: a new number
+    shown = (ty.shown("T"), ty.shown("pop"))
+    ty.clear()
+    after = ty.digit("pop", "3")                         # after an ENTER / a move: new
+    bs = [ty.backspace("pop", 3), ty.backspace("pop", 3)]
+    bv = [Typed().backspace("pop", 128), Typed().backspace("T", 90.0)]   # of the value
+    rep("typing: up to three digits; another row, or a clear, starts again; BACKSPACE",
+        seq == [1, 12, 128] and four == 6 and row == 9 and shown == ("9", "")
+        and after == 3 and bs == [None, None] and bv == [12, 9], f"{seq} {four} {bs} {bv}")
+    rep("the row shows the digits, and the clamped value when out of range",
+        (row_value("pop", 12, "12"), row_value("pop", 4, "1"), row_value("T", 240.0, "300"),
+         row_value("T", 90.0, "")) == ("12_", "1_ = 4", "300_ = 240", "90"))
     hist = [dict(gen=g, lap_best=(None if g < 2 else 70.0 - g), n_lapped=(0 if g < 2 else g))
             for g in range(12)]
     rows = lap_rows(hist, 24)

@@ -350,6 +350,10 @@ MENU_KEYS = {
     pygame.K_BACKSPACE: "garage",
     pygame.K_j: "ghosts",             # the TIME TRIAL page's Ghosts row (task 33)
 }
+#: the digits, typed into a page's number rows (the Deploy-swarm page's Cars
+#: and Sim time, task 34; drive/menu.Menu.show(typed=))
+MENU_KEYS.update({getattr(pygame, f"K_{d}"): f"digit:{d}" for d in range(10)})
+MENU_KEYS.update({getattr(pygame, f"K_KP{d}"): f"digit:{d}" for d in range(10)})
 
 def _menu_mouse(ev):
     """A mouse event while a menu is up -> a menu command, or None. The
