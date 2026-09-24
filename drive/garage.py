@@ -4254,7 +4254,13 @@ class Garage:
     PAD_REPEAT = 0.14     # s between stick-held adjustments on the list pages
 
     def __init__(self, size=(1280, 800), build=None, pad=None, headless: bool = False,
-                 lib: Library | None = None):
+                 lib: Library | None = None, car: str = "corsa", settings=None):
+        import cars as _cars
+        #: task 41: the car being driven (a `cars.py` key) -- its body, slot
+        #: bands, span limits and default build -- and the drive's Settings
+        #: (None in a bare garage: 'real' limits, no per-car defaults)
+        self.car = car if isinstance(car, str) and car in _cars.CARS else "corsa"
+        self.settings = settings
         if not pygame.get_init():
             pygame.init()
         if not pygame.font.get_init():
@@ -4320,6 +4326,12 @@ class Garage:
         drive.drive calls it right after constructing the Garage, with the
         fitted car's paint resolved to an RGB. Cosmetic only."""
         self.view.set_paint(rgb)
+
+    @property
+    def unlimited(self) -> bool:
+        """Settings' Wing limits is 'unlimited' (task 41): the editors may take
+        a span past the car's physical limit (`bodies.span_ceiling`)."""
+        return getattr(self.settings, "wing_limits", "real") == "unlimited"
 
     # -- pause menu (ESC / OPTIONS) -------------------------------------------
     def _menu_open(self) -> None:

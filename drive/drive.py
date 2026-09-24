@@ -429,11 +429,19 @@ class Settings:
     shake: bool = True            # the kerb / off-road camera shake (task 27)
     graphics: str = GRAPHICS_DEFAULT   # GRAPHICS_MODES -> render.look_config
     paint: dict = field(default_factory=dict)   # car key -> pnt.PAINT_ORDER name
+    #: task 41. 'real' holds every wing to its car's physical span limit
+    #: (drive/bodies.py); 'unlimited' lets the garage go UNLIMITED_FACTOR past
+    #: it. It gates the EDITORS only: whether a run is Unlimited is computed
+    #: from the build, the library and the car (`bodies.over_limits`).
+    wing_limits: str = "real"     # bodies.WING_LIMITS
+    #: task 41: the player's own default build per car -- car key -> the name
+    #: of a library build, loaded when that car is chosen
+    car_build: dict = field(default_factory=dict)
     path: str = field(default=SETTINGS_PATH, repr=False, compare=False)
 
     KEYS = ("track", "car", "ballast", "ballast_at", "engine", "gearbox",
             "abs", "tc", "steer_aid", "wet", "camera", "hud", "sound", "shake", "graphics",
-            "paint")
+            "paint", "wing_limits", "car_build")
     #  not fields (never saved): what went wrong with the file, for the screen
     load_note = ""
     save_note = ""
@@ -476,7 +484,18 @@ class Settings:
         p = self.paint if isinstance(self.paint, dict) else {}
         self.paint = {k: v for k, v in p.items()
                       if k in cars.CARS and isinstance(v, str) and v in pnt.PAINTS}
+        if not ok(self.wing_limits, ("real", "unlimited")):
+            self.wing_limits = "real"
+        cb = self.car_build if isinstance(self.car_build, dict) else {}
+        self.car_build = {k: v for k, v in cb.items()
+                          if k in cars.CARS and isinstance(v, str) and v.strip()}
         return self
+
+    def build_of(self, car: str | None = None) -> str:
+        """The player's default build for `car` (default this car), by library
+        name, or "" when none was chosen (task 41)."""
+        cb = self.car_build if isinstance(self.car_build, dict) else {}
+        return cb.get(car or self.car, "")
 
     def paint_of(self, car: str | None = None) -> str:
         """The Paint setting's name for `car` (default this car): 'factory'
@@ -7297,7 +7316,7 @@ def _painted_garage(grg, size, design, pad, lib, settings):
     """The garage run_interactive_cli opens, its preview car in the Paint
     setting of the car being driven. Resolved: `Garage.set_paint(None)` is
     the garage's stock yellow, so a factory MX-5 is handed its red."""
-    g = grg.Garage(size, design, pad=pad, lib=lib)
+    g = grg.Garage(size, design, pad=pad, lib=lib, car=settings.car, settings=settings)
     g.set_paint(paint_rgb(settings, concrete=True))
     return g
 
