@@ -829,6 +829,22 @@ SETTINGS_ROW_HELP = {
 }
 SETTINGS_ROW_HELP["set:ballast_at"] = SETTINGS_ROW_HELP["set:ballast"]
 SETTINGS_ROW_HELP["set:tc"] = SETTINGS_ROW_HELP["set:steer_aid"] = SETTINGS_ROW_HELP["set:abs"]
+#  task 41: the car's builds, from the drive
+SETTINGS_ROW_HELP.update({
+    "build_pick": [("BUILD", [
+        ("ENTER", "pick another saved build: a new session"),
+        ("", "on it, on any map (the dragstrip too)"),
+        ("Order", "this car's builds, then any-car ones,"),
+        ("", "then other cars' -- tagged, still yours"),
+        ("Saving", "the garage: S saves, B steps builds")])],
+    "build_default": [("DEFAULT BUILD", [
+        ("ENTER", "this build becomes this car's default:"),
+        ("", "choosing the car again loads it"),
+        ("", "(a build in no file is saved first)"),
+        ("None", "a new car starts with no wings, never"),
+        ("", "another car's build; an any-car one stays"),
+        ("Garage", "F there too; R renames, the default follows")])],
+})
 
 
 def engine_help(key: str, car=None) -> list:
@@ -2362,6 +2378,19 @@ class Sim:
             last = self._results_log[-1] if self._results_log else None
             rows.append((f"{'Last lap':<11s}{summary(last, short=True)}", "lap_results"))
         rows.append(("Controls: the DualSense and the keyboard", "controls"))
+        #  task 41: the car's builds from the drive, on every map -- the build
+        #  this session drives (ENTER: the PICK page) and the car's own default
+        #  (ENTER: this build becomes it). The car on the road, not one only
+        #  browsed on the Car row: a default is set for the car it was driven on
+        pk = self._picker()
+        if self.has_garage and pk is not None:
+            run = self._pending.get("car", s.car)
+            tag = "" if pk.saved() else "  (not saved)"
+            rows.append((f"{'Build':<11s}{(pk.build_name or '(unnamed)')[:24]}{tag}",
+                         "build_pick"))
+            from .prerace import car_label
+            rows.append((f"{'Default':<11s}{s.build_of(run)[:24] or 'none'}  "
+                         f"(the {car_label(run)}'s)", "build_default"))
         if self.has_garage:
             rows.append(("Garage (3D panel editor)", "garage"))
         rows.append(("Back", "settings_back"))
@@ -2906,13 +2935,65 @@ class Sim:
                                        "or click a row", title="TIME TRIAL", idx=idx, columns=1)
         self._menu_page = "prerace"
 
-    def _menu_show_prerace_pick(self, idx: int = 0) -> None:
+    def _picker(self):
+        """The PICK page's content (task 41): the pre-race page's own when the
+        session has one (its class: each build's best time), else the one
+        `_interactive_session` made for the Settings page's Build row -- on
+        every map, the dragstrip included. None: no garage, no builds."""
+        return self.prerace if self.prerace is not None else getattr(self, "build_pick", None)
+
+    def _menu_show_prerace_pick(self, idx: int = 0, from_: str | None = None) -> None:
+        """PICK A BUILD. `from_`: the page ESC goes back to -- 'prerace' (the
+        TIME TRIAL page's Build row) or 'settings' (the Settings page's)."""
         from .prerace import PICK_HELP
-        pr = self.prerace
+        if from_ is not None:
+            self._pick_from = from_
+        pr = self._picker()
+        run = self._pending.get("car", self.settings.car)    # the car on the road
+        pr.car, pr.default = run, self.settings.build_of(run)
         self.menu.show(items=pr.pick_items(), sections=PICK_HELP, subtitle=pr.pick_subtitle(),
                        note="", footer="ENTER / CROSS drive it   ESC / CIRCLE back",
                        title="PICK A BUILD", idx=idx, columns=1)
         self._menu_page = "prerace_pick"
+
+    def _pick_back(self) -> None:
+        """ESC / Back on the PICK page: to the page it was opened from."""
+        if getattr(self, "_pick_from", "prerace") == "settings" or self.prerace is None:
+            self._menu_show_settings()
+            acts = [a for _, a in self.menu.items]
+            if "build_pick" in acts:
+                self.menu.idx = acts.index("build_pick")
+        else:
+            self._menu_show_prerace(idx=1)
+
+    def _make_build_default(self) -> None:
+        """Settings > Default (task 41): the build this session drives becomes
+        the default of the car on the road. A build that is in no library file
+        is saved there first, under a free name (never over another build: the
+        garage's F is the one that writes a car's own build in place)."""
+        pk = self._picker()
+        run = self._pending.get("car", self.settings.car)
+        name = pk.build_name if pk.saved() else ""
+        if not name:
+            lib = getattr(self, "garage_lib", None)
+            if lib is None or not isinstance(pk.build_json, dict):
+                self._rec_note("save this build in the garage first (S there)", 3.0)
+                return
+            name = lib.unique_name("builds", pk.build_name or f"my {run}")
+            js = dict(pk.build_json, name=name, builtin=False)
+            try:
+                lib.save_build(js)
+            except (OSError, ValueError) as exc:
+                self._rec_note(f"build NOT saved ({type(exc).__name__}): no default set", 4.0)
+                return
+            pk.builds[name] = js
+            pk.build_name, pk.build_json = name, js
+        cb = dict(self.settings.car_build) if isinstance(self.settings.car_build, dict) else {}
+        cb[run] = name
+        self.settings.car_build = cb
+        self._save_settings()
+        from .prerace import car_label
+        self._rec_note(f"'{name}' is the {car_label(run)}'s default build", 3.0)
 
     def start_timed(self) -> None:
         """RACE: the car rolling up to the line on a circuit (standing on it
@@ -2921,7 +3002,8 @@ class Sim:
         pr = self.prerace
         if pr is not None and pr.build_json is not None and not self.tutorial_car:
             #  (the tutorial's plate car is in memory only: never a map's default)
-            pr.book.set_last_build(self.track.name, pr.build_name, pr.build_json)
+            pr.book.set_last_build(self.track.name, pr.build_name, pr.build_json,
+                                   car=getattr(self.settings, "car", None))   # task 41: per car
         self.reset(to_checkpoint=False)
         self._rec_note("TIME TRIAL: rolling start - the clock starts at the line"
                        if self.veh.u > 0.5 else
@@ -2941,7 +3023,7 @@ class Sim:
                 self._menu_close()
                 self.start_timed()
             elif action == "pr_pick":
-                self._menu_show_prerace_pick()
+                self._menu_show_prerace_pick(from_="prerace")
             elif action.endswith("set:pr_ghosts") and self.ghosts is not None:
                 self.ghosts.enabled = not self.ghosts.enabled   # what J does
                 self._rec_note("ghosts " + ("on" if self.ghosts.enabled else "off"), 2.0)
@@ -2956,13 +3038,14 @@ class Sim:
             else:
                 self._menu_show_prerace(idx=idx)
             return True
+        pr = self._picker()                    # the PICK page's (task 41: any map)
         if action in ("resume", "pr_back"):
-            self._menu_show_prerace(idx=1)
+            self._pick_back()
         elif action.startswith("pr_build:"):
             name = action[len("pr_build:"):]
             b = pr.builds.get(name)
             if b is None or (name == pr.build_name and pr.saved()):
-                self._menu_show_prerace(idx=1)
+                self._pick_back()
             else:                              # a new car: a new session on it
                 self.prerace_pick = (name, b)
                 self._menu_close()
@@ -3376,6 +3459,13 @@ class Sim:
             if action == "controls":
                 self._controls_from = "settings"
                 self._menu_show_controls()
+                return
+            if action == "build_pick" and self._picker() is not None:   # task 41
+                self._menu_show_prerace_pick(from_="settings")
+                return
+            if action == "build_default" and self._picker() is not None:
+                self._make_build_default()
+                self._menu_show_settings(idx=idx)
                 return
             if action.startswith(("prev:", "next:")):
                 # LEFT / RIGHT: browse the row; nothing restarts here
@@ -5378,7 +5468,7 @@ def _v32_prerace(tmp, verbose=True):
     race_ok = (not sim.menu.open and not sim.paused and sim.s == s_roll
                and hypot(sim.veh.u, sim.veh.v) > 5.0 and sim.lap.lap == 0
                and sim.lap.t_lap_start is None
-               and recm.RecordBook(root).last_build("arena")["name"] == "my corsa")
+               and recm.RecordBook(root).last_build("arena", CAR_DEFAULT)["name"] == "my corsa")
     ev("menu")                                     # pause menu -> Time trial
     goto("timetrial")
     ev("select")
@@ -6955,6 +7045,155 @@ def _v28_open_map(verbose=True):
                     max_n=drv.max_n, cross=cross_ok, wet=wet_ok, grass=grass_ok)
 
 
+def _v41_builds(tmp, verbose=True):
+    """Task 41's builds from the drive's side, on a scratch library (the
+    player's runs/ is never touched): a car's DEFAULT build is what a new car
+    opens with (`_car_build`); with none, another car's build is never kept
+    (the empty build, a hint) while an any-car one is; a default gone from
+    the library falls back with a note; the per-map memory's step is tried
+    before the empty build. At launch (`_resolve_design`) the same, unless
+    `--build` / `--wing` named the car. Back from the garage a car the player
+    changed is stamped as this car's (`_stamp_car`). And the Settings page's
+    Build / Default rows, on a map with no records: the PICK page lists this
+    car's builds first, ESC comes back to the row, a pick restarts on it, and
+    Default saves an unsaved build and makes it the car's."""
+    import contextlib
+    import io
+    from types import SimpleNamespace
+    from . import garage as grg
+    from .aero.library import Library
+    from .prerace import PreRace
+    lib = Library(os.path.join(tmp, "builds41", "library"), use_xfoil=False)
+
+    def mk(name, car, wing):
+        b = grg.CarBuild(name=name, car=car)
+        b.left.wing = wing
+        b.clamp(lib)
+        lib.save_build(b.to_json())
+        return b
+    c_fast, m_fast, old = mk("corsa fast", "corsa", "fin"), mk("mx fast", "mx5", "plate"), \
+        mk("old any", "", "plate")
+    st = Settings(path="")
+    st.car_build = {"mx5": "mx fast"}
+    quiet = contextlib.redirect_stdout(io.StringIO())
+    #  _car_build: the default wins; none -> another car's build is dropped for
+    #  the empty one (a hint), an any-car one kept; a gone default: noted
+    d1, n1 = _car_build(grg, lib, c_fast.copy(), "mx5", st)
+    d2, n2 = _car_build(grg, lib, c_fast.copy(), "540i", st)
+    d3, n3 = _car_build(grg, lib, old.copy(), "540i", st)
+    d4, n4 = _car_build(grg, lib, m_fast.copy(), "mx5", Settings(path="", car_build={"mx5": "gone"}))
+    st_gone = Settings(path="", car_build={"540i": "gone"})
+    d5, n5 = _car_build(grg, lib, c_fast.copy(), "540i", st_gone)
+    #  the per-map memory is asked before the empty build (stubbed here: the
+    #  real one reads the player's runs/records, `RecordBook.last_build` and
+    #  its self-check cover the per-car filter)
+    real_tb = globals()["_track_build"]
+    globals()["_track_build"] = lambda g_, l_, d_, t_, o_, car=None: (
+        grg.CarBuild.from_json(m_fast.to_json()) if (t_, car) == ("arena", "mx5") else None)
+    try:
+        d6, n6 = _car_build(grg, lib, c_fast.copy(), "mx5", Settings(path=""),
+                            track="arena", opts=SimpleNamespace())
+    finally:
+        globals()["_track_build"] = real_tb
+    car_ok = (d1 is not None and d1.name == "mx fast" and "default" in n1
+              and d2 is not None and d2.car == "540i" and d2.name == "my 540i"
+              and not d2.has_any(lib) and "no wings" in n2 and "F" in n2
+              and d3 is None and not n3
+              and d4 is None and "no longer" in n4
+              and d5 is not None and not d5.has_any(lib) and "no longer" in n5 and "no wings" in n5
+              and d6 is not None and d6.name == "mx fast" and "last build" in n6)
+    #  _resolve_design at launch: a last garage car of another car -> this
+    #  car's default; --build / --wing win untouched; an any-car car is kept
+    dpath = os.path.join(tmp, "builds41", "garage_design.json")
+    load0 = grg.CarBuild.__dict__["load"]
+    lib0, argv0 = grg._LIB, list(sys.argv)
+    launches = {}
+    try:
+        grg._LIB = lib
+        grg.CarBuild.load = classmethod(lambda cls, path=dpath: load0.__func__(cls, path))
+        for tag, garage_car, argv, want in (
+                ("default", c_fast, [], None), ("flag build", c_fast, ["--build", "corsa fast"],
+                                                "corsa fast"),
+                ("flag wing", c_fast, ["--wing", "plate"], None), ("any car", old, [], None)):
+            garage_car.save(dpath)
+            sys.argv = ["drive"] + argv
+            o = SimpleNamespace(build=want, wing="plate" if "--wing" in argv else "off",
+                                wing_x=0.97, wing_h=0.90, wing_inc=0.0)
+            with quiet:
+                _g, dsg, _l = _resolve_design(o, Settings(path="", car="mx5",
+                                                          car_build={"mx5": "mx fast"}))
+            launches[tag] = (dsg.name if isinstance(dsg, grg.CarBuild) else str(dsg),
+                             bool(o.build_note))
+    finally:
+        grg.CarBuild.load = load0
+        grg._LIB, sys.argv[:] = lib0, argv0
+    launch_ok = launches == {"default": ("mx fast", True), "flag build": ("corsa fast", False),
+                             "flag wing": ("my corsa", False), "any car": ("old any", False)}
+    #  back from the garage: changed -> this car's; only looked at -> as it was
+    seen = old.copy()
+    _stamp_car(seen, seen.to_json(), "mx5")
+    edited = old.copy()
+    was = edited.to_json()
+    edited.left.inc_deg += 1.0
+    _stamp_car(edited, was, "mx5")
+    stamp_ok = seen.car == "" and edited.car == "mx5"
+    #  the Settings page on the dragstrip (no records, no pre-race page)
+    with quiet:
+        sim = _build("dragstrip", driver=lambda t, v, T_: Controls())
+    sim.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
+    sim.has_garage = True
+    sim.settings = Settings(path="", car="corsa")
+    sim.garage_lib = lib
+    unsaved = dict(c_fast.to_json(), name="my corsa", slots=dict(
+        c_fast.to_json()["slots"], top=dict(c_fast.to_json()["slots"]["top"], inc_deg=9.0)))
+    sim.build_pick = PreRace(None, None, "my corsa", unsaved, builds=dict(lib.builds))
+    ev = sim.handle_event
+
+    def goto(action):
+        acts = [a for _, a in sim.menu.items]
+        i = acts.index(action)
+        while sim.menu.idx != i:
+            ev("nav_down")
+    ev("menu")
+    goto("settings")
+    ev("select")
+    rows = dict((a, lbl) for lbl, a in sim.menu.items)
+    goto("build_pick")
+    ev("select")
+    picks = [a for _, a in sim.menu.items]
+    page_ok = (sim._menu_page == "prerace_pick"
+               and picks == ["pr_back", "pr_build:corsa fast", "pr_build:old any",
+                             "pr_build:mx fast", "pr_back"]
+               and "[MX-5]" in sim.menu.items[3][0] and "not saved" in rows["build_pick"]
+               and "none" in rows["build_default"])
+    ev("menu")                                     # ESC: back to the settings row
+    back_ok = sim._menu_page == "settings" and sim.menu.action() == "build_pick"
+    goto("build_default")
+    ev("select")
+    dflt = sim.settings.build_of("corsa")
+    default_ok = (dflt == "my corsa" and "my corsa" in lib.builds
+                  and lib.builds["my corsa"]["slots"]["top"]["inc_deg"] == 9.0
+                  and sim._menu_page == "settings"
+                  and "my corsa" in dict((a, l_) for l_, a in sim.menu.items)["build_default"])
+    goto("build_pick")
+    ev("select")
+    goto("pr_build:old any")
+    ev("select")
+    pick_ok = (sim.quit and sim.stop_reason == "restart"
+               and sim.prerace_pick is not None and sim.prerace_pick[0] == "old any")
+    ok = car_ok and launch_ok and stamp_ok and page_ok and back_ok and default_ok and pick_ok
+    if verbose:
+        print(f"  V41b builds     : car change -> default {d1.name if d1 else None!r}, none + "
+              f"another car's -> {d2.name if d2 else None!r} (empty), any-car kept "
+              f"{d3 is None}, gone default noted {'no longer' in n4}, map memory first "
+              f"{d6.name if d6 else None!r}: {car_ok}; launch {launches}: {launch_ok}; "
+              f"garage stamp {stamp_ok}; Settings Build/Default on the dragstrip: pick "
+              f"{page_ok}, ESC back {back_ok}, default {dflt!r} {default_ok}, pick restarts "
+              f"{pick_ok}")
+    return ok, dict(car=car_ok, launch=launches, stamp=stamp_ok, page=page_ok, back=back_ok,
+                    default=default_ok, pick=pick_ok)
+
+
 def self_check(verbose=True) -> bool:
     """python3 -m drive.drive  ->  the harness acceptance numbers."""
     tmp = _tmpdir()
@@ -6969,6 +7208,7 @@ def self_check(verbose=True) -> bool:
                      ("V25", lambda: _v25_lap_timing(verbose)),
                      ("V26", lambda: _v26_settings_and_menu(tmp, verbose)),
                      ("V41", lambda: _v41_paint_on_the_road(tmp, verbose)),
+                     ("V41b", lambda: _v41_builds(tmp, verbose)),
                      ("V27", lambda: _v27_gearbox_modes(verbose)),
                      ("V28", lambda: _v28_open_map(verbose)),
                      ("V29", lambda: _v29_engine_tc(verbose)),
@@ -7348,11 +7588,13 @@ def run_interactive_cli(opts) -> int:
     settings = Settings.load().apply_cli(opts)
     settings.save()
     w, h = (int(v) for v in opts.size.lower().split("x"))
-    grg, design, lib = _resolve_design(opts)
+    grg, design, lib = _resolve_design(opts, settings)
     #  a player file that failed to load or save: the first session shows it
-    #  (_interactive_session), not only this terminal
+    #  (_interactive_session), not only this terminal -- and (task 41) which
+    #  build a car opened with when the last garage car was another car's
     opts.screen_notes = [n for n in (settings.load_note, settings.save_note,
-                                     getattr(opts, "garage_note", "")) if n]
+                                     getattr(opts, "garage_note", ""),
+                                     getattr(opts, "build_note", "")) if n]
 
     mode = "garage" if (opts.garage and grg is not None) else "drive"
     pad = None
@@ -7362,6 +7604,11 @@ def run_interactive_cli(opts) -> int:
     #  just built. The switch is in memory: runs/garage_design.json is the
     #  garage's working car and only the garage writes it
     seen_track = None
+    #  task 41: the car the last session drove. When the Settings page's Car
+    #  row changes it, the new car opens with ITS default build (Settings.
+    #  car_build), and never with another car's build (`_car_build`); the
+    #  launch's own case is `_resolve_design`'s
+    seen_car = None
     explicit = bool(getattr(opts, "build", None)) or any(
         a.startswith("--wing") for a in sys.argv[1:])
     #  the driving tutorial (drive/tutorial.py): runs/progress.json is a
@@ -7399,8 +7646,10 @@ def run_interactive_cli(opts) -> int:
                 #  on opts across the garage <-> drive round trips
                 g.progress = getattr(opts, "progress", None)
                 g.tutor = getattr(opts, "wing_tutor", None)
+                entered = g.build.to_json()    # as the garage fitted it to this car
                 action = g.run()
                 design, pad = g.build, g.pad
+                _stamp_car(design, entered, settings.car)
                 t_ = g.tutor
                 opts.wing_tutor = t_ if (t_ is not None and t_.active) else None
                 _save_design(design, opts)     # quitting from the garage keeps the car too
@@ -7425,10 +7674,23 @@ def run_interactive_cli(opts) -> int:
                 _challenge_restore(opts, settings, keep_changed=chal["class"])
                 chal = None
             if (grg is not None and design is not None and not from_garage
+                    and chal is None and seen_car is not None and settings.car != seen_car):
+                #  a new car (task 41): its default wins over the map's memory
+                d2, note = _car_build(grg, lib, design, settings.car, settings,
+                                      track=settings.track, opts=opts)
+                if d2 is not None:
+                    design = d2
+                    _apply_design(opts, design, lib)
+                if note:
+                    print(f"builds: {note}")
+                    opts.screen_notes = list(getattr(opts, "screen_notes", None) or []) + [note]
+                seen_track = settings.track
+            seen_car = settings.car
+            if (grg is not None and design is not None and not from_garage
                     and chal is None
                     and settings.track != seen_track
                     and not (explicit and seen_track is None)):
-                d2 = _track_build(grg, lib, design, settings.track, opts)
+                d2 = _track_build(grg, lib, design, settings.track, opts, car=settings.car)
                 if d2 is not None:
                     design = d2
                     _apply_design(opts, design, lib)
@@ -7445,7 +7707,7 @@ def run_interactive_cli(opts) -> int:
                 _apply_design(opts, design, lib)   # the player's own car back
             opts.tutorial_car = tut_car is not None
             if grg is not None and design is not None and tut_car is None:
-                _track_build_used(settings.track, design, opts)
+                _track_build_used(settings.track, design, opts, car=settings.car)
             sim = _interactive_session(opts, pad=pad, settings=settings,
                                        garage=(grg is not None))
             t_ = getattr(sim, "tutorial", None)    # started, or still running
@@ -8089,13 +8351,21 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
     return 0
 
 
-def _resolve_design(opts):
+def _resolve_design(opts, settings=None):
     """The garage's car for this launch -> opts. (garage module, design, lib);
     the module is None when the garage cannot import, and the launch then
-    drives the --wing flags as they are."""
+    drives the --wing flags as they are.
+
+    Task 41: with the player's `settings`, a last garage car that was made for
+    ANOTHER car than the one being launched (the Car row changed and the
+    player quit before the garage saw it, or `--car`) is not driven on this
+    one: the car's own default build, else -- no default, or it is gone --
+    the car's empty build (`_car_build`; the note goes on the first screen).
+    `--build` / `--wing` name the car explicitly and are never second-guessed."""
     grg = None
     design = None
     lib = None
+    opts.build_note = ""
     try:
         from . import garage as grg
         lib = grg.library()
@@ -8110,6 +8380,14 @@ def _resolve_design(opts):
                       f"({', '.join(sorted(lib.builds)) or 'empty'}); using the last garage car")
         if design is None and not explicit:
             design = grg.CarBuild.load()      # the last car built is the car
+            if (design is not None and settings is not None and not want
+                    and design.car not in ("", settings.car)):
+                d2, note = _car_build(grg, lib, design, settings.car, settings)
+                if d2 is not None:
+                    design = d2
+                if note:
+                    print(f"builds: {note}")
+                    opts.build_note = note
         if design is None:
             design = grg.CarBuild.from_json(dict(wing=opts.wing, x_w=opts.wing_x, h_w=opts.wing_h,
                                                  inc_deg=getattr(opts, "wing_inc", 0.0)))
@@ -8145,18 +8423,19 @@ def _player_session(opts) -> bool:
                 or getattr(opts, "render", None) in ("off", "offscreen"))
 
 
-def _track_build_used(track, design, opts) -> None:
+def _track_build_used(track, design, opts, car: str | None = None) -> None:
     """This session drives `design` on `track`: it is that map's build from
-    now on (the plan's "the last build used on this track")."""
+    now on (the plan's "the last build used on this track") -- for `car`, the
+    car driving it (task 41: the memory is per map AND car)."""
     if not _player_session(opts):
         return
     try:
-        from .records import RecordBook
+        from .records import RecordBook, last_key
         book = RecordBook()
         js = design.to_json()
-        cur = book.last_build(track)
-        if not cur or cur.get("build") != js:
-            book.set_last_build(track, design.name, js)
+        cur = book.last_builds().get(last_key(track, car) if car else track)
+        if not isinstance(cur, dict) or cur.get("build") != js:
+            book.set_last_build(track, design.name, js, car=car)
     except Exception as exc:               # noqa: BLE001 -- never stops a drive
         print(f"pre-race: per-map build not saved ({type(exc).__name__}: {exc})")
 
@@ -8180,17 +8459,21 @@ def _autosave_build(design, lib) -> None:
         print(f"pre-race: could not autosave the car ({type(exc).__name__}: {exc})")
 
 
-def _track_build(grg, lib, design, track, opts):
+def _track_build(grg, lib, design, track, opts, car: str | None = None):
     """The build last USED on `track` (runs/records/last_builds.json), as a
     CarBuild, when it differs from `design`; else None. A player file, so
-    only a player session reads it (`_player_session`)."""
+    only a player session reads it (`_player_session`). With `car` (task 41):
+    the one THAT car last used there, and never a build made for another car
+    (`RecordBook.last_build`)."""
     if not _player_session(opts):
         return None
     try:
         from .records import RecordBook
-        lb = RecordBook().last_build(track)
-        if not lb or lb["build"] == design.to_json():
-            return None
+        from .prerace import _same_build
+        lb = RecordBook().last_build(track, car)
+        js = design.to_json()
+        if not lb or (_same_build(lb["build"], js) and lb["build"].get("name") == js.get("name")):
+            return None                    # the car in hand (its tag aside) already
         d2 = grg.CarBuild.from_json(lb["build"])
         d2.clamp(lib)
         print(f"pre-race: {track} opens with the build last used there, '{lb.get('name', '')}'")
@@ -8198,6 +8481,59 @@ def _track_build(grg, lib, design, track, opts):
     except Exception as exc:               # noqa: BLE001 -- a bad file: keep the car
         print(f"pre-race: no per-map build ({type(exc).__name__}: {exc})")
         return None
+
+
+def _car_build(grg, lib, design, car: str, settings, track: str | None = None, opts=None):
+    """The build a session on `car` opens with when the car is NEW to it
+    (task 41): the Settings page's Car row changed it, or the launch's last
+    garage car was made for another one. (CarBuild or None = keep `design`,
+    the note for the screen or "").
+
+    The owner: "a custom default for each car the user wants". In order:
+
+      1. the car's DEFAULT build (Settings.car_build), when it is still in
+         the library -- the player's own choice wins over everything else;
+      2. the car in hand when it may ride on this car: made for it, or an
+         any-car build from before task 41 (kept, as it always was);
+      3. otherwise the car in hand is ANOTHER car's build, which is never put
+         on this one silently: the build this car last used on `track` (the
+         per-map memory, per car -- a player's earlier choice for this very
+         car), else the car's EMPTY build (`garage.new_build`), with a hint
+         on how to give the car a default.
+
+    A default that is no longer in the library (deleted, renamed outside the
+    garage) falls through to 2 / 3 and says so; nothing here can raise."""
+    from .prerace import car_label
+    name = settings.build_of(car) if settings is not None else ""
+    note = ""
+    if name:
+        js = lib.builds.get(name) if lib is not None else None
+        if isinstance(js, dict):
+            d = grg.CarBuild.from_json(js)
+            d.clamp(lib)
+            return d, f"the {car_label(car)} opens with its default build '{name}'"
+        note = f"the {car_label(car)}'s default '{name}' is no longer in the library"
+    if design is None or getattr(design, "car", "") in ("", car):
+        return None, note
+    if track and opts is not None:
+        d2 = _track_build(grg, lib, design, track, opts, car=car)
+        if d2 is not None:
+            return d2, note or f"the {car_label(car)} opens with its last build on this map"
+    d = grg.new_build(car)
+    d.clamp(lib)
+    why = (f"'{design.name}' is the {car_label(design.car)}'s: the {car_label(car)} starts "
+           f"with no wings (garage F: its default)")
+    return d, f"{note}; {why}" if note else why
+
+
+def _stamp_car(design, entered, car: str) -> None:
+    """Back from the garage (task 41): a car the player CHANGED there -- wings,
+    stations, a build loaded -- is now this car's build; one only looked at
+    keeps its tag (an any-car build stays one). `entered`: its JSON as the
+    garage opened on it."""
+    from .prerace import _same_build
+    if design is not None and car and not _same_build(design.to_json(), entered):
+        design.car = car
 
 
 def _challenge_class(settings) -> str:
@@ -8442,6 +8778,18 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     #  list them; a session started for one drives it
     lib = getattr(opts, "garage_lib", None)
     sim.garage_lib = lib                   # a bot's own build is rebuilt with it (task 26)
+    #  task 41: the Settings page's Build row opens the PICK page on EVERY map:
+    #  the pre-race page's own where there is one (with times), else a
+    #  class-less one (no records here: the dragstrip, a 30 m skidpad)
+    sim.build_pick = None
+    if garage and lib is not None:
+        try:
+            from .prerace import PreRace
+            sim.build_pick = sim.prerace or PreRace(
+                None, None, getattr(opts, "build_name", "") or "",
+                getattr(opts, "build_json", None), builds=dict(lib.builds), can_edit=True)
+        except Exception as exc:           # noqa: BLE001 -- never stops a drive
+            print(f"build list unavailable ({type(exc).__name__}: {exc})")
     if sim.progress_file is not None and lib is not None:
         sim.challenge_build = (getattr(opts, "build_json", None), lib)
     chal = getattr(opts, "challenge", None)
