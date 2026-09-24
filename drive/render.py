@@ -1245,7 +1245,10 @@ SPIN_BLUR_A1 = 0.53      # rad/frame ... and are a uniform blur above it. A
 #: width) read the very shell this module draws.
 from .bodies import CAR_STYLE_REF, STATIONS3, _STYLE_SHELL3  # noqa: E402
 #: the body colour per style (est; the Corsa keeps the study's C_CAR yellow)
-C_CAR_STYLE = {'hatch': C_CAR, 'roadster': (176, 34, 42), 'saloon': (64, 92, 138)}
+C_CAR_STYLE = {'hatch': C_CAR, 'roadster': (176, 34, 42), 'saloon': (64, 92, 138),
+               #  task 41 (C1's STUB so the two new cars have a factory
+               #  colour at all; the render-style pass owns the final pick):
+               'van': (228, 228, 220), 'bus': (54, 132, 96)}
 
 
 # --- materials: what the chase shader does with a polygon (_MAT3 rows) ----

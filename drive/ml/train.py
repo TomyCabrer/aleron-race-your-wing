@@ -248,7 +248,7 @@ def main(argv=None) -> int:
     ap.add_argument("--save-every", type=int, default=1,
                     help="iterations between checkpoints (0 = only at the end)")
     ap.add_argument("--car", default=None,
-                    help="cars.py key: corsa (default) | mx5 | 540i. The "
+                    help="cars.py key: corsa (default) | mx5 | 540i | express | bus. The "
                          "policy trims THAT car's own lock and wheelbase.")
     ap.add_argument("--eval", action="store_true",
                     help="after training, re-measure at DT_EVAL and print lap times")

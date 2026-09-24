@@ -152,8 +152,10 @@ def self_check(verbose: bool = True) -> bool:
     #  `driver_trim`'s margin fade closed that, so the check can now assert
     #  the thing that actually matters: one hand-written driver, three very
     #  different cars, a lap each, nobody off the road.
-    per_car = {k: rollout(p0, "arena", T=80.0, wing="plate",
-                          car=cars.get(k)) for k in ("corsa", "mx5", "540i")}
+    #  (task 41: all five -- the Express and the Citaro bus too. The bus's
+    #  standing arena lap is 79.8 s at DT_TRAIN, so the window is 85 s.)
+    per_car = {k: rollout(p0, "arena", T=85.0, wing="plate",
+                          car=cars.get(k)) for k in cars.CAR_ORDER}
     _rep("the anchor laps the arena in every car in the library",
          all(e.ended == "time" and e.laps >= 1 for e in per_car.values()),
          ", ".join(f"{k} {e.s_progress:.0f} m/{e.laps}L '{e.ended}'"
@@ -169,9 +171,13 @@ def self_check(verbose: bool = True) -> bool:
     t_test = {}
     for circ, T_c in (("linden", 145.0), ("kestrel", 186.0), ("ashdown", 160.0)):
         per_c = {k: rollout(p0, circ, T=T_c, wing="plate", car=cars.get(k))
-                 for k in ("corsa", "mx5", "540i")}
+                 for k in cars.CAR_ORDER}
+        #  the two task-41 cars are held to "on the road for the whole
+        #  window, a lap done": the bus laps 15-25 % slower than the 540i,
+        #  and T_c is sized on the three stock cars' second crossing
         _rep(f"the anchor laps {circ} in every car",
-             all(e.ended == "time" and e.laps >= 2 for e in per_c.values()),
+             all(e.ended == "time" and e.laps >= (2 if k in cars.STOCK_CARS else 1)
+                 for k, e in per_c.items()),
              ", ".join(f"{k} {e.laps}L '{e.ended}'"
                        + (f" (flying {e.lap_times[1] - e.lap_times[0]:.1f} s)"
                           if len(e.lap_times) >= 2 else f" at {e.s_progress:.0f} m")
@@ -188,10 +194,10 @@ def self_check(verbose: bool = True) -> bool:
     #  and it is genuinely a different car underneath, not the Corsa wearing
     #  three names: the library's grip calibration has to reach the physics
     #  (`env.rollout` passes `car.mu_scale`, which it did not until wave 4b)
-    mus = {k: cars.get(k).mu_scale for k in ("corsa", "mx5", "540i")}
+    mus = {k: cars.get(k).mu_scale for k in cars.CAR_ORDER}
     vs = [e.v_mean for e in per_car.values()]
     _rep("each car drives as itself, with its own grip",
-         len(set(round(v, 6) for v in vs)) == 3 and mus["mx5"] != 1.0,
+         len(set(round(v, 6) for v in vs)) == len(per_car) and mus["mx5"] != 1.0,
          "v_mean " + ", ".join(f"{k} {e.v_mean:.3f}" for k, e in per_car.items())
          + "; mu_scale " + ", ".join(f"{k} {v:.2f}" for k, v in mus.items()))
 

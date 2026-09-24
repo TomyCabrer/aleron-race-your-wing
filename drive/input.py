@@ -545,6 +545,48 @@ def steer_limit_pair_deg(V: float, beta_deg: float, ay_max: float = AY_MAX_DRY,
     return floor, floor
 
 
+#: the speed the per-car aid is measured at (task 41): the aid's own design
+#: point is R = 50 m at 20.5 m/s (K_US_DEG_MEASURED's row), and 20 m/s sits
+#: under the bus's 80 km/h governor
+AID_RAMP_V = 20.0
+_AID_CACHE: dict = {}
+
+
+def aid_for_car(car) -> dict:
+    """The steer aid's four car numbers for `car`: `lock_deg`, `k_us_deg`,
+    `aid_L`, `aid_ay` -- the keyword arguments KeyboardInput and
+    GamepadInput take.
+
+    A stock car (no `own_aids`) gets exactly what the launch path always
+    passed: its own lock (`vehicle.car_lock_rad`), K_US_DEG_MEASURED, and
+    the Corsa's L_WB and AY_MAX_DRY -- the aided laps and the V16/V17
+    numbers are frozen on those. A car with `own_aids` (task 41: the van and
+    the bus) gets its OWN wheelbase, and the grip and limit understeer
+    gradient MEASURED on it by the contract's open-loop ramp steer at
+    AID_RAMP_V -- the same statement K_US_DEG_MEASURED's table makes for
+    the Corsa: k_us = (delta_peak - L*a_y/V^2) / (a_y/g). Measured once per
+    (car, mu_scale) per process; ~0.5 s of CPU for the bus, at launch only.
+    """
+    from .vehicle import car_lock_rad
+    lock = math.degrees(car_lock_rad(car))
+    if not getattr(car, "own_aids", False):
+        return dict(lock_deg=lock, k_us_deg=K_US_DEG_MEASURED, aid_L=L_WB,
+                    aid_ay=AY_MAX_DRY)
+    mu = float(getattr(car, "mu_scale", 1.0))
+    key = (getattr(car, "name", ""), float(car.m), float(car.wdist_f),
+           float(car.h_cg), mu)
+    if key not in _AID_CACHE:
+        from .vehicle import ramp_steer, VehicleConfig
+        V = AID_RAMP_V
+        tel = ramp_steer(V, car=car, cfg=VehicleConfig(mu_scale=mu))
+        ay = float(tel["peak_ay"])
+        ack = math.degrees(car.L * ay / (V * V))
+        k_us = max((math.degrees(float(tel["delta"])) - ack) / (ay / G), 0.0)
+        _AID_CACHE[key] = (k_us, ay)
+    k_us, ay = _AID_CACHE[key]
+    return dict(lock_deg=lock, k_us_deg=k_us, aid_L=float(car.L), aid_ay=ay)
+
+
 def _return_rate_deg(V: float) -> float:
     """Road-wheel self-centring rate, 45 deg/s at rest -> 90 deg/s above 22 m/s."""
     f = _clamp(V / V_RETURN_FULL, 0.0, 1.0)
@@ -608,13 +650,22 @@ class KeyboardInput:
     def __init__(self, steer_limit: bool = True, fine_key: int = pygame.K_LSHIFT,
                  auto_gearbox: bool = True, wing_on: bool = False,
                  held_keys: dict | None = None, k_us_deg: float = K_US_DEG,
-                 lock_deg: float = DELTA_LOCK_DEG):
+                 lock_deg: float = DELTA_LOCK_DEG, aid_L: float = L_WB,
+                 aid_ay: float = AY_MAX_DRY):
         self.steer_limit = bool(steer_limit)
         #: this car's ROAD-WHEEL lock. DELTA_LOCK_DEG (the Corsa's 32.625) is
         #: the default, so every existing caller and every acceptance path is
         #: bit-for-bit; the interactive session passes the selected car's,
         #: from `vehicle.car_lock_rad`.
         self.lock_deg = float(lock_deg)
+        #: the wheelbase and the grip the soft lock is computed for (task 41,
+        #: `aid_for_car`). The Corsa's L_WB / AY_MAX_DRY by default -- the
+        #: same floats the limiter always read -- and for every stock car;
+        #: a car with `own_aids` passes its own, because the Corsa's 2.491 m
+        #: on a 5.845 m bus is 43 % of its Ackermann angle: at 20 m/s the
+        #: Corsa-calibrated limit is 11.2 deg where the bus's peak needs 12.6.
+        self.aid_L = float(aid_L)
+        self.aid_ay = float(aid_ay)
         self.fine_key = int(fine_key)
         self.auto_gearbox = bool(auto_gearbox)
         self.auto_clutch = True
@@ -822,7 +873,8 @@ class KeyboardInput:
         #     what the wheel physically does - the self-aligning torque pulls
         #     it back at exactly this rate.
         if self.steer_limit:
-            lim_l, lim_r = steer_limit_pair_deg(V, beta_deg,
+            lim_l, lim_r = steer_limit_pair_deg(V, beta_deg, ay_max=self.aid_ay,
+                                                L=self.aid_L,
                                                 k_us_deg=self.k_us_deg,
                                                 lock_deg=self.lock_deg)
         else:
@@ -896,7 +948,8 @@ class GamepadInput:
                  steer_limit: bool = True, joystick=None,
                  k_us_deg: float = K_US_DEG, lock_deg: float = DELTA_LOCK_DEG,
                  layout: str | None = None,
-                 user_config: bool = True):
+                 user_config: bool = True, aid_L: float = L_WB,
+                 aid_ay: float = AY_MAX_DRY):
         if joystick is None:
             if not GamepadInput.available():
                 raise RuntimeError("no gamepad: pygame.joystick.get_count() == 0")
@@ -911,6 +964,8 @@ class GamepadInput:
         self.steer_limit = bool(steer_limit)
         self.k_us_deg = float(k_us_deg)
         self.lock_deg = float(lock_deg)   # this car's road-wheel lock
+        self.aid_L = float(aid_L)         # ... and its aid's wheelbase / grip
+        self.aid_ay = float(aid_ay)       # (KeyboardInput, task 41)
 
         n = self.joy.get_numaxes()
         self.layout = layout or detect_pad_layout(self.name)
@@ -1220,7 +1275,8 @@ class GamepadInput:
         # the next. Now full stick into the slide means the floor and full
         # stick out of it means the catch.
         if self.steer_limit:
-            lim_l, lim_r = steer_limit_pair_deg(V, beta_deg,
+            lim_l, lim_r = steer_limit_pair_deg(V, beta_deg, ay_max=self.aid_ay,
+                                                L=self.aid_L,
                                                 k_us_deg=self.k_us_deg,
                                                 lock_deg=self.lock_deg)
         else:
@@ -1320,7 +1376,9 @@ class BlendedInput:
                 self.pad = GamepadInput(0, steer_limit=self.kb.steer_limit,
                                         k_us_deg=self.kb.k_us_deg,
                                         lock_deg=getattr(self.kb, "lock_deg",
-                                                         DELTA_LOCK_DEG))
+                                                         DELTA_LOCK_DEG),
+                                        aid_L=getattr(self.kb, "aid_L", L_WB),
+                                        aid_ay=getattr(self.kb, "aid_ay", AY_MAX_DRY))
                 print(f"gamepad connected: {self.pad.name} ({self.pad.layout} layout)")
                 if self.kb.menu:
                     self.pad.set_menu(True)
@@ -1492,7 +1550,7 @@ def default_input(steer_limit: bool = True, announce: bool = True,
     if GamepadInput.available():
         try:
             pad = GamepadInput(0, steer_limit=steer_limit, k_us_deg=kb.k_us_deg,
-                               lock_deg=kb.lock_deg)
+                               lock_deg=kb.lock_deg, aid_L=kb.aid_L, aid_ay=kb.aid_ay)
         except Exception as exc:        # a pad that enumerates but will not open
             print(f"gamepad found but not usable ({exc}) - keyboard only")
             pad = None
@@ -2214,6 +2272,46 @@ def self_check(verbose: bool = True) -> bool:
     check_eq("holding RIGHT gives a_y to the right", veh.ay < 0.0, True)
     check("delta commanded is the limiter's value", abs(math.degrees(c.delta)),
           kb.delta_lim_deg, 1e-9, "deg")
+
+    if verbose:
+        print("\n-- task 41: the aid per car (aid_for_car) --")
+    import cars as _cars
+    from .vehicle import car_lock_rad, ramp_steer, VehicleConfig
+    #  the stock three get what the launch path always passed them
+    for k in _cars.STOCK_CARS:
+        a = aid_for_car(_cars.CARS[k])
+        check_eq(f"{k}: the Corsa-calibrated aid, its own lock",
+                 (a["k_us_deg"], a["aid_L"], a["aid_ay"], a["lock_deg"]),
+                 (K_US_DEG_MEASURED, L_WB, AY_MAX_DRY,
+                  math.degrees(car_lock_rad(_cars.CARS[k]))))
+    #  passing the defaults explicitly is the same limiter to the bit
+    check_eq("aid_L/aid_ay at their defaults are the old limiter",
+             steer_limit_pair_deg(18.0, -4.0, ay_max=AY_MAX_DRY, L=L_WB,
+                                  k_us_deg=K_US_DEG_MEASURED),
+             steer_limit_pair_deg(18.0, -4.0, k_us_deg=K_US_DEG_MEASURED))
+    #  the method, run on the Corsa, recovers the Corsa's own calibration:
+    #  AY_MAX_DRY is qss's 0.862 g and K_US_DEG_MEASURED the R = 50 row (7.82)
+    ac = aid_for_car(_cars.CORSA_C.copy(own_aids=True))
+    check("the method on the Corsa: a_y vs AY_MAX_DRY", ac["aid_ay"], AY_MAX_DRY,
+          0.02 * AY_MAX_DRY, "m/s^2")
+    check("the method on the Corsa: k_us vs K_US_DEG_MEASURED", ac["k_us_deg"],
+          K_US_DEG_MEASURED, 0.10 * K_US_DEG_MEASURED, "deg/g")
+    #  the bus: its own aid leaves the designed margin over the angle its
+    #  peak needs at 20 m/s; the Corsa-calibrated one would not let it turn
+    bus = _cars.CARS["bus"]
+    ab = aid_for_car(bus)
+    tb = ramp_steer(AID_RAMP_V, car=bus, cfg=VehicleConfig(mu_scale=bus.mu_scale))
+    need = math.degrees(float(tb["delta"]))
+    own = steer_limit_deg(AID_RAMP_V, 0.0, ay_max=ab["aid_ay"], L=ab["aid_L"],
+                          k_us_deg=ab["k_us_deg"], lock_deg=ab["lock_deg"])
+    corsa = steer_limit_deg(AID_RAMP_V, 0.0, k_us_deg=K_US_DEG_MEASURED,
+                            lock_deg=ab["lock_deg"])
+    if verbose:
+        print(f"        bus at {AID_RAMP_V:g} m/s: peak needs {need:.2f} deg; own aid "
+              f"{own:.2f} deg (k_us {ab['k_us_deg']:.2f} deg/g, a_y "
+              f"{ab['aid_ay'] / G:.3f} g, L {ab['aid_L']}); the Corsa's {corsa:.2f} deg")
+    check_eq("the bus's own aid clears its peak angle, the Corsa's does not",
+             (own >= need, corsa < need), (True, True))
 
     if verbose:
         print()
