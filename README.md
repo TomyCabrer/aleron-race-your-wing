@@ -47,8 +47,10 @@ python3 -m drive.drive --swarm 32 --swarm-car mx5 --swarm-fast --swarm-save neve
 | `K` | arm a seed lap for the swarm (named and saved at the line) | `J` | ghosts on / off (time trial; a pad: the TIME TRIAL page's *Ghosts* row) |
 | `BACKSPACE` | garage (3D panel editor) | `ESC` | pause menu / settings |
 
-`ESC` (or `OPTIONS` on the pad) pauses and opens the menu: every keyboard and
-pad control on screen, plus *Resume*, *Settings*, *Time trial* (on a map with
+`ESC` (or `OPTIONS` on the pad) pauses and opens the menu: the controls of
+the device you are using on screen, plus *Resume*, *Settings*, **Controls**
+(the DualSense drawn with what every button does, and every key), *Time trial*
+(on a map with
 a lap), *Reset to last sector line*, *Full reset*, *Garage*, *Deploy swarm*,
 *Race vs bot*, *Tutorial*, *Challenges* and *Quit*. `↑` `↓` / d-pad move, `←` `→` / d-pad
 change a value on the settings page, `ENTER` / `✕`

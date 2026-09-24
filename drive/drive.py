@@ -619,6 +619,81 @@ SETTINGS_HELP = [
         ("Dragstrip", "1500 m straight; 1/8 mile, 1/4 mile, km gates"),
     ]),
 ]
+#: the settings page's help FOR THE HIGHLIGHTED ROW (task 37): what it does
+#: and its keys and pad buttons, one short column -- not every section at once
+SETTINGS_NAV = ("ON THIS PAGE", [
+    ("UP / DOWN", "move  (d-pad, stick)"),
+    ("LEFT / RIGHT", "step the value (d-pad); map, surface,"),
+    ("", "car and ballast only preview it"),
+    ("ENTER", "cycle the value, apply a preview (CROSS)"),
+    ("ESC", "back, drops a preview (CIRCLE)"),
+])
+#  each row's own section, written to fit the settings page's help column
+#  (about 45 characters; the menu wraps anything wider as a safety net)
+SETTINGS_ROW_HELP = {
+    "set:track": [("MAPS", [
+        ("Arena circuit", "1249 m, 7 corners R 30..130 m, wet patches"),
+        ("Open ground", "a 522 x 362 m pad: skidpad circles, a"),
+        ("", "slalom, a drag lane, a wet square, a road"),
+        ("Skidpad", "constant radius, guide circles"),
+        ("Dragstrip", "1500 m straight: 1/8 mile, 1/4 mile, km"),
+        ("TAB", "the next map, while driving")])],
+    "set:car": [("CAR", [
+        ("Corsa C 1.2", "the study's car: every acceptance number"),
+        ("", "is this one"),
+        ("MX-5 / 540i", "lighter and neutral / heavy and powerful;"),
+        ("", "both drive their FRONT wheels here (the"),
+        ("", "powertrain is FWD-only): traction is fiction")])],
+    "set:ballast": [("BALLAST", [
+        ("Mass", "0-200 kg; it moves what it really moves:"),
+        ("", "axle loads, CG height and station, Izz,"),
+        ("", "Ixx, the sprung mass -- never just m"),
+        ("Nose / Seat", "ahead of the front axle, low / at the CG"),
+        ("", "(SEAT changes the mass and nothing else)"),
+        ("Floor / Boot", "over the rear axle at 0.30 m, LOWERS the"),
+        ("", "CG / the boot floor at 0.65 m, RAISES it")])],
+    "set:engine": [("ENGINE", [
+        ("Stock", "the 1.2 16V, 75 hp: every scripted number"),
+        ("Tuned / Sport", "1.5x / 2x the torque, the clutch to suit;"),
+        ("", "TC keeps the fronts from spinning in 1st")])],
+    "set:gearbox": [("GEARBOX", [
+        ("Automatic", "the box shifts and works the clutch"),
+        ("Manual", "E / Q (R1 / L1) shift; the box does the"),
+        ("", "launch, the blip, the restart: no stall"),
+        ("With clutch", "Z (SQUARE) is the only clutch: launch on"),
+        ("", "it; it can stall: the clutch fully in (or"),
+        ("", "S) restarts it")])],
+    "set:abs": [("ASSISTS", [
+        ("ABS", "the wheels keep turning under hard"),
+        ("", "braking, so the car still steers"),
+        ("TC", "cuts the power when the driven wheels spin"),
+        ("Steer aid", "limits the lock to what the fronts can use"),
+        ("", "stored with every lap; never split a class")])],
+    "set:wet": [("SURFACE", [
+        ("Dry", "everywhere"), ("Wet patches", "the map's own wet patches"),
+        ("Wet", "everywhere: 0.63 of the grip"),
+        ("T", "wet on / off while driving (no record)")])],
+    "set:camera": [("CAMERA", [
+        ("Car up", "from above, the car pointing up"),
+        ("Chase", "3D, behind the car"), ("World up", "from above, north up"),
+        ("C", "the next camera, while driving  (R3)"),
+        ("- / = / 0", "zoom out / in / auto  (L3: auto)")])],
+    "set:sound": [("SOUND", [("Off .. High", "the engine, the tyres, the road, the wing")])],
+    "set:shake": [("SHAKE", [("On / Off", "the camera shakes a little on the kerbs,"),
+                             ("", "more off the road; never costs a lap")])],
+    "set:graphics": [("GRAPHICS", [("Full", "the world, the props, the effects"),
+                                   ("Low", "less detail, for a slower PC"),
+                                   ("Classic", "the plain look, no scenery")])],
+    "lap_results": [("LAST LAP", [("ENTER", "its results card, this session's laps")])],
+    "controls": [("CONTROLS", [("ENTER", "the DualSense drawn with what every"),
+                               ("", "button does, and every key")])],
+    "garage": [("GARAGE", [("ENTER", "the 3D wing designer"),
+                           ("BACKSPACE", "the garage while driving (touchpad)")])],
+}
+SETTINGS_ROW_HELP["set:ballast_at"] = SETTINGS_ROW_HELP["set:ballast"]
+SETTINGS_ROW_HELP["set:tc"] = SETTINGS_ROW_HELP["set:steer_aid"] = SETTINGS_ROW_HELP["set:abs"]
+
+
 SETTINGS_NOTE = ("Map, surface, car and ballast changes restart the session - a "
                  "different CarSpec is a different tyre, roll block and gearbox - "
                  "so LEFT / RIGHT only browse them and ENTER applies; the rest "
@@ -1988,7 +2063,8 @@ class Sim:
     def _menu_show_main(self, idx: int = 0) -> None:
         """The pause page: resume / settings / resets / garage / quit."""
         items = [("Resume", "resume"),
-                 ("Settings: map, gearbox, ABS, aids, camera", "settings")]
+                 ("Settings: map, gearbox, ABS, aids, camera", "settings"),
+                 ("Controls: the DualSense and the keyboard", "controls")]
         if self.prerace is not None:
             items.append(("Time trial: your top 5, medals, the build", "timetrial"))
         if self.progress_file is not None:
@@ -2008,8 +2084,11 @@ class Sim:
         layout = getattr(self.inp, "layout", None)
         try:
             from .input import menu_help, MENU_NO_PAD
-            sections = menu_help(layout)
-            note = "" if layout else MENU_NO_PAD
+            #  one column: the pad's when one is connected, else the keyboard's
+            #  (both side by side ran off the panel; task 37) -- Controls has all
+            sections = menu_help(layout)[-1:]
+            note = ("Controls (above): the DualSense drawn with what every button does, "
+                    "and every key." + ("" if layout else "  " + MENU_NO_PAD))
         except Exception:
             sections, note = [], ""
         foot = "ESC / OPTIONS resume   R reset   SHIFT+R full reset   TAB next map"
@@ -2017,7 +2096,7 @@ class Sim:
             foot += "   BACKSPACE garage"
         self.revert_pending()
         self.menu.show(items=items, sections=sections, subtitle=self._menu_subtitle(),
-                       note=note, footer=foot, title="PAUSED", idx=idx, columns=2)
+                       note=note, footer=foot, title="PAUSED", idx=idx, columns=1)
         self._menu_page = "main"
 
     def _settings_items(self) -> list:
@@ -2047,6 +2126,7 @@ class Sim:
             from .results import summary
             last = self._results_log[-1] if self._results_log else None
             rows.append((f"{'Last lap':<11s}{summary(last, short=True)}", "lap_results"))
+        rows.append(("Controls: the DualSense and the keyboard", "controls"))
         if self.has_garage:
             rows.append(("Garage (3D panel editor)", "garage"))
         rows.append(("Back", "settings_back"))
@@ -2072,8 +2152,45 @@ class Sim:
                        idx=0, columns=1, art=art, art_h=art_h)
         self._menu_page = "results"
 
+    def _settings_help(self, idx: int) -> list:
+        """The settings page's help for the highlighted row (task 37)."""
+        items = self.menu.items if self.menu is not None else []
+        act = items[idx][1] if 0 <= idx < len(items) else ""
+        return [SETTINGS_NAV] + list(SETTINGS_ROW_HELP.get(act, []))
+
+    def _menu_show_controls(self, idx: int = 0) -> None:
+        """The CONTROLS page (drive/controls_page.py): the DualSense drawn
+        with what every button does (the menu's art hook), what it does in a
+        menu; a row to the keyboard's keys."""
+        from .controls_page import draw_pad, MENU_PAD
+        rnd = self.renderer
+        art, art_h = None, 0
+        if rnd is not None and hasattr(rnd, "screen"):
+            u = float(getattr(rnd, "ui", 1.0) or 1.0)
+            art_h = int(330 * u)
+            art = lambda scr, r: draw_pad(scr, (r.x, r.y, r.w, r.h))   # noqa: E731
+        layout = getattr(self.inp, "layout", None)
+        sub = ("PS5 DualSense: connected" if layout == "ps" else
+               "PS5 DualSense -- another pad is connected: its buttons differ, the pause "
+               "page lists them" if layout else
+               "PS5 DualSense (none connected: CREATE + PS pairs it)")
+        self.menu.show(items=[("Keyboard keys", "ctl_kb"), ("Back", "ctl_back")],
+                       sections=[("IN A MENU", list(MENU_PAD))], subtitle=sub, note="",
+                       footer="ENTER / CROSS select   ESC / CIRCLE back", title="CONTROLS",
+                       idx=idx, columns=1, art=art, art_h=art_h)
+        self._menu_page = "controls"
+
+    def _menu_show_controls_kb(self, idx: int = 0) -> None:
+        from .controls_page import kb_rows
+        self.menu.show(items=[("The DualSense", "controls"), ("Back", "ctl_back")],
+                       sections=[("KEYBOARD", kb_rows())], subtitle="the keyboard", note="",
+                       footer="ENTER / CROSS select   ESC / CIRCLE back", title="CONTROLS",
+                       idx=idx, columns=1)
+        self._menu_page = "controls_kb"
+
     def _menu_show_settings(self, idx: int = 0) -> None:
         self.menu.show(items=self._settings_items(), sections=SETTINGS_HELP,
+                       help_for=self._settings_help,
                        subtitle=self._menu_subtitle(), note=SETTINGS_NOTE,
                        footer="LEFT / RIGHT browse   ENTER / CROSS cycle, apply   "
                               "ESC / CIRCLE back   BACKSPACE garage",
@@ -2966,6 +3083,24 @@ class Sim:
             return
         if self._menu_page in ("challenges", "challenge") and self._challenge_event(action):
             return
+        if self._menu_page in ("controls", "controls_kb"):   # task 37
+            if action in ("resume", "ctl_back"):
+                if getattr(self, "_controls_from", "main") == "settings":
+                    self._menu_show_settings()
+                else:
+                    self._menu_show_main()
+                self.menu.idx = [a for _, a in self.menu.items].index("controls")
+                return
+            if action == "ctl_kb":
+                self._menu_show_controls_kb()
+                return
+            if action == "controls":
+                self._menu_show_controls()
+                return
+            if action not in ("reset", "full_reset", "garage"):   # the hotkeys fall through
+                (self._menu_show_controls if self._menu_page == "controls"
+                 else self._menu_show_controls_kb)(idx=self.menu.idx)   # the cursor stays
+                return
         if self._menu_page == "results":       # Settings > Last lap (task 32)
             if action in ("resume", "results_back"):
                 self._menu_show_settings()
@@ -2981,6 +3116,10 @@ class Sim:
                 return
             if action == "lap_results":
                 self._menu_show_results()
+                return
+            if action == "controls":
+                self._controls_from = "settings"
+                self._menu_show_controls()
                 return
             if action.startswith(("prev:", "next:")):
                 # LEFT / RIGHT: browse the row; nothing restarts here
@@ -3098,6 +3237,10 @@ class Sim:
             return                         # LEFT / RIGHT mean nothing on the pause page
         elif action == "settings":
             self._menu_show_settings()
+            return
+        elif action == "controls":
+            self._controls_from = "main"
+            self._menu_show_controls()
             return
         elif action == "swarm":
             if self._swarm_typed is not None:
@@ -5482,6 +5625,62 @@ def _v38_airbrake(tmp, verbose=True):
     return ok, dict(auto=auto, air=air, one=one_v)
 
 
+def _v39_controls(tmp, verbose=True):
+    """The CONTROLS page and the settings help (task 37), by events with no
+    window: the pause page has a Controls row and ONE help column; the page
+    draws the DualSense through the menu's art hook; Keyboard keys lists
+    input.MENU_HELP_KB; Back returns to the row it came from (pause or
+    settings); the settings page's help follows the highlighted row and
+    names its pad buttons (Gearbox: R1 / L1, SQUARE; Camera: R3)."""
+    from types import SimpleNamespace
+    from .input import MENU_HELP_KB
+    sim = _build("arena", driver=lambda t, v, tr: Controls(brake=1.0))
+    sim.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"), screen=object(), ui=1.0)
+    sim.inp.layout = "ps"
+    ev = sim.handle_event
+
+    def goto(action):
+        i = [a for _, a in sim.menu.items].index(action)
+        while sim.menu.idx != i:
+            ev("nav_down")
+
+    ev("menu")
+    one_col = [t for t, _ in sim.menu.sections] == ["PS5 DUALSENSE"]
+    goto("controls")
+    ev("select")
+    page = sim._menu_page == "controls" and sim.menu.art is not None and sim.menu.art_h == 330
+    goto("ctl_back")
+    ev("nav_left")                                 # LEFT on a row: the cursor stays
+    page = page and sim.menu.items[sim.menu.idx][1] == "ctl_back"
+    goto("ctl_kb")
+    ev("select")
+    kb = (sim._menu_page == "controls_kb"
+          and sim.menu.sections and sim.menu.sections[0][1] == list(MENU_HELP_KB))
+    ev("menu")                                     # ESC: back to the pause page's row
+    back_main = sim._menu_page == "main" and sim.menu.items[sim.menu.idx][1] == "controls"
+    goto("settings")
+    ev("select")
+
+    def helps(action):
+        goto(action)
+        return " ".join(f"{k} {w}" for _t, rows in sim.menu.help_for(sim.menu.idx)
+                        for k, w in rows)
+    gb, cam, tr_ = helps("set:gearbox"), helps("set:camera"), helps("set:track")
+    ctx = ("R1 / L1" in gb and "SQUARE" in gb and "R3" in cam and "Arena" in tr_
+           and "CROSS" in gb and "R1 / L1" not in cam)
+    goto("controls")
+    ev("select")
+    ev("menu")
+    back_set = sim._menu_page == "settings" and sim.menu.items[sim.menu.idx][1] == "controls"
+    ok = one_col and page and kb and back_main and ctx and back_set
+    if verbose:
+        print(f"  V39 controls    : pause page one help column {one_col}; CONTROLS draws the pad "
+              f"{page}; keyboard keys {kb}; back to the pause row {back_main}; settings help "
+              f"follows the row with its pad buttons {ctx}; back to the settings row {back_set}"
+              f"  -> {'ok' if ok else 'FAIL'}")
+    return ok, {}
+
+
 def _v37_results_page(tmp, verbose=True):
     """Settings > Last lap and the LAP RESULTS page (task 32), by events with
     no window: no row without a recorder; with one, laps carded through
@@ -6274,6 +6473,7 @@ def self_check(verbose=True) -> bool:
                      ("V36", lambda: _v36_grid(tmp, verbose)),
                      ("V37", lambda: _v37_results_page(tmp, verbose)),
                      ("V38", lambda: _v38_airbrake(tmp, verbose)),
+                     ("V39", lambda: _v39_controls(tmp, verbose)),
                      ("V40", lambda: _v40_swarm_numbers(tmp, verbose)),
                      ("V20", lambda: _v20_determinism(tmp, verbose)),
                      ("accel", lambda: _accel_end_to_end(tmp, verbose)),

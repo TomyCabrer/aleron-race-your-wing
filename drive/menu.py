@@ -112,11 +112,12 @@ class Menu:
         self.art = None                   # a page's own drawing (show(art=))
         self.art_h = 0.0
         self.typed = frozenset()          # rows that take typed digits (show(typed=))
+        self.help_for = None              # idx -> sections: help for the row (show(help_for=))
 
     # -- state --------------------------------------------------------------
     def show(self, items=None, sections=None, subtitle=None, note=None,
              footer=None, title=None, idx=0, columns=None, art=None,
-             art_h: float = 0.0, typed=()) -> None:
+             art_h: float = 0.0, typed=(), help_for=None) -> None:
         """Open (or re-open) the menu. `idx` keeps the cursor where it was
         when a settings page re-shows itself after a value is cycled;
         `columns=1` stacks every help section (and the note) in one column
@@ -129,6 +130,10 @@ class Menu:
         self.art = art
         self.art_h = float(art_h) if art is not None else 0.0
         self.typed = frozenset(typed or ())
+        #: `help_for(idx)` -> the help sections for the highlighted row (the
+        #: settings page: what that setting does, with its pad buttons);
+        #: None = the page's fixed `sections`. Set by every show() too.
+        self.help_for = help_for
         if items is not None:
             self.items = list(items)
         if sections is not None:
@@ -307,7 +312,13 @@ class Menu:
             col_h[0] = self.art_h + 14 * u
         placed = []                       # (col, y_offset, title, rows)
         one = (self.columns == 1)
-        for title, rows in self.sections:
+        secs = self.sections
+        if self.help_for is not None:
+            try:
+                secs = list(self.help_for(self.idx))
+            except Exception:             # noqa: BLE001 -- the help never takes the menu down
+                secs = self.sections
+        for title, rows in secs:
             c = 0 if (one or col_h[0] <= col_h[1]) else 1
             placed.append((c, col_h[c], title, rows))
             col_h[c] += (len(rows) + 1) * row_h + 14 * u
@@ -378,7 +389,7 @@ class Menu:
                            y + 4 * u, f_lbl, C_DIM)
             y += 36 * u
         hint = NAV_HINT_PAD if any("PAD" in (t or "") or "DUALSENSE" in (t or "")
-                                   for t, _ in self.sections) else NAV_HINT
+                                   for t, _ in secs) else NAV_HINT
         if not any(a.startswith("set:") for _, a in self.items):
             hint = [row for row in hint if not row[0].startswith("LEFT")]
         y += 6 * u

@@ -61,6 +61,7 @@ from the repo root.
 | `drive/challenges.py` | challenges (`drive/data/challenges/*.json`, kind `carsim-challenge-1`): `validate`, `load_all`, the constraint checker (`build_stats`, `refusals`), `stars_for`, the per-step `Meter` (lap_time, stop_distance, skid_ay; drag_time and trap_speed stay measurable, no challenge uses them since task 36) and `ChallengeRun` (the Sim's hooks, best + stars into `runs/progress.json`), the reference runs (`measure`; `--measure` / `--write` derive every threshold as ref x 1.12 / 1.06 / 1.02), the page rows | `records`, `progress` (via the object handed in); `drive.drive`, `garage`, `track`, `vehicle`, `aero.library` lazily. Never pygame |
 | `drive/race_grid.py` | the race grid (plan D3): `GRID_MAX` (5, measured), `grid_slot(i)` (rows of two, 7 m apart), the slot colours, `bred_meta` (what a swarm writes into a checkpoint about the car it bred in), `own_car(meta, cfg, lib)` (that car rebuilt: stock or yours with ballast and wing masses, the garage build's aero, the engine) | `cars`, `vehicle`; `garage` lazily. Never pygame, never `drive.ml` |
 | `drive/swarm_panel.py` | the swarm window's progress panel (`panel_lines`: the best lap per generation with a bar, the class's medal lines and the owner's PB with the swarm's gap to each) and the Deploy-swarm page's free values (`clamp_pop` 4-128, `clamp_T` 20-240 s; task 34: `POP_PRESETS` / `T_PRESETS`, `step_value` / `cycle_value` over them, `Typed` digits, `row_value`) | nothing (pure; the caller hands in the PB). Never pygame, never `drive.ml` |
+| `drive/controls_page.py` | the CONTROLS page (task 37): `CONTROLS` (each DualSense control, its anchor on the drawing, its label, what it does), `MENU_PAD`, `pad_rows`, `kb_rows` (input.MENU_HELP_KB), `draw_pad(screen, rect)` (the controller and leader-lined labels, fitted to the rect, the labels' font shrunk to their column) | `input` (the bindings), `render.FONT_NAMES`; pygame lazily |
 | `drive/airbrake.py` | the G key's wing mode (task 35): `AUTO / AIR / ALL / LEFT / RIGHT`, `CYCLE`, `LABELS`, `next_mode`, `pair(cfg)` (both flanks fitted), `AirBrake.command(mode, brake, V, cfg)` -> `Controls.wing_cmd` or None (AIR BRAKE: all three while the pedal is >= 0.30, in to 0.15, above 5 m/s; one flank is left out) | nothing (pure). Never pygame, never the physics |
 | `drive/results.py` | the lap's results card (task 27): `card(res, book)` from the recorder's lap result (time, delta to the PB it was driven against, the sectors coloured purple / green / red, place, medal, `new_pb`, the class `key`), `view(card, age)` (None after `SHOW_S`), `drop` / `pulse` (the animation); task 32: `summary(card)` (the Settings row / the page's list), `page_rows(log)`, `LOG_N` cards kept a session | `records` lazily. Never pygame |
 | `drive/drive.py` | main loop, CLI, scripted runs | everything |
@@ -1108,7 +1109,10 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
   gives a page its own drawing: `f(screen, rect)` gets `art_h` px at the top
   of the first help column, the sections go below it, every `show()` resets
   it, and one that raises is dropped with a note (the LAP RESULTS page draws
-  the card there with `Renderer.draw_card`). Items are `(label, action)`;
+  the card there with `Renderer.draw_card`; the CONTROLS page the DualSense,
+  `controls_page.draw_pad`). `show(help_for=f)` (task 37): `f(idx)` gives the
+  help sections for the highlighted row (the settings page's
+  `SETTINGS_ROW_HELP`). Items are `(label, action)`;
   `select` returns the action and closes, `back`/`menu` return `'resume'`,
   `nav_left`/`nav_right` return `'prev:<action>'`/`'next:<action>'` and keep
   it open. On the drive's settings page these step the row's value:
