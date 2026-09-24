@@ -62,11 +62,11 @@ DESIGN_VARS = (
     #  the top's band is the garage's own TOP_H_MAX; the flank's spans a panel
     #  hugging the sill (DEV_OUT0) to one well clear of it
     ("ride_h",         "spec", "standoff",     "m",   (0.25, 0.70),  (0.90, 1.85)),
-    #  the flank's ceiling is what the sill-to-rail height can take (see
-    #  `span_fit`, which caps the band at the slot height); the top's is
-    #  AeroBO's `SPAN_BOUNDS_M` ceiling, past the 1.646 m body width -- the
-    #  packaging band is the widest a designer may ASK for, and a regulation
-    #  or a transporter narrows it on the DESIGN BOX
+    #  the default optimiser band. What a car may actually carry is per car
+    #  (`span_fit` -> `bodies.span_ceiling`, task 41: flank tip at the car's
+    #  ground clearance, top 1.2 x its width) and the garage passes that band;
+    #  the top's 2.00 is AeroBO's `SPAN_BOUNDS_M` ceiling -- a regulation or
+    #  a transporter narrows it on the DESIGN BOX
     ("span",           "spec", "span",         "m",   (0.35, 1.30),  (0.70, 2.00)),
 )
 
@@ -297,26 +297,31 @@ def apply_design(spec: "WingSpec", x, *, clamp: bool = True,
 
 
 #: The flank panel is a VERTICAL extent centred on its mount, so how tall it
-#: may be depends on where it is bolted: it has to clear the sill below and
-#: stay under the roof rail above. 0.28 m is the sill face the garage's body
-#: mesh puts the rocker at, 1.34 m the rail just under the 1.440 m published
-#: roof. They lived as two bare literals inside the optimiser's bounds and
-#: nowhere else, which is why the DESIGNER's span row did not know about them.
-SILL_Z, ROOF_Z = 0.28, 1.34
+#: may be depends on where it is bolted. Until task 41 that was the Corsa's
+#: sill (0.28 m) and roof rail (1.34 m) on every car; it is now the owner's
+#: rule, per car, and it lives in `drive/bodies.py`: a flank's lower tip may
+#: come down to the car's own ground clearance (span <= 2 (h - ground)), a top
+#: wing may be 1.2 x the body's width. The panel stands 0.25-0.70 m off the
+#: body side, so nothing but the road stops it growing -- the roof rail went.
+#:
+#: The sanity clamp a WingSpec is held to on every load. It is NOT a
+#: packaging band: those are per car (`bodies.span_ceiling`). It only has to
+#: be wide enough that the largest wing any car may carry in Unlimited
+#: survives a save and a reload (`bodies.self_check` pins that), so these
+#: rows' ceilings are max(BOUNDS, this).
+CLAMP_HI = {"flank": {"span": 16.0, "area": 10.0},
+            "top": {"span": 10.0, "area": 5.0, "ride_h": 4.0}}
 
 
-def span_fit(role: str, h: float) -> float:
-    """The tallest span `role` can actually be packaged at, mounted at height
-    `h` -- the upper bound BOTH the page's span row and the optimiser's span
-    band should use, so the page cannot offer a panel the optimiser is
-    forbidden to propose. A top wing is limited by the car's width, not by
-    its ride height, so its band is unconditional."""
-    lo, hi = BOUNDS[role if role in BOUNDS else "flank"]["span"]
-    if role != "flank":
-        return hi
-    #  the floor keeps the band non-degenerate: a mount right under the rail
-    #  would otherwise collapse it to nothing and leave the GP no room at all
-    return max(min(hi, 2.0 * min(h - SILL_Z, ROOF_Z - h)), lo + 0.05)
+def span_fit(role: str, h: float, car=None, unlimited: bool = False) -> float:
+    """The tallest span `role` may be offered at mount height `h` on `car` (a
+    `cars.py` key or a CarSpec; None is the Corsa) -- the upper bound BOTH the
+    page's span row and the optimiser's span band use, so the page cannot
+    offer a panel the optimiser is forbidden to propose. The physical limit
+    (`bodies.span_limit`), times `bodies.UNLIMITED_FACTOR` when `unlimited`.
+    A top wing is limited by the car's width, not by its ride height."""
+    from ..bodies import span_ceiling           # lazy: bodies imports this module
+    return span_ceiling(role, car, h, unlimited)
 
 
 def format_design(x, role: str = "flank", area: bool = False) -> str:
@@ -459,8 +464,10 @@ class WingSpec:
         if self.ride_h <= 0.0:
             self.ride_h = RIDE_H0[self.role]
         b = BOUNDS[self.role]
+        over = CLAMP_HI.get(self.role, {})
         for k in design_vars(self.role, owner="spec", area=True):  # page order
             lo, hi = b[k]
+            hi = max(hi, over.get(k, hi))       # span / area / top ride: per car
             setattr(self, k, float(min(max(getattr(self, k), lo), hi)))
         self.n_strips = int(min(max(self.n_strips, 8), 48))
         return self
@@ -913,25 +920,30 @@ def self_check(verbose: bool = True) -> bool:
         rep("an unknown bound override raises rather than being dropped", False, "no exception")
     except ValueError as exc:
         rep("an unknown bound override raises rather than being dropped", True, str(exc))
-    capped = design_bounds("flank", span=(0.35, span_fit("flank", 0.90)))
+    capped = design_bounds("flank", span=(0.35, 0.88))
     i_b = design_vars("flank").index("span")
     plain = design_bounds("flank")
     rep("an override narrows one band and leaves the order alone",
-        capped[i_b][0] == 0.35 and abs(capped[i_b][1] - 0.88) < 1e-12
+        capped[i_b][0] == 0.35 and capped[i_b][1] == 0.88
         and capped[:i_b] == plain[:i_b] and capped[i_b + 1:] == plain[i_b + 1:],
-        f"span capped to {capped[i_b][1]:.3f} m by the sill/roof fit, "
-        f"the other {len(plain) - 1} untouched")
-    #  the garage's optimiser has always used this fit; reproduce its two
-    #  literals exactly so adopting span_fit cannot move any bound. The band's
-    #  ceiling is the packaging band's (1.30 m since the bands were opened
-    #  up); the sill-to-rail fit is what actually caps a flank, at 1.06 m
-    rep("span_fit reproduces the optimiser's sill/roof fit",
-        all(abs(span_fit("flank", h)
-                - max(min(BOUNDS["flank"]["span"][1], 2.0 * min(h - 0.28, 1.34 - h)), 0.40)) < 1e-12
+        f"span capped to {capped[i_b][1]:.3f} m, the other {len(plain) - 1} untouched")
+    #  task 41: the owner's per-car rule replaced the Corsa's sill/roof fit.
+    #  On the Corsa (ground clearance 0.15 m, width 1.646 m) the flank's lower
+    #  tip sits exactly on the clearance and the top is 1.2 x the width;
+    #  Unlimited is three times that
+    rep("span_fit is the owner's rule on the Corsa (task 41)",
+        all(abs(span_fit("flank", h) - 2.0 * (h - 0.15)) < 1e-12
             for h in (0.40, 0.60, 0.81, 0.90, 1.00, 1.15, 1.20))
-        and span_fit("top", 1.6) == BOUNDS["top"]["span"][1],
-        f"h 0.90 -> {span_fit('flank', 0.90):.2f} m, h 1.15 -> {span_fit('flank', 1.15):.2f} m, "
-        f"top unconditional {span_fit('top', 1.6):.2f} m")
+        and abs(span_fit("top", 1.6) - 1.2 * 1.646) < 1e-12
+        and abs(span_fit("flank", 0.90, "corsa", unlimited=True) - 3.0 * 1.5) < 1e-12,
+        f"h 0.90 -> {span_fit('flank', 0.90):.2f} m, h 1.20 -> {span_fit('flank', 1.20):.2f} m, "
+        f"top {span_fit('top', 1.6):.4f} m, Unlimited h 0.90 "
+        f"{span_fit('flank', 0.90, unlimited=True):.2f} m")
+    big = WingSpec("big", "top", "s1223", span=2.9, chord=0.50, area=1.45,
+                   ride_h=3.30).clamp()
+    rep("a bus-sized top wing survives the load clamp (task 41)",
+        (big.span, big.area, big.ride_h) == (2.9, 1.45, 3.30),
+        f"span {big.span} area {big.area} ride {big.ride_h}")
 
     e423 = af.load_dat(af.DATA_DIR + "/e423.dat")[1]
     spec = WingSpec("flank-e423", "flank", "e423", span=0.78, chord=0.45, taper=1.0, plate_h=0.0)

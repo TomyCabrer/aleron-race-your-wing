@@ -5881,14 +5881,18 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
         and dsn.box["taper"][0] <= BOUNDS[dsn.role]["taper"][1],
         f"taper {dsn.box['taper'][0]:.3f} .. {dsn.box['taper'][1]:.3f}")
     dsn.box["taper"] = list(BOUNDS[dsn.role]["taper"])
-    #  the SPAN's upper end is still the sill/roof fit, whatever is typed
-    dsn.box["span"][1] = BOUNDS[dsn.role]["span"][1]
+    #  the SPAN's upper end is still the car's fit, whatever is typed
+    #  (task 41: the fit is the owner's ground rule, `bodies.span_ceiling`,
+    #  so a typed ceiling has to be past it for the cap to show)
+    typed = dsn._span_band()[1] + 0.5
+    dsn.box["span"][1] = typed
     b_sp, _ = dsn.search_bounds()
-    rep("the span band is still capped by the sill/roof fit",
+    rep("the span band is still capped by the car's span fit",
         abs(b_sp[design_vars(dsn.role).index("span")][1]
             - dsn._span_band()[1]) < 1e-12,
-        f"typed {BOUNDS[dsn.role]['span'][1]:.2f} m, searched "
+        f"typed {typed:.2f} m, searched "
         f"{b_sp[design_vars(dsn.role).index('span')][1]:.3f} m")
+    dsn.box["span"][1] = BOUNDS[dsn.role]["span"][1]
 
     #  FREEING THE REFERENCE AREA adds a row, one ahead of the span, exactly
     #  where AeroBO's `CarWingProblem` puts it. The whole vector has to move

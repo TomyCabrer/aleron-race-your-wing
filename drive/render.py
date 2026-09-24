@@ -1239,72 +1239,14 @@ SPIN_BLUR_A1 = 0.53      # rad/frame ... and are a uniform blur above it. A
                          #    (2.9 -> 9.3 m/s), 5 -> 16 rad/s at 30 fps, where
                          #    a fixed 32 rad/s let 19-32 rad/s spin backwards
 
-#: each style's shell, drawn round a real car's PUBLISHED exterior (length,
-#: width, height; the overhangs of the MX-5 and the E39 are est). `a` is that
-#: car's own CG-to-front-axle, the frame its stations are written in, so a
-#: fitted car with a different a / b / L (ballast moves a and b) gets the
-#: same shell placed on ITS axles. `t` is the mean track the widths scale by.
-CAR_STYLE_REF = {
-    'hatch': dict(length=3.817, width=1.646, height=1.440, ovh_f=0.780,
-                  L=2.491, t=1.4245, a=0.97149),       # Opel Corsa C 5-door
-    'roadster': dict(length=3.945, width=1.680, height=1.235, ovh_f=0.845,
-                     L=2.265, t=1.4275, a=1.0872),     # Mazda MX-5 NB (ovh est)
-    'saloon': dict(length=4.775, width=1.800, height=1.435, ovh_f=0.840,
-                   L=2.830, t=1.519, a=1.3867),        # BMW E39 (ovh est)
-}
+#: each style's shell and its reference car, the cross-sections down each
+#: shell, and their band kinds: `drive/bodies.py` owns them since task 41,
+#: so the wing limits (flank tip at the car's ground clearance, top 1.2 x its
+#: width) read the very shell this module draws.
+from .bodies import CAR_STYLE_REF, STATIONS3, _STYLE_SHELL3  # noqa: E402
 #: the body colour per style (est; the Corsa keeps the study's C_CAR yellow)
 C_CAR_STYLE = {'hatch': C_CAR, 'roadster': (176, 34, 42), 'saloon': (64, 92, 138)}
 
-#: Cross-sections down each shell: (x, z_floor, z_belt, z_top, half_w,
-#: half_w_roof) in the style car's own CG frame, nose first. The hatch is
-#: garage.py's STATIONS with the tail re-cut (an upright tailgate and a
-#: bumper ledge instead of one 48 deg slope, so lamps and a plate have a
-#: panel to sit on); the other two are drawn to their cars' published
-#: length / width / height. BAND kinds name what lies between consecutive
-#: stations and decide the paint (`_band_paint3`).
-STATIONS3 = (
-    (1.7515, 0.24, 0.58, 0.64, 0.700, 0.52),    # bumper face
-    (1.60, 0.17, 0.68, 0.74, 0.790, 0.60),
-    (1.10, 0.15, 0.78, 0.83, CAR_HALF_W, 0.68),
-    (0.60, 0.15, 0.85, 0.90, CAR_HALF_W, 0.70),   # scuttle
-    (-0.05, 0.15, 0.88, 1.38, CAR_HALF_W, 0.64),  # A-pillar top
-    (-0.80, 0.15, 0.90, CAR_H, CAR_HALF_W, 0.64),  # roof
-    (-1.48, 0.16, 0.92, 1.41, 0.815, 0.62),       # roof end (spoiler lip)
-    (-1.82, 0.22, 0.94, 1.04, 0.795, 0.64),       # tailgate glass base
-    (-1.98, 0.26, 0.68, 0.74, 0.745, 0.66),       # tailgate foot / bumper top
-    (CAR_X_REAR, 0.27, 0.58, 0.64, 0.700, 0.62),  # rear bumper face
-)
-_STYLE_SHELL3 = {
-    'hatch': (STATIONS3, ('nose', 'bonnet', 'bonnet', 'screen', 'roof', 'roof',
-                          'rglass', 'tail', 'bumper')),
-    'roadster': ((
-        (1.932, 0.22, 0.50, 0.55, 0.68, 0.50),     # bumper face
-        (1.80, 0.16, 0.60, 0.66, 0.79, 0.62),
-        (1.15, 0.14, 0.70, 0.76, 0.84, 0.72),      # over the front wheels
-        (0.45, 0.14, 0.76, 0.81, 0.84, 0.74),      # scuttle: the screen's foot
-        (0.20, 0.14, 0.78, 0.82, 0.84, 0.74),      # cockpit front
-        (-0.75, 0.14, 0.80, 0.84, 0.84, 0.74),     # cockpit rear
-        (-0.95, 0.15, 0.82, 0.87, 0.84, 0.74),     # tonneau / deck front
-        (-1.70, 0.18, 0.86, 0.92, 0.83, 0.70),     # boot lid rear edge
-        (-1.93, 0.24, 0.70, 0.76, 0.77, 0.66),     # tail panel foot
-        (-2.0128, 0.26, 0.60, 0.66, 0.72, 0.62),   # bumper face
-    ), ('nose', 'bonnet', 'bonnet', 'dash', 'cockpit', 'deck', 'deck', 'tail',
-        'bumper')),
-    'saloon': ((
-        (2.2267, 0.24, 0.60, 0.66, 0.76, 0.56),    # bumper face
-        (2.08, 0.17, 0.70, 0.76, 0.86, 0.66),
-        (1.45, 0.15, 0.78, 0.84, 0.90, 0.74),      # over the front wheels
-        (0.62, 0.15, 0.86, 0.92, 0.90, 0.76),      # scuttle
-        (-0.10, 0.15, 0.90, 1.38, 0.90, 0.68),     # A-pillar top
-        (-1.00, 0.15, 0.91, 1.435, 0.90, 0.69),    # roof
-        (-1.55, 0.15, 0.92, 1.40, 0.895, 0.67),    # C-pillar top
-        (-2.02, 0.17, 0.93, 1.02, 0.88, 0.72),     # rear glass base / boot lid
-        (-2.42, 0.20, 0.95, 1.01, 0.85, 0.74),     # boot lid rear edge
-        (-2.50, 0.25, 0.64, 0.70, 0.82, 0.72),     # boot face foot
-        (-2.5483, 0.26, 0.56, 0.62, 0.78, 0.68),   # bumper face
-    ), ('nose', 'bonnet', 'bonnet', 'screen', 'roof', 'roof', 'rglass', 'deck',
-        'tail', 'bumper')),
-}
 
 # --- materials: what the chase shader does with a polygon (_MAT3 rows) ----
 (M_PAINT, M_TRIM, M_GLASS, M_RIM, M_TYRE, M_TAIL, M_REV, M_HEAD, M_PLATE,
@@ -1381,18 +1323,8 @@ def car_style(car=None) -> str:
     registry, so key and spec always give the same style; any other string
     is read as a name."""
     car = car if car is not None else _CAR
-    if isinstance(car, str):
-        import cars as _cars             # lazy: the only use render has for it
-        spec = _cars.CARS.get(car)
-        name = spec.name if spec is not None else car
-    else:
-        name = getattr(car, 'name', '')
-    name = str(name or '').lower()
-    if 'mx-5' in name or 'mx5' in name or 'roadster' in name:
-        return 'roadster'
-    if 'bmw' in name or '540' in name or 'saloon' in name or 'sedan' in name:
-        return 'saloon'
-    return 'hatch'
+    from .bodies import style_of     # one lookup for render and the limits
+    return style_of(car)
 
 
 def factory_colour(car=None) -> tuple:
@@ -1437,19 +1369,9 @@ class CarGeom:
         self.wheel_w = tw if tw > 0 else WHEEL_W
         self.rim_r = min(rr * 1.06, 0.80 * self.wheel_r) if rr > 0 else 0.64 * self.wheel_r
         k_w = 0.5 * (t_f + t_r) / ref['t']
-        a_ref, L_ref = ref['a'], ref['L']
-
-        def mx(x):
-            xf = x - a_ref                        # from the style car's front axle
-            if xf >= 0.0:
-                return a + xf
-            if xf <= -L_ref:
-                return a - L + (xf + L_ref)
-            return a + xf * L / L_ref
-        stations, bands = _STYLE_SHELL3[self.style]
-        self.stations = tuple((mx(s[0]), s[1], s[2], s[3], s[4] * k_w, s[5] * k_w)
-                              for s in stations)
-        self.bands = bands
+        from .bodies import map_stations  # the limits map the same shell
+        self.stations = map_stations(self.style, a, L, k_w)
+        self.bands = _STYLE_SHELL3[self.style][1]
         self.a, self.b, self.L = a, b, L
         self.wheel_xy = ((a, 0.5 * t_f), (a, -0.5 * t_f), (-b, 0.5 * t_r), (-b, -0.5 * t_r))
         self.x_front = self.stations[0][0]
