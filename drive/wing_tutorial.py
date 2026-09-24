@@ -181,11 +181,12 @@ STEPS = (
           "-- leaving the page saves it).",
           _chk_fit, ("bar",)),
     WStep("build", "8  Save the car as a build",
-          "A BUILD is the whole car: all three slots, their stations and angles. "
-          "Saved builds are what the TIME TRIAL page offers (Build > PICK), on "
-          "any map, each with its best lap.",
-          "ESC / CIRCLE back to the car, L opens the library (pad: OPTIONS > Wing & "
-          "build library), S / SQUARE saves the car as a build.",
+          "A BUILD is the whole car: all three slots, their stations and angles, "
+          "kept for the car it was made for. Saved builds are what the TIME TRIAL "
+          "page offers (Build > PICK) and B steps through, on any map, each with its "
+          "best lap; F makes one the car's own default.",
+          "ESC / CIRCLE back to the car and S saves it (pad: OPTIONS > Save build); "
+          "or L opens the library, where S / SQUARE saves it too.",
           _chk_build, ("list", "builds")),
     WStep("drive", "9  Drive it",
           "The TIME TRIAL page opens with this build; its laps are filed with it, "
