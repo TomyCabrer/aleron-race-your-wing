@@ -125,7 +125,13 @@ def _wrap_px(text: "Text", msg: str, px: int, size: int) -> list:
 class Param:
     """One editable row. `get()`/`set(v)` talk to the model; `kind`:
     'float' (LEFT/RIGHT step, SHIFT fine), 'int', 'choice' (cycles
-    `choices`), 'bool', 'action' (ENTER calls `set(None)`), 'label'."""
+    `choices`), 'bool', 'action' (ENTER calls `set(None)`), 'label'.
+
+    `lo` / `hi` may be CALLABLES, read at every step (task 41): a band that
+    moves while the page is open -- a flank panel's span limit follows its
+    mount height and the car it is on -- could not be a number captured when
+    the list was built, and a stale `hi` let LEFT / RIGHT step a row past
+    the cap its setter then had to undo."""
 
     def __init__(self, key, label, get, set=None, *, kind="float", step=0.01, fine=None,
                  lo=None, hi=None, unit="", fmt="{:.2f}", choices=(), help="", enabled=True):
@@ -149,6 +155,13 @@ class Param:
         has nothing to do with."""
         e = self._enabled
         return bool(e() if callable(e) else e)
+
+    def band(self) -> tuple:
+        """(lo, hi) as they stand now: a callable end is read, a number is
+        itself, None is no bound."""
+        lo = self.lo() if callable(self.lo) else self.lo
+        hi = self.hi() if callable(self.hi) else self.hi
+        return lo, hi
 
     def value_text(self) -> str:
         v = self.get() if self.get is not None else ""
@@ -174,20 +187,21 @@ class Param:
     def adjust(self, direction: int, fine: bool = False) -> bool:
         if not self.enabled or self.set is None:
             return False
+        lo, hi = self.band()
         if self.kind == "float":
             v = float(self.get()) + direction * (self.fine if fine else self.step)
-            if self.lo is not None:
-                v = max(v, self.lo)
-            if self.hi is not None:
-                v = min(v, self.hi)
+            if lo is not None:
+                v = max(v, lo)
+            if hi is not None:
+                v = min(v, hi)
             self.set(v)
             return True
         if self.kind == "int":
             v = int(self.get()) + direction
-            if self.lo is not None:
-                v = max(v, int(self.lo))
-            if self.hi is not None:
-                v = min(v, int(self.hi))
+            if lo is not None:
+                v = max(v, int(lo))
+            if hi is not None:
+                v = min(v, int(hi))
             self.set(v)
             return True
         if self.kind == "choice" and self.choices:
