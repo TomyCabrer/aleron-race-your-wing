@@ -169,17 +169,50 @@ def records_reason(track: str, radius: float = 50.0, cw: bool = False):
     return None
 
 
+#: the `CarBuild` JSON keys that label a build rather than describe the car:
+#: its library name, the library's built-in flag, and (task 41) the car it
+#: was made for. Everything that asks "is this the same car?" strips exactly
+#: these -- `build_id` here, `prerace._same_build` (the pre-race page's
+#: "saved", the PICK's autosave, the wing tutorial's build step) -- so that
+#: tagging a build with its car changes no build's identity: a build saved
+#: before task 41 (no "car" key) and the same build tagged "bus" hash to the
+#: same id, and every PB filed before keeps its build (the self-check proves
+#: it against the pre-task-41 formula). The car a lap was driven in is in the
+#: CLASS key already, so dropping the tag from the hash loses nothing.
+BUILD_META = ("name", "builtin", "car")
+
+
 def build_id(name, build_json) -> str:
     """What a build's best lap is filed under: its CONTENT -- a hash of the
-    `CarBuild` JSON without its name and library flag -- so a car edited in
-    the garage that kept its name is a different build, and two names for one
-    car are one. A published one-panel car (no JSON) is known by its name."""
+    `CarBuild` JSON without its labels (`BUILD_META`: the name, the library
+    flag, the car it was made for) -- so a car edited in the garage that kept
+    its name is a different build, and two names for one car are one. A
+    published one-panel car (no JSON) is known by its name."""
     if isinstance(build_json, dict):
         import hashlib
-        body = {k: v for k, v in build_json.items() if k not in ("name", "builtin")}
+        body = {k: v for k, v in build_json.items() if k not in BUILD_META}
         return "b:" + hashlib.sha1(json.dumps(body, sort_keys=True, default=repr)
                                    .encode()).hexdigest()[:16]
     return "n:" + str(name or "")
+
+
+def build_car(build_json) -> str:
+    """The car a build was made for (a `cars.py` key), "" for a build saved
+    before task 41 -- one made for ANY car -- or anything not a build."""
+    c = build_json.get("car", "") if isinstance(build_json, dict) else ""
+    return c if isinstance(c, str) else ""
+
+
+def build_fits(build_json, car: str) -> bool:
+    """May `car` open with this build without the player choosing it? Only
+    its own builds and the any-car ones from before task 41: a Corsa build is
+    never silently put on a bus (task 41)."""
+    return build_car(build_json) in ("", str(car or ""))
+
+
+def last_key(track: str, car: str) -> str:
+    """The per-map memory's key for `car` on `track` (task 41)."""
+    return f"{track}|{car}"
 
 
 def surface_global_wet(surface: str, wet_scale: float) -> float:
@@ -677,6 +710,13 @@ class RecordBook:
             return True
 
     # ---- the pre-race screen's per-track default build (task 20) ------
+    #  Task 41: kept per MAP AND CAR. An entry's key is `track|car` (the car
+    #  it was DRIVEN in), so a bus session on the arena no longer writes over
+    #  the build the Corsa last used there. A file from before task 41 holds
+    #  bare `track` keys; those are still read, for any car, but only when the
+    #  build they hold is one that car may open with (`build_fits`) -- which
+    #  every pre-task-41 build is, as it carries no car. Nothing is rewritten:
+    #  the old entry simply stops being consulted once the car has its own.
     def _last_path(self) -> str:
         return os.path.join(self.root, LAST_BUILDS_FILE)
 
@@ -696,14 +736,30 @@ class RecordBook:
             _stash_bad(p, str(exc))
             return {}
 
-    def last_build(self, track: str):
-        e = self.last_builds().get(track)
-        return e if isinstance(e, dict) and isinstance(e.get("build"), dict) else None
-
-    def set_last_build(self, track: str, name: str, build: dict) -> bool:
+    def last_build(self, track: str, car: str | None = None):
+        """The entry `{name, build, date}` last used on `track` -- with `car`
+        (task 41): the one that car used there, else a pre-task-41 bare-track
+        entry whose build `car` may open with; never a build made for another
+        car. `car` None: the bare-track entry only (the old reading)."""
         tracks = self.last_builds()
-        tracks[track] = dict(name=str(name), build=build,
-                             date=time.strftime("%Y-%m-%dT%H:%M:%S"))
+
+        def entry(k):
+            e = tracks.get(k)
+            return e if isinstance(e, dict) and isinstance(e.get("build"), dict) else None
+        if car is None:
+            return entry(track)
+        e = entry(last_key(track, car))
+        if e is None:                      # this car has no entry of its own yet
+            e = entry(track)
+        return e if e is not None and build_fits(e["build"], car) else None
+
+    def set_last_build(self, track: str, name: str, build: dict,
+                       car: str | None = None) -> bool:
+        """This build is `track`'s from now on -- for `car` (task 41), under
+        `track|car`; without a car, the bare-track key (the old writing)."""
+        tracks = self.last_builds()
+        tracks[last_key(track, car) if car else track] = dict(
+            name=str(name), build=build, date=time.strftime("%Y-%m-%dT%H:%M:%S"))
         try:
             _atomic_json(self._last_path(), dict(kind=LAST_BUILDS_KIND, tracks=tracks))
         except OSError as exc:
@@ -1273,6 +1329,48 @@ def self_check(verbose: bool = True) -> bool:
     rep("last build per track", RecordBook(root).last_build("arena")["name"] == "fast one"
         and RecordBook(root).last_build("open")["build"]["name"] == "wet one"
         and RecordBook(root).last_build("skidpad") is None)
+    #  task 41: per map AND car. The bare "arena" entry above is a file from
+    #  before task 41 (its build has no car): every car may still open with
+    #  it until that car has an entry of its own; a build tagged for another
+    #  car is never handed out, whichever key holds it.
+    b3.set_last_build("arena", "bus wings", dict(version=2, name="bus wings", car="bus"),
+                      car="bus")
+    b3.set_last_build("linden", "corsa fast", dict(version=2, name="corsa fast", car="corsa"),
+                      car="corsa")
+    b3.set_last_build("kestrel", "picked", dict(version=2, name="picked", car="bus"),
+                      car="corsa")                 # a bus build the player drove on the Corsa
+    b3.set_last_build("ashdown", "mine", dict(version=2, name="mine", car="corsa"),
+                      car="corsa")
+    b3.set_last_build("ashdown", "old any-car", dict(version=2, name="old any-car"))
+    rb = RecordBook(root)
+    lb = {(t, c): (rb.last_build(t, c) or {}).get("name")
+          for t in ("arena", "linden", "kestrel", "ashdown") for c in ("corsa", "bus")}
+    rep("last build per map AND car: each car its own; a pre-task-41 entry for any car "
+        "until it has one; another car's build never",
+        lb == {("arena", "corsa"): "fast one", ("arena", "bus"): "bus wings",
+               ("linden", "corsa"): "corsa fast", ("linden", "bus"): None,
+               ("kestrel", "corsa"): None, ("kestrel", "bus"): None,
+               ("ashdown", "corsa"): "mine", ("ashdown", "bus"): "old any-car"}
+        and rb.last_build("arena")["name"] == "fast one"
+        and "arena|bus" in rb.last_builds() and "arena|corsa" not in rb.last_builds(),
+        str(lb))
+    #  and the BUILD_META strip: tagging a build with its car (task 41) moves
+    #  no PB -- the id is the pre-task-41 formula's, for the old JSON and the
+    #  tagged one alike
+    import hashlib
+    old_js = dict(version=2, name="fast", mirror=True, builtin=False,
+                  slots={"left": {"wing": "fin", "x": 0.97, "h": 0.9, "inc_deg": 0.0,
+                                  "mode": "active"}})
+    pre41 = "b:" + hashlib.sha1(json.dumps({k: v for k, v in old_js.items()
+                                            if k not in ("name", "builtin")},
+                                           sort_keys=True, default=repr)
+                                .encode()).hexdigest()[:16]
+    ids = {build_id("fast", old_js), build_id("fast", dict(old_js, car="bus")),
+           build_id("other", dict(old_js, car="", builtin=True))}
+    rep("a build's id ignores its name, library flag and car: the pre-task-41 id for "
+        "an old build and the same build tagged with a car",
+        ids == {pre41} and build_id("x", dict(old_js, mirror=False)) != pre41
+        and BUILD_META == ("name", "builtin", "car"), f"{pre41} ({len(ids)} distinct)")
 
     # -- what is not a lap, and what must not stop the car ----------------
     try:

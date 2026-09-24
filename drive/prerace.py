@@ -18,6 +18,14 @@ its low-drag car and the skidpad its big wing without the garage in between.
 Coming back from the garage keeps the car just built; `--build` / `--wing`
 on the command line win at launch.
 
+Task 41: builds know the car they were made for (`CarBuild.car`, "" for a
+build saved before -- an any-car build). The per-map memory is kept per map
+AND car, and never hands a car another car's build; the PICK page lists the
+driven car's builds first, then the any-car ones, then other cars' (tagged,
+still pickable: a bus wing on a Corsa is the player's own experiment), with
+the car's own DEFAULT build (Settings.car_build) marked. The same page is
+the Settings page's Build row, on every map (`key` None: no times there).
+
 The same page is the pause menu's *Time trial* item mid-session.
 
 When a session OPENS on it (task 33, `session_start`): when its class or
@@ -62,9 +70,45 @@ PR_HELP = [("PRE-RACE", [
 PICK_HELP = [("PICK A BUILD", [
     ("ENTER / CROSS", "drive that build (a new session on it)"),
     ("time", "its best lap in this class, if any"),
-    ("", "saved builds: the garage's LIBRARY page, S"),
-    ("ESC", "back to the pre-race screen"),
+    ("order", "this car's builds, then any-car ones, then"),
+    ("", "other cars' (tagged [car]: yours to try)"),
+    ("(default)", "the build this car opens with; Settings"),
+    ("", "> Default, or the garage's F, sets it"),
+    ("", "saved builds: the garage's S (pad: OPTIONS)"),
+    ("ESC", "back where you came from"),
 ])]
+
+#: short names for a car's tag on a pick row / a library row. The titles
+#: live in `cars.CAR_TITLES`; these are the few letters a row has room for.
+#: A key missing here (a car added later) falls back to its title's first
+#: two words, then to the key itself.
+CAR_SHORT = {"corsa": "Corsa", "mx5": "MX-5", "540i": "540i",
+             "express": "Express", "bus": "Citaro"}
+
+
+def car_label(car: str) -> str:
+    """A car key as a row's tag: 'Corsa', 'MX-5', ... ("" for "")."""
+    if not car:
+        return ""
+    if car in CAR_SHORT:
+        return CAR_SHORT[car]
+    try:
+        import cars as _cars              # lazily: this module stays light
+        t = _cars.CAR_TITLES.get(car)
+    except Exception:                      # noqa: BLE001
+        t = None
+    return " ".join(str(t).split()[:2]) if t else str(car)
+
+
+def pick_order(builds: dict, car: str) -> list:
+    """The library's build names in the order a car lists them (task 41):
+    `car`'s own builds, then the any-car ones saved before task 41, then
+    every other car's -- each group by name. The garage's library page and
+    its B key use the same order (`drive.garage`)."""
+    def group(n):
+        c = rec.build_car(builds[n])
+        return 0 if c == car else (1 if c == "" else 2)
+    return sorted(builds, key=lambda n: (group(n), n.lower(), n))
 
 
 def wanted(opts, settings) -> bool:
@@ -107,9 +151,10 @@ def session_start(opts, key, build_name, build_json, wanted_now: bool) -> bool:
     return opens
 
 
-def default_build(book, track: str):
-    """(name, CarBuild json) of the build last raced on `track`, or None."""
-    e = book.last_build(track)
+def default_build(book, track: str, car: str | None = None):
+    """(name, CarBuild json) of the build last raced on `track` -- with `car`,
+    the one that car last raced there (`RecordBook.last_build`) -- or None."""
+    e = book.last_build(track, car)
     if not e:
         return None
     return str(e.get("name", "")), e["build"]
@@ -164,13 +209,23 @@ class PreRace:
     """The screen's content for one class and one build.
 
     `builds` is the garage library's `{name: CarBuild json}`; `build_json`
-    None means the published one-panel car (a legacy `WingDesign`)."""
+    None means the published one-panel car (a legacy `WingDesign`).
+
+    Task 41: `key` and `book` may be None -- the Settings page's Build row
+    opens the PICK page on EVERY map, the dragstrip and a map with no
+    records included, where there is no class and no time to show. `car` is
+    the car being driven (its builds are listed first) and `default` the
+    build the player made that car's default (marked); the session sets both
+    before the pick page is drawn."""
 
     def __init__(self, key: str, book, build_name: str = "", build_json=None,
-                 builds=None, titles=None, can_edit: bool = True):
+                 builds=None, titles=None, can_edit: bool = True,
+                 car: str = "", default: str = ""):
         self.key = key
         self.can_edit = bool(can_edit)     # False: no garage this session (no EDIT row)
         self.book = book
+        self.car = str(car or "")
+        self.default = str(default or "")
         self.build_name = str(build_name or "")
         self.build_json = build_json
         self.builds = dict(builds or {})
@@ -188,6 +243,8 @@ class PreRace:
         """A build's best lap in THIS class (nan when it has none): by the
         car's content (`records.build_id`), so a saved build is not credited
         with a lap an edited car drove under its name."""
+        if self.book is None or not self.key:
+            return float("nan")            # a map with no records (task 41)
         return self.book.build_best(self.key, name, build_json)
 
     # -- the main page ------------------------------------------------------
@@ -255,32 +312,45 @@ class PreRace:
 
     # -- the pick page ----------------------------------------------------------
     def pick_items(self) -> list:
+        """The PICK page's rows: the car being driven when it is no saved
+        build, then the library's builds in `pick_order` -- this car's, the
+        any-car ones, then other cars' tagged `[car]` (task 41) -- each with
+        its best time in this class; the car's default marked."""
         rows = []
         if not self.saved():
             rows.append((f"{self.build_name or '(unnamed)':<24s}"
                          f"{rec.fmt_time(self.build_best(self.build_name, self.build_json)):>10s}"
                          f"  (driving, not saved)",
                          "pr_back"))
-        for name in sorted(self.builds):
+        for name in pick_order(self.builds, self.car):
             mark = "  <- driving" if (name == self.build_name and self.saved()) else ""
+            if name == self.default:
+                mark += "  (default)"
+            c = rec.build_car(self.builds[name])
+            if self.car and c and c != self.car:
+                mark += f"  [{car_label(c)}]"
             rows.append((f"{name[:24]:<24s}"
                          f"{rec.fmt_time(self.build_best(name, self.builds[name])):>10s}{mark}",
                          f"pr_build:{name}"))
         if not self.builds:
-            rows.append(("no saved builds yet (garage > LIBRARY > S saves one)", "pr_back"))
+            rows.append(("no saved builds yet (the garage's S saves one)", "pr_back"))
         rows.append(("Back", "pr_back"))
         return rows
 
     def pick_subtitle(self) -> str:
+        if not self.key:
+            return (f"{car_label(self.car) or 'this car'}'s builds first   "
+                    f"no lap times on this map")
         return f"{rec.class_label(self.key)}   the time is each build's best in this class"
 
 
 def _same_build(a, b) -> bool:
-    """Two CarBuild jsons describe the same car (the name and the library's
-    `builtin` flag do not change the car)."""
+    """Two CarBuild jsons describe the same car: its labels
+    (`records.BUILD_META` -- the name, the library's `builtin` flag, the car
+    it was made for) do not change the car."""
     if not isinstance(a, dict) or not isinstance(b, dict):
         return False
-    strip = lambda d: {k: v for k, v in d.items() if k not in ("name", "builtin")}
+    strip = lambda d: {k: v for k, v in d.items() if k not in rec.BUILD_META}   # noqa: E731
     return strip(a) == strip(b)
 
 
@@ -417,6 +487,44 @@ def self_check(verbose: bool = True) -> bool:
         "the garage; flags spent", seq == [True, False, False, True, True, True, True, True,
                                           False, False]
         and not o.prerace_force and not o.prerace_skip, str(seq))
+    # -- task 41: builds know their car ------------------------------------
+    b_c = dict(b_fast, name="c fast", car="corsa")
+    b_bus = dict(b_wet, name="big bus", car="bus")
+    b_any = dict(b_fast, name="any", slots={"left": {"wing": "x"}})       # before task 41
+    lib41 = {"c fast": b_c, "big bus": b_bus, "any": b_any, "b slow": dict(b_c, name="b slow")}
+    p41 = PreRace(key, book, "c fast", dict(b_c), builds=lib41, car="corsa", default="b slow")
+    rows41 = [lbl for lbl, _ in p41.pick_items()]
+    acts41 = [a for _, a in p41.pick_items()]
+    rep("the pick lists this car's builds, then any-car ones, then other cars' "
+        "(tagged); the default marked",
+        acts41 == ["pr_build:b slow", "pr_build:c fast", "pr_build:any", "pr_build:big bus",
+                   "pr_back"]
+        and "(default)" in rows41[0] and "<- driving" in rows41[1]
+        and "[Citaro]" in rows41[3] and "[" not in rows41[2] and "[" not in rows41[0],
+        str(rows41))
+    rep("pick_order: the garage's order too",
+        pick_order(lib41, "bus") == ["big bus", "any", "b slow", "c fast"]
+        and pick_order(lib41, "") == ["any", "b slow", "big bus", "c fast"],
+        str(pick_order(lib41, "bus")))
+    rep("a build tagged with its car is the SAME car as its untagged self "
+        "(saved, and one build_id)",
+        _same_build(b_fast, dict(b_fast, car="bus"))
+        and PreRace(key, book, "fast", dict(b_fast, car="corsa"), builds={"fast": b_fast}).saved()
+        and rec.build_id("fast", b_fast) == rec.build_id("fast", dict(b_fast, car="mx5"))
+        and not _same_build(b_fast, b_wet))
+    nokey = PreRace(None, None, "c fast", dict(b_c), builds=lib41, car="corsa")
+    rows_nk = nokey.pick_items()
+    rep("with no class (the dragstrip, from Settings): the same list, no times, no crash",
+        [a for _, a in rows_nk] == [a for _, a in PreRace(key, book, "c fast", dict(b_c),
+                                                          builds=lib41, car="corsa").pick_items()]
+        and "--" in rows_nk[0][0] and "no lap times" in nokey.pick_subtitle(),
+        nokey.pick_subtitle())
+    book.set_last_build("linden", "big bus", b_bus, car="bus")
+    rep("the default build of a map is per car",
+        default_build(rec.RecordBook(root), "linden", "bus") == ("big bus", b_bus)
+        and default_build(rec.RecordBook(root), "linden", "corsa") is None)
+    rep("car tags: short names, a later car by its key",
+        car_label("mx5") == "MX-5" and car_label("") == "" and car_label("zz9") == "zz9")
     if verbose:
         print(f"  {'ALL PASS' if ok else 'FAILURES ABOVE'}: {n_ok}/{n_all} checks")
     return ok
