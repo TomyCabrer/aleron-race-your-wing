@@ -139,6 +139,23 @@ Refuted: that AIR BRAKE should keep the outer panel's grip while
 trail-braking. The mode means all three out while braking, and their side
 forces cancel.
 
+## Found after landing: every launch crashed
+
+`python3 -m drive.drive` crashed at launch from this commit (95d7baa) on:
+`AttributeError: 'Namespace' object has no attribute 'wing_mode'`.
+* **The cause.** `_interactive_session` restores the G mode with
+  `if getattr(opts, "wing_mode", 0) in CYCLE: sim.wing_side_mode = opts.wing_mode`.
+  The guard is safe, but the assignment read the bare attribute, which exists
+  only after the restart loop has set it. A first session has none.
+* **Why no gate caught it.** No check runs a real first session through
+  `main()`.
+* **Who found it.** The other session working on this checkout (task 38), which
+  fixed it in the working tree with a `getattr`; its uncommitted V41 builds a
+  first session the way `main()` does.
+* **The fix.** Committed on its own, the same one line. Reproduced and verified
+  in a clean worktree of the commit: before, `--render offscreen` exits 1
+  with the error; after, the session starts.
+
 ## Shape of it
 
 | file | what |

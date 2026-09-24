@@ -7942,7 +7942,7 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     sim.hud_cfg = getattr(opts, "hud_cfg", None)   # the build's wing geometry
     from .airbrake import CYCLE as _WING_MODES
     if getattr(opts, "wing_mode", 0) in _WING_MODES:
-        sim.wing_side_mode = opts.wing_mode        # the G mode, kept across a restart
+        sim.wing_side_mode = getattr(opts, "wing_mode", 0)   # the G mode, kept across a restart
     if cfg.has_designed():
         sim.wing_on = True                 # a garage build starts armed, as --wing does
     if not _HELP_PRINTED:
