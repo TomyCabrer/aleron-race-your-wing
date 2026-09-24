@@ -65,6 +65,7 @@ from corsa_c import CorsaC, G, RHO
 from . import telemetry as tlm
 from . import track as trk
 from . import race_grid
+from . import paint as pnt
 from .vehicle import Controls, Vehicle, VehicleConfig, wheel_positions
 
 # ==================================================================== #
@@ -110,6 +111,37 @@ SEED_LAP_COLS = ("t", "x", "y", "psi", "u", "v", "r", "beta", "ay", "util_f",
 #: tested in that same MX-5.
 SWARM_MENU_DEFAULTS = dict(pop=24, seed="none", gens=0, T=70.0, view="replay", save="ask",
                            car="same")
+#: the default Sim time is one ARENA lap and a bit, this long: `swarm_T`
+#: scales it for a longer race circuit
+SWARM_T_LAP = 1249.2022
+
+
+def swarm_T(tr, T=None) -> float:
+    """The swarm's default Sim time on `tr`: `T` (default the page's 70 s,
+    set on the arena, where a car laps once and a bit) pro rata on a longer
+    race circuit, whole seconds in the page's range. The arena and the
+    shorter Linden keep 70 s, Ashdown gets 78 and Kestrel's 1.91 km 107 --
+    at 70 s no car would finish a lap there. The test maps keep `T`: their
+    'lap' is not what the default was set on."""
+    from .swarm_panel import clamp_T
+    T = float(T or SWARM_MENU_DEFAULTS["T"])
+    if getattr(tr, "name", None) not in trk.CIRCUITS:
+        return T
+    return clamp_T(T * max(1.0, float(tr.length) / SWARM_T_LAP))
+
+
+def _swarm_menu_kept(launch: dict, tr) -> dict:
+    """What the Deploy-swarm page keeps of a Deploy on `tr` for the sessions
+    after it: every value, except a Sim time still at this map's default
+    (`swarm_T(tr)`) -- the next map's page starts at ITS default, so an arena
+    Deploy at 70 s does not put 70 s on Kestrel's page, where no car laps in
+    it. A Sim time the player set is theirs, on every map."""
+    kept = dict(launch)
+    if abs(float(kept.get("T", 0.0)) - swarm_T(tr)) < 0.5:
+        kept.pop("T", None)
+    return kept
+
+
 #: `pop` and `T` are FREE values (drive/swarm_panel.py, task 26): any
 #: population in [4, 128] and any whole second in [20, 240]; LEFT / RIGHT jump
 #: between fixed numbers, ENTER cycles them, the digits type one (task 34);
@@ -351,6 +383,25 @@ SOUND_DEFAULT = "mid"
 GRAPHICS_MODES = ("full", "low", "classic")
 GRAPHICS_LABELS = {"full": "Full", "low": "Low detail", "classic": "Classic (no scenery)"}
 GRAPHICS_DEFAULT = "full"
+# The Paint setting (drive/paint.py): the colour the car is drawn in, kept
+# PER CAR (car key -> paint name), so a red Corsa and a white 540i are both
+# remembered. Cosmetic and nothing else: never in the class key, a record,
+# a medal, the CarSpec or the build, so the row applies at once and never
+# restarts. A car with no entry is 'factory', its own colour.
+
+
+def paint_rgb(settings, car: str | None = None, concrete: bool = False):
+    """The RGB the Paint setting draws `car` (a cars.py key; default the
+    settings' car) in. None for 'factory', which is what the renderer takes
+    for "the car's own colour"; `concrete` resolves it to that colour
+    (render.factory_colour) for the two readers that need a real one, the
+    Settings row's swatch and the garage's preview car."""
+    car = car or settings.car
+    c = pnt.rgb(settings.paint_of(car))
+    if c is None and concrete:
+        from . import render as _rnd
+        c = _rnd.factory_colour(car)
+    return c
 
 
 @dataclass
@@ -375,10 +426,12 @@ class Settings:
     sound: str = SOUND_DEFAULT    # SOUND_MODES -> audio.CarSound volume
     shake: bool = True            # the kerb / off-road camera shake (task 27)
     graphics: str = GRAPHICS_DEFAULT   # GRAPHICS_MODES -> render.look_config
+    paint: dict = field(default_factory=dict)   # car key -> pnt.PAINT_ORDER name
     path: str = field(default=SETTINGS_PATH, repr=False, compare=False)
 
     KEYS = ("track", "car", "ballast", "ballast_at", "engine", "gearbox",
-            "abs", "tc", "steer_aid", "wet", "camera", "sound", "shake", "graphics")
+            "abs", "tc", "steer_aid", "wet", "camera", "sound", "shake", "graphics",
+            "paint")
 
     def clamp(self) -> "Settings":
         if self.track not in trk.TRACKS:
@@ -407,7 +460,17 @@ class Settings:
         self.shake = bool(self.shake)
         if self.graphics not in GRAPHICS_MODES:
             self.graphics = GRAPHICS_DEFAULT
+        # a hand-edited file: only known cars wearing palette names survive
+        p = self.paint if isinstance(self.paint, dict) else {}
+        self.paint = {k: v for k, v in p.items()
+                      if k in cars.CARS and isinstance(v, str) and v in pnt.PAINTS}
         return self
+
+    def paint_of(self, car: str | None = None) -> str:
+        """The Paint setting's name for `car` (default this car): 'factory'
+        for a car never painted."""
+        p = self.paint if isinstance(self.paint, dict) else {}
+        return p.get(car or self.car, pnt.PAINT_DEFAULT)
 
     @property
     def power_scale(self) -> float:
@@ -520,9 +583,11 @@ class Settings:
         opts.auto_gearbox = (self.gearbox == "auto")
         return self
 
-    def cycle(self, key: str, d: int = +1) -> None:
+    def cycle(self, key: str, d: int = +1, car: str | None = None) -> None:
         """Step one setting to its next (d=+1, the menu's ENTER / RIGHT) or
-        previous (d=-1, LEFT) value. Lists wrap; booleans toggle."""
+        previous (d=-1, LEFT) value. Lists wrap; booleans toggle. `car` is
+        whose paint the Paint row steps (default this car: the one the Car
+        row shows, a browsed one included)."""
         d = +1 if d >= 0 else -1
 
         def step(order, cur):
@@ -564,6 +629,9 @@ class Settings:
             self.shake = not self.shake
         elif key == "graphics":
             self.graphics = step(GRAPHICS_MODES, self.graphics)
+        elif key == "paint":
+            c = car or self.car
+            self.paint = {**self.paint, c: step(pnt.PAINT_ORDER, self.paint_of(c))}
 
 
 # The settings whose change is a new session (a new map, or a new CarSpec:
@@ -588,6 +656,7 @@ SETTINGS_HELP = [
         ("", "heavy/powerful. BOTH ARE RWD AND DRIVE THEIR FRONT WHEELS:"),
         ("", "powertrain.py is FWD-only, so their traction is fiction"),
         ("", "and their torque curve is the Corsa's shape, scaled"),
+        ("Paint", "per car, looks only: no class, ranking or medal"),
     ]),
     ("BALLAST", [
         ("Mass", "0-200 kg, and it moves everything it really moves:"),
@@ -613,6 +682,9 @@ SETTINGS_HELP = [
     ]),
     ("MAPS", [
         ("Arena circuit", "1249 m, 7 corners R 30..130 m, wet patches"),
+        ("Linden park", "1110 m, 7 corners R 30..60 m: tight, technical"),
+        ("Kestrel ring", "1913 m, 7 corners R 55..100 m, a 390 m straight"),
+        ("Ashdown circuit", "1390 m clockwise, 7 corners R 30..120 m, a hairpin"),
         ("Open proving ground", "522 x 362 m pad: skidpad circles, slalom,"),
         ("", "300 m drag lane, wet square; road round the edge"),
         ("Skidpad", "constant radius (--radius), guide circles"),
@@ -633,6 +705,9 @@ SETTINGS_NAV = ("ON THIS PAGE", [
 SETTINGS_ROW_HELP = {
     "set:track": [("MAPS", [
         ("Arena circuit", "1249 m, 7 corners R 30..130 m, wet patches"),
+        ("Linden park", "1110 m, 7 corners R 30..60 m: tight"),
+        ("Kestrel ring", "1913 m, R 55..100 m, a 390 m straight"),
+        ("Ashdown", "1390 m clockwise, R 30..120 m, a hairpin"),
         ("Open ground", "a 522 x 362 m pad: skidpad circles, a"),
         ("", "slalom, a drag lane, a wet square, a road"),
         ("Skidpad", "constant radius, guide circles"),
@@ -644,6 +719,14 @@ SETTINGS_ROW_HELP = {
         ("MX-5 / 540i", "lighter and neutral / heavy and powerful;"),
         ("", "both drive their FRONT wheels here (the"),
         ("", "powertrain is FWD-only): traction is fiction")])],
+    "set:paint": [("PAINT", [
+        ("Factory", "the car's own colour: the Corsa yellow,"),
+        ("", "the MX-5 red, the 540i blue"),
+        ("Ten more", "white, silver, green, purple, cobalt ..."),
+        ("Per car", "each car keeps its own paint; looks only:"),
+        ("", "no class, ranking or medal"),
+        ("New car", "browse it on the Car row, paint it here,"),
+        ("", "then ENTER on the Car row: it arrives painted")])],
     "set:ballast": [("BALLAST", [
         ("Mass", "0-200 kg; it moves what it really moves:"),
         ("", "axle loads, CG height and station, Izz,"),
@@ -1381,7 +1464,7 @@ class Sim:
         self.hud_cfg = None                # the garage build's HudData fields
         self._menu_was_paused = False
         self._menu_page = "main"           # 'main' | 'settings' | 'swarm' | 'race'
-        self.swarm_opts = dict(SWARM_MENU_DEFAULTS)   # the Deploy-swarm page
+        self.swarm_opts = dict(SWARM_MENU_DEFAULTS, T=swarm_T(track))   # the Deploy-swarm page
         self._swarm_typed = None           # its digits typed on Cars / Sim time (task 34)
         self.swarm_launch = None           # set when the page fires 'Deploy'
         # the RACE VS BOT page. `rival` is the bot's car while a race is on;
@@ -1871,12 +1954,13 @@ class Sim:
         """Cycle one setting, apply it live, save. Returns True when the
         session has to be rebuilt (a new map or a new surface set)."""
         s = self.settings
-        s.cycle(key, d)
+        s.cycle(key, d)                    # Paint: the car the Car row shows
         restart = False
         tut = self.tutorial
         if key == "gearbox" and tut is not None and tut.gearbox_prev is not None:
             tut.set_gearbox_prev(None)         # the player chose a box: it stays theirs
-        if self.recorder is not None and key not in ("sound", "camera", "shake", "graphics"):
+        if self.recorder is not None and key not in ("sound", "camera", "shake", "graphics",
+                                                     "paint"):
             self.recorder.discard(f"{key} changed")   # the lap cannot be replayed
             self.recorder.retarget(s, self._pending)   # the engine is in the class,
             #                                             the aids go with the lap
@@ -1909,6 +1993,16 @@ class Sim:
             sl = getattr(self.renderer, "set_look", None)
             if sl is not None:
                 sl(s.graphics)
+        elif key == "paint":
+            # The Paint row paints the car the Car row SHOWS. A car only
+            # browsed there gets the paint saved for it (the session that
+            # ENTER builds draws it); the car on the road is another car and
+            # keeps its own colour until then. Painting the running car
+            # instead put a colour picked while looking at the new car on
+            # the old one, and the new car arrived in its old paint.
+            sp = getattr(self.renderer, "set_paint", None)
+            if sp is not None and "car" not in self._pending:
+                sp(paint_rgb(s))
         if restart:
             self._pending.clear()      # this value IS the next session's
         self._save_settings()
@@ -2108,10 +2202,14 @@ class Sim:
         s = self.settings
         p = self._pending
         mark = {k: ("  <- ENTER applies" if k in p else "") for k in RESTART_KEYS}
+        # the Paint row is the car the Car row shows: while another car is
+        # only browsed, the row says whose paint it is
+        whose = f"  (for the {cars.car_name(s.car)})" if "car" in p else ""
         rows = [(f"{'Map':<11s}{trk.TRACK_TITLES.get(s.track, s.track)}"
                  f"{mark['track']}", "set:track"),
                 (f"{'Car':<11s}{cars.car_name(s.car)}  "
                  f"{s.car_base.m:.0f} kg{mark['car']}", "set:car"),
+                (f"{'Paint':<11s}{pnt.PAINT_LABELS[s.paint_of()]}{whose}", "set:paint"),
                 (f"{'Ballast':<11s}{s.ballast_text()}{mark['ballast']}", "set:ballast"),
                 (f"{'Ballast at':<11s}{cars.BALLAST_LABELS[s.ballast_at]}"
                  f"{mark['ballast_at']}", "set:ballast_at"),
@@ -2194,13 +2292,16 @@ class Sim:
         self._menu_page = "controls_kb"
 
     def _menu_show_settings(self, idx: int = 0) -> None:
+        #  the Paint row's swatch: the colour of the car the Car row shows
+        #  (a browsed one included), factory resolved
+        swatch = paint_rgb(self.settings, concrete=True)
         self.menu.show(items=self._settings_items(), sections=SETTINGS_HELP,
                        help_for=self._settings_help,
                        subtitle=self._menu_subtitle(), note=SETTINGS_NOTE,
                        footer="LEFT / RIGHT browse   ENTER / CROSS cycle, apply   "
                               "ESC / CIRCLE back   BACKSPACE garage",
                        title="SETTINGS", idx=idx,
-                       columns=1)
+                       columns=1, swatches={"set:paint": swatch})
         self._menu_page = "settings"
 
     def _swarm_seed_available(self, key: str) -> str:
@@ -2464,12 +2565,16 @@ class Sim:
         try:
             import multiprocessing as mp
             from dataclasses import fields
-            from .ml.evaluate import bot_lap, BOT_TEST_T
+            from .ml.evaluate import bot_lap, bot_test_T, BOT_TEST_T
         except Exception as exc:
             print(f"bot test: drive.ml unavailable ({type(exc).__name__}: {exc})")
             self._race_note("test: drive.ml unavailable (see the terminal)", 4.0)
             return False
+        #  `T` is an ARENA budget and is what each job carries: bot_lap
+        #  scales it to this lap (Kestrel's 1.91 km runs 230 s). What the
+        #  page and the terminal say is the scaled one, T_run
         T = float(T or BOT_TEST_T)
+        T_run = bot_test_T(self.track, T)
         jobs = []
         meta = _bot_meta(spec)
         for name in RACE_BOT_CARS:
@@ -2481,12 +2586,12 @@ class Sim:
         label = "anchor" if spec == RACE_BOT_ANCHOR else race_bot_label(spec)
         n = len(jobs) if workers is None else max(1, min(int(workers), len(jobs)))
         pool = mp.Pool(n)
-        self._bot_test = dict(spec=spec, label=label, T=T, pool=pool,
+        self._bot_test = dict(spec=spec, label=label, T=T_run, pool=pool,
                               res=pool.map_async(bot_lap, jobs, chunksize=1),
                               t0=time.perf_counter())
         print(f"bot test: {label} alone in "
               + ", ".join(race_car_label(c) for c in RACE_BOT_CARS)
-              + f" -- {T:.0f} s each at 1 ms, in the background")
+              + f" -- {T_run:.0f} s each at 1 ms, in the background")
         self._race_note(f"TEST {label}: measuring in {len(jobs)} cars at 1 ms ...", 4.0)
         return True
 
@@ -4397,11 +4502,14 @@ def ramp_probe_script(opts) -> dict:
 
 # ---- a driven lap (extra; the arena driver the wing study needs) ---------
 def lap_script(opts) -> dict:
-    drv = LapDriver(trk.make_arena(surfaces=(opts.wet != "none")),
+    #  any race circuit `--track` names (trk.CIRCUITS); every other map laps
+    #  the arena, as this script always did
+    name = opts.track if getattr(opts, "track", None) in trk.CIRCUITS else "arena"
+    drv = LapDriver(trk.make_track(name, surfaces=(opts.wet != "none")),
                     margin=opts.margin, wing_on=(opts.wing != "off"),
                     global_wet=(MU_WET_SCALE if opts.wet == "all" else 1.0),
                     car=_opts_car(opts))
-    sim = _build("arena", wing=opts.wing, x_w=opts.wing_x, h_w=opts.wing_h,
+    sim = _build(name, wing=opts.wing, x_w=opts.wing_x, h_w=opts.wing_h,
                  wet=opts.wet, dt=opts.dt, telem_path=opts.telemetry,
                  telem_hz=opts.telem_hz, precision=opts.telem_precision,
                  driver=drv, start_V=25.0, gear=3, tag="lap",
@@ -4410,7 +4518,7 @@ def lap_script(opts) -> dict:
     if sim.telem:
         sim.telem.close()
     laps = [e for e in sim.events_log if e[0] == "lap"]
-    return dict(script="lap", laps=len(laps),
+    return dict(script="lap", track=name, laps=len(laps),
                 lap_times=[round(e[3], 4) for e in laps],
                 best=min([e[3] for e in laps], default=float("nan")),
                 max_n=drv.max_n, csv=opts.telemetry)
@@ -6032,6 +6140,7 @@ def _v26_settings_and_menu(tmp, verbose=True):
     s.track, s.gearbox, s.abs, s.wet = "open", "clutch", False, "all"
     s.engine, s.tc, s.sound = "tuned", False, "low"
     s.car, s.ballast, s.ballast_at = "mx5", 75.0, "boot"
+    s.paint = {"mx5": "cobalt", "540i": "burgundy"}
     s.save()
     back = Settings.load(path)
     rt_ok = (back.track, back.gearbox, back.abs, back.wet, back.camera,
@@ -6039,14 +6148,32 @@ def _v26_settings_and_menu(tmp, verbose=True):
              back.car, back.ballast, back.ballast_at) == (
         "open", "clutch", False, "all", "car_up", "tuned", False, "low",
         "mx5", 75.0, "boot")
+    # the Paint setting, per car: what was saved comes back, and a car never
+    # painted reads 'factory'
+    paint_ok = (back.paint == {"mx5": "cobalt", "540i": "burgundy"}
+                and back.paint_of() == "cobalt" and back.paint_of("540i") == "burgundy"
+                and back.paint_of("corsa") == pnt.PAINT_DEFAULT
+                and paint_rgb(back) == pnt.rgb("cobalt")
+                and paint_rgb(back, "corsa") is None)
     bad = Settings(path=path)
     bad.track, bad.gearbox, bad.engine, bad.sound = "moon", "dsg", "v8", "11"
     bad.car, bad.ballast, bad.ballast_at = "delorean", 1e9, "roof"
+    bad.paint = {"mx5": "chartreuse", "delorean": "red", "540i": "teal", "corsa": 7}
     bad.clamp()
     clamp_ok = (bad.track, bad.gearbox, bad.engine, bad.sound, bad.car,
                 bad.ballast, bad.ballast_at) == (
         "arena", "auto", ENGINE_DEFAULT, SOUND_DEFAULT, CAR_DEFAULT,
         cars.BALLAST_MAX, cars.BALLAST_DEFAULT)
+    # a bad paint is dropped (an unknown car, an unknown colour, a non-name),
+    # and a file whose paint is not a table at all loads as none
+    p_bad = os.path.join(tmp, "settings_badpaint.json")
+    with open(p_bad, "w") as f:
+        json.dump(dict(car="540i", paint=["red"]), f)
+    paint_ok = paint_ok and (bad.paint == {"540i": "teal"}
+                             and Settings(path="", paint="red").clamp().paint == {}
+                             and Settings.load(p_bad).paint == {}
+                             and Settings.load(p_bad).paint_of() == pnt.PAINT_DEFAULT
+                             and "paint" in Settings.KEYS and "paint" not in RESTART_KEYS)
     # the car library, through Settings: the default is the study's own car
     # and it is the SAME OBJECT, ballast really changes the CarSpec, and
     # power_scale is the Engine setting ALONE on every car (the car's engine
@@ -6117,6 +6244,18 @@ def _v26_settings_and_menu(tmp, verbose=True):
         cyc.cycle("track")
         seq.append(cyc.track)
     cycle_ok = tuple(seq) == tuple(trk.TRACK_ORDER[1:]) + (trk.TRACK_ORDER[0],)
+    # each car's paint is its own: stepping one leaves the others alone
+    pc = Settings(path="", car="mx5")
+    pc.cycle("paint")                               # the MX-5: factory -> the first colour
+    pc.cycle("paint", car="corsa")
+    pc.cycle("paint", car="corsa")                  # the Corsa: two on
+    pc.cycle("paint", -1, car="540i")               # the 540i: LEFT wraps to the last
+    paint_ok = paint_ok and pc.paint == {"mx5": pnt.PAINT_ORDER[1], "corsa": pnt.PAINT_ORDER[2],
+                                         "540i": pnt.PAINT_ORDER[-1]}
+    for _ in range(len(pnt.PAINT_ORDER) - 1):
+        pc.cycle("paint")
+    paint_ok = paint_ok and (pc.paint_of("mx5") == pnt.PAINT_DEFAULT
+                             and pc.paint_of("corsa") == pnt.PAINT_ORDER[2])
 
     # the menu state machine on a headless Sim with a real keyboard input
     from .input import BlendedInput, KeyboardInput
@@ -6192,6 +6331,70 @@ def _v26_settings_and_menu(tmp, verbose=True):
     snd_ok = (st.sound == SOUND_MODES[(SOUND_MODES.index(SOUND_DEFAULT) + 1)
                                        % len(SOUND_MODES)]
               and sim.audio is None and sim.menu.idx == i_snd)
+    # the Paint row: cosmetic, so it applies at once -- the renderer is
+    # handed the colour, nothing restarts, the lap being recorded is neither
+    # discarded nor retargeted -- and its swatch shows the colour, 'factory'
+    # resolved to the car's own. A stand-in recorder counts the calls; the
+    # ABS row after it is the control (a class-relevant row DOES discard)
+    from . import render as rnd
+    painted, disc, ret = [], [], []
+    sim.renderer.set_paint = painted.append
+    sim.recorder = SimpleNamespace(discard=disc.append, retarget=lambda *a: ret.append(a))
+    P = pnt.PAINT_ORDER
+
+    def sw():
+        return sim.menu.swatches.get("set:paint")
+    i_pnt = goto("set:paint")
+    ev("select")                                    # factory -> the first colour
+    live_ok = (st.paint_of() == P[1] and st.paint == {st.car: P[1]}
+               and painted == [pnt.rgb(P[1])] and sw() == pnt.rgb(P[1])
+               and pnt.PAINT_LABELS[P[1]] in sim.menu.items[i_pnt][0]
+               and Settings.load(path).paint == {st.car: P[1]})
+    ev("nav_left")                                  # LEFT: back to factory, live too
+    live_ok = live_ok and (st.paint_of() == pnt.PAINT_DEFAULT and painted[-1] is None
+                           and sw() == rnd.factory_colour(st.car))
+    ev("nav_left")                                  # ... and wraps to the last colour
+    live_ok = live_ok and (st.paint_of() == P[-1] and painted[-1] == pnt.rgb(P[-1])
+                           and sw() == pnt.rgb(P[-1]))
+    # 'factory' resolved for a swatch is each car's OWN colour, by key or by
+    # spec alike (the Corsa's is also the palette's yellow, so the other two)
+    own = [paint_rgb(Settings(path="", car=k), concrete=True) for k in CAR_MODES]
+    live_ok = live_ok and (own == [rnd.factory_colour(cars.get(k)) for k in CAR_MODES]
+                           and len(set(own)) == len(CAR_MODES))
+    live_ok = live_ok and (not disc and not ret and not sim.quit and sim.stop_reason == ""
+                           and sim.menu.open and sim._menu_page == "settings"
+                           and sim.menu.idx == i_pnt and len(painted) == 3)
+    # while another car is only BROWSED the row is THAT car's: it shows the
+    # browsed car's paint and swatch, stepping it paints the browsed car
+    # (saved for the session ENTER builds), and the car on the road keeps
+    # its own colour -- the renderer is not repainted with a colour picked
+    # for a different car
+    goto("set:car")
+    ev("nav_right")                                 # browse the next car
+    run_c, br_c = sim._pending.get("car"), st.car
+    goto("set:paint")
+    row0 = sim.menu.items[sim.menu.idx][0]
+    live_ok = live_ok and (run_c == CAR_DEFAULT and br_c == CAR_MODES[1]
+                           and pnt.PAINT_LABELS[pnt.PAINT_DEFAULT] in row0
+                           and f"(for the {cars.car_name(br_c)})" in row0
+                           and sw() == rnd.factory_colour(br_c))
+    ev("nav_left"); ev("nav_left")                  # the browsed car: factory -> two back
+    live_ok = live_ok and (st.paint_of(br_c) == P[-2]
+                           and st.paint_of(run_c) == P[-1]
+                           and len(painted) == 3 and sw() == pnt.rgb(P[-2])
+                           and pnt.PAINT_LABELS[P[-2]] in sim.menu.items[sim.menu.idx][0]
+                           and not sim.quit and sim._pending == {"car": run_c}
+                           and Settings.load(path).car == run_c
+                           and Settings.load(path).paint == {run_c: P[-1], br_c: P[-2]})
+    ev("menu")                                      # ESC drops the browsed car ...
+    live_ok = live_ok and (st.car == run_c and st.paint_of() == P[-1]
+                           and st.paint_of(br_c) == P[-2])   # (its paint is kept)
+    ev("select")                                    # ... the cursor is on Settings
+    goto("set:abs")
+    ev("select"); ev("select")                      # the control: off -> on -> off
+    live_ok = live_ok and len(disc) == 2 and len(ret) == 2 and len(painted) == 3
+    paint_ok = paint_ok and live_ok
+    sim.recorder = None
     # the three new rows: each one demands a session rebuild, because a
     # different CarSpec is a different tyre model, roll block and gearbox
     row_ok = True
@@ -6218,48 +6421,55 @@ def _v26_settings_and_menu(tmp, verbose=True):
     back_ok = sim._menu_page == "main" and sim.menu.open
     ev("menu")                                      # ESC on main -> closed, running
     closed_ok = (not sim.menu.open and not sim.paused and not inp.menu)
+    # the map order is trk.TRACK_ORDER's, whatever it holds: from the arena
+    # the Map row and TAB each step one on, and the browse below walks
+    # either way from there (t2 is the running map through it)
+    def nxt(t, d=1):
+        return trk.TRACK_ORDER[(trk.TRACK_ORDER.index(t) + d) % len(trk.TRACK_ORDER)]
+    t1 = nxt(st.track)
+    t2 = nxt(t1)
     ev("menu"); ev("nav_down"); ev("select")        # settings again
-    ev("select")                                    # Map: arena -> open: restart
-    map_ok = (sim.quit and sim.stop_reason == "restart" and st.track == "open"
-              and not sim.menu.open and Settings.load(path).track == "open")
+    ev("select")                                    # Map: the next map: restart
+    map_ok = (sim.quit and sim.stop_reason == "restart" and st.track == t1
+              and not sim.menu.open and Settings.load(path).track == t1)
     sim.quit, sim.stop_reason = False, ""
-    ev("track_next")                                # TAB: open -> skidpad
-    tab_ok = sim.stop_reason == "restart" and st.track == "skidpad"
+    ev("track_next")                                # TAB: the one after
+    tab_ok = sim.stop_reason == "restart" and st.track == t2
     sim.quit, sim.stop_reason = False, ""
     # browse before committing: LEFT / RIGHT on a restart row only change the
     # row (and what the file says stays the running value); ESC drops the
     # browse; ENTER on a browsed row applies it and restarts
     ev("menu"); ev("nav_down"); ev("select")        # settings
     goto("set:track")
-    ev("nav_right")                                 # skidpad -> dragstrip, preview
-    prev_ok = (st.track == "dragstrip" and not sim.quit and sim.menu.open
-               and sim._pending == {"track": "skidpad"}
+    ev("nav_right")                                 # t2 -> the next, preview
+    prev_ok = (st.track == nxt(t2) and not sim.quit and sim.menu.open
+               and sim._pending == {"track": t2}
                and "ENTER applies" in sim._settings_items()[sim.menu.idx][0])
     goto("set:abs")
     ev("select")                                    # a live change saves: not the preview
-    prev_ok = prev_ok and Settings.load(path).track == "skidpad" and st.track == "dragstrip"
+    prev_ok = prev_ok and Settings.load(path).track == t2 and st.track == nxt(t2)
     goto("set:track")
     ev("nav_left")                                  # back where it was: nothing pending
-    prev_ok = prev_ok and st.track == "skidpad" and not sim._pending
-    ev("nav_right"); ev("nav_right")                # dragstrip -> arena (wraps)
+    prev_ok = prev_ok and st.track == t2 and not sim._pending
+    ev("nav_right"); ev("nav_right")                # two on
     goto("set:car")
     ev("nav_left")                                  # corsa -> 540i (wraps back)
     ev("menu")                                      # ESC: the browse is dropped
-    prev_ok = (prev_ok and st.track == "skidpad" and st.car == CAR_DEFAULT
+    prev_ok = (prev_ok and st.track == t2 and st.car == CAR_DEFAULT
                and not sim._pending and sim._menu_page == "main" and not sim.quit)
     ev("select"); goto("set:track")                 # the cursor is on Settings
-    ev("nav_right"); ev("nav_left"); ev("nav_left")  # -> open
+    ev("nav_right"); ev("nav_left"); ev("nav_left")  # -> the one before t2
     ev("select")                                    # ENTER applies -> restart
-    prev_ok = (prev_ok and st.track == "open" and sim.quit
+    prev_ok = (prev_ok and st.track == nxt(t2, -1) and sim.quit
                and sim.stop_reason == "restart" and not sim.menu.open
-               and not sim._pending and Settings.load(path).track == "open")
+               and not sim._pending and Settings.load(path).track == nxt(t2, -1))
     goto_back = st.track
     sim.quit, sim.stop_reason = False, ""
     ev("menu"); ev("nav_down"); ev("select"); goto("set:gearbox")
     ev("nav_left")                                  # LEFT on a live row: manual -> auto
     prev_ok = prev_ok and st.gearbox == "auto" and sim.gearbox == "auto" and sim.menu.open
     ev("nav_right")                                 # and back
-    prev_ok = prev_ok and st.gearbox == "manual" and goto_back == "open"
+    prev_ok = prev_ok and st.gearbox == "manual" and goto_back == nxt(t2, -1)
     ev("menu"); ev("menu")
     sim.quit, sim.stop_reason = False, ""
     ev("garage")
@@ -6274,18 +6484,110 @@ def _v26_settings_and_menu(tmp, verbose=True):
     ok = all((rt_ok, clamp_ok, cli_ok, cycle_ok, car_ok, m_open, page_ok,
               eng_ok, gb_ok, abs_ok, tc_ok, aid_ok, cam_ok, snd_ok, row_ok,
               saved_ok, back_ok, closed_ok, map_ok, tab_ok, prev_ok, gar_ok,
-              gar2_ok))
+              gar2_ok, paint_ok))
     if verbose:
         print(f"  V26 settings    : round-trip {rt_ok}, clamp {clamp_ok}, cli {cli_ok}, "
               f"cycle {cycle_ok}; menu open {m_open}, settings page {page_ok}, "
               f"engine {eng_ok}, gearbox {gb_ok}, abs {abs_ok}, tc {tc_ok}, aid {aid_ok}, "
               f"camera {cam_ok}, sound {snd_ok}, saved {saved_ok}, back {back_ok}, "
-              f"closed {closed_ok}, map restart {map_ok}, TAB {tab_ok}, "
+              f"closed {closed_ok}, map restart {map_ok} ({t1}), TAB {tab_ok} ({t2}), "
               f"browse {prev_ok}, garage {gar_ok}/{gar2_ok}; car/ballast {car_ok}, "
-              f"rows {row_ok}")
+              f"rows {row_ok}; paint {paint_ok} (per car, clamp, live {live_ok})")
     return ok, dict(round_trip=rt_ok, cli=cli_ok, car=car_ok and row_ok,
                     menu=m_open and page_ok and eng_ok and gb_ok and tc_ok and snd_ok,
-                    map_restart=map_ok, garage=gar_ok and gar2_ok)
+                    map_restart=map_ok, garage=gar_ok and gar2_ok, paint=paint_ok)
+
+
+def _v41_paint_on_the_road(tmp, verbose=True):
+    """The Paint setting where the window's loop hands it on -- V26 drives
+    the row itself, against a stand-in renderer. Two real
+    `_interactive_session` builds (offscreen, the loop stubbed out, one
+    plan-view frame drawn): each draws its car's saved paint, set again on
+    every session, so neither the last session's paint nor a factory car
+    in someone else's colour survives a restart. The garage's preview car
+    is the driven car's paint, factory resolved (an MX-5 is red, never the
+    garage's stock yellow); the swarm viewer's cars are their own colour.
+    And the Deploy-swarm page's Sim time after a Deploy: a default one
+    follows the map (Kestrel's own, not the arena's 70 s, in which no car
+    laps Kestrel), a value the player set is kept on every map."""
+    import contextlib
+    import io
+    from types import SimpleNamespace
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+    import pygame
+    from . import render as rnd
+    from . import garage as grg
+
+    def px(screen, c):
+        """pixels in the plan view's four tones of body colour `c`"""
+        a = pygame.surfarray.pixels3d(screen)
+        n = 0
+        for k in (0.72, 0.80, 1.0, 1.10):
+            t = rnd._avoid_reserved3(np.array([rnd._shade_rgb(c, k)], dtype=np.int32),
+                                     rnd._RESERVED_PLAN3)[0]
+            n += int(((a[..., 0] == t[0]) & (a[..., 1] == t[1]) & (a[..., 2] == t[2])).sum())
+        del a
+        return n
+
+    def session(st, menu):
+        opts = build_parser().parse_args(["--headless", "--render", "offscreen"])
+        opts.swarm_menu = menu             # what run_interactive_cli keeps of a Deploy
+        with contextlib.redirect_stdout(io.StringIO()):
+            sim = _interactive_session(opts, settings=st)
+        r = sim.renderer
+        r.update_camera(sim.veh, 1.0 / 60.0, shake=0.0)
+        r.draw_frame(sim.veh, sim.pose_prev, sim.alpha_render, sim.ctl, sim.hud_data(),
+                     sim.skid)
+        return sim, r.screen
+
+    purple, teal = pnt.rgb("purple"), pnt.rgb("teal")
+    red, blue = rnd.factory_colour("mx5"), rnd.factory_colour("540i")
+    run0, car0 = Sim.run_interactive, rnd._CAR
+    Sim.run_interactive = lambda self: None
+    try:
+        rnd.set_paint(teal)                # the last session's paint, still set
+        st = Settings(path=os.path.join(tmp, "v41_settings.json"), track="kestrel",
+                      car="mx5", camera="car_up", graphics="classic",
+                      paint={"mx5": "purple", "corsa": "teal"}).clamp()
+        arena, kestrel = trk.make_arena(), trk.make_track("kestrel")
+        #  an arena Deploy at its default Sim time, 48 cars
+        sim, sc = session(st, _swarm_menu_kept(dict(SWARM_MENU_DEFAULTS, pop=48,
+                                                    T=swarm_T(arena)), arena))
+        n_a = dict(purple=px(sc, purple), teal=px(sc, teal), red=px(sc, red))
+        a_ok = (rnd._PAINT == purple and n_a["purple"] > 100
+                and n_a["teal"] == 0 and n_a["red"] == 0)
+        T_a = sim.swarm_opts["T"]
+        swarm_ok = (T_a == swarm_T(kestrel) and T_a > SWARM_MENU_DEFAULTS["T"]
+                    and sim.swarm_opts["pop"] == 48)
+        #  the MX-5 back to factory, on the arena; a Kestrel Deploy at 90 s,
+        #  the player's own value
+        st.track, st.paint = "arena", {"corsa": "teal"}
+        sim, sc = session(st, _swarm_menu_kept(dict(SWARM_MENU_DEFAULTS, T=90.0), kestrel))
+        n_b = dict(red=px(sc, red), purple=px(sc, purple), teal=px(sc, teal))
+        b_ok = (rnd._PAINT is None and n_b["red"] > 100
+                and n_b["purple"] == 0 and n_b["teal"] == 0)
+        swarm_ok = swarm_ok and sim.swarm_opts["T"] == 90.0
+        #  the garage the loop opens, on that factory MX-5
+        g = _painted_garage(grg, (640, 400), grg.CarBuild(), None, None, st)
+        gar_ok = g.view.paint == red and red != grg.C_PAINT
+        #  the swarm viewer, deployed from a painted session
+        rnd.set_paint(purple)
+        cfgv = _swarm_view(cars.get("540i"), st, SimpleNamespace(fps=60), (640, 400))
+        sw_ok = (rnd._PAINT is None and rnd.car_geom().colour == blue
+                 and cfgv.hud == "off")
+    finally:
+        Sim.run_interactive = run0
+        rnd.set_car(car0)
+        rnd.set_paint(None)
+    ok = a_ok and b_ok and gar_ok and sw_ok and swarm_ok
+    if verbose:
+        print(f"  V41 paint wired : session purple {a_ok} ({n_a['purple']} px, teal "
+              f"{n_a['teal']}, red {n_a['red']}); factory {b_ok} (red {n_b['red']} px, "
+              f"purple {n_b['purple']}); garage {gar_ok}; swarm viewer {sw_ok}; "
+              f"swarm Sim time after a Deploy {swarm_ok} (kestrel {T_a:.0f} s, kept 90 s)")
+    return ok, dict(session=a_ok and b_ok, garage=gar_ok, swarm_view=sw_ok,
+                    swarm_T=swarm_ok)
 
 
 def _v27_gearbox_modes(verbose=True):
@@ -6493,6 +6795,7 @@ def self_check(verbose=True) -> bool:
                      ("V23", lambda: _v23_accumulator(verbose)),
                      ("V25", lambda: _v25_lap_timing(verbose)),
                      ("V26", lambda: _v26_settings_and_menu(tmp, verbose)),
+                     ("V41", lambda: _v41_paint_on_the_road(tmp, verbose)),
                      ("V27", lambda: _v27_gearbox_modes(verbose)),
                      ("V28", lambda: _v28_open_map(verbose)),
                      ("V29", lambda: _v29_engine_tc(verbose)),
@@ -6602,8 +6905,9 @@ def build_parser():
                         "(runs/swarm/seed_*.json), or a Policy checkpoint to breed from")
     p.add_argument("--swarm-gens", dest="swarm_gens", type=int, default=0,
                    help="stop auto-running after this many generations (0 = until ESC)")
-    p.add_argument("--swarm-T", dest="swarm_T", type=float, default=70.0,
-                   help="s of sim per car per generation")
+    p.add_argument("--swarm-T", dest="swarm_T", type=float, default=None,
+                   help="s of sim per car per generation (default 70 on the arena, "
+                        "pro rata on a longer circuit)")
     p.add_argument("--swarm-name", dest="swarm_name", default=None,
                    help="name of the run (runs/swarm/<name>_state.json, "
                         "drive/ml/checkpoints/swarm_<name>.json)")
@@ -6764,10 +7068,16 @@ def main(argv=None) -> int:
     if opts.headless and opts.render != "offscreen":
         # Headless with no script and no offscreen renderer: run the driver
         # profile for --duration so the mode is still useful, not a no-op.
-        drv = (LapDriver(trk.TRACKS[opts.track](), margin=opts.margin,
-                         wing_on=(opts.wing != "off"))
-               if opts.track == "arena" else PathFollower(20.0,
-                                                          wing_on=opts.wing != "off"))
+        # Every race circuit gets the lap driver, planned on this run's
+        # surfaces and car (a plain PathFollower at 20 m/s leaves the road
+        # in Linden's and Ashdown's hairpins); with no flags the arena's is
+        # built exactly as before. The test maps keep the PathFollower.
+        drv = (LapDriver(trk.make_track(opts.track, surfaces=(opts.wet != "none")),
+                         margin=opts.margin, wing_on=(opts.wing != "off"),
+                         global_wet=(MU_WET_SCALE if opts.wet == "all" else 1.0),
+                         car=_opts_car(opts))
+               if opts.track in trk.CIRCUITS else PathFollower(20.0,
+                                                               wing_on=opts.wing != "off"))
         sim = _build(opts.track, radius=opts.radius, cw=opts.cw, wing=opts.wing,
                      x_w=opts.wing_x, h_w=opts.wing_h, wet=opts.wet, dt=opts.dt,
                      telem_path=opts.telemetry, telem_hz=opts.telem_hz,
@@ -6827,6 +7137,15 @@ def run_garage_cli(opts) -> int:
     run_interactive_cli's."""
     opts.garage = True
     return run_interactive_cli(opts)
+
+
+def _painted_garage(grg, size, design, pad, lib, settings):
+    """The garage run_interactive_cli opens, its preview car in the Paint
+    setting of the car being driven. Resolved: `Garage.set_paint(None)` is
+    the garage's stock yellow, so a factory MX-5 is handed its red."""
+    g = grg.Garage(size, design, pad=pad, lib=lib)
+    g.set_paint(paint_rgb(settings, concrete=True))
+    return g
 
 
 def run_interactive_cli(opts) -> int:
@@ -6896,7 +7215,7 @@ def run_interactive_cli(opts) -> int:
         while True:
             from_garage = False
             if mode == "garage":
-                g = grg.Garage((w, h), design, pad=pad, lib=lib)
+                g = _painted_garage(grg, (w, h), design, pad, lib, settings)
                 #  the wing-design tutorial (drive/wing_tutorial.py) rides
                 #  on opts across the garage <-> drive round trips
                 g.progress = getattr(opts, "progress", None)
@@ -7008,7 +7327,9 @@ def run_interactive_cli(opts) -> int:
                 opts.swarm = None
                 opts.swarm_car = None
                 opts.swarm_saved = None
-                opts.swarm_menu = dict(launch)     # the page remembers its values
+                #  the page remembers its values; a Sim time left at the
+                #  map's default follows the map (_swarm_menu_kept)
+                opts.swarm_menu = _swarm_menu_kept(launch, sim.track)
                 opts.prerace_skip = True           # back from the swarm: drive, not a timed start
                 continue
             if sim.stop_reason == "restart":
@@ -7095,6 +7416,21 @@ def _swarm_seed_spec(spec: str | None) -> str:
     return spec
 
 
+def _swarm_view(car, settings, opts, size):
+    """The swarm window's ViewConfig, with `car` fitted (the HUD's reference
+    car and the best car's body) in its OWN colour: `render.set_paint` is
+    module state, and the session a swarm is deployed from painted the
+    player's car. The settings' camera; no HUD, vectors or g-g."""
+    from . import render as rnd
+    rnd.set_car(car)
+    rnd.set_paint(None)
+    cfgv = rnd.ViewConfig(size=size, fps=opts.fps, mode=settings.camera or "car_up")
+    cfgv.hud = "off"
+    cfgv.show_vectors = False
+    cfgv.show_gg = False
+    return cfgv
+
+
 def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
     """`--swarm N`: a population of N learning cars on the session's map and
     car. The window REPLAYS a scored generation as ghost cars (the best one is
@@ -7142,6 +7478,8 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
         _resolve_design(opts)
     w, h = (int(v) for v in opts.size.lower().split("x"))
     from . import swarm_panel as spn
+    if opts.swarm_T is None:        # no --swarm-T: the default for this map's lap
+        opts.swarm_T = swarm_T(trk.make_track(opts.track, opts.radius, opts.cw))
     _pop, _T = spn.clamp_pop(opts.swarm), spn.clamp_T(opts.swarm_T)
     if (_pop, _T) != (opts.swarm, opts.swarm_T):
         print(f"swarm: {opts.swarm} cars / {opts.swarm_T} s -> {_pop} cars / {_T:.0f} s "
@@ -7242,11 +7580,7 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
             sw_pb = None
 
     from . import render as rnd
-    rnd.set_car(car)
-    cfgv = rnd.ViewConfig(size=(w, h), fps=opts.fps, mode=settings.camera or "car_up")
-    cfgv.hud = "off"
-    cfgv.show_vectors = False
-    cfgv.show_gg = False
+    cfgv = _swarm_view(car, settings, opts, (w, h))
     renderer = rnd.Renderer(cfgv, tr, headless=(opts.render == "offscreen"))
     print("swarm: SPACE auto-run | ENTER next generation | K name + save best | V replay | "
           "[ ] speed | C camera | - = 0 zoom | ESC quit")
@@ -7837,6 +8171,7 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
             from . import render as rnd
             w, h = (int(v) for v in opts.size.lower().split("x"))
             rnd.set_car(car)               # the HUD's %mg and the g-g envelope
+            rnd.set_paint(paint_rgb(settings))   # before the build: the prebuilt mesh
             cfgv = rnd.ViewConfig(size=(w, h), fps=opts.fps, mode=settings.camera,
                                   **rnd.look_config(settings.graphics))
             renderer = rnd.Renderer(cfgv, tr,

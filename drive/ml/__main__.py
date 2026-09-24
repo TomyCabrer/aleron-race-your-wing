@@ -158,6 +158,33 @@ def self_check(verbose: bool = True) -> bool:
          all(e.ended == "time" and e.laps >= 1 for e in per_car.values()),
          ", ".join(f"{k} {e.s_progress:.0f} m/{e.laps}L '{e.ended}'"
                    for k, e in per_car.items()))
+    #  The same driver on the three newer circuits, and here for TWO laps:
+    #  the first starts at 12 m/s, and the laps that matter -- medals.py's
+    #  author runs, a race -- are flying ones. Two of the failures that
+    #  reshaped these circuits came on lap 2 (the MX-5 into a wet R110 at the
+    #  end of Kestrel's first-draft 417 m straight, the 540i lifting out of
+    #  Ashdown's T1 for water it saw ahead in T2), and a one-lap check passed
+    #  both. T is ~1.1x the slowest car's second crossing.
+    from .evaluate import BOT_TEST_T, bot_test_T
+    t_test = {}
+    for circ, T_c in (("linden", 145.0), ("kestrel", 186.0), ("ashdown", 160.0)):
+        per_c = {k: rollout(p0, circ, T=T_c, wing="plate", car=cars.get(k))
+                 for k in ("corsa", "mx5", "540i")}
+        _rep(f"the anchor laps {circ} in every car",
+             all(e.ended == "time" and e.laps >= 2 for e in per_c.values()),
+             ", ".join(f"{k} {e.laps}L '{e.ended}'"
+                       + (f" (flying {e.lap_times[1] - e.lap_times[0]:.1f} s)"
+                          if len(e.lap_times) >= 2 else f" at {e.s_progress:.0f} m")
+                       for k, e in per_c.items()))
+        t_test[circ] = (bot_test_T(trk.make_track(circ)), T_c)
+    #  ... so the RACE page's Test (`bot_lap`, a standing + a flying lap)
+    #  must run at least that long there, and exactly as long as ever on
+    #  the arena
+    _rep("the RACE Test lasts two laps on every circuit",
+         bot_test_T(trk.make_arena()) == BOT_TEST_T
+         and all(a >= b for a, b in t_test.values()),
+         f"arena {bot_test_T(trk.make_arena()):.0f} s, "
+         + ", ".join(f"{c} {a:.0f} s (two laps {b:.0f})" for c, (a, b) in t_test.items()))
     #  and it is genuinely a different car underneath, not the Corsa wearing
     #  three names: the library's grip calibration has to reach the physics
     #  (`env.rollout` passes `car.mu_scale`, which it did not until wave 4b)

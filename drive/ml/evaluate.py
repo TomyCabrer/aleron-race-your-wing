@@ -211,20 +211,37 @@ def _car_cell(arg) -> tuple:
 #: per car -- a standing-start lap and at least one flying lap on the arena
 #: for every car in the library.
 BOT_TEST_T = 150.0
+#: ... on a lap this long (the arena's). `bot_test_T` scales it up for a
+#: longer one: Kestrel's 1.91 km would otherwise end the Test before the
+#: flying lap does, and the page would say the bot never lapped.
+BOT_TEST_L = 1249.2022
+
+
+def bot_test_T(tr=None, T=None) -> float:
+    """The Test's sim seconds on `tr`. `T` (default BOT_TEST_T) is an ARENA
+    budget: a longer lap gets it pro rata, a shorter one keeps it -- so the
+    arena's, and every explicit short T on it, is unchanged. A caller that
+    SHOWS the Test's length (the page, the terminal) prints this, but keeps
+    handing `bot_lap` the arena budget: a scaled T handed back in would be
+    scaled twice."""
+    T = float(T or BOT_TEST_T)
+    L = float(getattr(tr, "length", 0.0) or 0.0)
+    return T * max(1.0, L / BOT_TEST_L)
 
 
 def bot_lap(job: dict) -> dict:
     """One cell of the RACE page's test: a bot in one car, best flying lap
     at DT_EVAL. `job`: `spec` ('anchor' or a checkpoint path), `car` (a
     `cars.CarSpec`), `cfg_kwargs` (the car's whole `VehicleConfig`), `tr`
-    (the session's Track) and `T`. Plain data back, for a pool worker; a
-    failure comes back as `error` instead of killing the other cars' cells."""
+    (the session's Track) and `T` (an arena budget: `bot_test_T`). Plain
+    data back, for a pool worker; a failure comes back as `error` instead of
+    killing the other cars' cells."""
     try:
         spec = job.get("spec")
         pol = Policy() if spec in (None, "", "anchor") else Policy.load(spec)
         tr = job.get("tr")
         return lap_time(pol, getattr(tr, "name", "arena"), dt=DT_EVAL,
-                        T=float(job.get("T") or BOT_TEST_T), car=job.get("car"),
+                        T=bot_test_T(tr, job.get("T")), car=job.get("car"),
                         cfg_kwargs=job.get("cfg_kwargs"), tr=tr)
     except Exception as exc:
         return dict(best=None, error=f"{type(exc).__name__}: {exc}")

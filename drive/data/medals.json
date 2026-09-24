@@ -1,7 +1,7 @@
 {
  "kind": "carsim-medals-1",
- "generated": "2026-09-23T04:44:59",
- "inputs_hash": "1cf5a8b7fcf822e00c3ef6136c569bc7f970deba61ada4efc53b0898cd58b434",
+ "generated": "2026-09-24T08:24:11",
+ "inputs_hash": "8168f04119ad04f2399f15339c7f7f733e351060ae5be1fef0d75c1d3d801688",
  "thresholds": {
   "gold": 1.02,
   "silver": 1.06,
@@ -24,17 +24,23 @@
   "swarm_bot_2",
   "swarm_bot_3wings"
  ],
- "build_seconds": 1424.8,
- "workers": 6,
+ "build_seconds": 3273.5,
+ "workers": 7,
  "flying_laps": 2,
  "t_max": {
   "skidpad": 110.0,
   "arena": 300.0,
-  "open": 420.0
+  "open": 420.0,
+  "linden": 280.0,
+  "kestrel": 460.0,
+  "ashdown": 340.0
  },
  "trace_hz": 20,
  "built": [
   "arena",
+  "linden",
+  "kestrel",
+  "ashdown",
   "open",
   "skidpad"
  ],
@@ -4535,6 +4541,9350 @@
      "laps": [],
      "invalid": 0,
      "result": "lost at 13 s"
+    }
+   ]
+  },
+  "linden|corsa|stock|patch": {
+   "author": 59.104812954904695,
+   "gold": 60.28690921400279,
+   "silver": 62.65110173219898,
+   "bronze": 66.19739050949326,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 59.104812954904695,
+     "laps": [
+      59.104812954904695,
+      59.10500304949319
+     ],
+     "invalid": 0,
+     "result": "59.105 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 59.17398955906965,
+     "laps": [
+      59.17398955906965,
+      59.173990570697725
+     ],
+     "invalid": 0,
+     "result": "59.174 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 61.14398874940373,
+     "laps": [
+      61.14398874940373,
+      61.14399448509354
+     ],
+     "invalid": 0,
+     "result": "1:01.144 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 61.134220033470115,
+     "laps": [
+      61.134220033470115,
+      61.134487662413974
+     ],
+     "invalid": 0,
+     "result": "1:01.134 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 63.981217335596256,
+     "laps": [
+      63.981757089547344,
+      63.981217335596256
+     ],
+     "invalid": 0,
+     "result": "1:03.981 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 63.982819244927725,
+     "laps": [
+      63.982822165541975,
+      63.982819244927725
+     ],
+     "invalid": 0,
+     "result": "1:03.983 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 67.56252041031728,
+     "laps": [
+      67.56252041031728,
+      67.56289150765738
+     ],
+     "invalid": 0,
+     "result": "1:07.563 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 67.56252041031728,
+     "laps": [
+      67.56252041031728,
+      67.56289150765738
+     ],
+     "invalid": 0,
+     "result": "1:07.563 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 63.64630774998821,
+     "laps": [
+      63.64630774998821,
+      63.66588645445964
+     ],
+     "invalid": 0,
+     "result": "1:03.646 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 63.511716493336536,
+     "laps": [
+      63.520277505908695,
+      63.511716493336536
+     ],
+     "invalid": 0,
+     "result": "1:03.512 (2 laps)"
+    }
+   ]
+  },
+  "linden|corsa|stock|none": {
+   "author": 58.21499871571674,
+   "gold": 59.37929869003108,
+   "silver": 61.70789863865975,
+   "bronze": 65.20079856160275,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 58.21499871571674,
+     "laps": [
+      58.21499871571674,
+      58.214999848275696
+     ],
+     "invalid": 0,
+     "result": "58.215 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 58.22600153770209,
+     "laps": [
+      58.226014250730515,
+      58.22600153770209
+     ],
+     "invalid": 0,
+     "result": "58.226 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 60.010261023328766,
+     "laps": [
+      60.0102662883769,
+      60.010261023328766
+     ],
+     "invalid": 0,
+     "result": "1:00.010 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 60.070415676093305,
+     "laps": [
+      60.07043419114997,
+      60.070415676093305
+     ],
+     "invalid": 0,
+     "result": "1:00.070 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 62.93589683766095,
+     "laps": [
+      62.93654551300094,
+      62.93589683766095
+     ],
+     "invalid": 0,
+     "result": "1:02.936 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 62.93701824020596,
+     "laps": [
+      62.93740922798342,
+      62.93701824020596
+     ],
+     "invalid": 0,
+     "result": "1:02.937 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 66.46138713973977,
+     "laps": [
+      66.4618499844483,
+      66.46138713973977
+     ],
+     "invalid": 0,
+     "result": "1:06.461 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 66.46138713973977,
+     "laps": [
+      66.4618499844483,
+      66.46138713973977
+     ],
+     "invalid": 0,
+     "result": "1:06.461 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 60.954176679103654,
+     "laps": [
+      60.954176679103654,
+      61.01445940261735
+     ],
+     "invalid": 0,
+     "result": "1:00.954 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 60.919212450081915,
+     "laps": [
+      60.919212450081915,
+      60.97949075815214
+     ],
+     "invalid": 0,
+     "result": "1:00.919 (2 laps)"
+    }
+   ]
+  },
+  "linden|corsa|stock|all": {
+   "author": 69.10197723083088,
+   "gold": 70.4840167754475,
+   "silver": 73.24809586468074,
+   "bronze": 77.3942144985306,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 69.13751551707705,
+     "laps": [
+      69.13786827806427,
+      69.13751551707705
+     ],
+     "invalid": 0,
+     "result": "1:09.138 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 69.10197723083088,
+     "laps": [
+      69.10197723083088,
+      69.10199807662121
+     ],
+     "invalid": 0,
+     "result": "1:09.102 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 72.0834712353396,
+     "laps": [
+      72.0834712353396,
+      72.08353196208728
+     ],
+     "invalid": 0,
+     "result": "1:12.083 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 72.19066373681257,
+     "laps": [
+      72.19066373681257,
+      72.19090431094978
+     ],
+     "invalid": 0,
+     "result": "1:12.191 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 75.79911650279047,
+     "laps": [
+      75.79959625263403,
+      75.79911650279047
+     ],
+     "invalid": 0,
+     "result": "1:15.799 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 75.80696810388068,
+     "laps": [
+      75.80698822781531,
+      75.80696810388068
+     ],
+     "invalid": 0,
+     "result": "1:15.807 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 80.57287943104144,
+     "laps": [
+      80.57287943104144,
+      80.57304675170167
+     ],
+     "invalid": 0,
+     "result": "1:20.573 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 80.5792528889912,
+     "laps": [
+      80.5792528889912,
+      80.57977008693473
+     ],
+     "invalid": 0,
+     "result": "1:20.579 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 13 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 13 s"
+    }
+   ]
+  },
+  "linden|corsa|tuned|patch": {
+   "author": 57.79989908130533,
+   "gold": 58.955897062931435,
+   "silver": 61.26789302618365,
+   "bronze": 64.73588697106197,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 58.18185188562897,
+     "laps": [
+      58.183148370686396,
+      58.18185188562897
+     ],
+     "invalid": 0,
+     "result": "58.182 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 57.79989908130533,
+     "laps": [
+      57.8011164484403,
+      57.79989908130533
+     ],
+     "invalid": 0,
+     "result": "57.800 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 59.79851686322033,
+     "laps": [
+      59.79857987928596,
+      59.79851686322033
+     ],
+     "invalid": 0,
+     "result": "59.799 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 59.84429962724508,
+     "laps": [
+      59.84435803662299,
+      59.84429962724508
+     ],
+     "invalid": 0,
+     "result": "59.844 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 62.86311310339849,
+     "laps": [
+      62.86311310339849,
+      62.863783969293706
+     ],
+     "invalid": 0,
+     "result": "1:02.863 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 62.86294171283292,
+     "laps": [
+      62.86294171283292,
+      62.86296718504636
+     ],
+     "invalid": 0,
+     "result": "1:02.863 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 66.11316879635687,
+     "laps": [
+      66.11316879635687,
+      66.11331921692963
+     ],
+     "invalid": 0,
+     "result": "1:06.113 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 66.12112828336384,
+     "laps": [
+      66.12118215854755,
+      66.12112828336384
+     ],
+     "invalid": 0,
+     "result": "1:06.121 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 61.906993618972336,
+     "laps": [
+      61.906993618972336,
+      61.96461895843913
+     ],
+     "invalid": 0,
+     "result": "1:01.907 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 61.75490732535775,
+     "laps": [
+      61.75490732535775,
+      61.79208905400962
+     ],
+     "invalid": 0,
+     "result": "1:01.755 (2 laps)"
+    }
+   ]
+  },
+  "linden|corsa|tuned|none": {
+   "author": 56.873204668591654,
+   "gold": 58.01066876196349,
+   "silver": 60.28559694870716,
+   "bronze": 63.69798922882266,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 57.32496464453487,
+     "laps": [
+      57.32496464453487,
+      57.32499012918362
+     ],
+     "invalid": 0,
+     "result": "57.325 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 56.873204668591654,
+     "laps": [
+      56.873204668591654,
+      56.87378031167576
+     ],
+     "invalid": 0,
+     "result": "56.873 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 58.69199449121916,
+     "laps": [
+      58.69204924541891,
+      58.69199449121916
+     ],
+     "invalid": 0,
+     "result": "58.692 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 58.7180020949811,
+     "laps": [
+      58.718082352128356,
+      58.7180020949811
+     ],
+     "invalid": 0,
+     "result": "58.718 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 61.64101171051625,
+     "laps": [
+      61.64109295320766,
+      61.64101171051625
+     ],
+     "invalid": 0,
+     "result": "1:01.641 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 61.642999522240245,
+     "laps": [
+      61.642999522240245,
+      61.64300161551317
+     ],
+     "invalid": 0,
+     "result": "1:01.643 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 64.751381705189,
+     "laps": [
+      64.75165387477696,
+      64.751381705189
+     ],
+     "invalid": 0,
+     "result": "1:04.751 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 64.75943783060059,
+     "laps": [
+      64.75943783060059,
+      64.75960743992806
+     ],
+     "invalid": 0,
+     "result": "1:04.759 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 59.31274639992005,
+     "laps": [
+      59.31274639992005,
+      59.36794955093656
+     ],
+     "invalid": 0,
+     "result": "59.313 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 59.32837338642272,
+     "laps": [
+      59.32837338642272,
+      59.35945415770634
+     ],
+     "invalid": 0,
+     "result": "59.328 (2 laps)"
+    }
+   ]
+  },
+  "linden|corsa|tuned|all": {
+   "author": 67.64036120195064,
+   "gold": 68.99316842598965,
+   "silver": 71.69878287406767,
+   "bronze": 75.75720454618472,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 67.75682608099413,
+     "laps": [
+      67.75697850803988,
+      67.75682608099413
+     ],
+     "invalid": 0,
+     "result": "1:07.757 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 67.64036120195064,
+     "laps": [
+      67.64063741959741,
+      67.64036120195064
+     ],
+     "invalid": 0,
+     "result": "1:07.640 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 70.91598362504112,
+     "laps": [
+      70.9160559767166,
+      70.91598362504112
+     ],
+     "invalid": 0,
+     "result": "1:10.916 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 70.56293252010406,
+     "laps": [
+      70.56293252010406,
+      70.56304179324178
+     ],
+     "invalid": 0,
+     "result": "1:10.563 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 74.84218591419,
+     "laps": [
+      74.84248054628411,
+      74.84218591419
+     ],
+     "invalid": 0,
+     "result": "1:14.842 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 74.52210684851855,
+     "laps": [
+      74.52239247991392,
+      74.52210684851855
+     ],
+     "invalid": 0,
+     "result": "1:14.522 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 79.48624737666839,
+     "laps": [
+      79.48681323115412,
+      79.48624737666839
+     ],
+     "invalid": 0,
+     "result": "1:19.486 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 78.89779048499202,
+     "laps": [
+      78.89800772598704,
+      78.89779048499202
+     ],
+     "invalid": 0,
+     "result": "1:18.898 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 13 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 12 s"
+    }
+   ]
+  },
+  "linden|corsa|sport|patch": {
+   "author": 57.184121962574494,
+   "gold": 58.327804401825986,
+   "silver": 60.61516928032896,
+   "bronze": 64.04621659808343,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 57.184121962574494,
+     "laps": [
+      57.184121962574494,
+      57.18423536030713
+     ],
+     "invalid": 0,
+     "result": "57.184 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 57.66702398555057,
+     "laps": [
+      57.66702398555057,
+      57.66703510915379
+     ],
+     "invalid": 0,
+     "result": "57.667 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 59.04123097357902,
+     "laps": [
+      59.0415659483284,
+      59.04123097357902
+     ],
+     "invalid": 0,
+     "result": "59.041 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 59.109127052731615,
+     "laps": [
+      59.109127052731615,
+      59.10919959583897
+     ],
+     "invalid": 0,
+     "result": "59.109 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 61.932487893402225,
+     "laps": [
+      61.93285424271397,
+      61.932487893402225
+     ],
+     "invalid": 0,
+     "result": "1:01.932 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 62.00680986148389,
+     "laps": [
+      62.006847845251116,
+      62.00680986148389
+     ],
+     "invalid": 0,
+     "result": "1:02.007 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 65.55001734126148,
+     "laps": [
+      65.55029689920428,
+      65.55001734126148
+     ],
+     "invalid": 0,
+     "result": "1:05.550 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 65.60492543911954,
+     "laps": [
+      65.60492543911954,
+      65.6050009098521
+     ],
+     "invalid": 0,
+     "result": "1:05.605 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 61.07023334984268,
+     "laps": [
+      61.07023334984268,
+      61.16246808105859
+     ],
+     "invalid": 0,
+     "result": "1:01.070 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 60.9551654673145,
+     "laps": [
+      60.9551654673145,
+      61.01203377419334
+     ],
+     "invalid": 0,
+     "result": "1:00.955 (2 laps)"
+    }
+   ]
+  },
+  "linden|corsa|sport|none": {
+   "author": 56.14198719490142,
+   "gold": 57.264826938799445,
+   "silver": 59.510506426595505,
+   "bronze": 62.87902565828959,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 56.14198719490142,
+     "laps": [
+      56.14209350393104,
+      56.14198719490142
+     ],
+     "invalid": 0,
+     "result": "56.142 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 56.875914865887054,
+     "laps": [
+      56.875914865887054,
+      56.876015630664
+     ],
+     "invalid": 0,
+     "result": "56.876 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 57.93900211970709,
+     "laps": [
+      57.93900211970709,
+      57.939004633005936
+     ],
+     "invalid": 0,
+     "result": "57.939 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 58.01087002175691,
+     "laps": [
+      58.01087002175691,
+      58.01096622492338
+     ],
+     "invalid": 0,
+     "result": "58.011 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 60.7201941747806,
+     "laps": [
+      60.72046914484663,
+      60.7201941747806
+     ],
+     "invalid": 0,
+     "result": "1:00.720 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 60.7979088062897,
+     "laps": [
+      60.7979088062897,
+      60.797989975782045
+     ],
+     "invalid": 0,
+     "result": "1:00.798 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 64.22438786793423,
+     "laps": [
+      64.22438786793423,
+      64.2245490047433
+     ],
+     "invalid": 0,
+     "result": "1:04.224 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 64.27054807443591,
+     "laps": [
+      64.27054807443591,
+      64.27158555779849
+     ],
+     "invalid": 0,
+     "result": "1:04.271 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 58.50961406789306,
+     "laps": [
+      58.50961406789306,
+      58.52305134222644
+     ],
+     "invalid": 0,
+     "result": "58.510 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 58.4977684367172,
+     "laps": [
+      58.4977684367172,
+      58.515370574582434
+     ],
+     "invalid": 0,
+     "result": "58.498 (2 laps)"
+    }
+   ]
+  },
+  "linden|corsa|sport|all": {
+   "author": 67.51102849879814,
+   "gold": 68.8612490687741,
+   "silver": 71.56169020872603,
+   "bronze": 75.61235191865393,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 67.63844109463625,
+     "laps": [
+      67.63949471861733,
+      67.63844109463625
+     ],
+     "invalid": 0,
+     "result": "1:07.638 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 67.51102849879814,
+     "laps": [
+      67.5111033311881,
+      67.51102849879814
+     ],
+     "invalid": 0,
+     "result": "1:07.511 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 70.60499718605035,
+     "laps": [
+      70.60499718605035,
+      70.60514851107911
+     ],
+     "invalid": 0,
+     "result": "1:10.605 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 70.32588767710638,
+     "laps": [
+      70.32612840974627,
+      70.32588767710638
+     ],
+     "invalid": 0,
+     "result": "1:10.326 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 74.48626739981341,
+     "laps": [
+      74.48694160544103,
+      74.48626739981341
+     ],
+     "invalid": 0,
+     "result": "1:14.486 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 74.42913458011053,
+     "laps": [
+      74.42913458011053,
+      74.42918109347875
+     ],
+     "invalid": 0,
+     "result": "1:14.429 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 79.34596077603899,
+     "laps": [
+      79.34596904357666,
+      79.34596077603899
+     ],
+     "invalid": 0,
+     "result": "1:19.346 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 78.80800065137777,
+     "laps": [
+      78.80800065137777,
+      78.80817468974288
+     ],
+     "invalid": 0,
+     "result": "1:18.808 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 13 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 12 s"
+    }
+   ]
+  },
+  "linden|mx5|stock|patch": {
+   "author": 56.89358607592847,
+   "gold": 58.03145779744704,
+   "silver": 60.307201240484176,
+   "bronze": 63.72081640503989,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 56.907510948768376,
+     "laps": [
+      56.907510948768376,
+      56.907719283895304
+     ],
+     "invalid": 0,
+     "result": "56.908 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 56.89358607592847,
+     "laps": [
+      56.89383988196719,
+      56.89358607592847
+     ],
+     "invalid": 0,
+     "result": "56.894 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 59.03477235472917,
+     "laps": [
+      59.03477235472917,
+      59.03493200257762
+     ],
+     "invalid": 0,
+     "result": "59.035 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 59.03830512559361,
+     "laps": [
+      59.0383916999432,
+      59.03830512559361
+     ],
+     "invalid": 0,
+     "result": "59.038 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 62.33899948900047,
+     "laps": [
+      62.339008456456256,
+      62.33899948900047
+     ],
+     "invalid": 0,
+     "result": "1:02.339 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 62.33894168697556,
+     "laps": [
+      62.33894168697556,
+      62.33900126046032
+     ],
+     "invalid": 0,
+     "result": "1:02.339 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 65.88211248013855,
+     "laps": [
+      65.88244107989054,
+      65.88211248013855
+     ],
+     "invalid": 0,
+     "result": "1:05.882 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 65.88221044746824,
+     "laps": [
+      65.88221044746824,
+      65.88264281587831
+     ],
+     "invalid": 0,
+     "result": "1:05.882 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 60.694050869324215,
+     "laps": [
+      60.69409781361754,
+      60.694050869324215
+     ],
+     "invalid": 0,
+     "result": "1:00.694 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 60.62050877103535,
+     "laps": [
+      60.890036093440706,
+      60.62050877103535
+     ],
+     "invalid": 0,
+     "result": "1:00.621 (2 laps)"
+    }
+   ]
+  },
+  "linden|mx5|stock|none": {
+   "author": 55.865176505957194,
+   "gold": 56.98248003607634,
+   "silver": 59.21708709631463,
+   "bronze": 62.56899768667206,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 55.87181901340897,
+     "laps": [
+      55.87181901340897,
+      55.87192962890397
+     ],
+     "invalid": 0,
+     "result": "55.872 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 55.865176505957194,
+     "laps": [
+      55.865390803591495,
+      55.865176505957194
+     ],
+     "invalid": 0,
+     "result": "55.865 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 57.89627858818487,
+     "laps": [
+      57.89652962447684,
+      57.89627858818487
+     ],
+     "invalid": 0,
+     "result": "57.896 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 57.90198867192538,
+     "laps": [
+      57.9020125837234,
+      57.90198867192538
+     ],
+     "invalid": 0,
+     "result": "57.902 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 60.94544499742118,
+     "laps": [
+      60.9455645363354,
+      60.94544499742118
+     ],
+     "invalid": 0,
+     "result": "1:00.945 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 60.9454831656993,
+     "laps": [
+      60.945859786171425,
+      60.9454831656993
+     ],
+     "invalid": 0,
+     "result": "1:00.945 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 64.34050262415207,
+     "laps": [
+      64.34082673637535,
+      64.34050262415207
+     ],
+     "invalid": 0,
+     "result": "1:04.341 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 64.34058556309037,
+     "laps": [
+      64.34065868603165,
+      64.34058556309037
+     ],
+     "invalid": 0,
+     "result": "1:04.341 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 57.75746372154428,
+     "laps": [
+      57.75777163174487,
+      57.75746372154428
+     ],
+     "invalid": 0,
+     "result": "57.757 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 57.76591402536077,
+     "laps": [
+      57.76591402536077,
+      57.766064206057706
+     ],
+     "invalid": 0,
+     "result": "57.766 (2 laps)"
+    }
+   ]
+  },
+  "linden|mx5|stock|all": {
+   "author": 67.3849957990517,
+   "gold": 68.73269571503273,
+   "silver": 71.4280955469948,
+   "bronze": 75.4711952949379,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 74 s (no progress)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 67.3849957990517,
+     "laps": [
+      67.3849957990517,
+      67.38500028256863
+     ],
+     "invalid": 0,
+     "result": "1:07.385 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 65 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 70.55837087081507,
+     "laps": [
+      70.55837087081507,
+      70.55862079469051
+     ],
+     "invalid": 0,
+     "result": "1:10.558 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 68 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 74.42680171355882,
+     "laps": [
+      74.42680171355882,
+      74.42706544211677
+     ],
+     "invalid": 0,
+     "result": "1:14.427 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 70 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 80.54000809102621,
+     "laps": [
+      80.54004568141693,
+      80.54000809102621
+     ],
+     "invalid": 0,
+     "result": "1:20.540 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 13 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 12 s"
+    }
+   ]
+  },
+  "linden|mx5|tuned|patch": {
+   "author": 55.698994406888595,
+   "gold": 56.812974295026365,
+   "silver": 59.04093407130191,
+   "bronze": 62.38287373571523,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 55.95687638730723,
+     "laps": [
+      55.95806363967547,
+      55.95687638730723
+     ],
+     "invalid": 0,
+     "result": "55.957 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 55.698994406888595,
+     "laps": [
+      55.698994406888595,
+      55.69900049650664
+     ],
+     "invalid": 0,
+     "result": "55.699 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 58.20107707760995,
+     "laps": [
+      58.20145905830978,
+      58.20107707760995
+     ],
+     "invalid": 0,
+     "result": "58.201 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 58.206594897498945,
+     "laps": [
+      58.2074167780128,
+      58.206594897498945
+     ],
+     "invalid": 0,
+     "result": "58.207 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 60.84298717344063,
+     "laps": [
+      60.84298717344063,
+      60.84300271897679
+     ],
+     "invalid": 0,
+     "result": "1:00.843 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 60.845765237958425,
+     "laps": [
+      60.845765237958425,
+      60.845945743937065
+     ],
+     "invalid": 0,
+     "result": "1:00.846 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 64.60302789155367,
+     "laps": [
+      64.60308821826861,
+      64.60302789155367
+     ],
+     "invalid": 0,
+     "result": "1:04.603 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 64.59243793855057,
+     "laps": [
+      64.59256226548824,
+      64.59243793855057
+     ],
+     "invalid": 0,
+     "result": "1:04.592 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 58.97863505659685,
+     "laps": [
+      58.97863505659685,
+      58.978736950106324
+     ],
+     "invalid": 0,
+     "result": "58.979 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 58.984122514352734,
+     "laps": [
+      58.98696387275896,
+      58.984122514352734
+     ],
+     "invalid": 0,
+     "result": "58.984 (2 laps)"
+    }
+   ]
+  },
+  "linden|mx5|tuned|none": {
+   "author": 54.64332282598647,
+   "gold": 55.7361892825062,
+   "silver": 57.92192219554566,
+   "bronze": 61.20052156510486,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 54.89312997602556,
+     "laps": [
+      54.89312997602556,
+      54.89366304110439
+     ],
+     "invalid": 0,
+     "result": "54.893 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 54.64332282598647,
+     "laps": [
+      54.64489247410029,
+      54.64332282598647
+     ],
+     "invalid": 0,
+     "result": "54.643 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 56.96357187994214,
+     "laps": [
+      56.96370547691753,
+      56.96357187994214
+     ],
+     "invalid": 0,
+     "result": "56.964 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 56.96329115885764,
+     "laps": [
+      56.96329115885764,
+      56.964415076135666
+     ],
+     "invalid": 0,
+     "result": "56.963 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 59.226751141196814,
+     "laps": [
+      59.22684065796359,
+      59.226751141196814
+     ],
+     "invalid": 0,
+     "result": "59.227 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 59.23033597032621,
+     "laps": [
+      59.23049923169322,
+      59.23033597032621
+     ],
+     "invalid": 0,
+     "result": "59.230 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 62.85099725740422,
+     "laps": [
+      62.85099725740422,
+      62.85100362054581
+     ],
+     "invalid": 0,
+     "result": "1:02.851 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 62.85300916115702,
+     "laps": [
+      62.853103284871395,
+      62.85300916115702
+     ],
+     "invalid": 0,
+     "result": "1:02.853 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 56.360879012807466,
+     "laps": [
+      56.360879012807466,
+      56.36107427136962
+     ],
+     "invalid": 0,
+     "result": "56.361 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 56.39046748450347,
+     "laps": [
+      56.39046748450347,
+      56.39059030973257
+     ],
+     "invalid": 0,
+     "result": "56.390 (2 laps)"
+    }
+   ]
+  },
+  "linden|mx5|tuned|all": {
+   "author": 66.82997213040647,
+   "gold": 68.16657157301461,
+   "silver": 70.83977045823087,
+   "bronze": 74.84956878605526,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 16 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 66.82997213040647,
+     "laps": [
+      66.82997213040647,
+      66.82998937760925
+     ],
+     "invalid": 0,
+     "result": "1:06.830 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 17 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 69.95419661023547,
+     "laps": [
+      69.95423773234988,
+      69.95419661023547
+     ],
+     "invalid": 0,
+     "result": "1:09.954 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 73.8177584179419,
+     "laps": [
+      73.8177584179419,
+      73.8179294154809
+     ],
+     "invalid": 0,
+     "result": "1:13.818 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 78.77999807555312,
+     "laps": [
+      78.78001192225673,
+      78.77999807555312
+     ],
+     "invalid": 0,
+     "result": "1:18.780 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 12 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 12 s"
+    }
+   ]
+  },
+  "linden|mx5|sport|patch": {
+   "author": 55.27058637893963,
+   "gold": 56.37599810651842,
+   "silver": 58.58682156167601,
+   "bronze": 61.903056744412396,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 48 s (no progress)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 55.27058637893963,
+     "laps": [
+      55.27058637893963,
+      55.2710689008874
+     ],
+     "invalid": 0,
+     "result": "55.271 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 57.590075181071384,
+     "laps": [
+      57.59045083582748,
+      57.590075181071384
+     ],
+     "invalid": 0,
+     "result": "57.590 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 57.610137941050304,
+     "laps": [
+      57.610137941050304,
+      57.61069216916111
+     ],
+     "invalid": 0,
+     "result": "57.610 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 37 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 60.03634754932803,
+     "laps": [
+      60.036711874875685,
+      60.03634754932803
+     ],
+     "invalid": 0,
+     "result": "1:00.036 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 31 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 63.950962702954826,
+     "laps": [
+      63.95096877802786,
+      63.950962702954826
+     ],
+     "invalid": 0,
+     "result": "1:03.951 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 57.95787076325939,
+     "laps": [
+      57.958066992327375,
+      57.95787076325939
+     ],
+     "invalid": 0,
+     "result": "57.958 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 58.03306634312301,
+     "laps": [
+      58.03568197318755,
+      58.03306634312301
+     ],
+     "invalid": 0,
+     "result": "58.033 (2 laps)"
+    }
+   ]
+  },
+  "linden|mx5|sport|none": {
+   "author": 54.17937131373317,
+   "gold": 55.26295874000783,
+   "silver": 57.43013359255716,
+   "bronze": 60.68089587138115,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 48 s (no progress)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 54.17937131373317,
+     "laps": [
+      54.180796720097476,
+      54.17937131373317
+     ],
+     "invalid": 0,
+     "result": "54.179 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 56.4266506570854,
+     "laps": [
+      56.4266506570854,
+      56.42674233145273
+     ],
+     "invalid": 0,
+     "result": "56.427 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 56.45291762367972,
+     "laps": [
+      56.45291762367972,
+      56.452943769985836
+     ],
+     "invalid": 0,
+     "result": "56.453 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 36 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 58.94592877561992,
+     "laps": [
+      58.94592877561992,
+      58.9459947221042
+     ],
+     "invalid": 0,
+     "result": "58.946 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 31 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 62.304239681015645,
+     "laps": [
+      62.304239681015645,
+      62.304677035545126
+     ],
+     "invalid": 0,
+     "result": "1:02.304 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 55.465787476620946,
+     "laps": [
+      55.465787476620946,
+      55.46644832819162
+     ],
+     "invalid": 0,
+     "result": "55.466 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 55.57162085814832,
+     "laps": [
+      55.57234917380177,
+      55.57162085814832
+     ],
+     "invalid": 0,
+     "result": "55.572 (2 laps)"
+    }
+   ]
+  },
+  "linden|mx5|sport|all": {
+   "author": 66.84312930775485,
+   "gold": 68.17999189390994,
+   "silver": 70.85371706622014,
+   "bronze": 74.86430482468543,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 16 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 66.84312930775485,
+     "laps": [
+      66.84312930775485,
+      66.8442183453219
+     ],
+     "invalid": 0,
+     "result": "1:06.843 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 69.9970450536298,
+     "laps": [
+      69.9970450536298,
+      69.99714664877487
+     ],
+     "invalid": 0,
+     "result": "1:09.997 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 28 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 73.82168371000421,
+     "laps": [
+      73.82180656911021,
+      73.82168371000421
+     ],
+     "invalid": 0,
+     "result": "1:13.822 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 28 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 78.7818407577749,
+     "laps": [
+      78.7818407577749,
+      78.7819969638324
+     ],
+     "invalid": 0,
+     "result": "1:18.782 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 12 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 12 s"
+    }
+   ]
+  },
+  "linden|540i|stock|patch": {
+   "author": 57.56436963997865,
+   "gold": 58.715657032778225,
+   "silver": 61.01823181837737,
+   "bronze": 64.4720939967761,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 57.56783382093447,
+     "laps": [
+      57.56818573228906,
+      57.56783382093447
+     ],
+     "invalid": 0,
+     "result": "57.568 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 57.56436963997865,
+     "laps": [
+      57.564650305514995,
+      57.56436963997865
+     ],
+     "invalid": 0,
+     "result": "57.564 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 59.91474420921681,
+     "laps": [
+      59.91474420921681,
+      59.914984967826584
+     ],
+     "invalid": 0,
+     "result": "59.915 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 59.903879623515024,
+     "laps": [
+      59.903879623515024,
+      59.90400292649275
+     ],
+     "invalid": 0,
+     "result": "59.904 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 62.94262191809557,
+     "laps": [
+      62.94262191809557,
+      62.942787465330014
+     ],
+     "invalid": 0,
+     "result": "1:02.943 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 62.92610401274973,
+     "laps": [
+      62.92637691738649,
+      62.92610401274973
+     ],
+     "invalid": 0,
+     "result": "1:02.926 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 67.05535324578173,
+     "laps": [
+      67.05562604263787,
+      67.05535324578173
+     ],
+     "invalid": 0,
+     "result": "1:07.055 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 67.0418096011044,
+     "laps": [
+      67.04198725754834,
+      67.0418096011044
+     ],
+     "invalid": 0,
+     "result": "1:07.042 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 59.78101168907327,
+     "laps": [
+      59.78109511560829,
+      59.78101168907327
+     ],
+     "invalid": 0,
+     "result": "59.781 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 59.73970780039497,
+     "laps": [
+      59.73970780039497,
+      59.74001988156684
+     ],
+     "invalid": 0,
+     "result": "59.740 (2 laps)"
+    }
+   ]
+  },
+  "linden|540i|stock|none": {
+   "author": 56.359994244672606,
+   "gold": 57.487194129566056,
+   "silver": 59.741593899352964,
+   "bronze": 63.12319355403333,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 56.359994244672606,
+     "laps": [
+      56.359994244672606,
+      56.36000051000937
+     ],
+     "invalid": 0,
+     "result": "56.360 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 56.36700045249465,
+     "laps": [
+      56.36701291161873,
+      56.36700045249465
+     ],
+     "invalid": 0,
+     "result": "56.367 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 58.59507849825852,
+     "laps": [
+      58.59507849825852,
+      58.595660875756124
+     ],
+     "invalid": 0,
+     "result": "58.595 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 58.598520869768564,
+     "laps": [
+      58.598520869768564,
+      58.59896068580859
+     ],
+     "invalid": 0,
+     "result": "58.599 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 61.466000682311204,
+     "laps": [
+      61.46600319974647,
+      61.466000682311204
+     ],
+     "invalid": 0,
+     "result": "1:01.466 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 61.46694404707162,
+     "laps": [
+      61.46694404707162,
+      61.46700871159324
+     ],
+     "invalid": 0,
+     "result": "1:01.467 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 65.43599881436444,
+     "laps": [
+      65.43600619566607,
+      65.43599881436444
+     ],
+     "invalid": 0,
+     "result": "1:05.436 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 65.44399991501149,
+     "laps": [
+      65.44401152278422,
+      65.44399991501149
+     ],
+     "invalid": 0,
+     "result": "1:05.444 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 57.116020658498385,
+     "laps": [
+      57.11651477361108,
+      57.116020658498385
+     ],
+     "invalid": 0,
+     "result": "57.116 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 57.117492166286354,
+     "laps": [
+      57.11753248557571,
+      57.117492166286354
+     ],
+     "invalid": 0,
+     "result": "57.117 (2 laps)"
+    }
+   ]
+  },
+  "linden|540i|stock|all": {
+   "author": 70.90501031610575,
+   "gold": 72.32311052242787,
+   "silver": 75.1593109350721,
+   "bronze": 79.41361155403844,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 17 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 70.90501031610575,
+     "laps": [
+      70.90502529647165,
+      70.90501031610575
+     ],
+     "invalid": 0,
+     "result": "1:10.905 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 17 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 73.85703332713827,
+     "laps": [
+      73.85703332713827,
+      73.8571458034288
+     ],
+     "invalid": 0,
+     "result": "1:13.857 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 24 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 77.82117767020398,
+     "laps": [
+      77.82117767020398,
+      77.82184474487599
+     ],
+     "invalid": 0,
+     "result": "1:17.821 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 24 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 82.92504525900716,
+     "laps": [
+      82.92504525900716,
+      82.92509667149932
+     ],
+     "invalid": 0,
+     "result": "1:22.925 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 12 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 12 s"
+    }
+   ]
+  },
+  "linden|540i|tuned|patch": {
+   "author": 56.667047333981415,
+   "gold": 57.800388280661046,
+   "silver": 60.0670701740203,
+   "bronze": 63.46709301405919,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 56.667047333981415,
+     "laps": [
+      56.667047333981415,
+      56.668810062481285
+     ],
+     "invalid": 0,
+     "result": "56.667 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 15 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 59.05092554583186,
+     "laps": [
+      59.05092554583186,
+      59.05099985498562
+     ],
+     "invalid": 0,
+     "result": "59.051 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 16 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 62.179067459508715,
+     "laps": [
+      62.179067459508715,
+      62.17907318473769
+     ],
+     "invalid": 0,
+     "result": "1:02.179 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 16 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 66.17105694643334,
+     "laps": [
+      66.17105694643334,
+      66.17179390716046
+     ],
+     "invalid": 0,
+     "result": "1:06.171 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 58.561760903723396,
+     "laps": [
+      58.561760903723396,
+      58.56498760296421
+     ],
+     "invalid": 0,
+     "result": "58.562 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 58.48288319596068,
+     "laps": [
+      58.483863220082064,
+      58.48288319596068
+     ],
+     "invalid": 0,
+     "result": "58.483 (2 laps)"
+    }
+   ]
+  },
+  "linden|540i|tuned|none": {
+   "author": 55.455152665905416,
+   "gold": 56.564255719223524,
+   "silver": 58.78246182585974,
+   "bronze": 62.10977098581407,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 55.455152665905416,
+     "laps": [
+      55.455152665905416,
+      55.45586012968664
+     ],
+     "invalid": 0,
+     "result": "55.455 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 15 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 57.68851492995546,
+     "laps": [
+      57.68890911858865,
+      57.68851492995546
+     ],
+     "invalid": 0,
+     "result": "57.689 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 16 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 60.71399880317263,
+     "laps": [
+      60.714009328425924,
+      60.71399880317263
+     ],
+     "invalid": 0,
+     "result": "1:00.714 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 16 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 64.58321884033145,
+     "laps": [
+      64.58378356124108,
+      64.58321884033145
+     ],
+     "invalid": 0,
+     "result": "1:04.583 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 56.05299843497066,
+     "laps": [
+      56.05304110997025,
+      56.05299843497066
+     ],
+     "invalid": 0,
+     "result": "56.053 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 55.930099125831454,
+     "laps": [
+      55.930099125831454,
+      55.93048960051199
+     ],
+     "invalid": 0,
+     "result": "55.930 (2 laps)"
+    }
+   ]
+  },
+  "linden|540i|tuned|all": {
+   "author": 70.89805803345288,
+   "gold": 72.31601919412195,
+   "silver": 75.15194151546007,
+   "bronze": 79.40582499746723,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 27 s (no progress)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 70.89805803345288,
+     "laps": [
+      70.89826709677384,
+      70.89805803345288
+     ],
+     "invalid": 0,
+     "result": "1:10.898 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 27 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 74.21647561860249,
+     "laps": [
+      74.21647561860249,
+      74.21658585351707
+     ],
+     "invalid": 0,
+     "result": "1:14.216 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 28 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 78.08541295618045,
+     "laps": [
+      78.08541295618045,
+      78.08556230734231
+     ],
+     "invalid": 0,
+     "result": "1:18.085 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 30 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 82.82944051478293,
+     "laps": [
+      82.83100040728564,
+      82.82944051478293
+     ],
+     "invalid": 0,
+     "result": "1:22.829 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 12 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 12 s"
+    }
+   ]
+  },
+  "linden|540i|sport|patch": {
+   "author": 56.7202586038196,
+   "gold": 57.85466377589599,
+   "silver": 60.12347412004878,
+   "bronze": 63.52668963627796,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 30 s (no progress)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 56.7202586038196,
+     "laps": [
+      56.72075564825178,
+      56.7202586038196
+     ],
+     "invalid": 0,
+     "result": "56.720 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 59.1610003688737,
+     "laps": [
+      59.16100662275541,
+      59.1610003688737
+     ],
+     "invalid": 0,
+     "result": "59.161 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 62.21783737128614,
+     "laps": [
+      62.21818008340885,
+      62.21783737128614
+     ],
+     "invalid": 0,
+     "result": "1:02.218 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 19 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 66.41323802459198,
+     "laps": [
+      66.41385595670816,
+      66.41323802459198
+     ],
+     "invalid": 0,
+     "result": "1:06.413 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 58.3052933384256,
+     "laps": [
+      58.30833806625126,
+      58.3052933384256
+     ],
+     "invalid": 0,
+     "result": "58.305 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 57.82952123966818,
+     "laps": [
+      57.83092238953992,
+      57.82952123966818
+     ],
+     "invalid": 0,
+     "result": "57.830 (2 laps)"
+    }
+   ]
+  },
+  "linden|540i|sport|none": {
+   "author": 55.49321309154847,
+   "gold": 56.60307735337944,
+   "silver": 58.82280587704138,
+   "bronze": 62.15239866253429,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 30 s (no progress)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 55.49321309154847,
+     "laps": [
+      55.4932326322535,
+      55.49321309154847
+     ],
+     "invalid": 0,
+     "result": "55.493 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 57.79958844418199,
+     "laps": [
+      57.79958844418199,
+      57.79994447355003
+     ],
+     "invalid": 0,
+     "result": "57.800 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 60.76179808069738,
+     "laps": [
+      60.76179808069738,
+      60.762620507990206
+     ],
+     "invalid": 0,
+     "result": "1:00.762 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 19 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 64.80386303552726,
+     "laps": [
+      64.80412613388751,
+      64.80386303552726
+     ],
+     "invalid": 0,
+     "result": "1:04.804 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 55.78764487244462,
+     "laps": [
+      55.78764487244462,
+      55.789572532509524
+     ],
+     "invalid": 0,
+     "result": "55.788 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 55.50496427067807,
+     "laps": [
+      55.50496427067807,
+      55.504999137673934
+     ],
+     "invalid": 0,
+     "result": "55.505 (2 laps)"
+    }
+   ]
+  },
+  "linden|540i|sport|all": {
+   "author": 70.88421214162223,
+   "gold": 72.30189638445468,
+   "silver": 75.13726487011957,
+   "bronze": 79.3903175986169,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 27 s (no progress)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 70.88421214162223,
+     "laps": [
+      70.88421214162223,
+      70.8846387171557
+     ],
+     "invalid": 0,
+     "result": "1:10.884 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 28 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 74.18683446184536,
+     "laps": [
+      74.18702604435077,
+      74.18683446184536
+     ],
+     "invalid": 0,
+     "result": "1:14.187 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 28 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 78.04890822900255,
+     "laps": [
+      78.04890822900255,
+      78.04902588050797
+     ],
+     "invalid": 0,
+     "result": "1:18.049 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 31 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 82.85735284252593,
+     "laps": [
+      82.85884816488743,
+      82.85735284252593
+     ],
+     "invalid": 0,
+     "result": "1:22.857 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 12 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 12 s"
+    }
+   ]
+  },
+  "kestrel|corsa|stock|patch": {
+   "author": 79.00382404418036,
+   "gold": 80.58390052506397,
+   "silver": 83.74405348683119,
+   "bronze": 88.48428292948202,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 79.00382404418036,
+     "laps": [
+      79.00382404418036,
+      79.00416855133841
+     ],
+     "invalid": 0,
+     "result": "1:19.004 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 79.15891334807478,
+     "laps": [
+      79.15891334807478,
+      79.15896213366395
+     ],
+     "invalid": 0,
+     "result": "1:19.159 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 81.85714134094505,
+     "laps": [
+      81.85743030008297,
+      81.85714134094505
+     ],
+     "invalid": 0,
+     "result": "1:21.857 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 81.89330792919914,
+     "laps": [
+      81.89330792919914,
+      81.89337154238828
+     ],
+     "invalid": 0,
+     "result": "1:21.893 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 86.38564061541189,
+     "laps": [
+      86.38564061541189,
+      86.38580213355138
+     ],
+     "invalid": 0,
+     "result": "1:26.386 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 86.39107766870994,
+     "laps": [
+      86.39107766870994,
+      86.39111937492626
+     ],
+     "invalid": 0,
+     "result": "1:26.391 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 91.73740533266478,
+     "laps": [
+      91.73740533266478,
+      91.73760850306257
+     ],
+     "invalid": 0,
+     "result": "1:31.737 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 91.73740533266478,
+     "laps": [
+      91.73740533266478,
+      91.73760850306257
+     ],
+     "invalid": 0,
+     "result": "1:31.737 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 82.86708286705404,
+     "laps": [
+      82.86708286705404,
+      82.86729400099404
+     ],
+     "invalid": 0,
+     "result": "1:22.867 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 83.00086700402709,
+     "laps": [
+      83.00086700402709,
+      83.00113973956539
+     ],
+     "invalid": 0,
+     "result": "1:23.001 (2 laps)"
+    }
+   ]
+  },
+  "kestrel|corsa|stock|none": {
+   "author": 77.48300617880892,
+   "gold": 79.0326663023851,
+   "silver": 82.13198654953746,
+   "bronze": 86.780966920266,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 77.48300617880892,
+     "laps": [
+      77.48302663557465,
+      77.48300617880892
+     ],
+     "invalid": 0,
+     "result": "1:17.483 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 77.71546712924838,
+     "laps": [
+      77.71546712924838,
+      77.71585228950477
+     ],
+     "invalid": 0,
+     "result": "1:17.715 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 79.90791824615702,
+     "laps": [
+      79.90791824615702,
+      79.90807813797093
+     ],
+     "invalid": 0,
+     "result": "1:19.908 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 79.90060696491,
+     "laps": [
+      79.90060696491,
+      79.90091111617352
+     ],
+     "invalid": 0,
+     "result": "1:19.901 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 84.41136680450442,
+     "laps": [
+      84.41136680450442,
+      84.41150052391444
+     ],
+     "invalid": 0,
+     "result": "1:24.411 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 84.41136680450442,
+     "laps": [
+      84.41136680450442,
+      84.41150052391444
+     ],
+     "invalid": 0,
+     "result": "1:24.411 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 89.76500963857097,
+     "laps": [
+      89.76510538637422,
+      89.76500963857097
+     ],
+     "invalid": 0,
+     "result": "1:29.765 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 89.76500963857097,
+     "laps": [
+      89.76510538637422,
+      89.76500963857097
+     ],
+     "invalid": 0,
+     "result": "1:29.765 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 80.03898026342162,
+     "laps": [
+      80.03901599581877,
+      80.03898026342162
+     ],
+     "invalid": 0,
+     "result": "1:20.039 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 80.0290029438184,
+     "laps": [
+      80.02904162356612,
+      80.0290029438184
+     ],
+     "invalid": 0,
+     "result": "1:20.029 (2 laps)"
+    }
+   ]
+  },
+  "kestrel|corsa|stock|all": {
+   "author": 93.85198218381949,
+   "gold": 95.72902182749588,
+   "silver": 99.48310111484867,
+   "bronze": 105.11422004587783,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 93.85198218381949,
+     "laps": [
+      93.85198218381949,
+      93.85200386118572
+     ],
+     "invalid": 0,
+     "result": "1:33.852 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 94.10309868929647,
+     "laps": [
+      94.10674408872947,
+      94.10309868929647
+     ],
+     "invalid": 0,
+     "result": "1:34.103 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 98.02053803705982,
+     "laps": [
+      98.02068937611757,
+      98.02053803705982
+     ],
+     "invalid": 0,
+     "result": "1:38.021 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 98.02607470765997,
+     "laps": [
+      98.02623842425494,
+      98.02607470765997
+     ],
+     "invalid": 0,
+     "result": "1:38.026 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 102.99200388828856,
+     "laps": [
+      102.99204170760684,
+      102.99200388828856
+     ],
+     "invalid": 0,
+     "result": "1:42.992 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 102.99199929702942,
+     "laps": [
+      102.99200146428392,
+      102.99199929702942
+     ],
+     "invalid": 0,
+     "result": "1:42.992 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 109.1749604582516,
+     "laps": [
+      109.1749604582516,
+      109.17499879494986
+     ],
+     "invalid": 0,
+     "result": "1:49.175 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 109.17492485908137,
+     "laps": [
+      109.17492485908137,
+      109.17499881476812
+     ],
+     "invalid": 0,
+     "result": "1:49.175 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 20 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 21 s"
+    }
+   ]
+  },
+  "kestrel|corsa|tuned|patch": {
+   "author": 77.38466008384535,
+   "gold": 78.93235328552225,
+   "silver": 82.02773968887607,
+   "bronze": 86.6708192939068,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 77.38466008384535,
+     "laps": [
+      77.38509121210271,
+      77.38466008384535
+     ],
+     "invalid": 0,
+     "result": "1:17.385 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 77.39320566511824,
+     "laps": [
+      77.39358074345556,
+      77.39320566511824
+     ],
+     "invalid": 0,
+     "result": "1:17.393 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 80.12403034067965,
+     "laps": [
+      80.12403034067965,
+      80.12404567282965
+     ],
+     "invalid": 0,
+     "result": "1:20.124 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 80.08284325974651,
+     "laps": [
+      80.08284325974651,
+      80.08287763909118
+     ],
+     "invalid": 0,
+     "result": "1:20.083 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 84.0816372233027,
+     "laps": [
+      84.0816372233027,
+      84.08169490194143
+     ],
+     "invalid": 0,
+     "result": "1:24.082 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 84.0816113183856,
+     "laps": [
+      84.0816113183856,
+      84.08161693587283
+     ],
+     "invalid": 0,
+     "result": "1:24.082 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 89.17994116120819,
+     "laps": [
+      89.17994116120819,
+      89.17998950998583
+     ],
+     "invalid": 0,
+     "result": "1:29.180 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 89.17999757640126,
+     "laps": [
+      89.18007425598134,
+      89.17999757640126
+     ],
+     "invalid": 0,
+     "result": "1:29.180 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 79.26574786802473,
+     "laps": [
+      79.26689009036558,
+      79.26574786802473
+     ],
+     "invalid": 0,
+     "result": "1:19.266 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 79.10384758489332,
+     "laps": [
+      79.10384758489332,
+      79.10402418825561
+     ],
+     "invalid": 0,
+     "result": "1:19.104 (2 laps)"
+    }
+   ]
+  },
+  "kestrel|corsa|tuned|none": {
+   "author": 75.8258701497536,
+   "gold": 77.34238755274868,
+   "silver": 80.37542235873882,
+   "bronze": 84.92497456772404,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 76.40365587518959,
+     "laps": [
+      76.40365587518959,
+      76.63790210257955
+     ],
+     "invalid": 0,
+     "result": "1:16.404 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 75.8258701497536,
+     "laps": [
+      75.8258701497536,
+      75.8266036256025
+     ],
+     "invalid": 0,
+     "result": "1:15.826 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 78.3724696341296,
+     "laps": [
+      78.37269592023888,
+      78.3724696341296
+     ],
+     "invalid": 0,
+     "result": "1:18.372 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 78.38436844502417,
+     "laps": [
+      78.38443445955141,
+      78.38436844502417
+     ],
+     "invalid": 0,
+     "result": "1:18.384 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 82.44798691522877,
+     "laps": [
+      82.44803456741091,
+      82.44798691522877
+     ],
+     "invalid": 0,
+     "result": "1:22.448 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 82.44806251964718,
+     "laps": [
+      82.448072991263,
+      82.44806251964718
+     ],
+     "invalid": 0,
+     "result": "1:22.448 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 87.32698594005146,
+     "laps": [
+      87.32698594005146,
+      87.32699963434507
+     ],
+     "invalid": 0,
+     "result": "1:27.327 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 87.32700311565884,
+     "laps": [
+      87.32706701243606,
+      87.32700311565884
+     ],
+     "invalid": 0,
+     "result": "1:27.327 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 76.76566495631835,
+     "laps": [
+      76.76641771261924,
+      76.76566495631835
+     ],
+     "invalid": 0,
+     "result": "1:16.766 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 76.6705377253771,
+     "laps": [
+      76.67163255702287,
+      76.6705377253771
+     ],
+     "invalid": 0,
+     "result": "1:16.671 (2 laps)"
+    }
+   ]
+  },
+  "kestrel|corsa|tuned|all": {
+   "author": 91.55499717938126,
+   "gold": 93.38609712296889,
+   "silver": 97.04829701014414,
+   "bronze": 102.54159684090702,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 91.55499717938126,
+     "laps": [
+      91.55499717938126,
+      91.55500044329725
+     ],
+     "invalid": 0,
+     "result": "1:31.555 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 91.56127577339007,
+     "laps": [
+      91.56196285351713,
+      91.56127577339007
+     ],
+     "invalid": 0,
+     "result": "1:31.561 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 95.30397516418691,
+     "laps": [
+      95.30399906809316,
+      95.30397516418691
+     ],
+     "invalid": 0,
+     "result": "1:35.304 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 95.3378138024038,
+     "laps": [
+      95.3378138024038,
+      95.33879990909529
+     ],
+     "invalid": 0,
+     "result": "1:35.338 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 100.19100376259394,
+     "laps": [
+      100.19122234590037,
+      100.19100376259394
+     ],
+     "invalid": 0,
+     "result": "1:40.191 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 100.22332794903154,
+     "laps": [
+      100.22332794903154,
+      100.2236312429398
+     ],
+     "invalid": 0,
+     "result": "1:40.223 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 106.32087688296076,
+     "laps": [
+      106.32091212386514,
+      106.32087688296076
+     ],
+     "invalid": 0,
+     "result": "1:46.321 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 106.35590264509236,
+     "laps": [
+      106.35590264509236,
+      106.35595638160825
+     ],
+     "invalid": 0,
+     "result": "1:46.356 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 19 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 20 s"
+    }
+   ]
+  },
+  "kestrel|corsa|sport|patch": {
+   "author": 76.92576254058234,
+   "gold": 78.46427779139398,
+   "silver": 81.54130829301728,
+   "bronze": 86.15685404545223,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 79 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 76.92576254058234,
+     "laps": [
+      76.92576254058234,
+      76.92623929910349
+     ],
+     "invalid": 0,
+     "result": "1:16.926 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 79.38665141313294,
+     "laps": [
+      79.38667725379445,
+      79.38665141313294
+     ],
+     "invalid": 0,
+     "result": "1:19.387 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 79.44941541439984,
+     "laps": [
+      79.44941541439984,
+      79.44949818079155
+     ],
+     "invalid": 0,
+     "result": "1:19.449 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 83.3960007416714,
+     "laps": [
+      83.39606499438331,
+      83.3960007416714
+     ],
+     "invalid": 0,
+     "result": "1:23.396 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 83.39792754987106,
+     "laps": [
+      83.39792754987106,
+      83.39799626228393
+     ],
+     "invalid": 0,
+     "result": "1:23.398 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 88.31877845040763,
+     "laps": [
+      88.31877845040763,
+      88.31896475883039
+     ],
+     "invalid": 0,
+     "result": "1:28.319 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 88.32167444318749,
+     "laps": [
+      88.32167444318749,
+      88.32203826443501
+     ],
+     "invalid": 0,
+     "result": "1:28.322 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 77.19039049418089,
+     "laps": [
+      77.19039049418089,
+      77.19043501340283
+     ],
+     "invalid": 0,
+     "result": "1:17.190 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 77.09380532107525,
+     "laps": [
+      77.09380532107525,
+      77.09430562132448
+     ],
+     "invalid": 0,
+     "result": "1:17.094 (2 laps)"
+    }
+   ]
+  },
+  "kestrel|corsa|sport|none": {
+   "author": 74.88145472490436,
+   "gold": 76.37908381940245,
+   "silver": 79.37434200839863,
+   "bronze": 83.86722929189288,
+   "driver": "anchor",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 77 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 75.49897885491004,
+     "laps": [
+      75.498989750457,
+      75.49897885491004
+     ],
+     "invalid": 0,
+     "result": "1:15.499 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 77.72902246107498,
+     "laps": [
+      77.72905743712118,
+      77.72902246107498
+     ],
+     "invalid": 0,
+     "result": "1:17.729 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 77.77411230160843,
+     "laps": [
+      77.77448635891126,
+      77.77411230160843
+     ],
+     "invalid": 0,
+     "result": "1:17.774 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 81.49835324489801,
+     "laps": [
+      81.49835324489801,
+      81.49844702129215
+     ],
+     "invalid": 0,
+     "result": "1:21.498 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 81.49836438846611,
+     "laps": [
+      81.49850279804174,
+      81.49836438846611
+     ],
+     "invalid": 0,
+     "result": "1:21.498 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 86.37168588847555,
+     "laps": [
+      86.37175306573718,
+      86.37168588847555
+     ],
+     "invalid": 0,
+     "result": "1:26.372 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 86.37302525933137,
+     "laps": [
+      86.37340416413333,
+      86.37302525933137
+     ],
+     "invalid": 0,
+     "result": "1:26.373 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 74.91647624753861,
+     "laps": [
+      74.92029437986045,
+      74.91647624753861
+     ],
+     "invalid": 0,
+     "result": "1:14.916 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 74.88145472490436,
+     "laps": [
+      74.88145472490436,
+      74.88210083203481
+     ],
+     "invalid": 0,
+     "result": "1:14.881 (2 laps)"
+    }
+   ]
+  },
+  "kestrel|corsa|sport|all": {
+   "author": 90.43126065982372,
+   "gold": 92.2398858730202,
+   "silver": 95.85713629941314,
+   "bronze": 101.28301193900258,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 174 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 90.43126065982372,
+     "laps": [
+      90.43145629482369,
+      90.43126065982372
+     ],
+     "invalid": 0,
+     "result": "1:30.431 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 94.06097415171786,
+     "laps": [
+      94.06141693251142,
+      94.06097415171786
+     ],
+     "invalid": 0,
+     "result": "1:34.061 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 94.34397103604343,
+     "laps": [
+      94.34397103604343,
+      94.34406001675939
+     ],
+     "invalid": 0,
+     "result": "1:34.344 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 98.97626705349973,
+     "laps": [
+      99.08341282403107,
+      98.97626705349973
+     ],
+     "invalid": 0,
+     "result": "1:38.976 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 99.37700871767436,
+     "laps": [
+      99.37747817216867,
+      99.37700871767436
+     ],
+     "invalid": 0,
+     "result": "1:39.377 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 104.98813779438558,
+     "laps": [
+      104.98826849219253,
+      104.98813779438558
+     ],
+     "invalid": 0,
+     "result": "1:44.988 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 105.38800809609091,
+     "laps": [
+      105.38880354709106,
+      105.38800809609091
+     ],
+     "invalid": 0,
+     "result": "1:45.388 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 19 s"
+    }
+   ]
+  },
+  "kestrel|mx5|stock|patch": {
+   "author": 76.66830045268884,
+   "gold": 78.20166646174262,
+   "silver": 81.26839847985018,
+   "bronze": 85.86849650701151,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 76.68501460234668,
+     "laps": [
+      76.68535297325776,
+      76.68501460234668
+     ],
+     "invalid": 0,
+     "result": "1:16.685 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 76.66830045268884,
+     "laps": [
+      76.66840585745524,
+      76.66830045268884
+     ],
+     "invalid": 0,
+     "result": "1:16.668 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 79.3594430400974,
+     "laps": [
+      79.3594430400974,
+      79.35945504275853
+     ],
+     "invalid": 0,
+     "result": "1:19.359 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 79.35101738026717,
+     "laps": [
+      79.3510616998852,
+      79.35101738026717
+     ],
+     "invalid": 0,
+     "result": "1:19.351 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 83.90643759716161,
+     "laps": [
+      83.9065441840564,
+      83.90643759716161
+     ],
+     "invalid": 0,
+     "result": "1:23.906 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 83.90689956202638,
+     "laps": [
+      83.90689956202638,
+      83.90696029590623
+     ],
+     "invalid": 0,
+     "result": "1:23.907 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 89.0329670513864,
+     "laps": [
+      89.0329670513864,
+      89.03300010968701
+     ],
+     "invalid": 0,
+     "result": "1:29.033 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 89.03300069159468,
+     "laps": [
+      89.03303729644325,
+      89.03300069159468
+     ],
+     "invalid": 0,
+     "result": "1:29.033 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 77.75807772945208,
+     "laps": [
+      77.75818453704417,
+      77.75807772945208
+     ],
+     "invalid": 0,
+     "result": "1:17.758 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 77.35774549714446,
+     "laps": [
+      77.35774549714446,
+      77.357792115748
+     ],
+     "invalid": 0,
+     "result": "1:17.358 (2 laps)"
+    }
+   ]
+  },
+  "kestrel|mx5|stock|none": {
+   "author": 74.84009915472744,
+   "gold": 76.336901137822,
+   "silver": 79.3305051040111,
+   "bronze": 83.82091105329474,
+   "driver": "anchor",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 75.15094571044324,
+     "laps": [
+      75.15115461670551,
+      75.15094571044324
+     ],
+     "invalid": 0,
+     "result": "1:15.151 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 75.13086613250928,
+     "laps": [
+      75.13086613250928,
+      75.13109914498338
+     ],
+     "invalid": 0,
+     "result": "1:15.131 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 77.73380149640636,
+     "laps": [
+      77.7338845270286,
+      77.73380149640636
+     ],
+     "invalid": 0,
+     "result": "1:17.734 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 77.72508340996909,
+     "laps": [
+      77.72508340996909,
+      77.72508677485465
+     ],
+     "invalid": 0,
+     "result": "1:17.725 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 82.20910204942389,
+     "laps": [
+      82.20910204942389,
+      82.20931715304488
+     ],
+     "invalid": 0,
+     "result": "1:22.209 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 82.20915628434368,
+     "laps": [
+      82.20915628434368,
+      82.20931319021417
+     ],
+     "invalid": 0,
+     "result": "1:22.209 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 87.16156592518065,
+     "laps": [
+      87.16156592518065,
+      87.1615755385699
+     ],
+     "invalid": 0,
+     "result": "1:27.162 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 87.16161070804777,
+     "laps": [
+      87.16161070804777,
+      87.16197374159395
+     ],
+     "invalid": 0,
+     "result": "1:27.162 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 75.04240370928153,
+     "laps": [
+      75.04240370928153,
+      75.04782374542407
+     ],
+     "invalid": 0,
+     "result": "1:15.042 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 74.84009915472744,
+     "laps": [
+      74.84009915472744,
+      74.84123861735512
+     ],
+     "invalid": 0,
+     "result": "1:14.840 (2 laps)"
+    }
+   ]
+  },
+  "kestrel|mx5|stock|all": {
+   "author": 90.90097688304826,
+   "gold": 92.71899642070923,
+   "silver": 96.35503549603116,
+   "bronze": 101.80909410901405,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 29 s (no progress)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 90.90097688304826,
+     "laps": [
+      90.90097688304826,
+      90.9012526244247
+     ],
+     "invalid": 0,
+     "result": "1:30.901 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 29 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 95.08427860205,
+     "laps": [
+      95.08484050774054,
+      95.08427860205
+     ],
+     "invalid": 0,
+     "result": "1:35.084 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 29 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 99.62954340994726,
+     "laps": [
+      99.62954340994726,
+      99.62987005928255
+     ],
+     "invalid": 0,
+     "result": "1:39.630 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 29 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 105.55569153073054,
+     "laps": [
+      105.55591445711242,
+      105.55569153073054
+     ],
+     "invalid": 0,
+     "result": "1:45.556 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 19 s"
+    }
+   ]
+  },
+  "kestrel|mx5|tuned|patch": {
+   "author": 74.20512618478266,
+   "gold": 75.68922870847831,
+   "silver": 78.65743375586962,
+   "bronze": 83.10974132695658,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 74.20512618478266,
+     "laps": [
+      74.20512618478266,
+      74.20556450394466
+     ],
+     "invalid": 0,
+     "result": "1:14.205 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 74.2814811087308,
+     "laps": [
+      74.2814811087308,
+      74.2817512385109
+     ],
+     "invalid": 0,
+     "result": "1:14.281 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 77.79392968319787,
+     "laps": [
+      77.79392968319787,
+      77.79398856219473
+     ],
+     "invalid": 0,
+     "result": "1:17.794 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 77.8079739252582,
+     "laps": [
+      77.8079739252582,
+      77.80799592265257
+     ],
+     "invalid": 0,
+     "result": "1:17.808 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 82.10750780792023,
+     "laps": [
+      82.10750780792023,
+      82.10783241789798
+     ],
+     "invalid": 0,
+     "result": "1:22.108 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 82.12047490817292,
+     "laps": [
+      82.12057704294612,
+      82.12047490817292
+     ],
+     "invalid": 0,
+     "result": "1:22.120 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 86.82703388908897,
+     "laps": [
+      86.82746492434023,
+      86.82703388908897
+     ],
+     "invalid": 0,
+     "result": "1:26.827 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 86.8383484778334,
+     "laps": [
+      86.8383484778334,
+      86.83865889431553
+     ],
+     "invalid": 0,
+     "result": "1:26.838 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 75.13008266917151,
+     "laps": [
+      75.13008266917151,
+      75.13178580068313
+     ],
+     "invalid": 0,
+     "result": "1:15.130 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 75.13000298369445,
+     "laps": [
+      75.13215052600135,
+      75.13000298369445
+     ],
+     "invalid": 0,
+     "result": "1:15.130 (2 laps)"
+    }
+   ]
+  },
+  "kestrel|mx5|tuned|none": {
+   "author": 72.57970718453967,
+   "gold": 74.03130132823047,
+   "silver": 76.93448961561205,
+   "bronze": 81.28927204668445,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 72.57970718453967,
+     "laps": [
+      72.57990371720827,
+      72.57970718453967
+     ],
+     "invalid": 0,
+     "result": "1:12.580 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 72.59455581966691,
+     "laps": [
+      72.59455581966691,
+      72.594773961746
+     ],
+     "invalid": 0,
+     "result": "1:12.595 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 76.01297994052932,
+     "laps": [
+      76.01297994052932,
+      76.01305456973739
+     ],
+     "invalid": 0,
+     "result": "1:16.013 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 76.03399617825127,
+     "laps": [
+      76.03400623840166,
+      76.03399617825127
+     ],
+     "invalid": 0,
+     "result": "1:16.034 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 80.39127528000938,
+     "laps": [
+      80.39170637983334,
+      80.39127528000938
+     ],
+     "invalid": 0,
+     "result": "1:20.391 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 80.4029538595154,
+     "laps": [
+      80.4029538595154,
+      80.40296782085576
+     ],
+     "invalid": 0,
+     "result": "1:20.403 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 84.92356689779137,
+     "laps": [
+      84.92366849771574,
+      84.92356689779137
+     ],
+     "invalid": 0,
+     "result": "1:24.924 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 84.93434926897837,
+     "laps": [
+      84.93466373535614,
+      84.93434926897837
+     ],
+     "invalid": 0,
+     "result": "1:24.934 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 72.97781819689583,
+     "laps": [
+      72.97781819689583,
+      73.00985216891405
+     ],
+     "invalid": 0,
+     "result": "1:12.978 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 72.76632564567907,
+     "laps": [
+      72.76680774470674,
+      72.76632564567907
+     ],
+     "invalid": 0,
+     "result": "1:12.766 (2 laps)"
+    }
+   ]
+  },
+  "kestrel|mx5|tuned|all": {
+   "author": 89.2113572133731,
+   "gold": 90.99558435764057,
+   "silver": 94.56403864617549,
+   "bronze": 99.91672007897789,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 26 s (no progress)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 89.2113572133731,
+     "laps": [
+      89.21177636527717,
+      89.2113572133731
+     ],
+     "invalid": 0,
+     "result": "1:29.211 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 26 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 93.36425856673438,
+     "laps": [
+      93.36432070942007,
+      93.36425856673438
+     ],
+     "invalid": 0,
+     "result": "1:33.364 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 26 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 98.11714733894031,
+     "laps": [
+      98.11714733894031,
+      98.11775651209447
+     ],
+     "invalid": 0,
+     "result": "1:38.117 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 26 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 104.74789580164591,
+     "laps": [
+      104.74809501635306,
+      104.74789580164591
+     ],
+     "invalid": 0,
+     "result": "1:44.748 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 19 s"
+    }
+   ]
+  },
+  "kestrel|mx5|sport|patch": {
+   "author": 73.96704678439758,
+   "gold": 75.44638772008554,
+   "silver": 78.40506959146144,
+   "bronze": 82.8430923985253,
+   "driver": "anchor",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 77 s (no progress)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 36 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 77.04900058767169,
+     "laps": [
+      77.0490791169089,
+      77.04900058767169
+     ],
+     "invalid": 0,
+     "result": "1:17.049 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 77.07233151301415,
+     "laps": [
+      77.0728064131676,
+      77.07233151301415
+     ],
+     "invalid": 0,
+     "result": "1:17.072 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 81.21576446640233,
+     "laps": [
+      81.21576446640233,
+      81.21599441837583
+     ],
+     "invalid": 0,
+     "result": "1:21.216 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 81.27291283535266,
+     "laps": [
+      81.27309695697181,
+      81.27291283535266
+     ],
+     "invalid": 0,
+     "result": "1:21.273 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 85.400068038369,
+     "laps": [
+      85.40018761900306,
+      85.400068038369
+     ],
+     "invalid": 0,
+     "result": "1:25.400 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 85.60461775585604,
+     "laps": [
+      85.60461775585604,
+      85.60462912133463
+     ],
+     "invalid": 0,
+     "result": "1:25.605 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 56 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 73.96704678439758,
+     "laps": [
+      73.96753609779013,
+      73.96704678439758
+     ],
+     "invalid": 0,
+     "result": "1:13.967 (2 laps)"
+    }
+   ]
+  },
+  "kestrel|mx5|sport|none": {
+   "author": 71.4678375345051,
+   "gold": 72.8971942851952,
+   "silver": 75.7559077865754,
+   "bronze": 80.04397803864572,
+   "driver": "anchor",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 27 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 27 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 75.39099976734025,
+     "laps": [
+      75.39101739835017,
+      75.39099976734025
+     ],
+     "invalid": 0,
+     "result": "1:15.391 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 75.41300713526735,
+     "laps": [
+      75.41301045581763,
+      75.41300713526735
+     ],
+     "invalid": 0,
+     "result": "1:15.413 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 79.41419548886614,
+     "laps": [
+      79.41421354064695,
+      79.41419548886614
+     ],
+     "invalid": 0,
+     "result": "1:19.414 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 79.45574148204098,
+     "laps": [
+      79.45574148204098,
+      79.45583076867248
+     ],
+     "invalid": 0,
+     "result": "1:19.456 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 83.90509564799595,
+     "laps": [
+      83.90878731062276,
+      83.90509564799595
+     ],
+     "invalid": 0,
+     "result": "1:23.905 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 83.93434606983797,
+     "laps": [
+      83.93497388621557,
+      83.93434606983797
+     ],
+     "invalid": 0,
+     "result": "1:23.934 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 53 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 71.4678375345051,
+     "laps": [
+      71.46796699043978,
+      71.4678375345051
+     ],
+     "invalid": 0,
+     "result": "1:11.468 (2 laps)"
+    }
+   ]
+  },
+  "kestrel|mx5|sport|all": {
+   "author": 89.03296461078702,
+   "gold": 90.81362390300276,
+   "silver": 94.37494248743424,
+   "bronze": 99.71692036408147,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 11 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 89.03296461078702,
+     "laps": [
+      89.03357971239951,
+      89.03296461078702
+     ],
+     "invalid": 0,
+     "result": "1:29.033 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 11 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 93.16397046031861,
+     "laps": [
+      93.16397046031861,
+      93.16405069322931
+     ],
+     "invalid": 0,
+     "result": "1:33.164 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 11 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 97.99895120345026,
+     "laps": [
+      97.99895120345026,
+      97.99905319290812
+     ],
+     "invalid": 0,
+     "result": "1:37.999 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 11 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 104.57197832810512,
+     "laps": [
+      104.57197832810512,
+      104.57294173240754
+     ],
+     "invalid": 0,
+     "result": "1:44.572 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    }
+   ]
+  },
+  "kestrel|540i|stock|patch": {
+   "author": 75.74844275417223,
+   "gold": 77.26341160925568,
+   "silver": 80.29334931942257,
+   "bronze": 84.8382558846729,
+   "driver": "anchor",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 77.66839757970709,
+     "laps": [
+      77.66839757970709,
+      77.6686638490836
+     ],
+     "invalid": 0,
+     "result": "1:17.668 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 77.67383323895228,
+     "laps": [
+      77.6738844174092,
+      77.67383323895228
+     ],
+     "invalid": 0,
+     "result": "1:17.674 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 80.44144083056915,
+     "laps": [
+      80.44180102646413,
+      80.44144083056915
+     ],
+     "invalid": 0,
+     "result": "1:20.441 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 80.44900340683853,
+     "laps": [
+      80.44901561367743,
+      80.44900340683853
+     ],
+     "invalid": 0,
+     "result": "1:20.449 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 84.31088005869773,
+     "laps": [
+      84.31099107800443,
+      84.31088005869773
+     ],
+     "invalid": 0,
+     "result": "1:24.311 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 84.31788169657749,
+     "laps": [
+      84.31788169657749,
+      84.31799444497275
+     ],
+     "invalid": 0,
+     "result": "1:24.318 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 89.38312013969572,
+     "laps": [
+      89.38312013969572,
+      89.38388350250116
+     ],
+     "invalid": 0,
+     "result": "1:29.383 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 89.38740390604757,
+     "laps": [
+      89.38740390604757,
+      89.38758513973517
+     ],
+     "invalid": 0,
+     "result": "1:29.387 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 75.74844275417223,
+     "laps": [
+      75.74844275417223,
+      75.74913803154112
+     ],
+     "invalid": 0,
+     "result": "1:15.748 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 75.90094160332819,
+     "laps": [
+      75.90094160332819,
+      75.90096836549887
+     ],
+     "invalid": 0,
+     "result": "1:15.901 (2 laps)"
+    }
+   ]
+  },
+  "kestrel|540i|stock|none": {
+   "author": 73.55003035282462,
+   "gold": 75.02103095988112,
+   "silver": 77.96303217399411,
+   "bronze": 82.37603399516358,
+   "driver": "anchor",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 75.73362065087935,
+     "laps": [
+      75.7338830621446,
+      75.73362065087935
+     ],
+     "invalid": 0,
+     "result": "1:15.734 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 75.77365605003992,
+     "laps": [
+      75.77365605003992,
+      75.77382631889782
+     ],
+     "invalid": 0,
+     "result": "1:15.774 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 78.73713398994738,
+     "laps": [
+      78.73728190016986,
+      78.73713398994738
+     ],
+     "invalid": 0,
+     "result": "1:18.737 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 78.73800052543564,
+     "laps": [
+      78.73800052543564,
+      78.73800068822592
+     ],
+     "invalid": 0,
+     "result": "1:18.738 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 82.74780990864211,
+     "laps": [
+      82.74780990864211,
+      82.74848538940822
+     ],
+     "invalid": 0,
+     "result": "1:22.748 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 82.74799498408385,
+     "laps": [
+      82.74799498408385,
+      82.74800004099919
+     ],
+     "invalid": 0,
+     "result": "1:22.748 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 87.69799301544032,
+     "laps": [
+      87.69799301544032,
+      87.69800258073676
+     ],
+     "invalid": 0,
+     "result": "1:27.698 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 87.69799958987426,
+     "laps": [
+      87.69801702122341,
+      87.69799958987426
+     ],
+     "invalid": 0,
+     "result": "1:27.698 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 73.55003035282462,
+     "laps": [
+      73.55003035282462,
+      73.55045164454722
+     ],
+     "invalid": 0,
+     "result": "1:13.550 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 73.71022720007167,
+     "laps": [
+      73.71039933475268,
+      73.71022720007167
+     ],
+     "invalid": 0,
+     "result": "1:13.710 (2 laps)"
+    }
+   ]
+  },
+  "kestrel|540i|stock|all": {
+   "author": 91.89462847311428,
+   "gold": 93.73252104257656,
+   "silver": 97.40830618150115,
+   "bronze": 102.92198388988801,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 26 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 91.89462847311428,
+     "laps": [
+      91.89462847311428,
+      91.89476402478496
+     ],
+     "invalid": 0,
+     "result": "1:31.895 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 26 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 96.31998452783036,
+     "laps": [
+      96.31998452783036,
+      96.32090905508375
+     ],
+     "invalid": 0,
+     "result": "1:36.320 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 27 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 101.71999510242635,
+     "laps": [
+      101.71999510242635,
+      101.71999882910802
+     ],
+     "invalid": 0,
+     "result": "1:41.720 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 28 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 108.80436783381535,
+     "laps": [
+      108.80436783381535,
+      108.80463256168184
+     ],
+     "invalid": 0,
+     "result": "1:48.804 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 19 s"
+    }
+   ]
+  },
+  "kestrel|540i|tuned|patch": {
+   "author": 76.04396893199124,
+   "gold": 77.56484831063108,
+   "silver": 80.60660706791073,
+   "bronze": 85.1692452038302,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 29 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 76.04396893199124,
+     "laps": [
+      76.04396893199124,
+      76.04398852849278
+     ],
+     "invalid": 0,
+     "result": "1:16.044 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 33 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 78.89997168194256,
+     "laps": [
+      78.89997168194256,
+      78.89999974985844
+     ],
+     "invalid": 0,
+     "result": "1:18.900 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 35 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 82.83225653816555,
+     "laps": [
+      82.83289842508067,
+      82.83225653816555
+     ],
+     "invalid": 0,
+     "result": "1:22.832 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 31 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 87.95625378473329,
+     "laps": [
+      87.95670820456671,
+      87.95625378473329
+     ],
+     "invalid": 0,
+     "result": "1:27.956 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 86 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 76 s"
+    }
+   ]
+  },
+  "kestrel|540i|tuned|none": {
+   "author": 74.41003166901183,
+   "gold": 75.89823230239206,
+   "silver": 78.87463356915254,
+   "bronze": 83.33923546929326,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 74.41003166901183,
+     "laps": [
+      74.41008125890781,
+      74.41003166901183
+     ],
+     "invalid": 0,
+     "result": "1:14.410 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 74.47129411231248,
+     "laps": [
+      74.4715053254009,
+      74.47129411231248
+     ],
+     "invalid": 0,
+     "result": "1:14.471 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 51 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 77.32601441213342,
+     "laps": [
+      77.32601441213342,
+      77.32632666631176
+     ],
+     "invalid": 0,
+     "result": "1:17.326 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 81.48202003257992,
+     "laps": [
+      81.48202003257992,
+      81.48214286622911
+     ],
+     "invalid": 0,
+     "result": "1:21.482 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 81.24898453645235,
+     "laps": [
+      81.24898453645235,
+      81.24901683239551
+     ],
+     "invalid": 0,
+     "result": "1:21.249 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 86.61815661662992,
+     "laps": [
+      86.61815661662992,
+      86.61827562086836
+     ],
+     "invalid": 0,
+     "result": "1:26.618 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 86.23199801497319,
+     "laps": [
+      86.23200607676235,
+      86.23199801497319
+     ],
+     "invalid": 0,
+     "result": "1:26.232 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 83 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 74 s"
+    }
+   ]
+  },
+  "kestrel|540i|tuned|all": {
+   "author": 92.11189711451884,
+   "gold": 93.95413505680922,
+   "silver": 97.63861094138997,
+   "bronze": 103.16532476826112,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 24 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 92.11189711451884,
+     "laps": [
+      92.11189711451884,
+      92.11255939087314
+     ],
+     "invalid": 0,
+     "result": "1:32.112 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 40 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 96.14739905378332,
+     "laps": [
+      96.14841831851543,
+      96.14739905378332
+     ],
+     "invalid": 0,
+     "result": "1:36.147 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 25 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 102.00402561818201,
+     "laps": [
+      102.00402561818201,
+      102.00440630088451
+     ],
+     "invalid": 0,
+     "result": "1:42.004 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 26 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 109.37987310107953,
+     "laps": [
+      109.37987310107953,
+      109.37999372613857
+     ],
+     "invalid": 0,
+     "result": "1:49.380 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    }
+   ]
+  },
+  "kestrel|540i|sport|patch": {
+   "author": 75.20845744036743,
+   "gold": 76.71262658917477,
+   "silver": 79.72096488678947,
+   "bronze": 84.23347233321152,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 26 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 75.20845744036743,
+     "laps": [
+      75.20845744036743,
+      75.20851340239565
+     ],
+     "invalid": 0,
+     "result": "1:15.208 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 23 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 78.48679651905093,
+     "laps": [
+      78.48702102905547,
+      78.48679651905093
+     ],
+     "invalid": 0,
+     "result": "1:18.487 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 22 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 82.60080110761902,
+     "laps": [
+      82.60290469067888,
+      82.60080110761902
+     ],
+     "invalid": 0,
+     "result": "1:22.601 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 33 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 87.57018056473305,
+     "laps": [
+      87.57100884035465,
+      87.57018056473305
+     ],
+     "invalid": 0,
+     "result": "1:27.570 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 53 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 73 s"
+    }
+   ]
+  },
+  "kestrel|540i|sport|none": {
+   "author": 73.61998658243917,
+   "gold": 75.09238631408795,
+   "silver": 78.03718577738552,
+   "bronze": 82.45438497233188,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 47 s (no progress)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 73.61998658243917,
+     "laps": [
+      73.61998658243917,
+      73.62015326088644
+     ],
+     "invalid": 0,
+     "result": "1:13.620 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 23 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 76.85499789546009,
+     "laps": [
+      76.85500205956156,
+      76.85499789546009
+     ],
+     "invalid": 0,
+     "result": "1:16.855 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 22 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 80.67427703081404,
+     "laps": [
+      80.67430109618981,
+      80.67427703081404
+     ],
+     "invalid": 0,
+     "result": "1:20.674 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 30 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 85.73720095595257,
+     "laps": [
+      85.73777133680213,
+      85.73720095595257
+     ],
+     "invalid": 0,
+     "result": "1:25.737 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 48 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 71 s"
+    }
+   ]
+  },
+  "kestrel|540i|sport|all": {
+   "author": 92.1351502912413,
+   "gold": 93.97785329706613,
+   "silver": 97.66325930871578,
+   "bronze": 103.19136832619027,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 29 s (no progress)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 92.1351502912413,
+     "laps": [
+      92.13699579540626,
+      92.1351502912413
+     ],
+     "invalid": 0,
+     "result": "1:32.135 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 29 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 96.32763963506628,
+     "laps": [
+      96.3277663330194,
+      96.32763963506628
+     ],
+     "invalid": 0,
+     "result": "1:36.328 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 29 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 101.98038180581557,
+     "laps": [
+      101.98160398270691,
+      101.98038180581557
+     ],
+     "invalid": 0,
+     "result": "1:41.980 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 29 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 108.69644834616243,
+     "laps": [
+      108.69644834616243,
+      108.69672322232972
+     ],
+     "invalid": 0,
+     "result": "1:48.696 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    }
+   ]
+  },
+  "ashdown|corsa|stock|patch": {
+   "author": 64.98692035341753,
+   "gold": 66.28665876048588,
+   "silver": 68.88613557462259,
+   "bronze": 72.78535079582764,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 64.98692035341753,
+     "laps": [
+      64.9869271552908,
+      64.98692035341753
+     ],
+     "invalid": 0,
+     "result": "1:04.987 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 65.52212240681928,
+     "laps": [
+      65.52261201635464,
+      65.52212240681928
+     ],
+     "invalid": 0,
+     "result": "1:05.522 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 67.24893023292505,
+     "laps": [
+      67.24893023292505,
+      67.2497402759652
+     ],
+     "invalid": 0,
+     "result": "1:07.249 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 67.26083957786156,
+     "laps": [
+      67.26083957786156,
+      67.26094998802603
+     ],
+     "invalid": 0,
+     "result": "1:07.261 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 71.48806853260027,
+     "laps": [
+      71.4884857536257,
+      71.48806853260027
+     ],
+     "invalid": 0,
+     "result": "1:11.488 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 71.48806853260027,
+     "laps": [
+      71.4884857536257,
+      71.48806853260027
+     ],
+     "invalid": 0,
+     "result": "1:11.488 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 75.29650091014437,
+     "laps": [
+      75.2967233315141,
+      75.29650091014437
+     ],
+     "invalid": 0,
+     "result": "1:15.297 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 75.29650091014437,
+     "laps": [
+      75.2967233315141,
+      75.29650091014437
+     ],
+     "invalid": 0,
+     "result": "1:15.297 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 70.36791720970865,
+     "laps": [
+      70.36834441687378,
+      70.36791720970865
+     ],
+     "invalid": 0,
+     "result": "1:10.368 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 70.26140320775622,
+     "laps": [
+      70.26161055467792,
+      70.26140320775622
+     ],
+     "invalid": 0,
+     "result": "1:10.261 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|corsa|stock|none": {
+   "author": 64.19578217625578,
+   "gold": 65.4796978197809,
+   "silver": 68.04752910683112,
+   "bronze": 71.89927603740648,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 64.19578217625578,
+     "laps": [
+      64.19578217625578,
+      64.19626679949991
+     ],
+     "invalid": 0,
+     "result": "1:04.196 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 64.55429928214582,
+     "laps": [
+      64.55429928214582,
+      64.55762986148318
+     ],
+     "invalid": 0,
+     "result": "1:04.554 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 66.34572644746544,
+     "laps": [
+      66.34572644746544,
+      66.34588151949771
+     ],
+     "invalid": 0,
+     "result": "1:06.346 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 66.56966711277647,
+     "laps": [
+      66.57019231253234,
+      66.56966711277647
+     ],
+     "invalid": 0,
+     "result": "1:06.570 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 70.40311071166164,
+     "laps": [
+      70.40311071166164,
+      70.40326428437612
+     ],
+     "invalid": 0,
+     "result": "1:10.403 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 70.40508770879066,
+     "laps": [
+      70.40508770879066,
+      70.40511106604504
+     ],
+     "invalid": 0,
+     "result": "1:10.405 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 74.02774334983911,
+     "laps": [
+      74.0279125635642,
+      74.02774334983911
+     ],
+     "invalid": 0,
+     "result": "1:14.028 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 74.02774334983911,
+     "laps": [
+      74.0279125635642,
+      74.02774334983911
+     ],
+     "invalid": 0,
+     "result": "1:14.028 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 67.58431673918444,
+     "laps": [
+      67.58431673918444,
+      67.58486561625193
+     ],
+     "invalid": 0,
+     "result": "1:07.584 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 67.49199443509264,
+     "laps": [
+      67.4921414348064,
+      67.49199443509264
+     ],
+     "invalid": 0,
+     "result": "1:07.492 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|corsa|stock|all": {
+   "author": 76.22650034813972,
+   "gold": 77.75103035510251,
+   "silver": 80.80009036902811,
+   "bronze": 85.3736803899165,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 76.41084679432299,
+     "laps": [
+      76.41084679432299,
+      76.41090637072097
+     ],
+     "invalid": 0,
+     "result": "1:16.411 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 76.22650034813972,
+     "laps": [
+      76.22692346167733,
+      76.22650034813972
+     ],
+     "invalid": 0,
+     "result": "1:16.227 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 80.00898583382988,
+     "laps": [
+      80.00899824799474,
+      80.00898583382988
+     ],
+     "invalid": 0,
+     "result": "1:20.009 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 79.97021227607307,
+     "laps": [
+      79.97021227607307,
+      79.97066237193144
+     ],
+     "invalid": 0,
+     "result": "1:19.970 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 84.16399865956103,
+     "laps": [
+      84.16399865956103,
+      84.16400149404137
+     ],
+     "invalid": 0,
+     "result": "1:24.164 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 84.16300299062414,
+     "laps": [
+      84.1630546139993,
+      84.16300299062414
+     ],
+     "invalid": 0,
+     "result": "1:24.163 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 89.35902290283028,
+     "laps": [
+      89.35907483890813,
+      89.35902290283028
+     ],
+     "invalid": 0,
+     "result": "1:29.359 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 89.35843856855729,
+     "laps": [
+      89.35843856855729,
+      89.35897414976515
+     ],
+     "invalid": 0,
+     "result": "1:29.358 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 15 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 15 s"
+    }
+   ]
+  },
+  "ashdown|corsa|tuned|patch": {
+   "author": 63.88089859991075,
+   "gold": 65.15851657190896,
+   "silver": 67.7137525159054,
+   "bronze": 71.54660643190005,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 64.0534850352143,
+     "laps": [
+      64.05632521298924,
+      64.0534850352143
+     ],
+     "invalid": 0,
+     "result": "1:04.053 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 63.88089859991075,
+     "laps": [
+      63.883488386757534,
+      63.88089859991075
+     ],
+     "invalid": 0,
+     "result": "1:03.881 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 65.85107662337154,
+     "laps": [
+      65.85120728859391,
+      65.85107662337154
+     ],
+     "invalid": 0,
+     "result": "1:05.851 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 65.84000390506935,
+     "laps": [
+      65.8400464294096,
+      65.84000390506935
+     ],
+     "invalid": 0,
+     "result": "1:05.840 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 69.40446795961486,
+     "laps": [
+      69.40449509640143,
+      69.40446795961486
+     ],
+     "invalid": 0,
+     "result": "1:09.404 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 69.4120528587381,
+     "laps": [
+      69.4122874904388,
+      69.4120528587381
+     ],
+     "invalid": 0,
+     "result": "1:09.412 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 73.38902640114301,
+     "laps": [
+      73.38915504110847,
+      73.38902640114301
+     ],
+     "invalid": 0,
+     "result": "1:13.389 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 73.39199809874509,
+     "laps": [
+      73.39200510861744,
+      73.39199809874509
+     ],
+     "invalid": 0,
+     "result": "1:13.392 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 67.76793198763278,
+     "laps": [
+      67.76850708440422,
+      67.76793198763278
+     ],
+     "invalid": 0,
+     "result": "1:07.768 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 67.96299246975619,
+     "laps": [
+      67.96312065919517,
+      67.96299246975619
+     ],
+     "invalid": 0,
+     "result": "1:07.963 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|corsa|tuned|none": {
+   "author": 62.72130627331869,
+   "gold": 63.97573239878506,
+   "silver": 66.48458464971782,
+   "bronze": 70.24786302611693,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 53 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 62.72130627331869,
+     "laps": [
+      62.72130627331869,
+      62.72260002273478
+     ],
+     "invalid": 0,
+     "result": "1:02.721 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 64.93892359818464,
+     "laps": [
+      64.93892359818464,
+      64.93900009072274
+     ],
+     "invalid": 0,
+     "result": "1:04.939 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 64.79002931197357,
+     "laps": [
+      64.79008834658597,
+      64.79002931197357
+     ],
+     "invalid": 0,
+     "result": "1:04.790 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 67.96767592419674,
+     "laps": [
+      67.96767592419674,
+      67.9676891926718
+     ],
+     "invalid": 0,
+     "result": "1:07.968 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 67.97545825610663,
+     "laps": [
+      67.97551768659274,
+      67.97545825610663
+     ],
+     "invalid": 0,
+     "result": "1:07.975 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 72.09361327049237,
+     "laps": [
+      72.09361327049237,
+      72.09391140374095
+     ],
+     "invalid": 0,
+     "result": "1:12.094 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 72.09740276564386,
+     "laps": [
+      72.09760662058248,
+      72.09740276564386
+     ],
+     "invalid": 0,
+     "result": "1:12.097 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 65.28890495343771,
+     "laps": [
+      65.28912029663377,
+      65.28890495343771
+     ],
+     "invalid": 0,
+     "result": "1:05.289 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 65.04926290318994,
+     "laps": [
+      65.04926290318994,
+      65.04996116713568
+     ],
+     "invalid": 0,
+     "result": "1:05.049 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|corsa|tuned|all": {
+   "author": 75.04964441288799,
+   "gold": 76.55063730114574,
+   "silver": 79.55262307766127,
+   "bronze": 84.05560174243455,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 107 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 75.04964441288799,
+     "laps": [
+      75.04964441288799,
+      75.05142727923453
+     ],
+     "invalid": 0,
+     "result": "1:15.050 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 78.59797206880367,
+     "laps": [
+      78.59797206880367,
+      78.59807208724627
+     ],
+     "invalid": 0,
+     "result": "1:18.598 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 78.68117438391101,
+     "laps": [
+      78.68189003924368,
+      78.68117438391101
+     ],
+     "invalid": 0,
+     "result": "1:18.681 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 82.75300348034737,
+     "laps": [
+      82.75300348034737,
+      82.75320057780655
+     ],
+     "invalid": 0,
+     "result": "1:22.753 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 82.4827523231709,
+     "laps": [
+      82.4827523231709,
+      82.48294907723349
+     ],
+     "invalid": 0,
+     "result": "1:22.483 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 87.91234577087818,
+     "laps": [
+      87.91260999045566,
+      87.91234577087818
+     ],
+     "invalid": 0,
+     "result": "1:27.912 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 87.50600569581377,
+     "laps": [
+      87.50600661213211,
+      87.50600569581377
+     ],
+     "invalid": 0,
+     "result": "1:27.506 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 15 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 15 s"
+    }
+   ]
+  },
+  "ashdown|corsa|sport|patch": {
+   "author": 63.390895843658456,
+   "gold": 64.65871376053163,
+   "silver": 67.19434959427797,
+   "bronze": 70.99780334489748,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 63.390895843658456,
+     "laps": [
+      63.390895843658456
+     ],
+     "invalid": 3,
+     "result": "1:03.391 (1 lap)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 63.51455961447461,
+     "laps": [
+      63.51455961447461,
+      63.56108047656079
+     ],
+     "invalid": 0,
+     "result": "1:03.515 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 65.32121157355365,
+     "laps": [
+      65.3213632330334,
+      65.32121157355365
+     ],
+     "invalid": 0,
+     "result": "1:05.321 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 65.24807280129212,
+     "laps": [
+      65.24909244849448,
+      65.24807280129212
+     ],
+     "invalid": 0,
+     "result": "1:05.248 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 68.37854826083542,
+     "laps": [
+      68.37854826083542,
+      68.3788631104307
+     ],
+     "invalid": 0,
+     "result": "1:08.379 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 68.42269203084541,
+     "laps": [
+      68.42295319001929,
+      68.42269203084541
+     ],
+     "invalid": 0,
+     "result": "1:08.423 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 72.48368196233183,
+     "laps": [
+      72.48368196233183,
+      72.48380627406854
+     ],
+     "invalid": 0,
+     "result": "1:12.484 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 72.48923619722646,
+     "laps": [
+      72.48923619722646,
+      72.48963577961857
+     ],
+     "invalid": 0,
+     "result": "1:12.489 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 66.6599987021132,
+     "laps": [
+      66.6599987021132,
+      66.66000291356374
+     ],
+     "invalid": 0,
+     "result": "1:06.660 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 66.59692461172395,
+     "laps": [
+      66.5969878338818,
+      66.59692461172395
+     ],
+     "invalid": 0,
+     "result": "1:06.597 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|corsa|sport|none": {
+   "author": 62.48404519749582,
+   "gold": 63.73372610144573,
+   "silver": 66.23308790934557,
+   "bronze": 69.98213062119532,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 52 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 62.48404519749582,
+     "laps": [
+      62.50088666215788,
+      62.48404519749582
+     ],
+     "invalid": 0,
+     "result": "1:02.484 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 64.33547665708412,
+     "laps": [
+      64.33547665708412,
+      64.33567663616017
+     ],
+     "invalid": 0,
+     "result": "1:04.335 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 64.29500475501777,
+     "laps": [
+      64.29500839326187,
+      64.29500475501777
+     ],
+     "invalid": 0,
+     "result": "1:04.295 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 67.24082437071951,
+     "laps": [
+      67.24092516514725,
+      67.24082437071951
+     ],
+     "invalid": 0,
+     "result": "1:07.241 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 67.28480284023914,
+     "laps": [
+      67.2848435315474,
+      67.28480284023914
+     ],
+     "invalid": 0,
+     "result": "1:07.285 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 71.26954440455333,
+     "laps": [
+      71.26974025044174,
+      71.26954440455333
+     ],
+     "invalid": 0,
+     "result": "1:11.270 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 71.29878901299328,
+     "laps": [
+      71.29878901299328,
+      71.29894854486372
+     ],
+     "invalid": 0,
+     "result": "1:11.299 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 63.689704985530824,
+     "laps": [
+      63.689704985530824,
+      63.690223122668016
+     ],
+     "invalid": 0,
+     "result": "1:03.690 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 63.67610851735043,
+     "laps": [
+      63.70291623525452,
+      63.67610851735043
+     ],
+     "invalid": 0,
+     "result": "1:03.676 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|corsa|sport|all": {
+   "author": 74.67559715963712,
+   "gold": 76.16910910282986,
+   "silver": 79.15613298921535,
+   "bronze": 83.63666881879358,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 32 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 74.67559715963712,
+     "laps": [
+      74.67559715963712,
+      74.67594515614545
+     ],
+     "invalid": 0,
+     "result": "1:14.676 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 77.72512585953163,
+     "laps": [
+      77.72512585953163,
+      77.72519991480291
+     ],
+     "invalid": 0,
+     "result": "1:17.725 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 77.85603475552062,
+     "laps": [
+      77.8560681939216,
+      77.85603475552062
+     ],
+     "invalid": 0,
+     "result": "1:17.856 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 81.8191599821565,
+     "laps": [
+      81.8191599821565,
+      81.8194388959486
+     ],
+     "invalid": 0,
+     "result": "1:21.819 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 81.7116602481945,
+     "laps": [
+      81.71183407680229,
+      81.7116602481945
+     ],
+     "invalid": 0,
+     "result": "1:21.712 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 87.38797940460529,
+     "laps": [
+      87.38801894959414,
+      87.38797940460529
+     ],
+     "invalid": 0,
+     "result": "1:27.388 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 87.02540907746709,
+     "laps": [
+      87.02540907746709,
+      87.02585174076356
+     ],
+     "invalid": 0,
+     "result": "1:27.025 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 15 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 14 s"
+    }
+   ]
+  },
+  "ashdown|mx5|stock|patch": {
+   "author": 63.44858925474355,
+   "gold": 64.71756103983843,
+   "silver": 67.25550461002817,
+   "bronze": 71.06241996531278,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 63.5444300549035,
+     "laps": [
+      63.5444300549035,
+      63.54451485933288
+     ],
+     "invalid": 0,
+     "result": "1:03.544 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 63.44858925474355,
+     "laps": [
+      63.4490883661791,
+      63.44858925474355
+     ],
+     "invalid": 0,
+     "result": "1:03.449 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 65.36802790747177,
+     "laps": [
+      65.36808153823874,
+      65.36802790747177
+     ],
+     "invalid": 0,
+     "result": "1:05.368 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 65.36643892620896,
+     "laps": [
+      65.36643892620896,
+      65.36646069285212
+     ],
+     "invalid": 0,
+     "result": "1:05.366 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 68.71401723267189,
+     "laps": [
+      68.71409999940418,
+      68.71401723267189
+     ],
+     "invalid": 0,
+     "result": "1:08.714 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 68.71216650221685,
+     "laps": [
+      68.71216650221685,
+      68.7125673361551
+     ],
+     "invalid": 0,
+     "result": "1:08.712 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 72.9509986171739,
+     "laps": [
+      72.95100718029101,
+      72.9509986171739
+     ],
+     "invalid": 0,
+     "result": "1:12.951 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 72.95035082170386,
+     "laps": [
+      72.95035082170386,
+      72.95036843039998
+     ],
+     "invalid": 0,
+     "result": "1:12.950 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 66.14614672863277,
+     "laps": [
+      66.14682411546062,
+      66.14614672863277
+     ],
+     "invalid": 0,
+     "result": "1:06.146 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 66.20177976384974,
+     "laps": [
+      66.20200301026362,
+      66.20177976384974
+     ],
+     "invalid": 0,
+     "result": "1:06.202 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|mx5|stock|none": {
+   "author": 62.415094960894194,
+   "gold": 63.66339686011208,
+   "silver": 66.16000065854784,
+   "bronze": 69.90490635620151,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 62.429100929282185,
+     "laps": [
+      62.43041479118139,
+      62.429100929282185
+     ],
+     "invalid": 0,
+     "result": "1:02.429 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 62.415094960894194,
+     "laps": [
+      62.415094960894194,
+      62.41559339400439
+     ],
+     "invalid": 0,
+     "result": "1:02.415 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 64.24343211169443,
+     "laps": [
+      64.24354965778356,
+      64.24343211169443
+     ],
+     "invalid": 0,
+     "result": "1:04.243 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 64.24497944040473,
+     "laps": [
+      64.24497944040473,
+      64.24499413648354
+     ],
+     "invalid": 0,
+     "result": "1:04.245 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 67.4776022477755,
+     "laps": [
+      67.4776022477755,
+      67.47782728466612
+     ],
+     "invalid": 0,
+     "result": "1:07.478 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 67.47769144247142,
+     "laps": [
+      67.47769144247142,
+      67.47774230485905
+     ],
+     "invalid": 0,
+     "result": "1:07.478 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 71.59638961674162,
+     "laps": [
+      71.59638961674162,
+      71.59672971684424
+     ],
+     "invalid": 0,
+     "result": "1:11.596 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 71.59686320734276,
+     "laps": [
+      71.59686320734276,
+      71.59696605209021
+     ],
+     "invalid": 0,
+     "result": "1:11.597 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 63.48199057115299,
+     "laps": [
+      63.48199057115299,
+      63.48305641239594
+     ],
+     "invalid": 0,
+     "result": "1:03.482 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 63.445929729436884,
+     "laps": [
+      63.445929729436884,
+      63.44598971714194
+     ],
+     "invalid": 0,
+     "result": "1:03.446 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|mx5|stock|all": {
+   "author": 74.702965196507,
+   "gold": 76.19702450043714,
+   "silver": 79.18514310829742,
+   "bronze": 83.66732102008784,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 74.79204537340559,
+     "laps": [
+      74.79294756690335,
+      74.79204537340559
+     ],
+     "invalid": 0,
+     "result": "1:14.792 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 74.702965196507,
+     "laps": [
+      74.7030348583521,
+      74.702965196507
+     ],
+     "invalid": 0,
+     "result": "1:14.703 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 78.16795361199235,
+     "laps": [
+      78.16812058202177,
+      78.16795361199235
+     ],
+     "invalid": 0,
+     "result": "1:18.168 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 78.17700031169278,
+     "laps": [
+      78.17700606749257,
+      78.17700031169278
+     ],
+     "invalid": 0,
+     "result": "1:18.177 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 82.50101008864576,
+     "laps": [
+      82.50137341101264,
+      82.50101008864576
+     ],
+     "invalid": 0,
+     "result": "1:22.501 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 82.49898370675068,
+     "laps": [
+      82.49898370675068,
+      82.49900012459779
+     ],
+     "invalid": 0,
+     "result": "1:22.499 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 88.22098578822055,
+     "laps": [
+      88.22098578822055,
+      88.22100399940766
+     ],
+     "invalid": 0,
+     "result": "1:28.221 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 88.15597622208833,
+     "laps": [
+      88.15599952285727,
+      88.15597622208833
+     ],
+     "invalid": 0,
+     "result": "1:28.156 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 15 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 14 s"
+    }
+   ]
+  },
+  "ashdown|mx5|tuned|patch": {
+   "author": 61.381105384903165,
+   "gold": 62.60872749260123,
+   "silver": 65.06397170799735,
+   "bronze": 68.74683803109156,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 61.7286004273123,
+     "laps": [
+      61.73856717700254,
+      61.7286004273123
+     ],
+     "invalid": 0,
+     "result": "1:01.729 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 61.381105384903165,
+     "laps": [
+      61.381105384903165,
+      61.381564801955875
+     ],
+     "invalid": 0,
+     "result": "1:01.381 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 64.26739336847777,
+     "laps": [
+      64.26739336847777,
+      64.26792820941807
+     ],
+     "invalid": 0,
+     "result": "1:04.267 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 64.2509102296788,
+     "laps": [
+      64.2509102296788,
+      64.25100510944577
+     ],
+     "invalid": 0,
+     "result": "1:04.251 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 67.78145184010972,
+     "laps": [
+      67.78145184010972,
+      67.78198568220103
+     ],
+     "invalid": 0,
+     "result": "1:07.781 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 67.78545802749163,
+     "laps": [
+      67.78545802749163,
+      67.78557868145978
+     ],
+     "invalid": 0,
+     "result": "1:07.785 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 71.2818327344354,
+     "laps": [
+      71.2818327344354,
+      71.28200158109743
+     ],
+     "invalid": 0,
+     "result": "1:11.282 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 71.28704844189866,
+     "laps": [
+      71.28752717204229,
+      71.28704844189866
+     ],
+     "invalid": 0,
+     "result": "1:11.287 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 63.89752748450951,
+     "laps": [
+      63.89752748450951,
+      63.89962945650743
+     ],
+     "invalid": 0,
+     "result": "1:03.898 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 63.888989686397025,
+     "laps": [
+      63.889029400765224,
+      63.888989686397025
+     ],
+     "invalid": 0,
+     "result": "1:03.889 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|mx5|tuned|none": {
+   "author": 60.25097780802099,
+   "gold": 61.455997364181414,
+   "silver": 63.86603647650225,
+   "bronze": 67.48109514498351,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 60.25097780802099,
+     "laps": [
+      60.2512155750412,
+      60.25097780802099
+     ],
+     "invalid": 0,
+     "result": "1:00.251 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 60.26918756608096,
+     "laps": [
+      60.26966966923213,
+      60.26918756608096
+     ],
+     "invalid": 0,
+     "result": "1:00.269 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 63.09988685882733,
+     "laps": [
+      63.09988685882733,
+      63.0999881085057
+     ],
+     "invalid": 0,
+     "result": "1:03.100 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 63.09407399769182,
+     "laps": [
+      63.09408558590299,
+      63.09407399769182
+     ],
+     "invalid": 0,
+     "result": "1:03.094 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 66.52000193713332,
+     "laps": [
+      66.5200779758341,
+      66.52000193713332
+     ],
+     "invalid": 0,
+     "result": "1:06.520 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 66.52797726522137,
+     "laps": [
+      66.52797726522137,
+      66.52799449628279
+     ],
+     "invalid": 0,
+     "result": "1:06.528 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 69.91991577614074,
+     "laps": [
+      69.91991577614074,
+      69.91999651320208
+     ],
+     "invalid": 0,
+     "result": "1:09.920 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 69.9264491253517,
+     "laps": [
+      69.9264491253517,
+      69.92652706995634
+     ],
+     "invalid": 0,
+     "result": "1:09.926 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 61.15560261175311,
+     "laps": [
+      61.15560261175311,
+      61.2482232382839
+     ],
+     "invalid": 0,
+     "result": "1:01.156 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 61.183380809953434,
+     "laps": [
+      61.184029008692534,
+      61.183380809953434
+     ],
+     "invalid": 0,
+     "result": "1:01.183 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|mx5|tuned|all": {
+   "author": 77.38394491762779,
+   "gold": 78.93162381598034,
+   "silver": 82.02698161268546,
+   "bronze": 86.67001830774313,
+   "driver": "lapdriver-0.80",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 21 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 32 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 25 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 77.38394491762779,
+     "laps": [
+      77.38394491762779,
+      77.38399963670594
+     ],
+     "invalid": 0,
+     "result": "1:17.384 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 81.58353907520589,
+     "laps": [
+      81.58442482670709,
+      81.58353907520589
+     ],
+     "invalid": 0,
+     "result": "1:21.584 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 21 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 86.9720058047402,
+     "laps": [
+      86.97202605725445,
+      86.9720058047402
+     ],
+     "invalid": 0,
+     "result": "1:26.972 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 15 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 14 s"
+    }
+   ]
+  },
+  "ashdown|mx5|sport|patch": {
+   "author": 60.81376481756904,
+   "gold": 62.03004011392042,
+   "silver": 64.46259070662319,
+   "bronze": 68.11141659567733,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 22 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 60.81376481756904,
+     "laps": [
+      60.81376481756904,
+      60.815575525465476
+     ],
+     "invalid": 0,
+     "result": "1:00.814 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 63.275881797767966,
+     "laps": [
+      63.27597684819152,
+      63.275881797767966
+     ],
+     "invalid": 0,
+     "result": "1:03.276 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 63.207208612996624,
+     "laps": [
+      63.20731681312628,
+      63.207208612996624
+     ],
+     "invalid": 0,
+     "result": "1:03.207 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 43 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 66.75096788715281,
+     "laps": [
+      66.75096788715281,
+      66.75098501216118
+     ],
+     "invalid": 0,
+     "result": "1:06.751 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 44 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 70.60897033897405,
+     "laps": [
+      70.61100161312302,
+      70.60897033897405
+     ],
+     "invalid": 0,
+     "result": "1:10.609 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 46 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 62.8244503628155,
+     "laps": [
+      62.82530577313982,
+      62.8244503628155
+     ],
+     "invalid": 0,
+     "result": "1:02.824 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|mx5|sport|none": {
+   "author": 60.14093967924408,
+   "gold": 61.34375847282896,
+   "silver": 63.74939605999872,
+   "bronze": 67.35785244075338,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 22 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 60.14093967924408,
+     "laps": [
+      60.14093967924408,
+      60.14203626983637
+     ],
+     "invalid": 0,
+     "result": "1:00.141 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 62.489004125186796,
+     "laps": [
+      62.48902721792584,
+      62.489004125186796
+     ],
+     "invalid": 0,
+     "result": "1:02.489 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 62.41418498340863,
+     "laps": [
+      62.41418498340863,
+      62.41418922471786
+     ],
+     "invalid": 0,
+     "result": "1:02.414 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 65.72596250913875,
+     "laps": [
+      65.72596250913875,
+      65.72603309779888
+     ],
+     "invalid": 0,
+     "result": "1:05.726 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 65.5540023118254,
+     "laps": [
+      65.55403747134353,
+      65.5540023118254
+     ],
+     "invalid": 0,
+     "result": "1:05.554 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 47 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 69.41192666622828,
+     "laps": [
+      69.41192666622828,
+      69.41199906048334
+     ],
+     "invalid": 0,
+     "result": "1:09.412 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 60 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 60.15053634077175,
+     "laps": [
+      60.15053634077175,
+      60.151011614296394
+     ],
+     "invalid": 0,
+     "result": "1:00.151 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|mx5|sport|all": {
+   "author": 77.22468268088225,
+   "gold": 78.7691763344999,
+   "silver": 81.85816364173519,
+   "bronze": 86.49164460258814,
+   "driver": "lapdriver-0.80",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 11 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 33 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 11 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 77.22468268088225,
+     "laps": [
+      77.22468268088225,
+      77.22481970778287
+     ],
+     "invalid": 0,
+     "result": "1:17.225 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 11 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 81.50744362576566,
+     "laps": [
+      81.50841506931364,
+      81.50744362576566
+     ],
+     "invalid": 0,
+     "result": "1:21.507 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 11 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 86.91525482633224,
+     "laps": [
+      86.91552386749967,
+      86.91525482633224
+     ],
+     "invalid": 0,
+     "result": "1:26.915 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 14 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 14 s"
+    }
+   ]
+  },
+  "ashdown|540i|stock|patch": {
+   "author": 63.3845123698635,
+   "gold": 64.65220261726077,
+   "silver": 67.18758311205531,
+   "bronze": 70.99065385424713,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 63.43319132012664,
+     "laps": [
+      63.43319132012664,
+      63.43343779470274
+     ],
+     "invalid": 0,
+     "result": "1:03.433 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 63.3845123698635,
+     "laps": [
+      63.38524727821657,
+      63.3845123698635
+     ],
+     "invalid": 0,
+     "result": "1:03.385 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 66.20185229484234,
+     "laps": [
+      66.20185229484234,
+      66.20190741428647
+     ],
+     "invalid": 0,
+     "result": "1:06.202 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 66.20346710160503,
+     "laps": [
+      66.20346710160503,
+      66.20348766028167
+     ],
+     "invalid": 0,
+     "result": "1:06.203 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 69.63322623773325,
+     "laps": [
+      69.63399989146384,
+      69.63322623773325
+     ],
+     "invalid": 0,
+     "result": "1:09.633 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 69.63599851333396,
+     "laps": [
+      69.63606370305311,
+      69.63599851333396
+     ],
+     "invalid": 0,
+     "result": "1:09.636 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 73.67799934355878,
+     "laps": [
+      73.67801513406057,
+      73.67799934355878
+     ],
+     "invalid": 0,
+     "result": "1:13.678 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 73.68400652728519,
+     "laps": [
+      73.68405480424488,
+      73.68400652728519
+     ],
+     "invalid": 0,
+     "result": "1:13.684 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 65.0179864244221,
+     "laps": [
+      65.0179864244221,
+      65.02011031115362
+     ],
+     "invalid": 0,
+     "result": "1:05.018 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 64.78976461899414,
+     "laps": [
+      64.78976461899414,
+      64.79001209317283
+     ],
+     "invalid": 0,
+     "result": "1:04.790 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|540i|stock|none": {
+   "author": 62.187612683592604,
+   "gold": 63.431364937264455,
+   "silver": 65.91886944460816,
+   "bronze": 69.65012620562372,
+   "driver": "anchor",
+   "aids": {
+    "abs": false,
+    "tc": false
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": 62.332200388900134,
+     "laps": [
+      62.332205148559666,
+      62.332200388900134
+     ],
+     "invalid": 0,
+     "result": "1:02.332 (2 laps)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 62.31385586948424,
+     "laps": [
+      62.31385586948424,
+      62.313928219405284
+     ],
+     "invalid": 0,
+     "result": "1:02.314 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": 65.04400140559068,
+     "laps": [
+      65.04402232314688,
+      65.04400140559068
+     ],
+     "invalid": 0,
+     "result": "1:05.044 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 65.04802450005587,
+     "laps": [
+      65.04805492856468,
+      65.04802450005587
+     ],
+     "invalid": 0,
+     "result": "1:05.048 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": 68.36698918462022,
+     "laps": [
+      68.36698918462022,
+      68.3670024191957
+     ],
+     "invalid": 0,
+     "result": "1:08.367 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 68.36800244579595,
+     "laps": [
+      68.36802108695574,
+      68.36800244579595
+     ],
+     "invalid": 0,
+     "result": "1:08.368 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": 72.41499886227726,
+     "laps": [
+      72.41500591274905,
+      72.41499886227726
+     ],
+     "invalid": 0,
+     "result": "1:12.415 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 72.4212794413427,
+     "laps": [
+      72.42173353983961,
+      72.4212794413427
+     ],
+     "invalid": 0,
+     "result": "1:12.421 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 62.187612683592604,
+     "laps": [
+      62.18849446439049,
+      62.187612683592604
+     ],
+     "invalid": 0,
+     "result": "1:02.188 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 62.25597492366977,
+     "laps": [
+      62.25800739095294,
+      62.25597492366977
+     ],
+     "invalid": 0,
+     "result": "1:02.256 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|540i|stock|all": {
+   "author": 77.11201280959278,
+   "gold": 78.65425306578464,
+   "silver": 81.73873357816835,
+   "bronze": 86.36545434674393,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 36 s (no progress)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 77.11201280959278,
+     "laps": [
+      77.1121297718759,
+      77.11201280959278
+     ],
+     "invalid": 0,
+     "result": "1:17.112 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 27 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 80.93699607862592,
+     "laps": [
+      80.93788809810896,
+      80.93699607862592
+     ],
+     "invalid": 0,
+     "result": "1:20.937 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 33 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 85.40197853414703,
+     "laps": [
+      85.40197853414703,
+      85.40199837344366
+     ],
+     "invalid": 0,
+     "result": "1:25.402 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 35 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 90.5999988184441,
+     "laps": [
+      90.6000043053502,
+      90.5999988184441
+     ],
+     "invalid": 0,
+     "result": "1:30.600 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 15 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 14 s"
+    }
+   ]
+  },
+  "ashdown|540i|tuned|patch": {
+   "author": 62.19899572713207,
+   "gold": 63.442975641674714,
+   "silver": 65.93093547076,
+   "bronze": 69.66287521438792,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 62.19899572713207,
+     "laps": [
+      62.19904002532235,
+      62.19899572713207
+     ],
+     "invalid": 0,
+     "result": "1:02.199 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 65.14232295558983,
+     "laps": [
+      65.14232295558983,
+      65.14278716184955
+     ],
+     "invalid": 0,
+     "result": "1:05.142 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 19 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 68.65322837591131,
+     "laps": [
+      68.65394867264689,
+      68.65322837591131
+     ],
+     "invalid": 0,
+     "result": "1:08.653 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 41 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 73.06799184344965,
+     "laps": [
+      73.0680008706288,
+      73.06799184344965
+     ],
+     "invalid": 0,
+     "result": "1:13.068 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 47 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 63.0391934695522,
+     "laps": [
+      63.04096056691898,
+      63.0391934695522
+     ],
+     "invalid": 0,
+     "result": "1:03.039 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|540i|tuned|none": {
+   "author": 60.57611540197448,
+   "gold": 61.78763771001397,
+   "silver": 64.21068232609295,
+   "bronze": 67.84524925021142,
+   "driver": "anchor",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 61.30749700792232,
+     "laps": [
+      61.30749700792232,
+      61.30764782494212
+     ],
+     "invalid": 0,
+     "result": "1:01.307 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 64.20499845318433,
+     "laps": [
+      64.20499845318433,
+      64.20500207255967
+     ],
+     "invalid": 0,
+     "result": "1:04.205 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 19 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 67.37099895272733,
+     "laps": [
+      67.37099895272733,
+      67.3710009841738
+     ],
+     "invalid": 0,
+     "result": "1:07.371 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 41 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 71.676993043018,
+     "laps": [
+      71.67703715068063,
+      71.676993043018
+     ],
+     "invalid": 0,
+     "result": "1:11.677 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": 60.61280959565519,
+     "laps": [
+      60.61280959565519,
+      60.76337528412381
+     ],
+     "invalid": 0,
+     "result": "1:00.613 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 60.57611540197448,
+     "laps": [
+      60.58050425173676,
+      60.57611540197448
+     ],
+     "invalid": 0,
+     "result": "1:00.576 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|540i|tuned|all": {
+   "author": 77.35897397810831,
+   "gold": 78.90615345767047,
+   "silver": 82.0005124167948,
+   "bronze": 86.64205085548132,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 41 s (no progress)"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 77.35897397810831,
+     "laps": [
+      77.36182147544548,
+      77.35897397810831
+     ],
+     "invalid": 0,
+     "result": "1:17.359 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 32 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 81.19999606472228,
+     "laps": [
+      81.20000244916777,
+      81.19999606472228
+     ],
+     "invalid": 0,
+     "result": "1:21.200 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 31 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 85.36008271325119,
+     "laps": [
+      85.36008809300345,
+      85.36008271325119
+     ],
+     "invalid": 0,
+     "result": "1:25.360 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 31 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 91.25791306281383,
+     "laps": [
+      91.25859468175709,
+      91.25791306281383
+     ],
+     "invalid": 0,
+     "result": "1:31.258 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 14 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 14 s"
+    }
+   ]
+  },
+  "ashdown|540i|sport|patch": {
+   "author": 62.17617776918446,
+   "gold": 63.41970132456815,
+   "silver": 65.90674843533553,
+   "bronze": 69.63731910148661,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 16 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 62.17617776918446,
+     "laps": [
+      62.17617776918446,
+      62.17657071796836
+     ],
+     "invalid": 0,
+     "result": "1:02.176 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 17 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 64.7769535133874,
+     "laps": [
+      64.7769535133874,
+      64.77698335137146
+     ],
+     "invalid": 0,
+     "result": "1:04.777 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 17 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 68.51226211504071,
+     "laps": [
+      68.51226211504071,
+      68.51302453016135
+     ],
+     "invalid": 0,
+     "result": "1:08.512 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 72.98669495871638,
+     "laps": [
+      72.98669495871638,
+      72.98727838235536
+     ],
+     "invalid": 0,
+     "result": "1:12.987 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 33 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 62.56803429500445,
+     "laps": [
+      62.56913752287369,
+      62.56803429500445
+     ],
+     "invalid": 0,
+     "result": "1:02.568 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|540i|sport|none": {
+   "author": 60.00795447746256,
+   "gold": 61.208113567011814,
+   "silver": 63.60843174611032,
+   "bronze": 67.20890901475808,
+   "driver": "anchor",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 16 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 61.15843123714379,
+     "laps": [
+      61.15843123714379,
+      61.15851701189861
+     ],
+     "invalid": 0,
+     "result": "1:01.158 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 17 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 63.833997774970214,
+     "laps": [
+      63.83498200932178,
+      63.833997774970214
+     ],
+     "invalid": 0,
+     "result": "1:03.834 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 17 s"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 67.29901165376913,
+     "laps": [
+      67.29939755657955,
+      67.29901165376913
+     ],
+     "invalid": 0,
+     "result": "1:07.299 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 18 s"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 71.6851857800844,
+     "laps": [
+      71.68555690189015,
+      71.6851857800844
+     ],
+     "invalid": 0,
+     "result": "1:11.685 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 121 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": 60.00795447746256,
+     "laps": [
+      60.01556828452877,
+      60.00795447746256
+     ],
+     "invalid": 0,
+     "result": "1:00.008 (2 laps)"
+    }
+   ]
+  },
+  "ashdown|540i|sport|all": {
+   "author": 77.35799474248086,
+   "gold": 78.90515463733047,
+   "silver": 81.99947442702971,
+   "bronze": 86.64095411157857,
+   "driver": "lapdriver",
+   "aids": {
+    "abs": true,
+    "tc": true
+   },
+   "tried": [
+    {
+     "driver": "lapdriver",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 17 s"
+    },
+    {
+     "driver": "lapdriver",
+     "aids": "on",
+     "best": 77.35799474248086,
+     "laps": [
+      77.35799474248086,
+      77.35814412229195
+     ],
+     "invalid": 0,
+     "result": "1:17.358 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 21 s"
+    },
+    {
+     "driver": "lapdriver-0.80",
+     "aids": "on",
+     "best": 81.20071202389016,
+     "laps": [
+      81.20133511849825,
+      81.20071202389016
+     ],
+     "invalid": 0,
+     "result": "1:21.201 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 31 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.70",
+     "aids": "on",
+     "best": 85.41903551340826,
+     "laps": [
+      85.41924667208866,
+      85.41903551340826
+     ],
+     "invalid": 0,
+     "result": "1:25.419 (2 laps)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 31 s (no progress)"
+    },
+    {
+     "driver": "lapdriver-0.60",
+     "aids": "on",
+     "best": 90.74901165503206,
+     "laps": [
+      90.74906445774708,
+      90.74901165503206
+     ],
+     "invalid": 0,
+     "result": "1:30.749 (2 laps)"
+    },
+    {
+     "driver": "anchor",
+     "aids": "off",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 14 s"
+    },
+    {
+     "driver": "anchor",
+     "aids": "on",
+     "best": null,
+     "laps": [],
+     "invalid": 0,
+     "result": "lost at 14 s"
     }
    ]
   },

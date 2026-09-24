@@ -103,7 +103,7 @@ CAR = CorsaC()
 #: dragstrip is NOT here: it has no corner, so every wing on it is pure drag
 #: and the objective would rank them by drag alone. That is a real answer to a
 #: different question (`drive.drive --scripted accel`), not a wing mission.
-TRACKS = ("arena", "open", "skidpad")
+TRACKS = ("arena", "linden", "kestrel", "ashdown", "open", "skidpad")
 
 #: Below this curvature a segment is a STRAIGHT for the mission's purposes.
 #: 1/1200 m^-1: at the arena's own speeds a 1200 m radius costs under 0.01

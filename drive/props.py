@@ -31,7 +31,7 @@ Everything is placed by the same `_Ctx.place` test (footprint sampled every
 <= 1 m against the exact point-to-segment distance of a 1 m centreline, the
 areas' own polygons, and every footprint already placed), so a track the
 layout was never tuned for gets fewer props rather than props on the road.
-The self-check measures it on all four maps and on a generated circuit the
+The self-check measures it on all seven maps and on a generated circuit the
 themes have never seen: min solid prop 30.5 m (arena), board 6.8, gantry
 pillar 4.8, dragstrip wall 8.8, start-light tree 3.8, tree canopy 36.2.
 
@@ -1474,7 +1474,8 @@ def _theme_drag(ctx) -> None:
            species_bias=poplar_rows)
 
 
-THEMES = {'arena': _theme_circuit, 'open': _theme_proving,
+THEMES = {'arena': _theme_circuit, 'linden': _theme_circuit, 'kestrel': _theme_circuit,
+          'ashdown': _theme_circuit, 'open': _theme_proving,
           'skidpad': _theme_skidpad, 'dragstrip': _theme_drag}
 
 
@@ -3436,9 +3437,16 @@ class Props:
 #  SELF-CHECK                                                             #
 # ======================================================================= #
 #: what each map must contain (the check fails if a theme silently lost one)
+_CIRCUIT_KINDS = ('pillar', 'gantry', 'pits', 'tower', 'stand', 'tyres', 'armco', 'board',
+                  'fence', 'brake', 'marshal', 'flood', 'flag', 'trailer')
 REQUIRED = {
-    'arena': ('pillar', 'gantry', 'pits', 'tower', 'stand', 'tyres', 'armco', 'board',
-              'fence', 'brake', 'marshal', 'flood', 'flag', 'trailer'),
+    #  every circuit: the three after the arena were shaped for the full set
+    #  (a pit straight >= 120 m through s = 0, infields wide enough for the
+    #  paddock, R <= 65 corners for the boards and a stand)
+    'arena': _CIRCUIT_KINDS,
+    'linden': _CIRCUIT_KINDS,
+    'kestrel': _CIRCUIT_KINDS,
+    'ashdown': _CIRCUIT_KINDS,
     'open': ('hangar', 'tower', 'office', 'windsock', 'fence', 'cones', 'flood', 'car'),
     'skidpad': ('office', 'flood', 'windsock', 'cones'),
     'dragstrip': ('wall', 'xmas', 'timing', 'gatepost', 'stand', 'tower', 'lightpole'),
@@ -3523,7 +3531,7 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
 
     if verbose:
         print('drive/props.py self-check')
-    names = ('arena', 'open', 'skidpad', 'dragstrip')
+    names = trk.TRACK_ORDER
     tracks = {n: trk.make_track(n) for n in names}
     tracks['generated-test'] = _gen_track()
     tracks['hairpin-test'] = _hairpin_track()
@@ -3561,8 +3569,9 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
         cnt = lay.counts()
         need = REQUIRED.get(n, ())
         miss = [k for k in need if cnt.get(k, 0) == 0]
-        rep(f'{n}: counts per class', not miss and cnt.get('tree', 0) > 200,
-            ('MISSING ' + ','.join(miss) + '; ') * bool(miss)
+        rep(f'{n}: counts per class', n in REQUIRED and not miss and cnt.get('tree', 0) > 200,
+            ('NO REQUIRED ENTRY; ' * (n not in REQUIRED))
+            + ('MISSING ' + ','.join(miss) + '; ') * bool(miss)
             + ', '.join(f'{k} {v}' for k, v in sorted(cnt.items()))
             + f'; soup {geo.n_poly} polys, {geo.n_obj} objects')
         fb = int(((np.rint(geo.p_col).astype(np.int32)[:, None, :]

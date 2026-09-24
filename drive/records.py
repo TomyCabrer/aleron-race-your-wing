@@ -50,7 +50,8 @@ says why; the lap is simply not a record. A live change also RETARGETS the
 recorder: the engine is in the class. A write that fails keeps the book in
 memory and says NOT SAVED -- a record never stops the car.
 
-Tracks: `arena`, `open` and `skidpad` (the standard 50 m pad) have laps. The
+Tracks: the four circuits (`arena`, `linden`, `kestrel`, `ashdown` --
+track.CIRCUITS), `open` and `skidpad` (the standard 50 m pad) have laps. The
 DRAGSTRIP has no finish time -- `LapTimer` never fires a lap on an open
 track -- and is EXCLUDED rather than given an invented finish line: a
 standing-start quarter mile is a different game mode, not a lap.
@@ -81,8 +82,11 @@ RECORDS_DIR = os.path.join("runs", "records")
 LAST_BUILDS_FILE = "last_builds.json"
 TOP_N = 5
 
-#: the tracks a lap time exists on (the dragstrip is excluded, see above)
-LAP_TRACKS = ("arena", "open", "skidpad")
+#: the tracks a lap time exists on (the dragstrip is excluded, see above).
+#: A literal, not track.CIRCUITS + ..., so this module stays importable
+#: without the track; track.py's names are what these must match (the
+#: self-check asserts it)
+LAP_TRACKS = ("arena", "linden", "kestrel", "ashdown", "open", "skidpad")
 #: a lap is filed only if the car went ROUND: every sector line in order and
 #: at least this much of the track's length of centreline progress
 LAP_MIN_FRACTION = 0.95
@@ -1189,12 +1193,16 @@ def self_check(verbose: bool = True) -> bool:
     except ValueError:
         bad = True
     rep("a path in a key component is refused", bad)
+    from . import track as trk
     rep("which tracks record",
-        records_reason("arena") is None and records_reason("open") is None
+        all(records_reason(t) is None for t in trk.CIRCUITS)
+        and records_reason("open") is None
         and records_reason("skidpad") is None and records_reason("dragstrip") is not None
         and records_reason("skidpad", 30.0) is not None
-        and records_reason("skidpad", 50.0, True) is not None,
-        "arena, open, the 50 m skidpad yes; dragstrip, other skidpads no")
+        and records_reason("skidpad", 50.0, True) is not None
+        and set(LAP_TRACKS) == set(trk.CIRCUITS) | {"open", "skidpad"}
+        and set(LAP_TRACKS) <= set(trk.TRACK_ORDER),
+        f"{', '.join(trk.CIRCUITS)}, open, the 50 m skidpad yes; dragstrip, other skidpads no")
 
     # -- the encodings are exact -----------------------------------------
     rng = np.random.default_rng(3)

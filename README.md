@@ -74,8 +74,9 @@ saved). Scripted and headless runs never read the file.
 
 | setting | values | applies |
 |---|---|---|
-| Map | Arena circuit / Open proving ground / Skidpad / Dragstrip (`--track`, `TAB`) | restarts the session on the new map, same car |
+| Map | Arena circuit / Linden park / Kestrel ring / Ashdown circuit / Open proving ground / Skidpad / Dragstrip (`--track`, `TAB`) | restarts the session on the new map, same car |
 | Car | Opel Corsa C 1.2 / Mazda MX-5 1.8 / BMW 540i (`--car`) | restarts the session: a different car is a different tyre, load set, roll block and gearbox |
+| Paint | factory (the car's own: Corsa yellow, MX-5 red, 540i blue) / signal yellow / rosso red / estoril blue / arctic white / silver / racing green / midnight purple / cobalt blue / teal / burgundy, with a swatch beside the row; kept per car | at once, on the road and in the garage; looks only: never in the class, a ranking or a medal (a lap's settings snapshot lists it, as it does Graphics) |
 | Ballast | None / 25 / 50 / 75 / 100 / 150 / 200 kg (`--ballast`, 0-300) | restarts the session |
 | Ballast at | Nose (front subframe, low) / Passenger seat (at the CG) / Floorpan over the rear axle (low) / Boot floor, behind the rear axle (high) (`--ballast-at`) | restarts the session |
 | Engine | Stock 1.2 16V (75 hp) / Tuned (~110 hp) / Sport (~150 hp) (`--engine`) | at once |
@@ -149,6 +150,20 @@ cycles.
 
 * **Arena circuit** — the 1249.2 m, seven-corner (R = 30 … 130 m) circuit the
   study is validated on, with its wet patches; lap and sector timing.
+* **Linden park** — 1110.4 m, anticlockwise, tight and technical: seven
+  corners at R = 30 … 60 m, the R = 30 m hairpin at the end of a 284 m back
+  straight. Standing water through T5, a wet half-strip braking into the
+  hairpin.
+* **Kestrel ring** — 1913.3 m, anticlockwise and fast: a 390 m pit straight and
+  a 320 m back straight, each ending in a stop, and sweepers out to R = 100 m. Standing water through
+  T2, a wet half-strip braking into T4 (R = 55 m).
+* **Ashdown circuit** — 1390.0 m, the clockwise one: six right-handers and a
+  left (R = 30 … 120 m), the R = 35 m hairpin among them. Standing water
+  through the fast T5, a wet half-strip braking into the hairpin.
+
+  The four circuits all have lap and sector timing, records, medals, ghosts
+  and the race, and each is dressed the same way — kerbs, gravel, the grid,
+  pits, stands, barriers, trees — laid out from its own shape.
 * **Open proving ground** — a 522 × 362 m rounded-rectangle of tarmac with a
   12 m road round the edge (lap and sector timing on it) and, inside, the
   things a chassis engineer walks a car through: painted skidpad circles
@@ -238,8 +253,8 @@ stars are kept in `runs/progress.json`.
 
 ## Time trial: the pre-race screen and your records
 
-A drive on a map with a lap (arena, open, the standard skidpad) starts on the
-**TIME TRIAL** page, not on the tarmac: the class you are about to be timed
+A drive on a map with a lap (the four circuits, open, the standard skidpad)
+starts on the **TIME TRIAL** page, not on the tarmac: the class you are about to be timed
 in, the build you are driving, the class's top 5 (time, build, assists, date)
 and the medal targets. The cursor opens on **RACE**, so an unchanged car is one
 press (`ENTER` / `✕` / a click): every car to the line, and the clock starts
@@ -352,15 +367,15 @@ records. The dragstrip has no lap, so no medals. The table lives in
 modes it is regenerated with
 
 ```
-python3 -m drive.medals --build        # ~25 min on 6 cores; --only skidpad for one map
+python3 -m drive.medals --build        # 1626 runs, ~65 min on 6 cores (est.); --only skidpad for one map
 python3 -m drive.medals --show         # the table
 ```
 
 ### Your records
 
-Every lap you drive on a map with a lap (arena, open, the standard 50 m
-skidpad) is recorded, and the valid ones go into that **class's top 5**,
-kept in `runs/records/`. A class is *map | car | engine | surface*, e.g.
+Every lap you drive on a map with a lap (the four circuits, open, the
+standard 50 m skidpad) is recorded, and the valid ones go into that
+**class's top 5**, kept in `runs/records/`. A class is *map | car | engine | surface*, e.g.
 `arena | corsa | sport | wet patches`: change any of those four and it is a
 different table. Your garage build and ballast are **not** in the class —
 designing the car is the game — but each lap remembers the build it was set
@@ -457,11 +472,12 @@ order is enforced, not suggested. `ESC` steps back up the chain rather than
 dropping to the car.
 
 **Step 1, MISSION** (`drive/aero/mission.py`). What the wing is for is a
-**lap** of one of carsim's own circuits — arena, open or skidpad, on a dry,
-damp or wet surface — integrated quasi-steadily over the arcs and straights
-`drive/track.py` defines the track with. The page shows the lap of the car as
-it stands, its delta against the car with no wings, the mean and fastest
-speed and how much of the lap is corners against straights: the exchange rate
+**lap** of one of carsim's own circuits — the arena, Linden, Kestrel,
+Ashdown, open or skidpad, on a dry, damp or wet surface — integrated
+quasi-steadily over the arcs and straights `drive/track.py` defines the track
+with. The page shows the lap of the car as it stands, its delta against the
+car with no wings, the mean and fastest speed and how much of the lap is
+corners against straights: the exchange rate
 between downforce and drag nobody has to state. `ENTER` (*state this mission*)
 is what opens step 2; a mission nobody confirmed is a default. At zero
 downforce the lap's cornering model is `qss.py` bit for bit.
@@ -793,9 +809,11 @@ removed (the built-in driver cannot be deleted).
 **Test a bot in every car.** *Test bot 1 in every car* on the same page
 drives bot 1 **alone**, with nothing drawn, in each car the *car* row offers
 — yours, then the stock Corsa, MX-5 and 540i on your settings — for 150 s
-each at the contract's 1 ms, on your map and surface, in a process pool of
-its own (`Sim.start_bot_test` → `drive.ml.evaluate.bot_lap`). You keep
-driving meanwhile; about 16 s later the page shows each car's best flying
+each (pro rata on a longer circuit: 167 s on Ashdown, 230 s on Kestrel,
+time for a standing and a flying lap) at the contract's 1 ms, on your map
+and surface, in a process pool of its own (`Sim.start_bot_test` →
+`drive.ml.evaluate.bot_lap`). You keep driving meanwhile; about 16 s later
+(on the arena) the page shows each car's best flying
 lap, or how and when the bot left the road, and the HUD and the terminal
 carry the same line. Selecting the row again while it runs cancels it. It is
 the rollout's judgement, so a car that goes off is *out* (a race would put it
@@ -816,7 +834,9 @@ from 4 to 128: `←` `→` jump 4 8 16 24 32 48 64 96 128, `ENTER` cycles them,
 or type the number on the keyboard), *Seed*
 (none / your last seed lap / best saved swarm), *Generations*, *Sim time* (any
 whole second from 20 to 240: `←` `→` 20 30 45 60 70 90 120 150 180 240, or
-type it),
+type it; it starts at 70 s, an arena lap and a bit, and pro rata on a longer
+circuit: 78 s on Ashdown, 107 s on Kestrel; after a Deploy that default
+still follows the map, while a time you set stays on every map),
 *Replay* (watch every generation, or off), *Save best* (what `ESC` does with
 the best car: ask, always, never), *Seed lap* and *Deploy*. *Seed lap* puts
 you on the start line, recording from
@@ -1064,6 +1084,7 @@ drive/
                 via pygame.mixer
   garage.py     software-3D editor: place the flank panel, closed-form readout
   menu.py       pause / help / settings menu (ESC, OPTIONS) shared by the drive and the garage
+  paint.py      the car paint palette (Settings > Paint): per car, cosmetic only
   records.py    lap records: top 5 per class, the lap's trace, its controls log and
                 start state (re-simulated bit for bit), runs/records/
   prerace.py    the TIME TRIAL page: class, build, top 5, medal targets; PICK a

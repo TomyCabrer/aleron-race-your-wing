@@ -36,7 +36,10 @@ CIRCUIT_ARENA's 14-segment list, its origin, its 14 node coordinates and its
 7 arc centres come from `specs/harness.txt` verbatim: the two "odd" straight
 lengths (169.2669025 and 105.2229498 m) were solved from a 2x2 linear closure
 system with every other quantity fixed at a round value. They are NOT to be
-re-derived -- rounding either one to 3 dp opens the loop by ~0.5 m.
+re-derived -- rounding either one to 3 dp opens the loop by ~0.5 m. The three
+newer circuits (Linden, Kestrel, Ashdown) were closed the same way, by
+`solve_closure`, and are not in the harness spec: their literals, and the
+rules their shapes answer to, are under "three more circuits" below.
 
 Sign convention (contract section 0): +y is LEFT, psi and turn_deg positive is
 counter-clockwise = a LEFT turn, and `n` from `project()` is positive to the
@@ -644,6 +647,50 @@ DRAGSTRIP_PATCHES = [
 DRAGSTRIP_BOARDS = [900.0, 1000.0, 1100.0, 1200.0]   # brake boards, m
 
 
+def solve_closure(segs, ia: int, ib: int, heading0: float = 0.0):
+    """(La, Lb): the lengths of straights `ia` and `ib` that close the loop.
+
+    How every circuit's two "odd" straights were found. The end point of a
+    segment walk is LINEAR in the length of any straight (the heading does
+    not depend on it), so with every other segment fixed at a round value
+    the gap to close is
+
+        La * [cos th_a, sin th_a] + Lb * [cos th_b, sin th_b] = -(x, y)
+
+    where (x, y) is the displacement of all the OTHER segments and th_a,
+    th_b the headings at the two free straights: a 2x2 system with
+    det = sin(th_b - th_a). The lengths `segs[ia]` / `segs[ib]` carry are
+    ignored. Pick the two legs roughly at right angles (det near 1): nearly
+    parallel legs make the system ill-conditioned, and a NEGATIVE answer
+    means a leg points the wrong way for this shape.
+
+    Only the self-check calls this: the factories store the answers as
+    literals at 7 dp (closure ~5e-8 m), like the arena's, so building a
+    track never solves anything and a stored number cannot silently drift.
+    """
+    x = y = 0.0
+    psi = float(heading0)
+    dirs = {}
+    for k, sg in enumerate(segs):
+        if k in (ia, ib):
+            if sg.kind != "S":
+                raise ValueError(f"segment {k} is not a straight")
+            dirs[k] = (math.cos(psi), math.sin(psi))
+            continue
+        if sg.kind == "S":
+            x += sg.length * math.cos(psi)
+            y += sg.length * math.sin(psi)
+        else:
+            sgn = 1.0 if sg.turn_deg >= 0.0 else -1.0
+            th = psi + math.radians(sg.turn_deg)
+            x += sgn * sg.radius * (math.sin(th) - math.sin(psi))
+            y -= sgn * sg.radius * (math.cos(th) - math.cos(psi))
+            psi = th
+    (a1, a2), (b1, b2) = dirs[ia], dirs[ib]
+    det = a1 * b2 - a2 * b1
+    return ((-x * b2 + y * b1) / det, (-a1 * y + a2 * x) / det)
+
+
 def make_arena(surfaces: bool = True) -> Track:
     """The 1249.2022 m closed circuit. Seven corners spanning R = 30..130 m.
 
@@ -663,6 +710,197 @@ def make_arena(surfaces: bool = True) -> Track:
         sector_s=[0.0, 390.639, 851.080],
     )
     return build(tr)
+
+
+# --- three more circuits ----------------------------------------------------
+# Built the arena's way: straights and constant-radius arcs, every quantity
+# round except two straights solved by `solve_closure` and stored at 7 dp
+# (CLOSURE_FREE says which two). Nothing else about them is special-cased
+# anywhere: the dressing (kerbs, gravel, grid boxes, pits, stands, barriers)
+# is derived from the geometry by scenery.py and props.py, so each shape was
+# chosen to satisfy the rules those modules place things by --
+#   * width 12 m and R 30..130 m, the band the scripted driver, the ML anchor
+#     and the projection's 8 m hash were all calibrated on;
+#   * s = 0 part-way along a straight with >= 37.4 m of it behind the line
+#     (six painted grid rows need R >= 80 there) and >= 120 m through it
+#     (the pits need Lp >= 36 m of a 0.3-0.62 share of it);
+#   * centrelines >= 60 m apart wherever they are > 90 m apart in s, i.e. the
+#     width plus two scenery.DRESS_MAX run-off bands, so the gravel of one
+#     stretch never meets the next and the 30 m-clear props have room;
+#   * the sector lines on straights (the reset and a race respawn stand the
+#     car on them), sector_s[0] == 0.0 (the lap line, the grid, the gantry);
+#   * every surface patch covers n = 0: drive.ml's observation reads the
+#     grip on the centreline only, and a patch it cannot see is one the bots
+#     and the anchor arrive at at dry speed. As on the arena, one full-width
+#     wet patch sits in a fast grip-limited corner and one half-width wet
+#     strip in a braking zone, on the corner's turn-in side (Ashdown's
+#     racing line crosses its strip rather than braking in it: see there);
+#   * the two reference drivers (medals.py drives both) lap it in all three
+#     cars. That ruled out three shapes the rules above allow, all measured:
+#     a straight of 300 m or more into a corner wider than R ~70 (the ML
+#     anchor discounts its 120 m lookahead, K120_PLAN, so for an R90 bend
+#     it plans 47 m/s there and only starts braking at the 70 m station --
+#     the 540i and the MX-5 went off); a fast corner, a 60 m straight and a
+#     heavy stop (LapDriver brakes below its target by turn-in and the speed
+#     loop floors the throttle mid-corner: the Corsa washes wide, the MX-5
+#     spins); and an R130 kink taken at the grip limit less than ~150 m
+#     before a heavy stop. At an arc's end LapDriver's throttle cap (the
+#     friction ellipse on the PATH's curvature) steps to 1 and the gearbox
+#     kicks down, so the MX-5 leaves a limit R130 swaying; aids off, the
+#     full-pedal stop then locks its fronts while it drifts, the steering
+#     winds up, and the release throws it off at turn-in. The arena's R130
+#     (T7) never reaches its grip limit: it is POWER-limited, 30 m after the
+#     R35 T6. Kestrel's and Ashdown's docstrings say where.
+# The self-check re-solves the closure and re-measures all of the above.
+CIRCUIT_LINDEN_SEGS = [                # tight and technical, 150 m pit straight
+    Seg.straight(100.0),
+    Seg.arc(35.0, 90.0),       # T1
+    Seg.straight(284.4920075),
+    Seg.arc(30.0, 150.0),      # T2  hairpin, tightest
+    Seg.straight(60.0),
+    Seg.arc(50.0, -60.0),      # T3  right
+    Seg.straight(109.7560269),
+    Seg.arc(40.0, 90.0),       # T4
+    Seg.straight(50.0),
+    Seg.arc(60.0, 45.0),       # T5  the fastest grip-limited corner: wet
+    Seg.straight(40.0),
+    Seg.arc(45.0, -45.0),      # T6  right
+    Seg.straight(30.0),
+    Seg.arc(35.0, 90.0),       # T7
+    Seg.straight(50.0),
+]
+CIRCUIT_LINDEN_ORIGIN = (159.0380592, 15.0)
+LINDEN_PATCHES = [
+    SurfacePatch(850.0, 905.0, -6.0, 6.0, mu_scale=MU_WET_SCALE,
+                 label="WET_T5", colour=(43, 58, 74)),
+    SurfacePatch(400.0, 435.0, -6.0, 0.0, mu_scale=MU_WET_SCALE,
+                 label="WET_T2_ENTRY", colour=(43, 58, 74)),
+]
+
+CIRCUIT_KESTREL_SEGS = [               # fast: 390 m pit and 320 m back straights, R 55..100
+    Seg.straight(320.0),
+    Seg.arc(60.0, 60.0),       # T1  the stop at the end of the pit straight
+    Seg.straight(80.0),
+    Seg.arc(80.0, 60.0),       # T2  fast and grip-limited: wet
+    Seg.straight(120.0),
+    Seg.arc(100.0, -40.0),     # T3  right, the fast kink (not R130: make_kestrel)
+    Seg.straight(140.0),
+    Seg.arc(55.0, 120.0),      # T4  tightest
+    Seg.straight(320.0),
+    Seg.arc(70.0, 70.0),       # T5
+    Seg.straight(172.7266405),
+    Seg.arc(60.0, -50.0),      # T6  right
+    Seg.straight(50.0),
+    Seg.arc(70.0, 140.0),      # T7  the long one onto the pit straight
+    Seg.straight(70.0815616),
+]
+CIRCUIT_KESTREL_ORIGIN = (155.08154234, 15.0)
+KESTREL_PATCHES = [
+    SurfacePatch(466.0, 544.0, -6.0, 6.0, mu_scale=MU_WET_SCALE,
+                 label="WET_T2", colour=(43, 58, 74)),
+    SurfacePatch(830.0, 870.0, -6.0, 0.0, mu_scale=MU_WET_SCALE,
+                 label="WET_T4_ENTRY", colour=(43, 58, 74)),
+]
+
+CIRCUIT_ASHDOWN_SEGS = [               # CLOCKWISE (sum -360): mostly right-handers
+    Seg.straight(151.2626648),
+    Seg.arc(40.0, -90.0),      # T1
+    Seg.straight(60.0),
+    Seg.arc(100.0, -45.0),     # T2
+    Seg.straight(80.0),
+    Seg.arc(30.0, 100.0),      # T3  the only left, tightest
+    Seg.straight(50.0),
+    Seg.arc(35.0, -150.0),     # T4  hairpin
+    Seg.straight(200.0),
+    Seg.arc(120.0, -30.0),     # T5  the fastest grip-limited corner: wet
+    Seg.straight(90.0),
+    Seg.arc(55.0, -85.0),      # T6
+    Seg.straight(190.4464162),
+    Seg.arc(75.0, -60.0),      # T7
+    Seg.straight(60.0),
+]
+CIRCUIT_ASHDOWN_ORIGIN = (242.54325522, 380.41608798)
+ASHDOWN_PATCHES = [
+    #  T5, not T2: in T2 the ML anchor, seeing the water 60 m ahead,
+    #  lifted out of T1 and spun the 540i
+    SurfacePatch(830.0, 886.0, -6.0, 6.0, mu_scale=MU_WET_SCALE,
+                 label="WET_T5", colour=(43, 58, 74)),
+    #  n 0..6, the LEFT half, T4's turn-in side (T4 turns right). T4 comes
+    #  only 50 m after the left-hand T3, too close to set up from the
+    #  outside, so the racing line runs apex to apex and CROSSES the strip:
+    #  n +0.8 -> -1.8 over 495..530, leaving it at s ~506. What the strip
+    #  is for holds all the same: a car on the centreline (LapDriver, the
+    #  anchor, a bot) brakes with its left wheels in the water, split-mu
+    SurfacePatch(495.0, 530.0, 0.0, 6.0, mu_scale=MU_WET_SCALE,
+                 label="WET_T4_ENTRY", colour=(43, 58, 74)),
+]
+
+#: the two straights `solve_closure` solved on each circuit (seg indices)
+CLOSURE_FREE = {"arena": (0, 8), "linden": (2, 6), "kestrel": (10, 14),
+                "ashdown": (0, 12)}
+
+
+def _circuit(name, segs, origin, patches, sector_s, title, surfaces) -> Track:
+    """One of the three circuits below: the arena's width, closed, heading 0."""
+    tr = Track(
+        name=name,
+        width=12.0,
+        segs=list(segs),
+        origin=origin,
+        heading0=0.0,
+        closed=True,
+        surfaces=[replace(p) for p in patches] if surfaces else [],
+        sector_s=list(sector_s),
+        title=title,
+    )
+    return build(tr)
+
+
+def make_linden(surfaces: bool = True) -> Track:
+    """Linden park: 1110.4021 m, counter-clockwise, tight and technical.
+
+    Seven corners at R 30..60 m and a 284 m back straight into the R30
+    hairpin; the shortest lap of the circuits. `surfaces` as make_arena."""
+    return _circuit("linden", CIRCUIT_LINDEN_SEGS, CIRCUIT_LINDEN_ORIGIN,
+                    LINDEN_PATCHES, [0.0, 370.0, 690.0], "Linden park", surfaces)
+
+
+def make_kestrel(surfaces: bool = True) -> Track:
+    """Kestrel ring: 1913.3440 m, counter-clockwise, fast.
+
+    Seven corners at R 55..100 m, a 390 m pit straight (across the line)
+    and a 320 m back straight; the longest lap.
+    Each long straight ends in a stop (T1 R60, T5 R70) rather than a fast
+    bend: the first draft ran 357 / 376 m straights into R110 / R90 and the
+    ML anchor put the MX-5 off at T1 and the 540i off at T5 (see the
+    section comment).
+
+    T3 -> T4 was the other reshape. The spec's R130 T3, 60 m from an R45
+    T4, spun LapDriver's MX-5 in T4; at 100 m the MX-5 still left the road
+    there with aids off on the DRY surface (the wet strip only hid it: the
+    plan braked earlier and softer for it). A longer straight into an R55
+    fixed that and broke another class instead: the tuned MX-5's
+    full-throttle exit slide grew into a spin before the brakes came on.
+    The cause is the R130 itself (the section comment), so T3 is R100,
+    140 m from an R55 T4. Measured with medals.py's own runs:
+    LapDriver 0.90 laps every class the 100 m draft did plus four more
+    (among them the MX-5's stock dry class, aids off), the anchor laps both
+    surfaces in all three cars, and the neighbours (T3 R90..110, 120..160
+    m, T4 R45..60) keep the MX-5's lap. `surfaces` as make_arena."""
+    return _circuit("kestrel", CIRCUIT_KESTREL_SEGS, CIRCUIT_KESTREL_ORIGIN,
+                    KESTREL_PATCHES, [0.0, 610.0, 1140.0], "Kestrel ring", surfaces)
+
+
+def make_ashdown(surfaces: bool = True) -> Track:
+    """Ashdown circuit: 1390.0362 m, CLOCKWISE, mixed.
+
+    Six right-handers and one left at R 30..120 m, including the R35
+    hairpin; the only circuit whose infield is on the right (props.py reads
+    the side from the sign of the total turn). T5 -> T6 is 90 m: at 60 m
+    LapDriver left the road at T6 in every car (measured |n| 14.5 m in the
+    Corsa). `surfaces` as make_arena."""
+    return _circuit("ashdown", CIRCUIT_ASHDOWN_SEGS, CIRCUIT_ASHDOWN_ORIGIN,
+                    ASHDOWN_PATCHES, [0.0, 505.0, 930.0], "Ashdown circuit", surfaces)
 
 
 def make_skidpad(radius: float = 50.0, cw: bool = False) -> Track:
@@ -778,28 +1016,55 @@ def make_open() -> Track:
 
 TRACKS: dict = {
     "arena": make_arena,
+    "linden": make_linden,
+    "kestrel": make_kestrel,
+    "ashdown": make_ashdown,
     "open": make_open,
     "skidpad": make_skidpad,
     "dragstrip": make_dragstrip,
 }
 TRACK_TITLES: dict = {
     "arena": "Arena circuit",
+    "linden": "Linden park",
+    "kestrel": "Kestrel ring",
+    "ashdown": "Ashdown circuit",
     "open": "Open proving ground",
     "skidpad": "Skidpad",
     "dragstrip": "Dragstrip",
 }
-TRACK_ORDER = ("arena", "open", "skidpad", "dragstrip")   # TAB cycles this
+#: TAB cycles this: the circuits together, then the test maps. A name is a
+#: plain lowercase identifier with no '_', ',' or '|' and never
+#: '<another map>_...': it is a records class-key field and file-name part,
+#: a checkpoint's comma-listed meta and the seed-lap glob `seed_<map>_`.
+TRACK_ORDER = ("arena", "linden", "kestrel", "ashdown", "open", "skidpad", "dragstrip")
+#: The race CIRCUITS: closed, 12 m, dressed with the circuit theme, lapped
+#: with records and medals. `Track.closed` does not say this (the open map's
+#: perimeter and the skidpad close too).
+CIRCUITS = ("arena", "linden", "kestrel", "ashdown")
 
 
 def make_track(name: str, radius: float = 50.0, cw: bool = False,
                surfaces: bool = True) -> Track:
-    """One place that turns a name + options into a built Track."""
+    """One place that turns a name + options into a built Track.
+
+    `radius` / `cw` are the skidpad's, `surfaces` every circuit's (False is
+    `--wet none`). An unknown name builds the ARENA: drive/ml/evaluate.py
+    hands a multi-track checkpoint meta ('arena,open') straight in and relies
+    on that. The flip side is that a map missing a branch here silently
+    builds the arena under its own name, so self_check asserts
+    `make_track(n).name == n` for every name in TRACK_ORDER."""
     if name == "skidpad":
         return make_skidpad(radius, cw)
     if name == "dragstrip":
         return make_dragstrip()
     if name == "open":
         return make_open()
+    if name == "linden":
+        return make_linden(surfaces=surfaces)
+    if name == "kestrel":
+        return make_kestrel(surfaces=surfaces)
+    if name == "ashdown":
+        return make_ashdown(surfaces=surfaces)
     return make_arena(surfaces=surfaces)
 
 
@@ -816,6 +1081,111 @@ _ARENA_NODES = [                     # specs/harness.txt, pasted as a fixture
 _ARENA_CENTRES = [(382.471, 129.419), (383.351, 210.808), (266.682, 256.506),
                   (124.768, 232.307), (99.265, 116.348), (67.523, 37.498),
                   (213.204, -45.581)]
+
+# the three circuits' lengths, pasted as fixtures (a changed shape must be
+# a deliberate edit here too: it makes the medal table stale)
+_CIRCUIT_LENGTHS = {"linden": 1110.4021, "kestrel": 1913.3440, "ashdown": 1390.0362}
+_CIRCUIT_CW = {"linden": False, "kestrel": False, "ashdown": True}
+#: centrelines this far apart wherever they are > 90 m apart in s: the width
+#: plus two scenery.DRESS_MAX (24 m) run-off bands, so no two stretches'
+#: dressing meets (the arena, drawn before the rule, has 65.55)
+CLEARANCE_MIN = 60.0
+
+
+def _min_separation(tr: Track, gap_s: float = 90.0) -> float:
+    """Closest approach of the centreline to itself, over sample pairs more
+    than `gap_s` apart in arclength (V4). 90 m is about pi * R_min: any two
+    points of one R30 hairpin are nearer than that along the road."""
+    P = tr.xy[:-1]
+    sv = tr.s[:-1]
+    L = tr.length
+    dmin = float("inf")
+    for i in range(0, len(P)):
+        dsep = np.abs(sv - sv[i])
+        dsep = np.minimum(dsep, L - dsep)
+        m = dsep > gap_s
+        if not m.any():
+            continue
+        d = np.hypot(P[m, 0] - P[i, 0], P[m, 1] - P[i, 1]).min()
+        if d < dmin:
+            dmin = float(d)
+    return dmin
+
+
+def _circuit_checks(rep, verbose: bool) -> None:
+    """V1-V4 for the three newer circuits, plus the rules their comment
+    lists (grid zone, sector lines, radii, patches on the centreline)."""
+    segs_of = {"arena": CIRCUIT_ARENA_SEGS, "linden": CIRCUIT_LINDEN_SEGS,
+               "kestrel": CIRCUIT_KESTREL_SEGS, "ashdown": CIRCUIT_ASHDOWN_SEGS}
+    worst = 0.0
+    for name, (ia, ib) in CLOSURE_FREE.items():
+        segs = segs_of[name]
+        La, Lb = solve_closure(segs, ia, ib)
+        worst = max(worst, abs(La - segs[ia].length), abs(Lb - segs[ib].length))
+    rep("closure re-solved", worst < 1e-6,
+        f"solve_closure reproduces every circuit's two stored straights to "
+        f"{worst:.1e} m ({', '.join(CLOSURE_FREE)})")
+    for name in ("linden", "kestrel", "ashdown"):
+        if verbose:
+            print(f"circuit  {name} ({TRACK_TITLES[name]})")
+        tr = make_track(name)
+        hw = 0.5 * tr.width
+        gap = float(np.hypot(*(tr.xy[-1] - tr.xy[0])))
+        turn = sum(sg.turn_deg for sg in tr.segs)
+        rep(f"{name} closure", gap < 1e-4 and abs(abs(turn) - 360.0) < 1e-6
+            and (turn < 0.0) == _CIRCUIT_CW[name] and tr.closed and tr.width == 12.0,
+            f"|xy[-1]-xy[0]| = {gap:.1e} m, sum(turn_deg) = {turn:+.1f} "
+            f"({'clockwise' if turn < 0 else 'counter-clockwise'}), width {tr.width:.0f}")
+        rep(f"{name} length", abs(tr.length - _CIRCUIT_LENGTHS[name]) < 0.01,
+            f"length = {tr.length:.4f} m  (expect {_CIRCUIT_LENGTHS[name]:.4f})")
+        rng = np.random.default_rng(12345)
+        ss = rng.uniform(0.0, tr.length, 500)
+        nn = rng.uniform(-hw, hw, 500)
+        dsm = dnm = 0.0
+        for a, b in zip(ss, nn):
+            px, py = point_at(tr, float(a), float(b))
+            s2, n2, _, _, _ = project(tr, px, py)
+            e = abs(s2 - a)
+            dsm = max(dsm, min(e, tr.length - e))
+            dnm = max(dnm, abs(n2 - b))
+        rep(f"{name} round trip", dsm < 1e-3 and dnm < 1e-3,
+            f"500 random (s, |n| <= {hw:.0f}): max |ds| {dsm:.1e} m, max |dn| {dnm:.1e} m")
+        dmin = _min_separation(tr)
+        rep(f"{name} clearance", dmin >= CLEARANCE_MIN,
+            f"min separation = {dmin:.2f} m (>= {CLEARANCE_MIN:.0f}: width + 2 x 24 m run-off)")
+        x0, y0, p0 = start_pose(tr)
+        radii = [sg.radius for sg in tr.segs if sg.kind == "A"]
+        rep(f"{name} start and radii",
+            abs(x0 - tr.origin[0]) < 1e-9 and abs(y0 - tr.origin[1]) < 1e-9
+            and abs(p0 - tr.heading0) < 1e-12 and 30.0 <= min(radii) and max(radii) <= 130.0,
+            f"start ({x0:.3f}, {y0:.3f}) heading {math.degrees(p0):.1f} deg; "
+            f"R {min(radii):.0f}..{max(radii):.0f} m (band 30..130)")
+        sec = list(tr.sector_s)
+        on_straight = all(abs(_eval(tr, v + d)[3]) == 0.0 for v in sec for d in (-2.0, 0.0, 2.0))
+        rep(f"{name} sector lines", len(sec) == 3 and sec[0] == 0.0 and sec == sorted(sec)
+            and sec[-1] < tr.length and on_straight,
+            f"{sec}, each on a straight (+-2 m)")
+        kg = max(abs(_eval(tr, float(v))[3]) for v in np.arange(-37.4, 2.1, 0.1))
+        rep(f"{name} grid zone", kg <= 1.0 / 80.0,
+            f"max |kappa| over s -37.4..+2.1 = {kg:.4f} (<= 1/80: six painted rows)")
+        seen = []
+        for pt in tr.surfaces:
+            idx = np.nonzero((tr.s >= pt.s0) & (tr.s <= pt.s1))[0]
+            mus = [surface_at(tr, float(tr.xy[i, 0]), float(tr.xy[i, 1]))[0] for i in idx]
+            seen.append(pt.n0 <= 0.0 <= pt.n1 and len(idx) > 0
+                        and all(abs(m - pt.mu_scale) < 1e-12 for m in mus))
+        dry = make_track(name, surfaces=False)
+        rep(f"{name} patches on the centreline",
+            len(tr.surfaces) == 2 and all(seen) and dry.surfaces == []
+            and tr.title == TRACK_TITLES[name],
+            ", ".join(f"{p.label} {p.s0:.0f}..{p.s1:.0f} n {p.n0:+.0f}..{p.n1:+.0f}"
+                      for p in tr.surfaces) + "; every centreline sample inside reads its mu; "
+            "surfaces=False drops them")
+    rep("CIRCUITS", all(n in TRACK_ORDER and n in TRACKS for n in CIRCUITS)
+        and all(make_track(n).closed for n in CIRCUITS)
+        and tuple(n for n in TRACK_ORDER if n in CIRCUITS) == CIRCUITS,
+        f"{', '.join(CIRCUITS)}: closed, in TRACK_ORDER and TRACKS, in menu order")
+
 
 # Corsa C wheel contact points in the body frame (contract / harness geometry):
 # front axle x = +0.9715, rear x = -1.5195; half tracks 0.7145 and 0.7100.
@@ -906,19 +1276,7 @@ def self_check(verbose: bool = True) -> bool:
 
     if verbose:
         print("V4  self-clearance (points > 90 m apart in arclength)")
-    P = tr.xy[:-1]
-    sv = tr.s[:-1]
-    L = tr.length
-    dmin = float("inf")
-    for i in range(0, len(P)):
-        dsep = np.abs(sv - sv[i])
-        dsep = np.minimum(dsep, L - dsep)
-        m = dsep > 90.0
-        if not m.any():
-            continue
-        d = np.hypot(P[m, 0] - P[i, 0], P[m, 1] - P[i, 1]).min()
-        if d < dmin:
-            dmin = float(d)
+    dmin = _min_separation(tr)
     rep("clearance", dmin > 20.0,
         f"min separation = {dmin:.2f} m  (spec 65.96; width is 12)")
 
@@ -1023,6 +1381,10 @@ def self_check(verbose: bool = True) -> bool:
     rep("open pad polygon", len(poly) == 44 and abs(poly[:, 0].min() - (-OPEN_R - 0.5 * OPEN_WIDTH - OPEN_MARGIN)) < 1e-9,
         f"{len(poly)} vertices, x {poly[:, 0].min():.1f}..{poly[:, 0].max():.1f}, "
         f"y {poly[:, 1].min():.1f}..{poly[:, 1].max():.1f}")
+
+    if verbose:
+        print("extra  the circuits (Linden, Kestrel, Ashdown)")
+    _circuit_checks(rep, verbose)
     rep("make_track by name", all(make_track(n).name == n for n in TRACK_ORDER),
         ", ".join(TRACK_ORDER))
 

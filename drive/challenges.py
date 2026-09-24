@@ -64,7 +64,8 @@ SECTION = "challenges"
 #: 1 / 2 / 3 stars: the medal multipliers (plan D4; drive.medals)
 STAR_X = (1.12, 1.06, 1.02)
 METRICS = {
-    "lap_time": dict(unit="s", lower=True, tracks=("arena", "open", "skidpad")),
+    "lap_time": dict(unit="s", lower=True,
+                     tracks=("arena", "linden", "kestrel", "ashdown", "open", "skidpad")),
     "stop_distance": dict(unit="m", lower=True, tracks=("dragstrip",), param="v0_kmh"),
     "skid_ay": dict(unit="g", lower=False, tracks=("skidpad",)),
     "drag_time": dict(unit="s", lower=True, tracks=("dragstrip",), param="distance_m"),
@@ -78,6 +79,10 @@ MOVE_V = 0.10                  # m/s: a drag run's clock starts
 STILL_V = 0.05                 # m/s: standing, ready for a drag run
 MAX_DS = 10.0                  # m a step: more is a teleport (LapTimer's guard)
 START_S = 2.5                  # m down the open strip: a stop's rolling start (drive._build's)
+#: sim seconds a reference measurement may take. lap_time's is an out-lap
+#: and one flying lap on an arena-length map: a lap challenge on Kestrel
+#: (1.91 km) in a slow wet class would need more -- scale it with the
+#: track's length before adding one
 T_MAX = {"lap_time": 260.0, "skid_ay": 120.0, "stop_distance": 60.0,
          "drag_time": 90.0, "trap_speed": 90.0}
 
@@ -851,6 +856,11 @@ def self_check(verbose: bool = True) -> bool:
         if verbose:
             print(f"  [{'ok' if passed else 'FAIL'}] {tag}" + (f": {msg}" if msg else ""))
 
+    # --- the metrics table
+    from .records import LAP_TRACKS
+    rep("lap_time is measured on every map with a lap",
+        set(METRICS["lap_time"]["tracks"]) == set(LAP_TRACKS),
+        ", ".join(METRICS["lap_time"]["tracks"]))
     # --- every file
     files = sorted(f for f in os.listdir(DIR) if f.endswith(".json"))
     allc = {}

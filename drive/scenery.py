@@ -1043,42 +1043,47 @@ def self_check(verbose: bool = True) -> bool:
         f"dragstrip {lens[1]:.3f} m (0.25 bar, 0.32 strokes)")
     # the grid is painted where the race lines cars up (the game's
     # race_grid: you at s 0 n 0, bots in rows of two at n +-2.2, rows 7 m
-    # back), standing in T7's R 130 arc as the cars do: every slot's box
-    # has its bar just ahead of that car's nose, and no paint under the car
-    gsl = la.grid_slots
-    gs_ = la.grid_s if la.grid_s is not None else np.zeros(0)
-    want = [(0.0, GRID_SIDE_N), (0.0, 0.0), (0.0, -GRID_SIDE_N)] + [
-        ((-GRID_ROW_M * k) % la.L, sg * GRID_SIDE_N) for k in range(1, GRID_ROWS)
-        for sg in (1.0, -1.0)]
-    ok_slots = sorted((round(float(a), 6), float(b)) for a, b in gsl) == sorted(
-        (round(a, 6), b) for a, b in want)
-    worst_k = 0.0
-    for sg_ in gs_:
-        ss_ = np.arange(sg_ - GRID_TAIL - 0.3, sg_ + GRID_NOSE + 0.3, 0.1)
-        worst_k = max(worst_k, float(np.abs(ar.kappa[_i_of_s(ar, ss_)]).max()))
-    P = la.paint
-    Pc = P.mean(axis=1)
-    bar_err, under = 0.0, 0
-    for s_c, n_c in gsl:
-        c_ = np.array(pt(ar, s_c, n_c))
-        _x, _y, p_c, _k = trk._eval(ar, float(s_c))
-        t_ = np.array([math.cos(p_c), math.sin(p_c)])
-        l_ = np.array([-t_[1], t_[0]])
-        want_bar = np.array(pt(ar, s_c + GRID_NOSE + 0.2, n_c))
-        bar_err = max(bar_err, float(np.hypot(*(Pc - want_bar).T).min()))
-        # every paint quad in this car's own frame: none may overlap its
-        # 3.82 x 1.65 m footprint
-        X, Y = (P - c_) @ t_, (P - c_) @ l_
-        hit = ((X.max(axis=1) > -GRID_TAIL) & (X.min(axis=1) < GRID_NOSE)
-               & (Y.max(axis=1) > -0.823) & (Y.min(axis=1) < 0.823))
-        under += int(hit.sum())
-    rep("grid: where the race lines cars up, in T7's arc",
-        ok_slots and worst_k < 1.0 / GRID_R_MIN and bar_err < 0.05 and under == 0,
-        f"{len(gsl)} boxes in {len(gs_)} rows at s "
-        f"{np.round(np.where(gs_ > la.L / 2, gs_ - la.L, gs_), 1).tolist()}"
-        f" (race_grid's slots: {ok_slots}); max |kappa| {worst_k:.5f} (R "
-        f"{1.0 / max(worst_k, 1e-9):.0f} m > {GRID_R_MIN:.0f}); bars within "
-        f"{bar_err * 100:.1f} cm of nose + 0.2 m; {under} paint quads under a car")
+    # back), on every circuit -- the arena's stands in T7's R 130 arc as
+    # its cars do: every slot's box has its bar just ahead of that car's
+    # nose, and no paint under the car. All six rows, so a circuit whose
+    # line was moved next to a bend fails here rather than racing from
+    # bare tarmac (race_grid needs three)
+    gmsg, g_ok = [], True
+    for nm in trk.CIRCUITS:
+        t_, l_ = tracks[nm], lays[nm]
+        gsl = l_.grid_slots
+        gs_ = l_.grid_s if l_.grid_s is not None else np.zeros(0)
+        want = [(0.0, GRID_SIDE_N), (0.0, 0.0), (0.0, -GRID_SIDE_N)] + [
+            ((-GRID_ROW_M * k) % l_.L, sg * GRID_SIDE_N) for k in range(1, GRID_ROWS)
+            for sg in (1.0, -1.0)]
+        ok_slots = sorted((round(float(a), 6), float(b)) for a, b in gsl) == sorted(
+            (round(a, 6), b) for a, b in want)
+        worst_k = 0.0
+        for sg_ in gs_:
+            ss_ = np.arange(sg_ - GRID_TAIL - 0.3, sg_ + GRID_NOSE + 0.3, 0.1)
+            worst_k = max(worst_k, float(np.abs(t_.kappa[_i_of_s(t_, ss_)]).max()))
+        P = l_.paint
+        Pc = P.mean(axis=1)
+        bar_err, under = 0.0, 0
+        for s_c, n_c in gsl:
+            c_ = np.array(pt(t_, s_c, n_c))
+            _x, _y, p_c, _k = trk._eval(t_, float(s_c))
+            tv = np.array([math.cos(p_c), math.sin(p_c)])
+            lv = np.array([-tv[1], tv[0]])
+            want_bar = np.array(pt(t_, s_c + GRID_NOSE + 0.2, n_c))
+            bar_err = max(bar_err, float(np.hypot(*(Pc - want_bar).T).min()))
+            # every paint quad in this car's own frame: none may overlap its
+            # 3.82 x 1.65 m footprint
+            X, Y = (P - c_) @ tv, (P - c_) @ lv
+            hit = ((X.max(axis=1) > -GRID_TAIL) & (X.min(axis=1) < GRID_NOSE)
+                   & (Y.max(axis=1) > -0.823) & (Y.min(axis=1) < 0.823))
+            under += int(hit.sum())
+        g_ok = (g_ok and ok_slots and len(gs_) >= 3 and worst_k < 1.0 / GRID_R_MIN
+                and bar_err < 0.05 and under == 0)
+        r_txt = f"R >= {1.0 / worst_k:.0f} m" if worst_k > 0.0 else "straight"
+        gmsg.append(f"{nm} {len(gsl)} boxes/{len(gs_)} rows (slots {ok_slots}, {r_txt}, "
+                    f"bars {bar_err * 100:.1f} cm, {under} under)")
+    rep("grid: where the race lines cars up, every circuit", g_ok, "; ".join(gmsg))
     # timing: four wheels, on and off the road (the per-frame call)
     P4 = np.array([pt(ar, 330.0, 5.4), pt(ar, 330.0, 4.0), pt(ar, 328.0, 5.4), pt(ar, 328.0, 4.0)])
     Pg = np.array([pt(ar, 640.0, 9.0 + d) for d in (0.0, 1.4, -0.5, 0.9)])
@@ -1094,11 +1099,14 @@ def self_check(verbose: bool = True) -> bool:
         f"{us:.1f} us per call, measured over {2 * nrep} calls")
     tb = {nm: round(lay.build_ms, 1) for nm, lay in lays.items()}
     rep("layout build (once per track)", max(tb.values()) < 2000.0, f"ms {tb}")
-    rep("per-map themes", [lays[k].theme for k in trk.TRACK_ORDER]
-        == ["circuit", "open", "skidpad", "dragstrip"] and len(lays["skidpad"].guide_rings) >= 3
+    want_th = {k: ("circuit" if k in trk.CIRCUITS else k) for k in trk.TRACK_ORDER}
+    rep("per-map themes", {k: lays[k].theme for k in trk.TRACK_ORDER} == want_th
+        and set(want_th.values()) == {"circuit", "open", "skidpad", "dragstrip"}
+        and len(lays["skidpad"].guide_rings) >= 3
         and len(lays["dragstrip"].paint) > 20 and lays["open"].dashes,
-        f"skidpad {len(lays['skidpad'].guide_rings)} guide rings, dragstrip "
-        f"{len(lays['dragstrip'].paint)} paint quads, open keeps its dashes")
+        f"{', '.join(trk.CIRCUITS)} circuit; skidpad {len(lays['skidpad'].guide_rings)} "
+        f"guide rings, dragstrip {len(lays['dragstrip'].paint)} paint quads, open keeps "
+        f"its dashes")
     if verbose:
         print(f"  {'PASS' if ok_all else 'FAIL'}: {sum(1 for r in res if r[1])}/{len(res)} checks")
     return ok_all

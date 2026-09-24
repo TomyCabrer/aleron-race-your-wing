@@ -11,10 +11,11 @@ medals below it are fixed multiples of it:
 A class nobody laps has NO medals ("--" on the screen) rather than an
 invented time: a gold nobody can prove is reachable is worse than none.
 
-The class is records.py's (plan D1): `track|car|engine|surface`. Four maps x
-three cars x three engines x three surfaces = 108 classes, every one of which
-has an entry -- an author time, or a reason there is none. The DRAGSTRIP has
-no lap (records.py excludes it for the same reason), so its 27 classes say so.
+The class is records.py's (plan D1): `track|car|engine|surface`. Seven maps
+(four circuits, the open map, the skidpad, the dragstrip) x three cars x
+three engines x three surfaces = 189 classes, every one of which has an
+entry -- an author time, or a reason there is none. The DRAGSTRIP has no
+lap (records.py excludes it for the same reason), so its 27 classes say so.
 
 How a reference lap is driven
 -----------------------------
@@ -122,13 +123,18 @@ REF_PATH = os.path.join(_HERE, "data", "reference_laps.json")
 CKPT_DIR = os.path.join(_HERE, "ml", "checkpoints")
 
 #: the author lap's trace: enough for a ghost (the renderer interpolates) at
-#: two fifths of the records' 50 Hz; 78 laps are ~0.7 MB of JSON
+#: two fifths of the records' 50 Hz; ~12 KB of JSON an arena-length lap
+#: (the six lap maps' 162 are 1.8 MB)
 REF_TRACE_HZ = 20
 #: a run stops once it has this many VALID flying laps
 FLYING_LAPS = 2
 #: sim seconds a run may take: the out-lap plus FLYING_LAPS flying laps with
-#: margin, at the slowest class (the 75 hp car on the all-wet surface)
-T_MAX = {"skidpad": 110.0, "arena": 300.0, "open": 420.0}
+#: margin, at the slowest class (the 75 hp car on the all-wet surface). The
+#: circuits after the arena take its 300 s pro rata to their length, rounded
+#: up and never under 1.1x the slowest run measured there (LapDriver 0.60,
+#: all-wet, the 540i with aids on): Linden 252 s, Kestrel 333 s, Ashdown 278 s
+T_MAX = {"skidpad": 110.0, "arena": 300.0, "open": 420.0,
+         "linden": 280.0, "kestrel": 460.0, "ashdown": 340.0}
 #: LOST: further than this outside the ribbon's edge, or spun (|beta| over
 #: LOST_BETA rad below LOST_V m/s), for LOST_S seconds -- the race bot's
 #: respawn test (`drive.drive.Rival`), which here ends the run instead
@@ -171,7 +177,7 @@ REGEN = "python3 -m drive.medals --build"
 # ==================================================================== #
 def class_keys() -> list:
     """Every class, in menu order: TRACK_ORDER x CAR_ORDER x ENGINE_MODES x
-    SURFACE_MODES (108)."""
+    SURFACE_MODES (189)."""
     import cars
     from . import track as trk
     from .drive import ENGINE_MODES, SURFACE_MODES
@@ -739,9 +745,9 @@ def build(workers=None, only=None, verbose: bool = True) -> dict:
             for aname, a_abs, a_tc in AIDS:
                 jobs.append(dict(key=lead, track=t, car=c, engine=e, surface=s,
                                  driver=dname, path=dpath, aids=aname, abs=a_abs, tc=a_tc))
-    # longest first, so the pool does not end on one open-map run
-    order = {"open": 0, "arena": 1, "skidpad": 2}
-    jobs.sort(key=lambda j: (order.get(j["track"], 3), j["key"], j["driver"], j["aids"]))
+    # longest laps first, so the pool does not end on one long run
+    order = {"kestrel": 0, "open": 1, "ashdown": 2, "arena": 3, "linden": 4, "skidpad": 5}
+    jobs.sort(key=lambda j: (order.get(j["track"], 6), j["key"], j["driver"], j["aids"]))
     if verbose:
         n_cls = len(leader)
         print(f"medals --build: {n_cls} classes on {', '.join(todo) or 'no track'} "
@@ -908,6 +914,15 @@ def self_check(verbose: bool = True) -> bool:
         + ", ".join(f"{n} '{r}'" for r, n in sorted(reasons.items(), key=lambda x: str(x[0])))
         + (f"; missing/bad {bad[:3]}" if bad else "")
         + (f"; {len(extra)} unknown keys ignored" if extra else ""))
+
+    # 1b. every lap map has a run budget: `_drive` reads T_MAX[track], and a
+    #     KeyError there is caught per job and filed as 'no reference lap',
+    #     which check 1 accepts -- so a map added without one would get no
+    #     medals, silently
+    rep("every lap map has a run budget", set(T_MAX) == set(rec.LAP_TRACKS),
+        ", ".join(f"{t} {T_MAX[t]:.0f} s" for t in rec.LAP_TRACKS if t in T_MAX)
+        + (f"; missing {sorted(set(rec.LAP_TRACKS) - set(T_MAX))}"
+           if set(rec.LAP_TRACKS) - set(T_MAX) else ""))
 
     # 2. bronze > silver > gold > author > 0, each exactly author x constant --
     bad2 = []

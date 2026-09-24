@@ -2218,8 +2218,8 @@ def self_check(verbose: bool = True) -> bool:
         f"vs near the horizon {col_hor.astype(int).tolist()}")
     # no cloud is cut off by its box: alpha 0 on every border, every map
     edges = {}
-    for nm_, th_ in (('arena', 'circuit'), ('open', 'open'), ('skidpad', 'skidpad'),
-                     ('dragstrip', 'dragstrip')):
+    for nm_ in trk.TRACK_ORDER:            # each map's own sky (seeded by name)
+        th_ = 'circuit' if nm_ in trk.CIRCUITS else nm_
         edges[nm_] = round(build_panorama(nm_, th_, rnd._chase.fl)['cloud_edge'], 4)
     rep('clouds: no box edge in the sky (border alpha ~0)', max(edges.values()) < 0.01,
         f'largest cloud alpha on a box border: {edges} (was 0.09-0.92 on 6 of 9 arena clouds)')

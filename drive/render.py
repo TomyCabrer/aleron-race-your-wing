@@ -49,7 +49,11 @@ groups: the body rolls by the state's own phi, the front wheels turn by
 lamps follow the pedals and the gear, and it sits on a soft shadow cast down
 the shared sun (drive/world.py SUN_DIR). Measured against the scaffold in one
 interleaved run (12 scenes, loaded machine): +0.58 ms a chase frame, +0.11 ms
-a plan frame. The chase eye is a critically-damped SPRING (Chase3D.set_pose),
+a plan frame. Its paint is the car's own factory colour (C_CAR_STYLE) unless
+the player chose one (`set_paint`, drive/paint.py's palette on the Settings
+page): cosmetic only, and the colour is part of every cache key the car's
+drawing is built on, so a live change shows on the very next frame. The
+chase eye is a critically-damped SPRING (Chase3D.set_pose),
 integrated in closed form so it lands in the same place at any frame rate.
 Nothing here reads anything the flat modes did not already read, except the
 state's `phi` and `omega`, read-only (DEVIATION 9).
@@ -276,6 +280,7 @@ C_WING_OFF = (107, 111, 117)
 C_HUD_BG = (16, 17, 20)
 C_HUD_TEXT = (232, 234, 238)
 C_HUD_DIM = (139, 144, 153)
+C_MM_RING = (206, 210, 216)     # the minimap car dot's 1 px ring
 C_BAR_THR = (78, 194, 106)
 C_BAR_BRK = (226, 82, 63)
 C_BAR_STEER = (217, 206, 85)
@@ -397,6 +402,27 @@ def set_car(car) -> None:
     global _CAR
     _CAR = car if car is not None else CorsaC()
     _GG_CACHE['key'] = None
+
+
+#  The player's paint (drive/paint.py, chosen on the Settings page): an RGB
+#  the car is drawn in, or None for its own factory colour (C_CAR_STYLE, by
+#  body style). None by default, so every module self-check and every
+#  headless or scripted renderer draws exactly what it did before paint
+#  existed; `set_paint` changes it.
+_PAINT = None
+
+
+def set_paint(rgb=None) -> None:
+    """Paint the fitted car `rgb` (None: its factory colour). Module-wide,
+    like `set_car`: drive.drive calls it before building a Renderer, so the
+    mesh the constructor prebuilds is the painted one, and
+    `Renderer.set_paint` calls it for a live change. Drops the CarGeom cache;
+    the colour is in `CarGeom.key`, so every mesh and tone built on the old
+    one is simply not looked up again."""
+    global _PAINT
+    _PAINT = (tuple(min(255, max(0, int(round(float(c))))) for c in rgb[:3])
+              if rgb is not None else None)
+    _GEOM3['key'] = None
 
 
 def gg_envelope(V, mu_scale=1.0, k_eff=0.0, x_w=X_W, h_w=H_W, n=91):
@@ -1326,6 +1352,11 @@ C_SKY_REFL3 = np.array([150.0, 178.0, 210.0])   # what glass and paint reflect
 #: the exact colours the self-checks count on screen: nothing shaded may land
 #: on one (C_YELLOW, C_GREEN, C_BAR_BRK, C_PURPLE, the PB ghost's green)
 _RESERVED3 = np.array([C_YELLOW, C_GREEN, C_BAR_BRK, C_PURPLE, (120, 220, 160)])
+#: ... and for the plan view's paint tones, the HUD's text and dim grey too:
+#: the tutorial check counts both in the strip right of R_TUTOR, where the
+#: plan-view car sits. A paint whose 1.0 tone is C_HUD_TEXT (a cool white) or
+#: whose 0.80 tone is C_HUD_DIM (a blue silver) put 53 and 12 px there.
+_RESERVED_PLAN3 = np.vstack([_RESERVED3, [C_HUD_TEXT, C_HUD_DIM]])
 
 
 def car_style(car=None) -> str:
@@ -1333,13 +1364,37 @@ def car_style(car=None) -> str:
 
     Keyed on the NAME because the name is the one thing `cars.py` promises is
     the car; any unknown car (a custom CarSpec, a test stand-in) draws as the
-    hatch, which is the study's own car."""
-    name = str(getattr(car if car is not None else _CAR, 'name', '') or '').lower()
+    hatch, which is the study's own car.
+
+    `car` may also be a `cars.py` KEY ('corsa' / 'mx5' / '540i'), which is
+    what the session holds (Settings.car, the Paint setting's per-car dict):
+    a str has no `.name`, so before this it silently drew as the hatch, and a
+    factory MX-5's swatch came out Corsa yellow. A key is looked up in the
+    registry, so key and spec always give the same style; any other string
+    is read as a name."""
+    car = car if car is not None else _CAR
+    if isinstance(car, str):
+        import cars as _cars             # lazy: the only use render has for it
+        spec = _cars.CARS.get(car)
+        name = spec.name if spec is not None else car
+    else:
+        name = getattr(car, 'name', '')
+    name = str(name or '').lower()
     if 'mx-5' in name or 'mx5' in name or 'roadster' in name:
         return 'roadster'
     if 'bmw' in name or '540' in name or 'saloon' in name or 'sedan' in name:
         return 'saloon'
     return 'hatch'
+
+
+def factory_colour(car=None) -> tuple:
+    """The car's own colour, whatever paint is set: its body style's
+    C_CAR_STYLE entry (the Corsa yellow, the MX-5 red, the 540i blue; any
+    other car the hatch's yellow). What the 'factory' paint resolves to
+    wherever a concrete RGB is needed (the Settings row's swatch, the
+    garage's preview). `car` is a CarSpec or a `cars.py` key, the two
+    interchangeable (car_style); None is the fitted `_CAR`."""
+    return tuple(C_CAR_STYLE[car_style(car)])
 
 
 class CarGeom:
@@ -1402,9 +1457,15 @@ class CarGeom:
         h_r = getattr(car, 'h_rc_r', None)
         self.roll_z = (float(h_f) + (float(h_r) - float(h_f)) * a / L
                        if h_f is not None and h_r is not None else ROLL_AXIS_Z3)
-        self.colour = C_CAR_STYLE[self.style]
-        self.key = (self.style, round(a, 4), round(b, 4), round(t_f, 4), round(t_r, 4),
-                    round(self.wheel_r, 4), round(self.wheel_w, 4))
+        # the paint: the player's (`set_paint`) or the style's own. `key` is
+        # what every drawing cache is keyed on (the chase mesh, the joined
+        # wing soup, the plan tones), so it carries the colour; `shape_key`
+        # is the shape alone, for the caches a colour does not touch (the
+        # ghosts' low-poly car, the shadow's hull)
+        self.colour = _PAINT if _PAINT is not None else C_CAR_STYLE[self.style]
+        self.shape_key = (self.style, round(a, 4), round(b, 4), round(t_f, 4), round(t_r, 4),
+                          round(self.wheel_r, 4), round(self.wheel_w, 4))
+        self.key = self.shape_key + (tuple(self.colour),)
         self._xs = np.array([s[0] for s in self.stations][::-1])
         self._zt = np.array([s[3] for s in self.stations][::-1])
         self._hw = np.array([s[4] for s in self.stations][::-1])
@@ -1423,14 +1484,14 @@ _GEOM3 = {'key': None, 'geom': None}
 
 
 def car_geom(car=None) -> CarGeom:
-    """The fitted car's CarGeom, cached on the car's identity and the fields
-    it is built from. `set_car` needs no hook: a new car (or a changed
-    L / weight split / track / tyre on the same one) is a new key, so the
-    next call rebuilds."""
+    """The fitted car's CarGeom, cached on the car's identity, the fields
+    it is built from and the paint. `set_car` needs no hook: a new car (or a
+    changed L / weight split / track / tyre on the same one, or a new paint)
+    is a new key, so the next call rebuilds."""
     car = car if car is not None else _CAR
     key = (id(car), str(getattr(car, 'name', '')), getattr(car, 'L', None),
            getattr(car, 'wdist_f', None), getattr(car, 't_f', None),
-           getattr(car, 't_r', None), getattr(car, 'tyre_width', None))
+           getattr(car, 't_r', None), getattr(car, 'tyre_width', None), _PAINT)
     if _GEOM3['key'] != key:
         _GEOM3['key'], _GEOM3['geom'] = key, CarGeom(car)
     return _GEOM3['geom']
@@ -2131,7 +2192,8 @@ _CAR_MESH3: dict = {}
 
 
 def car_mesh_cached(geom=None) -> Mesh:
-    """The fitted car's body + wheels Mesh, built once per car shape."""
+    """The fitted car's body + wheels Mesh, built once per car shape and
+    paint (`CarGeom.key`): a few dozen at most, ~3 ms each, once."""
     g = geom or car_geom()
     m = _CAR_MESH3.get(g.key)
     if m is None:
@@ -2139,13 +2201,14 @@ def car_mesh_cached(geom=None) -> Mesh:
     return m
 
 
-def _avoid_reserved3(cols: np.ndarray) -> np.ndarray:
+def _avoid_reserved3(cols: np.ndarray, reserved: np.ndarray = _RESERVED3) -> np.ndarray:
     """Nudge any shaded (n,3) int colour that lands EXACTLY on a colour the
     self-checks count (the delta's green / red, the flash purple, the PB
     ghost) by one step of blue. A 1-in-16-million coincidence per polygon is
-    still a flaky test over thousands of frames."""
+    still a flaky test over thousands of frames. The plan view's paint tones
+    pass `_RESERVED_PLAN3`, which adds the HUD's two text colours."""
     if len(cols):
-        hit = (cols[:, None, :] == _RESERVED3[None, :, :]).all(axis=2).any(axis=1)
+        hit = (cols[:, None, :] == reserved[None, :, :]).all(axis=2).any(axis=1)
         if hit.any():
             cols[hit, 2] = np.where(cols[hit, 2] > 0, cols[hit, 2] - 1, 1)
     return cols
@@ -2590,6 +2653,19 @@ class Renderer:
             self._cam3.jolt(jx, jz)
         # a plan view's shake is task 27's anchor offset (update_camera):
         # fx's jolt is centimetres, under half a pixel there (drive/fx.py)
+
+    def set_paint(self, rgb) -> None:
+        """The Paint setting, live: the module's `set_paint(rgb)` (None: the
+        car's factory colour; module-wide, as `set_car` is), and this
+        renderer's own copies of the old colour dropped -- the chase mesh and
+        its joined wing soup, the plan car's tones -- so the very next frame
+        draws the new paint in the chase view, the plan views and the
+        minimap alike. The painted mesh is built here (~3 ms measured, a menu
+        action) rather than on that frame."""
+        set_paint(rgb)
+        self._car3 = self._wing3 = self._wing3_key = None
+        self._plan_cache = None
+        car_mesh_cached(car_geom())
 
     def set_look(self, mode: str) -> None:
         """The Graphics setting, live: `look_config(mode)` into the ViewConfig,
@@ -3388,9 +3464,10 @@ class Renderer:
         return np.asarray(pts) @ R.T + np.array([x, y])
 
     def _plan_car(self, g):
-        """The plan-view car's shapes for THIS car, body frame, built once:
-        [(name, (n,2))] in drawing order, plus their stacked block so a frame
-        transforms them all with one matmul."""
+        """The plan-view car's shapes for THIS car, body frame, built once
+        per car and paint (`g.key`): [(name, (n,2))] in drawing order, plus
+        their stacked block so a frame transforms them all with one matmul,
+        and the tones they are filled with."""
         pc = self._plan_cache
         if pc is not None and pc[0] == g.key:
             return pc
@@ -3442,11 +3519,16 @@ class Renderer:
                                              (xr + 0.11, sgn * 0.93 * wt), (xr + 0.11, sgn * 0.52 * wt)])))
         block = np.vstack([p_ for _n, p_ in shapes])
         cuts = np.cumsum([0] + [len(p_) for _n, p_ in shapes])
-        paint = g.colour
-        cols = {'body': _shade_rgb(paint, 0.80), 'upper': paint,
-                'glass': (44, 54, 68), 'roof': _shade_rgb(paint, 1.10),
+        # the paint's four tones, each kept off every colour a self-check
+        # counts (`_RESERVED_PLAN3`); none of the factory colours' tones is
+        # one, so this only ever moves a player's paint, by one step of blue
+        tone = {k_: tuple(int(v_) for v_ in _avoid_reserved3(
+            np.array([_shade_rgb(g.colour, k_)], dtype=np.int32), _RESERVED_PLAN3)[0])
+            for k_ in (0.72, 0.80, 1.0, 1.10)}
+        cols = {'body': tone[0.80], 'upper': tone[1.0],
+                'glass': (44, 54, 68), 'roof': tone[1.10],
                 'cockpit': C_INTERIOR3, 'seat': C_SEAT3,
-                'mirror': _shade_rgb(paint, 0.72), 'head': C_HEAD3}
+                'mirror': tone[0.72], 'head': C_HEAD3}
         pc = self._plan_cache = (g.key, shapes, block, cuts, cols)
         return pc
 
@@ -3617,9 +3699,10 @@ class Renderer:
         """A ghost's body-frame low-poly car, shaped from the fitted car's
         own stations: a lower body (sides, nose, tail, bonnet, deck) and a
         cabin (screen, roof, rear glass, sides), plus four wheel discs --
-        15 polygons, outward-wound. Built once per car."""
+        15 polygons, outward-wound. Built once per car shape: a ghost is
+        drawn in its own colour, so the player's paint does not rebuild it."""
         gm = getattr(self, '_gmesh', None)
-        if gm is not None and gm[0] == g.key:
+        if gm is not None and gm[0] == g.shape_key:
             return gm
         st = g.stations
         kb = {kd: i for i, kd in enumerate(g.bands)}
@@ -3666,7 +3749,7 @@ class Renderer:
         starts = np.concatenate([[0], np.cumsum(counts)[:-1]])
         N = np.array([_newell3(p_) / max(np.linalg.norm(_newell3(p_)), 1e-12) for p_ in polys])
         wheel = np.arange(len(polys)) >= n_body
-        self._gmesh = (g.key, V, starts, counts, N, wheel)
+        self._gmesh = (g.shape_key, V, starts, counts, N, wheel)
         return self._gmesh
 
     def _ghost_proj3(self, x, y, psi, squash: float = 1.0):
@@ -4469,7 +4552,7 @@ class Renderer:
         kbx, kby = kx * c + ky * s, -kx * s + ky * c    # into the body frame
         ang = int(round(math.degrees(math.atan2(kby, kbx)) / 2.0))
         cache = self.__dict__.setdefault('_shadow_hulls', {})
-        key = (g.key, ang)
+        key = (g.shape_key, ang)
         got = cache.get(key)
         if got is None:
             xf, xr, hw = g.x_front, g.x_rear, g.half_w
@@ -5046,8 +5129,11 @@ class Renderer:
             pygame.draw.polygon(self.screen, (70, 74, 80), poly, 1)
         pygame.draw.lines(self.screen, C_HUD_DIM, self.track.closed,
                           self._mm_pts, 1)
-        pygame.draw.circle(self.screen, C_CAR, self._mm_xy(x, y),
-                           max(2, int(3 * self.ui)))
+        # the dot is the car's own colour (its paint), ringed in 1 px of
+        # light grey so a dark paint still reads on the dark panel
+        p_, r_ = self._mm_xy(x, y), max(2, int(3 * self.ui))
+        pygame.draw.circle(self.screen, C_MM_RING, p_, r_ + 1)
+        pygame.draw.circle(self.screen, car_geom().colour, p_, r_)
         name = getattr(self.track, 'title', '') or self.track.name
         self._blit(name, r.x + 6 * self.ui, r.y + 4 * self.ui, self.f_lbl,
                    C_HUD_DIM)
@@ -5794,6 +5880,8 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     # ---- the look: the car and the chase camera, then the world round it
     for tag_, ok_, msg_ in _car_checks(screenshot_dir):
         rep(tag_, ok_, msg_)
+    for tag_, ok_, msg_ in _paint_checks(screenshot_dir):
+        rep(tag_, ok_, msg_)
     for tag_, ok_, msg_ in _ghost_checks(screenshot_dir):
         rep(tag_, ok_, msg_)
     for tag_, ok_, msg_ in _world_checks(screenshot_dir):
@@ -6160,6 +6248,184 @@ def _car_checks(screenshot_dir: str = 'runs') -> list:
                         f'60 frames braking / steering / rolling, wings out: {why_b}'))
     finally:
         set_car(was)
+    return out
+
+
+def _paint_checks(screenshot_dir: str = 'runs') -> list:
+    """The player's paint (drive/paint.py): [(tag, passed, message)], run by
+    self_check. One row, measured off the meshes and the screen:
+
+    * every palette paint builds on every car (the mesh carries it, the
+      shape stays the car's own), and no tone the car is drawn in -- the
+      chase sills' 0.58, the plan view's 0.72 / 0.80 / 1.0 / 1.10 -- is a
+      colour a self-check counts: the palette needs no guard. Two naive
+      paints (a cool white, a blue silver) DO land on one, and the plan
+      view's guard moves them off it;
+    * `factory_colour` of a `cars.py` key is the spec's own, one per car
+      (the session holds keys; a key once fell through to the hatch);
+    * the tutorial check's strip right of R_TUTOR, at that check's own pose,
+      gets no HUD text / dim pixel from any car in any paint, the naive two
+      included (the chase view's shading is guarded by `_shade3` itself);
+    * a LIVE change (`Renderer.set_paint`) is on the very next frame: in the
+      chase view only the car's pixels change, toward the new colour, and
+      the old paint set back gives the old frame bit for bit; in the plan
+      view and on the minimap dot the new colour replaces the old; and in
+      the 'classic' look too.
+
+    The module's car and paint are saved and restored, as _car_checks does
+    with the car."""
+    import cars as _cars
+    from . import paint as _pm
+    from . import props as _props
+    out = []
+    was_car, was_paint = _CAR, _PAINT
+    counted = {tuple(int(v) for v in c)
+               for c in np.vstack([_RESERVED_PLAN3, _props.FORBIDDEN])}
+    naive = {'naive white': (232, 234, 238), 'naive silver': (174, 180, 191)}
+    try:
+        tra = trk.make_arena()
+        # the V22 / tutorial pose: the camera settled behind a car at 28 m/s
+        rp = Renderer(ViewConfig(), tra, headless=True)
+        for n in range(600):
+            i = trk_index(tra, 300.0 + 0.35 * n)
+            st_p = _demo_state(float(tra.xy[i][0]), float(tra.xy[i][1]), float(tra.psi[i]),
+                               u=28.0, v=-0.6, r=0.25)
+            rp.update_camera(st_p, 1.0 / 60.0)
+        aux_p = _demo_hud()
+        x0_, y0_, w_, h_ = (int(v * rp.ui) for v in R_TUTOR)
+        mx0, my0, mw, mh = (int(v * rp.ui) for v in R_MINIMAP)
+
+        def px_of(r_, cols, where='car'):
+            """Pixels exactly one of `cols`: on the minimap ('mm'), in the
+            tutorial check's strip ('strip'), or everywhere else ('car')."""
+            a = pygame.surfarray.pixels3d(r_.screen)
+            hit = np.zeros(a.shape[:2], dtype=bool)
+            for col in cols:
+                hit |= (a[..., 0] == col[0]) & (a[..., 1] == col[1]) & (a[..., 2] == col[2])
+            del a
+            mm = hit[mx0:mx0 + mw, my0:my0 + mh]
+            if where == 'mm':
+                return int(mm.sum())
+            if where == 'strip':
+                return int(hit[x0_ + w_:x0_ + w_ + int(200 * r_.ui), y0_:y0_ + h_].sum())
+            return int(hit.sum()) - int(mm.sum())
+
+        # ---- every paint on every car -------------------------------------
+        n_built, bad, naive_raw, n_raw, strip_max = 0, [], [], 0, 0
+        # the factory colour by KEY (what the session holds) is the spec's,
+        # and the three differ: a key must not fall through to the hatch
+        fac = {key: factory_colour(key) for key in _cars.CAR_ORDER}
+        for key in _cars.CAR_ORDER:
+            if fac[key] != factory_colour(_cars.get(key)):
+                bad.append(f'{key}: factory_colour by key {fac[key]} != by spec '
+                           f'{factory_colour(_cars.get(key))}')
+        if len(set(fac.values())) != len(fac):
+            bad.append(f'factory colours by key not distinct: {fac}')
+        for key in _cars.CAR_ORDER:
+            car = _cars.get(key)
+            set_car(car)
+            n_polys = None
+            for name in _pm.PAINT_ORDER + tuple(naive):
+                rgb = naive.get(name, _pm.rgb(name))
+                set_paint(rgb)
+                g = car_geom()
+                want = tuple(rgb) if rgb is not None else factory_colour(car)
+                m = car_mesh_cached(g)
+                n_polys = len(m.starts) if n_polys is None else n_polys
+                n_paint = int((m.colours == np.array(want, dtype=np.float64)).all(axis=1).sum())
+                raw = {_shade_rgb(want, k_) for k_ in (0.58, 0.72, 0.80, 1.0, 1.10)} & counted
+                plan = {rp._plan_car(g)[4][k_] for k_ in ('body', 'upper', 'roof', 'mirror')}
+                rp.draw_frame(st_p, None, 0.0, _demo_ctl(), aux_p, SkidBuffer())
+                n_strip = px_of(rp, (C_HUD_TEXT, C_HUD_DIM), 'strip')
+                strip_max = max(strip_max, n_strip)
+                n_built += 1
+                if name in naive:
+                    naive_raw.append(bool(raw))
+                    raw = set()                  # expected: the guard's to move
+                n_raw += bool(raw)
+                if (g.colour != want or n_paint < 20 or len(m.starts) != n_polys
+                        or raw or plan & counted or n_strip):
+                    bad.append(f'{key}/{name}: colour {g.colour} {n_paint} paint polys '
+                               f'{len(m.starts)} polys raw {sorted(raw)} plan '
+                               f'{sorted(plan & counted)} strip {n_strip}')
+
+        # ---- a LIVE change, the very next frame ----------------------------
+        A, B = _pm.rgb('cobalt'), _pm.rgb('burgundy')
+        tA, tB = ({_shade_rgb(c_, k_) for k_ in (0.72, 0.80, 1.0, 1.10)} for c_ in (A, B))
+        set_car(_cars.get('corsa'))
+        rp.set_paint(A)
+        rp.draw_frame(st_p, None, 0.0, _demo_ctl(), aux_p, SkidBuffer())
+        plan0 = (px_of(rp, tA), px_of(rp, (A,), 'mm'))
+        rp.set_paint(B)
+        rp.draw_frame(st_p, None, 0.0, _demo_ctl(), aux_p, SkidBuffer())
+        plan1 = (px_of(rp, tA), px_of(rp, (A,), 'mm'), px_of(rp, tB), px_of(rp, (B,), 'mm'))
+        ok_plan = (plan0[0] > 150 and plan0[1] > 3 and plan1[0] == 0 and plan1[1] == 0
+                   and plan1[2] > 150 and plan1[3] > 3)
+        # classic: no world, no effects -- the same car drawing on the old look
+        rk = Renderer(ViewConfig(scenery=False, effects=False), tra, headless=True)
+        rk.update_camera(st_p, 0.0)
+        rk.update_camera(st_p, 0.0)
+        rk.draw_frame(st_p, None, 0.0, _demo_ctl(), aux_p, SkidBuffer())
+        cl0 = px_of(rk, tB)
+        rk.set_paint(A)
+        rk.draw_frame(st_p, None, 0.0, _demo_ctl(), aux_p, SkidBuffer())
+        cl1 = (px_of(rk, tB), px_of(rk, tA), px_of(rk, (A,), 'mm'))
+        ok_classic = cl0 > 150 and cl1[0] == 0 and cl1[1] > 150 and cl1[2] > 3
+        # chase: the frame drawn again at the same pose (the render clock only
+        # moves in update_camera), so the paint is the one thing that changes
+        i_a = trk_index(tra, 148.0)
+        st_a = _demo_state(float(tra.xy[i_a][0]), float(tra.xy[i_a][1]),
+                           float(tra.psi[i_a]) + 0.04, u=24.0, v=-0.3, r=0.20)
+        a_c = _demo_hud(V=24.0)
+        a_c.wing_side, a_c.wing_deploy = 0, 0.0
+        rc = Renderer(ViewConfig(mode='chase'), tra, headless=True)
+        rc.update_camera(st_a, 0.0)
+        frames = []
+        shot = os.path.join(os.path.abspath(screenshot_dir), 'render_paint_chase.png')
+        for p_ in (A, B, A):
+            rc.set_paint(p_)
+            rc.draw_frame(st_a, None, 0.0, _demo_ctl(delta=0.05), a_c, SkidBuffer())
+            frames.append(pygame.surfarray.array3d(rc.screen).astype(np.int32))
+            if len(frames) == 2:                 # the evidence frame, as drawn
+                os.makedirs(screenshot_dir, exist_ok=True)
+                rc.screenshot(shot)
+        diff = (frames[0] != frames[1]).any(axis=2)
+        mm_ = np.zeros_like(diff)
+        mm_[mx0:mx0 + mw, my0:my0 + mh] = True
+        car_px = diff & ~mm_
+        n_ch = int(car_px.sum())
+
+        def toward(f_):
+            """Which of A / B the changed pixels' mean colour points at."""
+            mc = f_[car_px].mean(axis=0) if n_ch else np.zeros(3)
+            cos = [float(mc @ np.array(c_) / max(np.linalg.norm(mc) * np.linalg.norm(c_), 1e-9))
+                   for c_ in (A, B)]
+            return 'AB'[int(np.argmax(cos))]
+        ys_, xs_ = np.nonzero(car_px.T)
+        box = (int(xs_.min()), int(ys_.min()), int(xs_.max()), int(ys_.max())) if n_ch else None
+        mm_ch = (int((frames[0][mm_] == np.array(A)).all(axis=1).sum()),
+                 int((frames[1][mm_] == np.array(B)).all(axis=1).sum()))
+        ok_chase = (n_ch > 3000 and toward(frames[0]) == 'A' and toward(frames[1]) == 'B'
+                    and np.array_equal(frames[0], frames[2]) and mm_ch[0] > 3 and mm_ch[1] > 3)
+        ok = not bad and all(naive_raw) and ok_plan and ok_classic and ok_chase
+        out.append(('paint: every palette colour builds, caches refresh on change, no '
+                    'plan/chase tone hits a counted colour', ok,
+                    f'{n_built} car x paint builds ({len(_cars.CAR_ORDER)} cars x '
+                    f'{len(_pm.PAINT_ORDER)} paints + 2 naive; factory by key = by spec '
+                    f'{"/".join(str(c) for c in fac.values())}): palette tones on a counted '
+                    f'colour {n_raw}, the naive two on one raw {naive_raw} and off it after '
+                    f'the guard; tutorial strip HUD px '
+                    f'max {strip_max}'
+                    + (f'; BAD {bad[:3]}' if bad else '')
+                    + f'. Live cobalt -> burgundy, next frame: plan {plan0[0]} -> {plan1[0]} '
+                    f'cobalt px, {plan1[2]} burgundy; minimap dot {plan0[1]} -> {plan1[3]} px; '
+                    f'classic look {cl0} -> {cl1[1]} px; chase {n_ch} px changed in '
+                    f'{box}, toward {toward(frames[0])} -> {toward(frames[1])}, back to '
+                    f'cobalt {"bit-identical" if np.array_equal(frames[0], frames[2]) else "DIFFERENT"}'
+                    f', its minimap dot {mm_ch[0]} / {mm_ch[1]} px; {shot}'))
+    finally:
+        set_car(was_car)
+        set_paint(was_paint)
     return out
 
 

@@ -887,7 +887,7 @@ def group_X():
 # ==================================================================== #
 #  MODULE SELF-CHECKS (subprocess, so nothing is duplicated here)      #
 # ==================================================================== #
-MODULES = ("tyre", "powertrain", "track", "telemetry", "vehicle", "input",
+MODULES = ("tyre", "powertrain", "track", "telemetry", "vehicle", "input", "paint",
            "render", "menu", "garage", "aero.airfoil", "aero.panel2d", "aero.polar",
            "aero.xfoil", "aero.blend", "aero.vlm", "aero.wing", "aero.optimize",
            "aero.library", "aero.screen", "aero.section", "aero.mission",

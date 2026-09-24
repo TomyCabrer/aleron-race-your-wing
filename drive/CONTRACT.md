@@ -39,7 +39,8 @@ from the repo root.
 | `drive/vehicle.py` | EOM, load transfer, roll, aero+wing, integrator | `tyre`, `powertrain`, `corsa_c`, `cars` |
 | `drive/track.py` | track geometry, projection, surfaces | numpy |
 | `drive/input.py` | keyboard/gamepad → `Controls` | pygame |
-| `drive/render.py` | pygame drawing + HUD; the chase camera and the 3-D car (a body STYLE per fitted car: hatch / roadster / saloon, generic shapes); `look_config` / `Renderer.set_look` (the Graphics setting) | `track`, `qss`, pygame; `world`, `props`, `fx` inside `Renderer` (built when `ViewConfig.scenery` / `effects`) |
+| `drive/render.py` | pygame drawing + HUD; the chase camera and the 3-D car (a body STYLE per fitted car: hatch / roadster / saloon, generic shapes); `look_config` / `Renderer.set_look` (the Graphics setting); `set_paint` / `Renderer.set_paint` / `factory_colour` (the Paint setting) | `track`, `qss`, pygame; `world`, `props`, `fx` inside `Renderer` (built when `ViewConfig.scenery` / `effects`) |
+| `drive/paint.py` | the player car's paint: `PAINT_ORDER`, `PAINT_LABELS`, `PAINTS` (name -> RGB; `factory` -> None, the car's own colour), `PAINT_DEFAULT`, `rgb(name)`. A fixed palette, every tone of it checked against the colours the self-checks count. Cosmetic: never in the class key, a ranking, a medal, a ghost, the CarSpec or the build JSON (a lap record's `settings` snapshot lists it, as it lists Graphics) | nothing (pure data); `race_grid`, `ghosts` in its self-check only. Never pygame |
 | `drive/scenery.py` | the ground beside the road, laid out from the track's own geometry (a generated track gets it too): verges, gravel traps (slow corners), painted run-off (fast ones), apex + exit kerbs, the racing line, paint (grid boxes at `race_grid`'s slots, sector bars, the dragstrip's lane / numerals), all within 24 m of the edge; `wheel_surfaces(track, pts, on_track4, mu4, scenery=)` -> per wheel `'tarmac' \| 'wet' \| 'kerb' \| 'grass' \| 'gravel'`, read off the SAME tables the drawing uses. Never read by the physics | `track`, numpy |
 | `drive/world.py` | the look's backdrop and ground: sky + a per-map panorama (clouds, ridges, a tree line; scrolled by the chase camera's VIEW heading), grass with mowing stripes, the dressing from `scenery`, detail ON the tarmac (rubber, repairs, water, inset lines, raised kerbs), the horizon haze; the chase view's track layers batched (one projection a layer). The SHARED look: `SUN_DIR`, `HAZE_RGB`, `haze_factor`, `hazed`, `HAZE_LAND` | numpy, pygame, `scenery`; `render` only lazily (it is handed the renderer) |
 | `drive/props.py` | the solid things round the road: trees, tyre walls / armco with fictional boards, catch fences, stands, the pit building and tower, the start gantry, brake boards, marshal posts, masts; per-map themes, generic from the geometry; every solid prop >= 30 m from the edge (the car has no collision), thin exceptions justified in its docstring. Plan footprints and a pre-lit chase soup + tree sprites, split at the car's depth | numpy, pygame, `world`; `render` only lazily |
@@ -49,7 +50,7 @@ from the repo root.
 | `drive/garage.py` | 3D garage: `CarBuild` (three wing slots) -> `VehicleConfig` kwargs and the fitted wings' mass; the MISSION page and the DESIGN navigator (`DESIGN_TREE`: airfoil / endplate / wing / results, four stages each -- the criterion WEIGHTS are asked on the screening step, and the design box is a BAND table). The navigator GATES: a step whose predecessor is unfinished cannot be selected at all, by key or by click, and the refusal quotes the reason. Every page takes the MOUSE as well as the keyboard. Plus the airfoil and library pages | `corsa_c`, `cars`, `crossover`, `input`, `menu`, `garage_ui`, `aero`, `track` (`make_track`, for the mission's circuit), `vehicle` (the two aero dataclasses only), pygame |
 | `drive/garage_ui.py` | widget kit for the garage pages (params, lists, plots, prompt) | pygame, numpy |
 | `drive/aero/` | wing-design physics: sections, panel method, polars (XFOIL / estimate), vortex lattice, GP-BO, the library, and the three-step design procedure -- `mission.py` (the lap a wing is for), `screen.py` (the seven weighted criteria the library is ranked on), `section.py` (the aerofoil designed in 2-D against it), `wing.py` (the planform), `blend.py` (how the wing and its end plates meet) | numpy, scipy, the `xfoil` binary if present; `mission.py` alone also imports `corsa_c` and `qss` |
-| `drive/menu.py` | pause / help menu overlay (ESC, OPTIONS); pure UI | pygame only |
+| `drive/menu.py` | pause / help menu overlay (ESC, OPTIONS); a row's colour swatch through `show(swatches={action: rgb})` (rows stay 2-tuples); pure UI | pygame only |
 | `drive/audio.py` | procedural car sound: `Synth` (numpy) + `CarSound` (one pygame.mixer channel, stereo when the mixer grants it; task 27's chime on channel 1); an engine PROFILE per car (`HudData.car_key`); a render-loop consumer of `HudData`, never an input | numpy, pygame; `scipy.signal` optional, imported off-frame by `warm_up` (its fast path uses scipy's private `_sigtools._linear_filter`, checked for exact equality with `lfilter` at import, else the public one); its self-check imports `render.frame_budget_verdict` lazily (the `garage` exception) |
 | `drive/records.py` | lap records: the class key `track\|car\|engine\|surface`, `RecordBook` (top 5 per class, `runs/records/<class>.json`, best sectors, best medal, `last_builds.json`), `LapRecorder` (the `Sim` hooks: controls log, 50 Hz trace, the lap's exact start state), `resimulate` (a lap re-driven from its log, bit for bit) | numpy; `vehicle`, `powertrain`, `cars`, `corsa_c` (dataclass registry only); `drive.drive` / `track` lazily inside `resimulate` and the self-check. Never pygame, never `drive.ml` |
 | `drive/prerace.py` | the pre-race (TIME TRIAL) page's content: `PreRace` rows and help sections from a `RecordBook`, the medal table and the library's builds; `wanted(opts, settings)` (never a script, headless, `--ml-drive`, offscreen, the dragstrip); the PICK page rows. Pure UI logic: the `Sim` owns the menu and dispatches | `records`; `medals` lazily. Never pygame |
@@ -862,16 +863,63 @@ def surface_at(tr, x, y, global_wet=1.0) -> tuple[float,float,bool]   # (mu_scal
 def on_tarmac(tr, x, y, n=None) -> bool          # ribbon OR a drivable area
 def start_pose(tr, offset_n=0.0) -> tuple[float,float,float]
 def point_at(tr, s, n=0.0) -> tuple[float,float]
-def make_arena(); make_open(); make_skidpad(radius=50.0, cw=False); make_dragstrip()
-def make_track(name, radius=50.0, cw=False, surfaces=True) -> Track   # the one builder
-TRACKS = {'arena':..., 'open':..., 'skidpad':..., 'dragstrip':...}
-TRACK_ORDER = ('arena', 'open', 'skidpad', 'dragstrip')      # TAB / the Map setting cycle this
+def make_arena(surfaces=True); make_linden(surfaces=True); make_kestrel(surfaces=True)
+def make_ashdown(surfaces=True); make_open(); make_skidpad(radius=50.0, cw=False); make_dragstrip()
+def make_track(name, radius=50.0, cw=False, surfaces=True) -> Track   # the one builder;
+                                        # an unknown name builds the arena
+def solve_closure(segs, ia, ib, heading0=0.0) -> tuple[float,float]   # the two straights
+                                        # that close a loop (self-check only)
+TRACKS = {'arena':..., 'linden':..., 'kestrel':..., 'ashdown':...,
+          'open':..., 'skidpad':..., 'dragstrip':...}
+TRACK_ORDER = ('arena', 'linden', 'kestrel', 'ashdown', 'open', 'skidpad', 'dragstrip')
+                                        # TAB / the Map setting cycle this
+CIRCUITS = ('arena', 'linden', 'kestrel', 'ashdown')         # the race circuits
 TRACK_TITLES = {...}                                          # menu labels
+CLOSURE_FREE = {'arena': (0, 8), 'linden': (2, 6), 'kestrel': (10, 14), 'ashdown': (0, 12)}
 ```
 `DS = 0.5 m` sampling, 8.0 m grid hash for projection with 3×3 → 5×5 → full
 argmin fallback. Literal geometry (segments, node coordinates, arc centres,
 closure to 3.8e-8 m, length 1249.2022 m) is in `../specs/harness.txt` and must
 be used verbatim.
+
+**The circuits** (`CIRCUITS`). Three more closed circuits are built the
+arena's way -- straights and constant-radius arcs, 12 m wide, heading 0 at
+s = 0 -- with every quantity round except two straights solved for closure by
+`solve_closure` (`CLOSURE_FREE` names them) and stored as literals at 7 dp
+(closure 2e-8..6e-8 m). A map name is a plain lowercase identifier with no
+`_`, `,` or `|` and never `<another map>_...` (records class keys and file
+names, a checkpoint's comma-listed meta, the `seed_<map>_` glob).
+
+| name | title | turn | length m | corners (R m) | straights | sector_s | patches (s, n) |
+|---|---|---|---|---|---|---|---|
+| `linden` | Linden park | CCW | 1110.4021 | 7, R 30..60 (T2 R30 hairpin) | 284 m back, 150 m pit | 0 / 370 / 690 | WET_T5 850..905 full; WET_T2_ENTRY 400..435, n -6..0 |
+| `kestrel` | Kestrel ring | CCW | 1913.3440 | 7, R 55..100 | 390 m pit, 320 m back | 0 / 610 / 1140 | WET_T2 466..544 full; WET_T4_ENTRY 830..870, n -6..0 |
+| `ashdown` | Ashdown circuit | CW (sum -360) | 1390.0362 | 6 right + 1 left, R 30..120 | 211 m pit, 200 and 190 m | 0 / 505 / 930 | WET_T5 830..886 full; WET_T4_ENTRY 495..530, n 0..6 |
+
+What a circuit must satisfy, and `self_check` measures on each: closure < 1e-4 m
+and |sum(turn_deg)| = 360; the stored straights re-solve to 1e-6 m; the V3
+round trip at |n| <= half-width; centreline separation >= 60 m (width + two
+24 m run-off bands) over pairs > 90 m apart in s; R 30..130 m; three sector
+lines, `sector_s[0] == 0.0`, ascending, each on a straight; |kappa| <= 1/80
+over s -37.4..+2.1 (the six painted grid rows); every surface patch covers
+n = 0 (drive.ml reads the grip on the centreline only) and every centreline
+sample inside it reads its mu. Measured, not asserted here: `LapDriver` at
+0.90 laps each cleanly in all three cars on the stock engine, surfaces none
+and patch, aids on and off (the classes it laps on the arena), and the
+drive.ml anchor laps each twice (`python3 -m drive.ml`). Scenery and props dress them from their
+geometry under their own names (the 'circuit' theme); every name-keyed table
+(`records.LAP_TRACKS`, `medals.T_MAX`, `challenges.METRICS`, `props.REQUIRED`,
+`aero.mission.TRACKS`) lists them, and adding one makes the medal table stale.
+In `drive.drive` every `CIRCUITS` name gets the `LapDriver` as the
+`--headless` default driver (planned on the run's surfaces, global wet and
+car; the arena with no flags is built exactly as before; the test maps keep
+the 20 m/s `PathFollower`), and `--script lap --track <circuit>` laps it
+(any other map laps the arena, as before). The RACE page's Test shows
+`bot_test_T(track, T)` seconds and hands `bot_lap` the arena budget; the
+Deploy-swarm page's default Sim time is `swarm_T(track)` (70 s, pro rata
+on a longer circuit), as is `--swarm-T` when not given; what the page keeps
+of a Deploy (`_swarm_menu_kept`) drops a Sim time still at that map's
+default, so the next map's page shows its own, and keeps one the player set.
 
 **The open map** (`make_open`, name `'open'`): a closed perimeter loop
 (straights 420 / 260 m, corners R = 45 m, 12 m wide, length 1642.743 m, sector
@@ -1007,6 +1055,16 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
   renderer is unchanged; `drive.drive` calls it once per session.
   `HudData.car_name` / `mass_kg` are drawn under the minimap — the Ballast
   setting is otherwise invisible, and 200 kg is 20 % of a Corsa.
+* `render.set_paint(rgb)` paints the fitted car (`drive/paint.py`'s palette;
+  None, the default, is its factory colour `render.factory_colour(car)`,
+  `C_CAR_STYLE` by body style; `car` is a CarSpec or a `cars.py` key, the
+  two give the same colour). Module-wide like `set_car`: called before a
+  Renderer is built, and live through `Renderer.set_paint(rgb)`, which shows
+  on the very next frame in the chase view, the plan views and the minimap
+  dot (the car's colour, 1 px light ring). The colour is in `CarGeom.key`,
+  so every mesh and tone built on the old one is not looked up again; the
+  plan tones are guarded off the counted colours and the HUD's text / dim
+  grey. Cosmetic only; headless and scripted runs keep it None.
 * g-g envelope calls `qss.max_ay` — cache, recompute only when `|ΔV| > 1 m/s`.
 * `HudData` carries `x_w, h_w, wing_type, inc_deg` (defaults 0.97 / 0.90 /
   '' / 0): the plan-view panel is drawn at `aux.x_w`, not at a constant, so a
@@ -1263,7 +1321,8 @@ guarded by `CARSIM_HEADLESS`).
 
 CLI:
 ```
-python3 -m drive.drive [--track arena|open|skidpad|dragstrip] [--radius 50] [--cw]
+python3 -m drive.drive [--track arena|linden|kestrel|ashdown|open|skidpad|dragstrip]
+  [--radius 50] [--cw]
   [--car corsa|mx5|540i] [--ballast 0..300] [--ballast-at nose|seat|floor|boot]
   [--wet none|patch|all] [--wing off|fin|plate] [--wing-x 0.97] [--wing-h 0.90]
   [--dt 0.001] [--fps 60] [--size 1280x800] [--camera car_up|world_up|chase]
@@ -1300,10 +1359,28 @@ another one with the repo's own rigs is the point of having them. Nothing in
 Corsa C with no ballast.
 
 **Settings** (`drive.Settings`: `track`, `car`, `ballast`, `ballast_at`,
-`engine`, `gearbox`, `abs`, `tc`, `steer_aid`, `wet`, `camera`, `sound` —
-`Settings.KEYS`; properties `power_scale`, `volume`, `car_base`; methods
-`car_spec(extra=())`, `ballast_text()`, `load / save / clamp / apply_cli /
-to_opts / cycle`).
+`engine`, `gearbox`, `abs`, `tc`, `steer_aid`, `wet`, `camera`, `sound`,
+`shake`, `graphics`, `paint` — `Settings.KEYS`; properties `power_scale`,
+`volume`, `car_base`; methods `car_spec(extra=())`, `ballast_text()`,
+`paint_of(car=None)`, `load / save / clamp / apply_cli / to_opts /
+cycle(key, d, car=None)`).
+
+`paint` is a table, car key -> a `drive/paint.py` name (a car with no entry
+is `'factory'`); `clamp` keeps only known cars wearing palette names.
+`cycle('paint', d, car)` steps ONE car's entry: the settings page hands in
+the RUNNING car (`Sim._pending['car']` while another is only browsed), so
+the row always paints the car on the road. It is not in `RESTART_KEYS` and
+not in the class: `apply_setting('paint')` neither discards nor retargets
+the lap being recorded, and hands `drive.paint_rgb(settings, car)` (None =
+factory) to `renderer.set_paint` if the renderer has one. The row's swatch
+and the garage's preview take `paint_rgb(..., concrete=True)` (factory
+resolved by `render.factory_colour`). `_interactive_session` calls
+`render.set_paint` after `set_car`, before the Renderer is built, on every
+session (a factory car sets None); the loop's garage is `_painted_garage`
+(`Garage.set_paint` on construction); the swarm viewer's `_swarm_view` sets
+None. V41 builds real sessions and checks all three. `as_dict()` carries the
+table, so the `settings` snapshot a lap record, the seed lap and a
+telemetry header keep lists it, like Graphics; nothing reads it back.
 
 `Settings.power_scale` is `ENGINE_SCALE[engine]` and nothing else. It briefly
 also carried `cars.get(car).engine_scale = T_max/110`, which was how another
@@ -1459,7 +1536,10 @@ RTF is measured without one.
 The page's *Test* (`Sim.start_bot_test`) is the one bot path NOT stepped in
 lockstep with the session: bot 1 alone in each `RACE_BOT_CARS` entry, built by
 `Sim._race_car`, driven by `drive.ml.evaluate.bot_lap` (the `lap_time`
-rollout at `DT_EVAL`, `BOT_TEST_T` s, the session's Track, the global wet
+rollout at `DT_EVAL` for `bot_test_T(track, T)` s -- `BOT_TEST_T` on the arena
+and any shorter lap, pro rata on a longer one: Ashdown 167 s, Kestrel 230 s;
+whatever the page and terminal print as the Test's length must come from the
+same function -- the session's Track, the global wet
 folded into `mu_scale`) in a `multiprocessing` pool of its own, collected by
 `_bot_test_poll` from the render loop. Nothing of it reaches the session's
 physics; its output is text (the page, the HUD `msg`, the terminal). The
@@ -1482,7 +1562,8 @@ exact; `recorder.event(sim, e)` for each `LapTimer` event; and
 end of the crossing step with a snapshot of every dynamic `Vehicle`
 attribute, the harness's surface samples and the `LapTimer`, and closes at
 the end of the next crossing step, after its sector event). `reset()`, a
-live `apply_setting` (anything but sound / camera) and the `T` wet toggle
+live `apply_setting` (anything but sound / camera / shake / graphics /
+paint) and the `T` wet toggle
 `discard` the open lap: the physics could not replay it; the live change
 also `retarget`s the recorder (the engine is in the key, the assists go
 with the lap). A lap is filed only when `LapTimer.lap_valid` holds, it went
@@ -1504,7 +1585,8 @@ its records file (`RecordBook.set_best_medal(..., save=False)`, written by
 the recorder's filing thread: `LapRecorder.save_later`). The pre-race page
 shows the class's targets and your best medal. V31 checks the medals of its
 three laps and the best kept. The table is generated, never typed:
-`python3 -m drive.medals --build` (26 min on 6 workers for 816 runs), and
+`python3 -m drive.medals --build` (816 runs in 26 min on 6 workers for the
+first three maps; the three newer circuits make it 1626 runs), and
 its self-check soft-fails with that command when a track, a car or the
 engine modes changed since.
 

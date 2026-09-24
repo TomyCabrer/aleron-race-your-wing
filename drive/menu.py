@@ -27,6 +27,11 @@ Command vocabulary (the strings `Menu.handle` understands):
 
 A page with more rows than fit shows a scrolling window of them.
 
+A row can carry a colour SWATCH -- the Settings page's Paint row shows the
+paint it names -- through a side channel, `show(..., swatches={action: rgb})`:
+a small filled square drawn right after that row's label. The rows stay
+(label, action) 2-tuples, which is what every caller unpacks.
+
 Everything else is ignored so a caller can pass its whole command stream.
 """
 
@@ -45,6 +50,7 @@ C_ACCENT = (255, 140, 43)
 C_SEL_BG = (40, 44, 52)
 C_KEY = (217, 206, 85)
 C_SECTION = (79, 163, 255)
+C_SWATCH_EDGE = (206, 210, 216)    # a swatch's 1 px outline: a dark paint still reads
 
 #: frames after a show() before a mouse press arms a row (~0.25 s at 60 fps)
 CLICK_GUARD_DRAWS = 15
@@ -88,13 +94,15 @@ class Menu:
                `handle('select')`.
     `sections` list of (title, rows) with rows = [(key, what), ...]; drawn as
                columns to the right of the items.
+    `swatches` {action: (r, g, b)}: a colour swatch after that row's label.
     """
 
     def __init__(self, title: str = "PAUSED", items=(), sections=(),
-                 footer: str = "", subtitle: str = "", note: str = ""):
+                 footer: str = "", subtitle: str = "", note: str = "", swatches=None):
         self.title = title
         self.items = list(items)
         self.sections = list(sections)
+        self.swatches = dict(swatches or {})
         self.footer = footer
         self.subtitle = subtitle
         self.note = note
@@ -117,7 +125,7 @@ class Menu:
     # -- state --------------------------------------------------------------
     def show(self, items=None, sections=None, subtitle=None, note=None,
              footer=None, title=None, idx=0, columns=None, art=None,
-             art_h: float = 0.0, typed=(), help_for=None) -> None:
+             art_h: float = 0.0, typed=(), help_for=None, swatches=None) -> None:
         """Open (or re-open) the menu. `idx` keeps the cursor where it was
         when a settings page re-shows itself after a value is cycled;
         `columns=1` stacks every help section (and the note) in one column
@@ -126,7 +134,12 @@ class Menu:
         page's card), given `art_h` px at the top of the first help column;
         every show() sets it, so the next page never inherits it. `typed`:
         the actions of the rows that take the keyboard's digits (a digit on
-        one returns 'type:<d>:<action>'); set by every show() too."""
+        one returns 'type:<d>:<action>'); set by every show() too.
+        `swatches` {action: (r, g, b)} draws a small colour swatch right
+        after the label of the row with that action. The swatches belong to
+        the rows: new `items` without `swatches` clear them (the pause page
+        shown after the settings page has none), a re-show that keeps the
+        items keeps them."""
         self.art = art
         self.art_h = float(art_h) if art is not None else 0.0
         self.typed = frozenset(typed or ())
@@ -136,6 +149,10 @@ class Menu:
         self.help_for = help_for
         if items is not None:
             self.items = list(items)
+            if swatches is None:
+                self.swatches = {}
+        if swatches is not None:
+            self.swatches = dict(swatches)
         if sections is not None:
             self.sections = list(sections)
         if subtitle is not None:
@@ -297,8 +314,11 @@ class Menu:
         # value labels, a pause page has short verbs)
         row_h = 21 * u
         w = min(1160 * u, W - 16 * u)
-        items_w = max(310 * u, max((f_item.size("> " + lbl)[0] for lbl, _ in self.items),
-                                   default=0) + 24 * u)
+        sw = max(6, int(round(14 * u)))           # a swatch's side, px
+        sw_gap = int(round(8 * u))
+        items_w = max(310 * u, max((f_item.size("> " + lbl)[0]
+                                    + (sw_gap + sw if a in self.swatches else 0)
+                                    for lbl, a in self.items), default=0) + 24 * u)
         n_rows = len(self.items)
         cap0 = max(3, int((H - 16 * u - 96 * u - (len(NAV_HINT) + 1) * row_h - 30 * u
                            - 44 * u) // (36 * u)))
@@ -381,8 +401,16 @@ class Menu:
                 pygame.draw.rect(screen, C_ACCENT,
                                  (int(x0 + 16 * u), int(y - 6 * u),
                                   int(4 * u), int(32 * u)))
-            self._blit(screen, ("> " if sel else "  ") + label, x0 + 28 * u, y,
-                       f_item, C_TEXT if sel else C_DIM)
+            lw = self._blit(screen, ("> " if sel else "  ") + label, x0 + 28 * u, y,
+                            f_item, C_TEXT if sel else C_DIM)
+            rgb = self.swatches.get(self.items[i][1])
+            if rgb is not None:
+                # centred on the label's line, rounded, a 1 px light outline
+                sr = pygame.Rect(int(x0 + 28 * u) + lw + sw_gap,
+                                 int(y + 0.5 * (f_item.get_height() - sw)), sw, sw)
+                rad = max(2, int(round(3 * u)))
+                pygame.draw.rect(screen, tuple(int(c) for c in rgb[:3]), sr, border_radius=rad)
+                pygame.draw.rect(screen, C_SWATCH_EDGE, sr, 1, border_radius=rad)
             if (i == top and top > 0) or (i == top + vis - 1 and top + vis < n):
                 more = f"^ {top} more" if i == top and top > 0 else f"v {n - top - vis} more"
                 self._blit(screen, more, x0 + 16 * u + items_w - f_lbl.size(more)[0] - 8 * u,
@@ -547,6 +575,39 @@ def self_check(verbose: bool = True) -> bool:
     undeclared = m.handle("digit:7")
     rep("a digit on a typed row -> 'type:<d>:<action>'; nothing elsewhere",
         on_row == "type:7:set:n" and off_row is None and undeclared is None and m.open)
+    # the swatch side channel: a square of the row's colour right after its
+    # label and inside its row (so clear of the help columns), on that row
+    # only; the rows stay 2-tuples; a re-show keeps it, new items drop it
+    cob = (40, 72, 186)
+    sm = Menu("SETTINGS", [("Car        Opel Corsa C", "set:car"),
+                           ("Paint      cobalt blue", "set:paint"), ("Back", "back")],
+              [("KEYBOARD", [("ESC", "back")])])
+
+    def swatch_px():
+        scr.fill((27, 29, 33))
+        sm.draw(scr)
+        a = pygame.surfarray.pixels3d(scr)
+        hit = (a[..., 0] == cob[0]) & (a[..., 1] == cob[1]) & (a[..., 2] == cob[2])
+        del a
+        xs, ys = hit.nonzero()
+        return int(hit.sum()), xs, ys
+    sm.show(swatches={"set:paint": cob})
+    n_sw, xs, ys = swatch_px()
+    rows = dict(sm._rows)
+    rx, ry, rw, rh = rows[1]
+    lw = sm._font(18).size("  " + sm.items[1][0])[0]
+    inside = bool(n_sw) and (xs.min() >= rx + 12 + lw and xs.max() < rx + rw
+                             and ys.min() >= ry and ys.max() < ry + rh)
+    sm.show(idx=1)
+    kept = swatch_px()[0]
+    sm.show(items=[("Resume", "resume"), ("Quit", "quit")])
+    gone = swatch_px()[0]
+    rep("a row's colour swatch: after its label, inside its row, kept on a re-show, "
+        "dropped with new items; rows stay 2-tuples",
+        100 <= n_sw <= 14 * 14 and inside and kept == n_sw and gone == 0
+        and all(len(it) == 2 for it in sm.items) and sm.action() == "resume",
+        f"{n_sw} px at x {xs.min() if n_sw else 0}-{xs.max() if n_sw else 0} (label ends "
+        f"{rx + 12 + lw}, row {rx}-{rx + rw}), re-show {kept}, new items {gone}")
     m.hide()
     scr.fill((27, 29, 33))
     m.draw(scr)

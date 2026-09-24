@@ -625,8 +625,16 @@ def _between(x0, x1, lo_hi):
     return (x0 <= lo + 1e-9 and x1 >= hi - 1e-9)
 
 
-def build_car_mesh() -> list[tuple[np.ndarray, tuple, str]]:
-    """(verts (n,3), colour, kind). Kind is 'body' | 'wheel' | 'trim'."""
+def build_car_mesh(paint=C_PAINT) -> list[tuple[np.ndarray, tuple, str]]:
+    """(verts (n,3), colour, kind). Kind is 'body' | 'wheel' | 'trim'.
+
+    `paint` is the body colour (the player's paint, drive/paint.py); the nose
+    and tail caps are a darker tone of it. The stock yellow keeps its own
+    hand-picked cap tone, C_PAINT_DARK; any other paint gets 0.75 of itself,
+    about what C_PAINT_DARK is of C_PAINT (0.744-0.757 by channel)."""
+    paint = tuple(int(c) for c in paint)
+    dark = (C_PAINT_DARK if paint == C_PAINT
+            else tuple(int(round(0.75 * c)) for c in paint))
     polys = []
     inside = np.array([-0.15, 0.0, 0.70])
     rings = [_ring(s) for s in STATIONS]
@@ -638,16 +646,16 @@ def build_car_mesh() -> list[tuple[np.ndarray, tuple, str]]:
             quad = np.array([a[j], a[k], b[k], b[j]])
             if j in (3, 4):               # roof
                 col = (C_GLASS if _between(x0, x1, X_WINDSCREEN)
-                       or _between(x0, x1, X_REAR_GLASS) else C_PAINT)
+                       or _between(x0, x1, X_REAR_GLASS) else paint)
             elif j in (2, 5):             # belt -> roof edge: side glass
-                col = C_GLASS if _between(x0, x1, X_SIDE_GLASS) else C_PAINT
+                col = C_GLASS if _between(x0, x1, X_SIDE_GLASS) else paint
             elif j in (8, 9):             # floor
                 col = C_UNDER
             else:
-                col = C_PAINT
+                col = paint
             polys.append((_orient(quad, inside), col, "body"))
-    polys.append((_orient(rings[0], inside), C_PAINT_DARK, "body"))       # nose
-    polys.append((_orient(rings[-1], inside), C_PAINT_DARK, "body"))      # tail
+    polys.append((_orient(rings[0], inside), dark, "body"))       # nose
+    polys.append((_orient(rings[-1], inside), dark, "body"))      # tail
 
     # wheel arches: dark discs on the flank, a hair outboard of the sill
     for wx, wy in WHEEL_XY:
@@ -930,10 +938,23 @@ class GarageView:
         self.f_lbl = self.fonts.get(14)
         self.f_val = self.fonts.get(16)
         self.f_big = self.fonts.get(26, bold=True)
-        self.car = Batch(build_car_mesh())
+        self.paint = C_PAINT
+        self.car = Batch(build_car_mesh(self.paint))
         self.n_polys = 0
         self.frame_ms = 0.0
         self.show_vectors = True
+
+    def set_paint(self, rgb) -> None:
+        """Paint the preview car `rgb` (None: the stock C_PAINT yellow). The
+        body Batch is rebuilt only when the colour changes (~2.4 ms); the next
+        frame draws it. Cosmetic: nothing in the build or its JSON changes.
+        The preview is the old hatch shell whatever car is fitted, so the
+        caller passes the fitted car's paint RESOLVED (its factory colour
+        for 'factory', render.factory_colour)."""
+        rgb = C_PAINT if rgb is None else tuple(int(c) for c in rgb)
+        if rgb != self.paint:
+            self.paint = rgb
+            self.car = Batch(build_car_mesh(rgb))
 
     def _txt(self, s, x, y, font=None, col=C_TEXT):
         surf = (font or self.f_val).render(s, True, col)
@@ -4217,6 +4238,12 @@ class Garage:
     def design(self) -> CarBuild:
         return self.build
 
+    def set_paint(self, rgb) -> None:
+        """The player's paint on the preview car (GarageView.set_paint):
+        drive.drive calls it right after constructing the Garage, with the
+        fitted car's paint resolved to an RGB. Cosmetic only."""
+        self.view.set_paint(rgb)
+
     # -- pause menu (ESC / OPTIONS) -------------------------------------------
     def _menu_open(self) -> None:
         secs = [("KEYBOARD", GARAGE_HELP_KB)]
@@ -5253,6 +5280,32 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     if screenshot_dir:
         os.makedirs(screenshot_dir, exist_ok=True)
         pygame.image.save(g.screen, os.path.join(screenshot_dir, "garage_frame.png"))
+    # the player's paint (drive/paint.py) on the preview: the body is rebuilt
+    # in it -- only when it changes -- and the scene drawn again at the same
+    # pose changes the car's pixels, toward the new colour
+    g.view.draw_scene(g.build, g.lib, g.cam, g.deploy, g.sel)
+    f0 = pygame.surfarray.array3d(g.screen).astype(np.int32)
+    body0 = g.view.car
+    cobalt = (40, 72, 186)
+    g.set_paint(cobalt)
+    body1 = g.view.car
+    g.set_paint(list(cobalt))                  # the same colour: no rebuild
+    same = g.view.car is body1
+    g.view.draw_scene(g.build, g.lib, g.cam, g.deploy, g.sel)
+    f1 = pygame.surfarray.array3d(g.screen).astype(np.int32)
+    if screenshot_dir:
+        pygame.image.save(g.screen, os.path.join(screenshot_dir, "garage_paint.png"))
+    ch = (f0 != f1).any(axis=2)
+    m0, m1 = (f_[ch].mean(axis=0) if ch.any() else np.zeros(3) for f_ in (f0, f1))
+    g.set_paint(None)
+    rep("paint: the preview body rebuilt in the paint (dark caps 0.75 of it) only on a "
+        "change, drawn toward it; None is the stock yellow again",
+        body1 is not body0 and same and g.view.car is not body1 and g.view.paint == C_PAINT
+        and body0.colours.count(C_PAINT_DARK) == 2 and body1.colours.count((30, 54, 140)) == 2
+        and body1.colours.count(cobalt) > 20 and C_PAINT not in body1.colours
+        and int(ch.sum()) > 2000 and m0[0] > m0[2] and m1[2] > m1[0] + 40,
+        f"{body1.colours.count(cobalt)} body polys in {cobalt}; {int(ch.sum())} px changed, "
+        f"mean {m0.round().astype(int).tolist()} -> {m1.round().astype(int).tolist()}")
 
     def key(k, mod=0):
         return g._handle(pygame.event.Event(pygame.KEYDOWN, key=k, mod=mod))
