@@ -812,10 +812,11 @@ def self_check(verbose: bool = True) -> bool:
     metrics = {c["goal"]["metric"] for c in allc.values()}
     tracks = {c["class"].split("|")[0] for c in allc.values()}
     surf = {c["class"].split("|")[3] for c in allc.values()}
-    rep("8 challenges: braking, skidpad, drag, lap and wet",
-        len(allc) == 8 and {"stop_distance", "skid_ay", "lap_time"} <= metrics
-        and metrics & {"drag_time", "trap_speed"} and "all" in surf
-        and {"dragstrip", "skidpad", "arena"} <= tracks and len(load_all()) == 8,
+    modes = {c["ref"].get("wing_mode", "auto") for c in allc.values()}
+    rep("8 challenges: stops (one on the air brake), skidpad circles, laps, and wet",
+        len(allc) == 8 and {"stop_distance", "skid_ay", "lap_time"} == metrics
+        and "air_brake" in modes and "all" in surf
+        and {"dragstrip", "skidpad", "arena", "open"} <= tracks and len(load_all()) == 8,
         f"{len(allc)} files, metrics {sorted(metrics)}, surfaces {sorted(surf)}")
     # --- a broken file is refused with its reasons
     good = next(iter(allc.values()))
@@ -996,10 +997,19 @@ def self_check(verbose: bool = True) -> bool:
     # a malformed saved entry: ignored with a note
     bad_p = Progress(os.path.join(tmp, "bad.json"))
     bad_p.section(SECTION).update({"brake_100": None, "brake_wet": 5, "skid_dry": {"stars": "x"},
-                                   "skid_wet": {"stars": 9}, "drag_400": {"best": 16.0, "stars": 1}})
+                                   "skid_wet": {"stars": 9},
+                                   "airbrake_150": {"best": 90.0, "stars": 1}})
     rep("malformed saved entries are ignored with a note, the good one counts",
         total_stars(bad_p)[0] == 1 and _best(bad_p, "skid_dry") == (None, 0)
         and any("malformed" in n for n in bad_p.notes))
+    #  a challenge that is gone (task 36 replaced drag_400 / trap_1000): its
+    #  saved entry is never read -- a time in seconds is not a stop distance
+    old_p = Progress(os.path.join(tmp, "old.json"))
+    old_p.section(SECTION).update({"drag_400": {"best": 16.2, "stars": 3},
+                                   "trap_1000": {"best": 170.0, "stars": 3}})
+    rep("a removed challenge's saved entry counts for nothing and is never read",
+        total_stars(old_p)[0] == 0 and "drag_400" not in load_all()
+        and all(_best(old_p, cid) == (None, 0) for cid in load_all()))
     if verbose:
         print(f"challenges self-check: {'PASS' if ok else 'FAIL'}")
     return ok

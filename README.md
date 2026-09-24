@@ -198,19 +198,26 @@ so it cannot pull sideways; its top wing still comes out.
 
 **It is a small effect with these wings.** Measured on the Corsa with the
 plate on both flanks and the rear-s1223 top wing, against no wing at all:
-braking at 100 km/h stops 0.4 % shorter, at 150 2.3 %, and from 200 with
-the wings already out 3.1 %. Against the same car in AUTO, whose active top
+braking at 100 km/h stops 0.4 % shorter, at 150 2.3 % (the tuned engine,
+braking already settled at 150: 2.1 %), and from 200 with the wings already
+out 3.1 %. Against the same car in AUTO, whose active top
 wing already comes out under braking, the air brake adds the flanks' drag:
 0.7 % from 150. The flank panels make no downforce, and the tyres do almost
 all of the stopping.
 
 ## Challenges
 
-ESC > *Challenges*: eight set pieces, each with **three stars** --
-**Stop from 100**, **Wet stop from 80**, **Hold the circle** (mean lateral g
-over a flying lap of the skidpad, flank wings only), **Wet circle**,
-**Quarter mile** (402 m from standing), **Speed at 1000 m**, **Arena, sport
-engine** and **Wet arena** (a lap each). Each runs in its own map, car,
+ESC > *Challenges*: eight set pieces, each with **three stars**, about what
+the wings are for -- stopping and grip:
+* **the stops:** **Stop from 100**, **Wet stop from 80**, and **Air brake
+  from 150** (the wing mode's AIR BRAKE puts all three wings out as you
+  brake);
+* **the skidpad:** **Hold the circle** (mean lateral g over a flying lap,
+  flank wings only) and **Wet circle**;
+* **the laps:** **Proving-ground lap**, **Arena, sport engine** and **Wet
+  arena**.
+
+Each runs in its own map, car,
 engine and surface (yours come back when you end it); its page shows the
 goal, the three thresholds, the RULES the build must meet (the wing area a
 slot, the wings' weight, the ballast, the slots allowed, the drag area with

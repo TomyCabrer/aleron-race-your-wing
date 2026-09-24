@@ -1,0 +1,35 @@
+{
+  "kind": "carsim-challenge-1",
+  "id": "lap_open",
+  "title": "Proving-ground lap",
+  "blurb": "One valid lap of the proving ground's road with the 150 hp engine: corners to hold and stops into them. Up to 15 kg of wing; 3 stars with 10.5 kg or less.",
+  "class": "open|corsa|sport|none",
+  "constraints": {
+    "max_wing_mass": 15
+  },
+  "goal": {
+    "metric": "lap_time",
+    "threshold": 74.49434631328553
+  },
+  "stars": {
+    "2": {
+      "threshold": 70.50357776078809
+    },
+    "3": {
+      "efficiency": {
+        "max_wing_mass": 10.5
+      },
+      "threshold": 67.84306539245647
+    }
+  },
+  "ref": {
+    "driver": "lapdriver:0.90",
+    "build": "plate",
+    "x": [
+      1.12,
+      1.06,
+      1.02
+    ],
+    "value": 66.51280920829065
+  }
+}

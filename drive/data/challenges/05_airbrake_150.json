@@ -1,0 +1,35 @@
+{
+  "kind": "carsim-challenge-1",
+  "id": "airbrake_150",
+  "title": "Air brake from 150",
+  "blurb": "Stop as short as you can: the distance runs from 150 km/h down to a standstill. Brake before 150, so the car is already stopping hard when it counts -- and with G (TRIANGLE) on AIR BRAKE all three wings come out as you brake: about 2 % shorter than no wings, the third star.",
+  "class": "dragstrip|corsa|tuned|none",
+  "constraints": {},
+  "goal": {
+    "metric": "stop_distance",
+    "v0_kmh": 150.0,
+    "threshold": 98.44086802288052
+  },
+  "stars": {
+    "2": {
+      "threshold": 93.16725009308334
+    },
+    "3": {
+      "efficiency": {
+        "max_ballast": 0
+      },
+      "threshold": 89.6515048065519
+    }
+  },
+  "ref": {
+    "driver": "brake:1.0:165",
+    "build": "tall",
+    "wing_mode": "air_brake",
+    "x": [
+      1.12,
+      1.06,
+      1.02
+    ],
+    "value": 87.89363216328617
+  }
+}
