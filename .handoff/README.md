@@ -116,6 +116,7 @@ is true of the two cells it swept and false of the two it did not.
 | `30-look-and-sound.md` | **30** | owner request: the world round the road, props, the car and the chase camera, smoke / dust / spray, a new engine and road sound; Settings > Graphics |
 | `31-tutorial-manual.md` | **31** | owner feedback on 23: an **optional manual-gearbox** pair (a page with the keys, the shift lights, when to change down, the clutch mode, and *Skip it*; then up to 3rd by hand and a downshift at speed, the box switched to Manual for the step and back after); the **wing-design tutorial** one press from the tutorial's last page and from WELCOME. V34 drives the manual step too (and its time bound now counts the running session) |
 | `32-results-card.md` | **32** | owner feedback on 27: the **results card in the HUD's own look** (the rounded top-lit panels, the timing panel's width, the medal as a tag, a bar per sector in its colour, a NEW PB's edge pulsing gold) and **Settings > Last lap**: the LAP RESULTS page with the card itself (a new `Menu.show(art=)` hook) and the session's last ten laps. The tutorial / challenge box gets the same panel |
+| `33-phase-a-answers.md` | **33** | the owner's answers to Phase A's questions: a **Ghosts row** on the TIME TRIAL page (J had no pad button), and the page opens only with **something new** on it (the first drive, a new class or build, back from the garage), not on every restart; the rounded controls, PICK's class best and the medals' aids stay, with the reasons |
 
 ### Wave 7
 

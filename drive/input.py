@@ -348,6 +348,7 @@ MENU_KEYS = {
     pygame.K_p: "menu",
     pygame.K_r: "reset",              # + SHIFT -> 'full_reset'
     pygame.K_BACKSPACE: "garage",
+    pygame.K_j: "ghosts",             # the TIME TRIAL page's Ghosts row (task 33)
 }
 
 def _menu_mouse(ev):

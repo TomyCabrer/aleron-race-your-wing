@@ -1650,7 +1650,14 @@ the pause menu's `timetrial` row reaches it any time. Its rows: `pr_race`
 json)` and `restart()`s; `run_interactive_cli` first saves a car that is in
 no library file as `'<name> (autosave)'` (`_autosave_build`), then makes the
 pick the design), `pr_edit` (only with a garage: `stop_reason = 'garage'`;
-the garage's ENTER starts a new session, which opens on the page). ESC on the
+the garage's ENTER starts a new session, which opens on the page).
+Task 33: `prerace.session_start(opts, key, build_name, build_json,
+wanted)` decides it: the page opens when this session's `seen_key` (class,
+build name, build content) is not the previous session's (`opts.prerace_seen`,
+None for a map with no page) or `opts.prerace_force` is set (the garage's
+return, `run_interactive_cli`); it records this session's key and spends
+`prerace_force` / `prerace_skip`. The page's `set:pr_ghosts` row toggles
+`GhostSet.enabled` (J, for a pad); J itself (`MENU_KEYS`) works on the page. ESC on the
 page is the pause page (laps still count there); the hotkeys R / SHIFT+R /
 BACKSPACE fall through. The build a map opens with: every player session
 (`_player_session`: not `--ml-drive`, headless, `--render off/offscreen`)

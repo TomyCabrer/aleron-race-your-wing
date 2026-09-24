@@ -44,7 +44,7 @@ python3 -m drive.drive --swarm 32 --swarm-car mx5 --swarm-fast --swarm-save neve
 | `S` | starter | `C` | camera |
 | `H` `V` `B` `N` `X` | HUD / vectors / g-g / skid / clear | `-` `=` `0` | zoom |
 | `M` `L` | telemetry marker / record | `TAB` | next map |
-| `K` | arm a seed lap for the swarm (named and saved at the line) | `J` | ghosts on / off (time trial) |
+| `K` | arm a seed lap for the swarm (named and saved at the line) | `J` | ghosts on / off (time trial; a pad: the TIME TRIAL page's *Ghosts* row) |
 | `BACKSPACE` | garage (3D panel editor) | `ESC` | pause menu / settings |
 
 `ESC` (or `OPTIONS` on the pad) pauses and opens the menu: every keyboard and
@@ -215,9 +215,16 @@ its best lap in this class (the car's own laps: an edited car that kept a
 saved build's name is a different car); `ENTER` restarts the session in it,
 and a car you were driving that is in no library file is saved there first
 as `<name> (autosave)`. **Edit** opens the garage on this build, and its
-`ENTER` comes back here. `ESC` is the pause menu; *Resume* drives on from
-where you are, and those laps count too. The pause menu's *Time trial* brings
-the page back any time.
+`ENTER` comes back here. **Ghosts** shows or hides both ghosts (what `J`
+does, for a pad) and **Ghost 2** picks the second one. `ESC` is the pause
+menu; *Resume* drives on from where you are, and those laps count too. The
+pause menu's *Time trial* brings the page back any time.
+
+The page opens when there is something new on it: when the class (map,
+car, engine or surface) or the build is not the previous drive's -- the
+first drive of a launch, a map change, a PICK -- and back from the garage. A
+restart that keeps both (a ballast change, a tutorial or challenge ending on
+the same class, a race) drives straight on. `J` works on the page too.
 
 Each map remembers the build you last **drove** on it
 (`runs/records/last_builds.json`): launch, or change map, and the car you

@@ -8,7 +8,7 @@ top 5 and the medal targets, and one press to go.
            zero. An unchanged build starts in ONE press -- the cursor opens
            on RACE.
     EDIT   the garage, on this build; ENTER there drives it and comes back
-           to this screen (every drive session on a lap map opens here).
+           to this screen.
     PICK   any build saved in the garage library, whichever track it was
            designed on, each row with that build's best time in THIS class.
 
@@ -20,6 +20,14 @@ on the command line win at launch.
 
 The same page is the pause menu's *Time trial* item mid-session.
 
+When a session OPENS on it (task 33, `session_start`): when its class or
+its build (name and content) is not the previous session's -- the first
+session of a launch, a map / car / engine / surface change (through a map
+with no page too), a PICK -- and back from the garage (EDIT's round trip
+ends here). A restart that keeps both -- a ballast change, a tutorial or a
+challenge ending on the same class, a race -- drives straight on: the page
+would show what was just on it, one more press for nothing.
+
 Pure UI logic: this module builds `drive.menu.Menu` rows and help sections
 from a `records.RecordBook`, the medal table (`drive.medals`, lazily -- a
 class with no reference lap shows "--") and the library's builds; the `Sim`
@@ -28,7 +36,8 @@ It imports no pygame. Scripted and headless runs never see the screen
 (`wanted`).
 
 Actions the rows return: 'pr_race', 'pr_edit', 'pr_pick', 'pr_back',
-'pr_build:<name>' (the PICK page) and 'set:pr_ghost' (task 22's ghost slot).
+'pr_build:<name>' (the PICK page), 'set:pr_ghost' (task 22's ghost slot) and
+'set:pr_ghosts' (both ghosts shown / hidden: J's toggle, for a pad; task 33).
 
     python3 -m drive.prerace      the self-check
 """
@@ -46,6 +55,7 @@ PR_HELP = [("PRE-RACE", [
     ("RACE", "every car to the line; the clock starts at the next crossing"),
     ("Build", "pick another saved build (each with its best in this class)"),
     ("Edit", "the garage on this build; its ENTER comes back here"),
+    ("Ghosts", "shown / hidden: J on the keyboard, this row on a pad"),
     ("Ghost 2", "LEFT / RIGHT: the reference bot, none, or your P2..P5"),
     ("ESC", "the pause menu: Resume drives on from here (laps still count)"),
 ])]
@@ -69,6 +79,32 @@ def wanted(opts, settings) -> bool:
         return False
     return rec.records_reason(settings.track, getattr(opts, "radius", 50.0),
                               getattr(opts, "cw", False)) is None
+
+
+def seen_key(key, build_name, build_json) -> tuple:
+    """What a session's page shows: the class and the build -- its name and
+    its content (`records.build_id`)."""
+    return (str(key or ""), str(build_name or ""), rec.build_id(build_name, build_json))
+
+
+def due(prev, now, forced: bool = False) -> bool:
+    """Does this session open on the page? When `now` (this session's
+    `seen_key`) is not `prev` (the previous session's; None: none, or a map
+    with no page), and when `forced` (back from the garage)."""
+    return bool(forced) or prev != now
+
+
+def session_start(opts, key, build_name, build_json, wanted_now: bool) -> bool:
+    """At a drive session's start: does it open on the page? Remembers this
+    session's `seen_key` for the next (`opts.prerace_seen`, None without a
+    class) and spends the one-shot flags (`opts.prerace_force`, set by the
+    garage's return; `opts.prerace_skip`, by the swarm's)."""
+    now = seen_key(key, build_name, build_json) if key else None
+    opens = bool(wanted_now and now is not None and not getattr(opts, "prerace_skip", False)
+                 and due(getattr(opts, "prerace_seen", None), now,
+                         forced=getattr(opts, "prerace_force", False)))
+    opts.prerace_seen, opts.prerace_force, opts.prerace_skip = now, False, False
+    return opens
 
 
 def default_build(book, track: str):
@@ -123,6 +159,7 @@ class PreRace:
         self.builds = dict(builds or {})
         self.titles = dict(titles or {})
         self.ghost_label = None            # task 22: the ghost-2 row, when set
+        self.ghosts_on = None              # task 33: the ghosts row (J), when set
 
     # -- what the build is ------------------------------------------------
     def saved(self) -> bool:
@@ -144,6 +181,9 @@ class PreRace:
                 (f"{'Build':<9s}{name}{tag}", "pr_pick")]
         if self.can_edit:
             rows.append(("Edit this build in the garage", "pr_edit"))
+        if self.ghosts_on is not None:
+            rows.append((f"{'Ghosts':<9s}{'shown' if self.ghosts_on else 'hidden'}  (J)",
+                         "set:pr_ghosts"))
         if self.ghost_label is not None:
             rows.append((f"{'Ghost 2':<9s}{self.ghost_label}", "set:pr_ghost"))
         return rows
@@ -310,6 +350,30 @@ def self_check(verbose: bool = True) -> bool:
         == ["pr_race", "pr_pick"])
     pr.ghost_label = "reference bot"
     rep("the ghost row appears when set", pr.items()[-1] == ("Ghost 2  reference bot", "set:pr_ghost"))
+    pr.ghosts_on = False
+    rep("the ghosts row (J, for a pad) before it, when set",
+        pr.items()[-2:] == [("Ghosts   hidden  (J)", "set:pr_ghosts"),
+                            ("Ghost 2  reference bot", "set:pr_ghost")], str(pr.items()[-2:]))
+    from types import SimpleNamespace
+    o = SimpleNamespace()
+    stock = key.replace("sport", "stock")
+    seq = [session_start(o, *a) for a in (
+        (key, "fast", b_fast, True),            # the launch's first session: opens
+        (key, "fast", dict(b_fast), True),      # a ballast restart, same class + build
+        (None, "", None, False),                # TAB to the dragstrip: no page there
+        (key, "fast", b_fast, True),            # ... and back: a new map again, opens
+        (stock, "fast", b_fast, True),          # an engine change: opens
+        (stock, "copy", dict(b_fast), True),    # PICK the same car under another name
+        (stock, "copy", edited, True))]         # the same name, edited in the garage
+    o.prerace_force = True                      # back from the garage, nothing changed
+    seq.append(session_start(o, stock, "copy", edited, True))
+    o.prerace_skip = True                       # back from the swarm, the build changed
+    seq.append(session_start(o, key, "fast", b_fast, True))
+    seq.append(session_start(o, key, "fast", b_fast, False))   # a headless run: never
+    rep("the page opens when the class or build is not the last session's, or from "
+        "the garage; flags spent", seq == [True, False, False, True, True, True, True, True,
+                                          False, False]
+        and not o.prerace_force and not o.prerace_skip, str(seq))
     if verbose:
         print(f"  {'ALL PASS' if ok else 'FAILURES ABOVE'}: {n_ok}/{n_all} checks")
     return ok

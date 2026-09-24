@@ -2509,6 +2509,7 @@ class Sim:
         if self.ghosts is not None:
             from .ghosts import slot_label
             pr.ghost_label = slot_label(self.ghosts.slot, pr.book, pr.key)
+            pr.ghosts_on = bool(self.ghosts.enabled)   # J's row, for a pad (task 33)
 
     def _menu_show_prerace(self, idx: int = 0) -> None:
         try:
@@ -2558,6 +2559,10 @@ class Sim:
                 self.start_timed()
             elif action == "pr_pick":
                 self._menu_show_prerace_pick()
+            elif action.endswith("set:pr_ghosts") and self.ghosts is not None:
+                self.ghosts.enabled = not self.ghosts.enabled   # what J does
+                self._rec_note("ghosts " + ("on" if self.ghosts.enabled else "off"), 2.0)
+                self._menu_show_prerace(idx=idx)
             elif action.endswith("set:pr_ghost") and self.ghosts is not None:
                 self.ghosts.step_slot(-1 if action.startswith("prev:") else +1)
                 self._menu_show_prerace(idx=idx)
@@ -2897,6 +2902,11 @@ class Sim:
         cursor where it was; ESC / CIRCLE there goes back to the pause page."""
         if ev == "quit":                   # window close
             self.quit = True
+            return
+        if ev == "ghosts" and self._menu_page == "prerace" and self.ghosts is not None:
+            self.ghosts.enabled = not self.ghosts.enabled      # J, on the page whose
+            self._rec_note("ghosts " + ("on" if self.ghosts.enabled else "off"), 2.0)
+            self._menu_show_prerace(idx=self.menu.idx)          # Ghosts row says (J)
             return
         if ev in ("reset", "full_reset", "garage"):
             action = ev
@@ -4918,6 +4928,18 @@ def _v32_prerace(tmp, verbose=True):
                 and "reference bot" in row0 and sim.menu.open)
     ev("select")
     ghost_ok = ghost_ok and sim.ghosts.slot == "top2" and sim.menu.open
+    goto("set:pr_ghosts")                          # J's row, for a pad (task 33)
+    on_a = sim.ghosts.enabled
+    ev("select")
+    on_b = sim.ghosts.enabled
+    ev("nav_left")
+    ev("ghosts")                                   # J on the page toggles it too
+    on_j = sim.ghosts.enabled
+    ev("ghosts")
+    pad_ok = (on_a and not on_b and not on_j and sim.ghosts.enabled and sim.menu.open
+              and sim._menu_page == "prerace"
+              and "shown" in sim.menu.items[sim.menu.idx][0])
+    ghost_ok = ghost_ok and pad_ok
     ev("menu"); ev("menu")                         # the page, then the pause page
     on0 = sim.ghosts.enabled
     ev("ghosts")                                   # J
@@ -6438,6 +6460,7 @@ def run_interactive_cli(opts) -> int:
                 print(f"garage -> drive: {design.summary(lib)}")
                 mode = "drive"
                 from_garage = True
+                opts.prerace_force = True      # EDIT's round trip ends on the page
             tut = getattr(opts, "tutorial", None)
             if tut is not None and not tut.active:
                 tut = opts.tutorial = None
@@ -7397,6 +7420,7 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     #  the pre-race screen (drive/prerace.py): a timed session on a lap map
     #  starts on it; the pause menu's Time trial reaches it any time
     prerace_now = False
+    pr_key, pr_wanted = None, False
     if sim.recorder is not None and renderer is not None:
         try:
             from .prerace import PreRace, wanted
@@ -7411,11 +7435,16 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
                                               engine=engine_label(settings.engine, car),
                                               surface=SURFACE_LABELS[settings.wet]),
                                   can_edit=bool(garage))
-            prerace_now = wanted(opts, settings) and not getattr(opts, "prerace_skip", False)
+            pr_key, pr_wanted = sim.recorder.key, wanted(opts, settings)
         except Exception as exc:           # noqa: BLE001
             print(f"pre-race screen unavailable ({type(exc).__name__}: {exc})")
             sim.prerace = None
-    opts.prerace_skip = False
+    #  only with something new on it: a class or build not the previous
+    #  session's, or back from the garage (task 33, prerace.session_start)
+    from .prerace import session_start
+    prerace_now = session_start(opts, pr_key if sim.prerace is not None else None,
+                                getattr(opts, "build_name", "") or "",
+                                getattr(opts, "build_json", None), pr_wanted)
     #  the driving tutorial (drive/tutorial.py): a player session has the
     #  progress file; a running tutorial comes back on every restart
     sim.progress_file = getattr(opts, "progress", None)
