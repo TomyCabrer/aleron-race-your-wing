@@ -75,15 +75,18 @@ CAR_STYLE_REF = {
                    L=2.830, t=1.519, a=1.3867),        # BMW E39 (ovh est)
     #  Renault Express (the Renault 5-based van, 1985-2000): length 4.056,
     #  width 1.566, height 1.776, wheelbase 2.580 m published (Wikipedia,
-    #  "Renault Express"). Overhangs, track and a are est until cars.py
-    #  carries the car.
+    #  "Renault Express"). t and a are cars.EXPRESS_14's own (tracks
+    #  1.326 / 1.288 published by French Wikipedia; a from its est 60 %
+    #  front), so the shell sits on that car's axles by the identity map.
     'van': dict(length=4.056, width=1.566, height=1.776, ovh_f=0.720,
-                L=2.580, t=1.330, a=1.032),
+                L=2.580, t=0.5 * (1.326 + 1.288), a=(1.0 - 0.60) * 2.580),
     #  Mercedes-Benz Citaro O530, 12 m city bus: length 11.950, width 2.550,
     #  height 3.120 (roof air conditioning), wheelbase 5.845, front overhang
-    #  2.705 m published (Mercedes-Benz Citaro data sheet). Track and a est.
+    #  2.705 m published (Mercedes-Benz Citaro data sheet). t and a are
+    #  cars.CITARO_O530's own (both est there), written as the same
+    #  expressions so they are the same floats and the map is the identity.
     'bus': dict(length=11.950, width=2.550, height=3.120, ovh_f=2.705,
-                L=5.845, t=2.110, a=3.741),
+                L=5.845, t=0.5 * (2.100 + 1.840), a=(1.0 - 0.36) * 5.845),
 }
 
 #: Cross-sections down each shell: (x, z_floor, z_belt, z_top, half_w,

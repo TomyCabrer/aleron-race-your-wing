@@ -545,6 +545,19 @@ class CarDerived:
     lltd_roll_f: float      # -      elastic (roll-lagged) front share
     lltd_roll_r: float
     y_dev: float            # m      half-track the flank panel sits at
+    #: task 41. The steady-state front transfer share this car runs:
+    #: `cfg.roll_dist_f` (the 0.74 calibration) unless the car declares its
+    #: own -- `geo + roll` equals it to the last bit either way.
+    roll_dist_f: float = 0.74
+    #: the tyre on each wheel, FL FR RL RR, and the `qss`-shaped reference
+    #: each one's utilisation is read against. On every car with no declared
+    #: load scale these are `tyre_for`'s cached car tyre -- CORSA_TYRE itself
+    #: on the Corsa -- and `qss.TYRE` itself, so nothing is copied or moved.
+    #: They live HERE, in the structural block, not on the Vehicle: records'
+    #: snapshot serialises every Vehicle attribute and a TyreModel is not
+    #: state.
+    tyres: tuple = ()
+    tyre_refs: tuple = ()
 
 
 def _h_ra_hat(c) -> float:
@@ -608,11 +621,45 @@ def car_derived(car, cfg: VehicleConfig) -> CarDerived:
     # `roll_dist_f`: written as a difference from the reference pair it does,
     # whatever the two references are, and at ratio 1.0 the correction is
     # exactly 0.0 and each share is exactly `cfg`'s own.
+    rd_car = getattr(car, "roll_dist_f", None)
+    if rd_car is None:
+        rd = cfg.roll_dist_f
+        roll_f = cfg.lltd_roll_f + (cfg.lltd_geo_f - geo_f)
+        roll_r = cfg.lltd_roll_r + (cfg.lltd_geo_r - geo_r)
+    else:
+        # task 41: a car that DECLARES its own split (the bus, whose 36 %
+        # front weight under the 0.74 calibration lifts its inner front at
+        # 0.44 g). The instantaneous shares are the same roll-centre
+        # scaling; the elastic ones make up the declared total.
+        rd = float(rd_car)
+        roll_f = rd - geo_f
+        roll_r = (1.0 - rd) - geo_r
+    tyres, refs = car_tyres(car)
     return CarDerived(h_ra=h_ra, I_roll=I_roll, Cphi=Cphi,
                       lltd_geo_f=geo_f, lltd_geo_r=geo_r,
-                      lltd_roll_f=cfg.lltd_roll_f + (cfg.lltd_geo_f - geo_f),
-                      lltd_roll_r=cfg.lltd_roll_r + (cfg.lltd_geo_r - geo_r),
-                      y_dev=Y_DEV * (car.t / ref.t))
+                      lltd_roll_f=roll_f, lltd_roll_r=roll_r,
+                      y_dev=Y_DEV * (car.t / ref.t),
+                      roll_dist_f=rd, tyres=tyres, tyre_refs=refs)
+
+
+def car_tyres(car) -> tuple:
+    """((tyre FL, FR, RL, RR), (qss reference FL, FR, RL, RR)) for `car`.
+
+    The car's own tyre SIZE, and -- task 41 -- its declared per-axle LOAD
+    SCALE (`cars.CarSpec.tyre_lfzo_f/_r`; drive/tyre.py "Load scaling").
+    At scale 1.0 `tyre_for` returns the same cached object it always did --
+    CORSA_TYRE itself for the Corsa, identity not equality -- and the
+    reference is `qss.TYRE` itself, so an unscaled car's step() reads the
+    very objects it read before. `CorsaC`, which has no tyre fields, falls
+    through to the Corsa's own numbers.
+    """
+    f = getattr(car, "tyre_file", None)
+    R0 = getattr(car, "tyre_R0", 0.2915)
+    w = getattr(car, "tyre_width", 0.175)
+    tf = tyre_for(f, R0, w, getattr(car, "tyre_lfzo_f", 1.0))
+    tr = tyre_for(f, R0, w, getattr(car, "tyre_lfzo_r", 1.0))
+    rf, rr = qss.car_tyre_refs(car)
+    return (tf, tf, tr, tr), (rf, rf, rr, rr)
 
 
 def _check_reference() -> CarDerived:
@@ -636,8 +683,13 @@ def _check_reference() -> CarDerived:
         raise RuntimeError("car_derived(CORSA_C) is not the hard-coded Corsa: "
                            + "; ".join(bad))
     # and the steady-state front share is untouched, to the last bit
-    if (d.lltd_geo_f + d.lltd_roll_f) != cfg.roll_dist_f:
+    if (d.lltd_geo_f + d.lltd_roll_f) != cfg.roll_dist_f or d.roll_dist_f != cfg.roll_dist_f:
         raise RuntimeError("car_derived: the Corsa's roll_dist_f moved")
+    # task 41: the Corsa's four wheels are the singleton tyre and its
+    # utilisation reference is qss.TYRE itself -- the load scale is 1.0
+    if (any(t is not CORSA_TYRE for t in d.tyres)
+            or any(r is not qss.TYRE for r in d.tyre_refs)):
+        raise RuntimeError("car_derived: the Corsa's tyre is no longer CORSA_TYRE")
     # the per-car steering lock is a generalisation of LOCK_RAD, not a rival
     if car_lock_rad(CORSA_C) != LOCK_RAD or car_lock_rad(CorsaC()) != LOCK_RAD:
         raise RuntimeError(
@@ -880,15 +932,21 @@ class Vehicle:
         self.Kphi = c.Kphi_tot * 180.0 / pi   # 640 N.m/deg -> 36669 N.m/rad
         # the car's own tyre SIZE.  tyre_for() is CORSA_TYRE for the Corsa --
         # identity, not equality -- and `CorsaC` (which has no tyre_* fields)
-        # falls through to the same defaults.  Built here, never in step().
-        self.tyre = tyre_for(getattr(c, "tyre_file", None),
-                             getattr(c, "tyre_R0", 0.2915),
-                             getattr(c, "tyre_width", 0.175))
+        # falls through to the same defaults.  Built in car_derived (per
+        # WHEEL since task 41: a bus's front singles and rear twins are two
+        # load-scaled tyres), never in step().  `tyre` is the front one, for
+        # the readers that want "the car's tyre".
+        self.tyre = self.der.tyres[0]
         # CONTRACT section 4 requires util_f/util_r to come from qss.fy_max
         # with qss.TYRE, which is the CORSA's mu(Fz).  That is only right for
         # another car while every tyre here shares one coefficient set; this
-        # is the check that says so rather than assuming it (tyre.py).
-        self.tyre_ref_ok = mu_curve_matches(self.tyre)
+        # is the check that says so rather than assuming it (tyre.py).  A
+        # load-scaled tyre passes against its own scaled reference
+        # (qss.tyre_ref), which is what `der.tyre_refs` hands `_publish`.
+        self.tyre_ref_ok = all(mu_curve_matches(t) for t in self.der.tyres)
+        #: task 41: the car's own front compliance steer, or None to read
+        #: cfg.eps_f live exactly as before (see _steer)
+        self.eps_f_car = getattr(c, "eps_f", None)
         self.Fz_f_static = c.m * G * c.wdist_f / 2.0     # 3022.0 N
         self.Fz_r_static = c.m * G * (1.0 - c.wdist_f) / 2.0   # 1932.1 N
         # a top wing's downforce splits between the axles by its station:
@@ -1026,7 +1084,8 @@ class Vehicle:
             dFL, dFR = d_in, d_out
         else:
             dFL, dFR = d_out, d_in
-        comp = cfg.eps_f * self.state.Fy_f_prev
+        eps = cfg.eps_f if self.eps_f_car is None else self.eps_f_car
+        comp = eps * self.state.Fy_f_prev
         dFL -= comp
         dFR -= comp
         dR = -radians(cfg.c_rs) * self.state.phi if cfg.c_rs else 0.0
@@ -1383,6 +1442,7 @@ class Vehicle:
         sg_a = [0.0] * 4
         Kxk = [0.0] * 4
         Kya = [0.0] * 4
+        tyres = self.der.tyres
         for i in range(4):
             xi, yi = pos[i]
             vcx = st.u - st.r * yi
@@ -1396,10 +1456,11 @@ class Vehicle:
             if self._free_roll:
                 st.omega[i] = vx / R_e
             Vsx[i] = st.omega[i] * R_e - vx
-            kk, ka = self.tyre.stiffnesses(Fz[i])
+            ty = tyres[i]
+            kk, ka = ty.stiffnesses(Fz[i])
             Kxk[i] = kk
             Kya[i] = ka
-            sk, sa = self.tyre.relax_lengths(Fz[i])
+            sk, sa = ty.relax_lengths(Fz[i])
             sg_k[i] = sk
             sg_a[i] = sa
 
@@ -1732,6 +1793,7 @@ class Vehicle:
         Fxr = [0.0] * 4
         Fyr = [0.0] * 4
         kv = [0.0] * 4
+        tyres = self.der.tyres
         for i in range(4):
             fz = Fz[i]
             if fz <= 0.0:
@@ -1741,7 +1803,8 @@ class Vehicle:
                 # relaxing so the corner is correct the instant it lands.
                 continue
             mus = mu[i] * cfg.mu_scale
-            fx, fy, mz = _tyre_eval(fz, st.kx[i], atan(st.ky[i]), mus, self.tyre)
+            ty = tyres[i]
+            fx, fy, mz = _tyre_eval(fz, st.kx[i], atan(st.ky[i]), mus, ty)
             Fx_t[i], Fy_t[i], Mz_t[i] = fx, fy, mz
 
             vxa = fabs(Vx[i])
@@ -1754,8 +1817,8 @@ class Vehicle:
                 fy = fy - k_vy * Vy[i]
 
             # ellipse cap: the damper must not manufacture grip
-            mux = self.tyre.mu_x(fz, mus) * fz
-            muy = self.tyre.mu_y(fz, mus) * fz
+            mux = ty.mu_x(fz, mus) * fz
+            muy = ty.mu_y(fz, mus) * fz
             if mux > 0.0 and muy > 0.0:
                 ex = fx / mux
                 ey = fy / muy
@@ -1815,10 +1878,14 @@ class Vehicle:
         self.top_deploy = aer["dep_top"]
 
         # util MUST call qss.fy_max with qss.TYRE -- never a local mu(Fz).
-        cap_f = (qss.fy_max(Fz[0], mu_scale=mu[0] * cfg.mu_scale, **qss.TYRE)
-                 + qss.fy_max(Fz[1], mu_scale=mu[1] * cfg.mu_scale, **qss.TYRE))
-        cap_r = (qss.fy_max(Fz[2], mu_scale=mu[2] * cfg.mu_scale, **qss.TYRE)
-                 + qss.fy_max(Fz[3], mu_scale=mu[3] * cfg.mu_scale, **qss.TYRE))
+        # `der.tyre_refs` IS qss.TYRE on every unscaled car (the same dict);
+        # a load-scaled tyre reads qss.tyre_ref(lambda), the same law with
+        # the load axis stretched (task 41).
+        tr = self.der.tyre_refs
+        cap_f = (qss.fy_max(Fz[0], mu_scale=mu[0] * cfg.mu_scale, **tr[0])
+                 + qss.fy_max(Fz[1], mu_scale=mu[1] * cfg.mu_scale, **tr[1]))
+        cap_r = (qss.fy_max(Fz[2], mu_scale=mu[2] * cfg.mu_scale, **tr[2])
+                 + qss.fy_max(Fz[3], mu_scale=mu[3] * cfg.mu_scale, **tr[3]))
         Yf = Fby[0] + Fby[1]
         Yr = Fby[2] + Fby[3]
         self.util_f = fabs(Yf) / cap_f if cap_f > 0.0 else 0.0
@@ -2399,6 +2466,61 @@ def validate(verbose: bool = True) -> bool:
                   f"{_d.Cphi:6.0f} {_d.lltd_geo_f:6.4f} {_d.lltd_roll_f:6.4f} "
                   f"{_d.lltd_geo_f + _d.lltd_roll_f:6.3f} {_c.tyre_R0:6.4f} "
                   f"{_c.mu_scale:5.2f}")
+
+    # ---------------- T41 task 41: the per-car fields ------------------
+    #  (a) DEFAULTS ARE IDENTITY. The MX-5 (the non-Corsa, rear-driven path)
+    #  with every task-41 field written out at its default must drive the
+    #  same second of throttle, steer and brake to the last bit, and the
+    #  three stock cars must run the unscaled tyre and qss.TYRE itself.
+    def _drive(c):
+        v = Vehicle(c, VehicleConfig(mu_scale=c.mu_scale))
+        v.reset(V=15.0, gear=2)
+        for k in range(1500):
+            v.step(Controls(delta=0.06 * sin(k * 0.004), throttle=0.6 if k < 900 else 0.0,
+                            brake=0.0 if k < 900 else 0.5), _MU1, _MU1, DT_PHYS)
+        return (v.x, v.y, v.psi, v.u, v.v, v.r, v.phi, tuple(v.omega), v.rpm)
+    same = _drive(_cars.MX5_NB) == _drive(_cars.MX5_NB.copy(**_cars.PHYSICS_DEFAULTS))
+    stock = all(all(t.LFZO == 1.0 for t in car_derived(_cars.CARS[k], par).tyres)
+                and all(r is qss.TYRE for r in car_derived(_cars.CARS[k], par).tyre_refs)
+                and car_derived(_cars.CARS[k], par).roll_dist_f == par.roll_dist_f
+                and Vehicle(_cars.CARS[k]).eps_f_car is None
+                for k in _cars.STOCK_CARS)
+    chk("T41a task-41 fields at their defaults are identity",
+        f"MX-5 1.5 s bitwise {same}; stock tyres unscaled {stock}",
+        "both True", same and stock)
+    #  (b) THE BUS CORNERS: 0.55-0.75 g at 15 and 20 m/s, no spin, no wheel
+    #  off the ground. On the car tyre at the car tyre's load it managed
+    #  0.24 g and spun (the probe); that counterfactual is re-measured.
+    bus = _cars.CARS["bus"]
+    bcfg = VehicleConfig(mu_scale=bus.mu_scale)
+    rb = [ramp_steer(V, car=bus, cfg=bcfg) for V in (15.0, 20.0)]
+    corner_ok = all(0.55 <= r["peak_ay_g"] <= 0.75 and not r["aborted"]
+                    and not any(r.get("wheel_lift", (True,))) for r in rb)
+    r0 = ramp_steer(15.0, car=bus.copy(tyre_lfzo_f=1.0, tyre_lfzo_r=1.0), cfg=bcfg)
+    chk("T41b the bus corners on its load-scaled tyres",
+        f"{rb[0]['peak_ay_g']:.3f} g @15, {rb[1]['peak_ay_g']:.3f} g @20 m/s "
+        f"(delta {rb[1]['delta_deg']:.1f} deg); unscaled {r0['peak_ay_g']:.3f} g "
+        f"'{r0['aborted']}'",
+        "0.55-0.75 g, no spin, no lift; unscaled < 0.40 g",
+        corner_ok and r0["peak_ay_g"] < 0.40)
+    #  (c) THE BUS STOPS, like a truck: 60-0 km/h on its air-brake equivalent
+    #  with ABS, and the ABS holds the wheels off lock (T24's kappa > -0.5).
+    #  The wheel spin mode is why the bus needs its own wheel inertia: at
+    #  h*wn = dt*R*sqrt(CFX/I_w) the Corsa sits at 0.20; a load-scaled truck
+    #  tyre on the Corsa's 0.73 kg m^2 is 1.17, and there the ABS lets the
+    #  rear go to kappa -0.55 and the wheel turns BACKWARDS (reported).
+    bb = brake_run(60 / 3.6, 1.0, cfg=VehicleConfig(mu_scale=bus.mu_scale, abs_on=True), car=bus)
+    bl = brake_run(60 / 3.6, 1.0, cfg=VehicleConfig(mu_scale=bus.mu_scale, abs_on=True),
+                   car=bus.copy(I_wf=None, I_wr=None))
+    t_r = car_derived(bus, par).tyres[2]
+    hwn = DT_PHYS * bus.r_roll * sqrt(t_r.CFX / bus.I_wr)
+    hwn_c = DT_PHYS * bus.r_roll * sqrt(t_r.CFX / ptm.PowertrainParams().I_wr)
+    chk("T41c the bus stops 60-0 km/h like a truck",
+        f"{bb['distance']:.1f} m, mean {bb['mean_g']:.3f} g, kappa_min {bb['kappa_min']:.2f}; "
+        f"rear h*wn {hwn:.2f} (Corsa I_w: {hwn_c:.2f}, kappa_min {bl['kappa_min']:.2f})",
+        "18-30 m (0.47-0.79 g), kappa > -0.5, h*wn < 0.25",
+        18.0 <= bb["distance"] <= 30.0 and bb["v_end"] <= 0.05
+        and bb["kappa_min"] > -0.5 and hwn < 0.25)
 
     # ---------------- T8 Coriolis ------------------------------------
     if verbose:

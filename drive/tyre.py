@@ -17,13 +17,39 @@ What is rescaled and what is NOT
 The file was measured on a 205/60R15. Only the GEOMETRY is swapped to the
 Corsa's 175/65R14 (R0 0.3135 -> 0.2915 m, width 0.205 -> 0.175, aspect 0.60 ->
 0.65, rim 0.1905 -> 0.1778). R0 enters only Mz, scaling pneumatic trail by
-0.930. FNOMIN stays 4000 N and LFZO/LMUX/LMUY/LKX/LKY all stay 1.0. FNOMIN is
+0.930. FNOMIN stays 4000 N and LFZO/LMUX/LMUY/LKX/LKY all stay 1.0 (on every
+car except one that DECLARES a load-scaled tyre -- see "Load scaling" below). FNOMIN is
 the TYRE's rated load, not the car's operating wheel load: a 175/65R14 82T is
 load index 82 = 4660 N max, so 4000 N is 86% of max, the usual MF reference.
 The arithmetic is what actually decides it — MF load sensitivity is
 s = PDY2/(LFZO*FNOMIN), which at LFZO=1 is -16.11e-6/N (qss's number) and at the
 tempting LFZO = 2500/4000 would be -25.78e-6/N, a 60% steeper slope that moves
 crossover.py's marginal_mu from 0.888 to 0.839 and invalidates the study.
+
+Load scaling: the one exception to "LFZO stays 1.0" (task 41)
+--------------------------------------------------------------
+A 12 m city bus puts 20-36 kN on each wheel station, 2-4x this file's own
+FZMAX of 10 kN, and every clamp below (Fz, stiffness, mu) then pins every bus
+wheel at the 10 kN force: 0.19-0.34 g of cornering, whatever the car. Raising
+FZMAX alone would EXTRAPOLATE a car tyre's load sensitivity to 36 kN and give
+mu 0.29-0.57, which is a lie of a different kind. The honest move is the
+Magic Formula's own nominal-load scaler: a tyre with LFZO = lambda produces
+EXACTLY lambda times the file tyre's Fx, Fy, Mz, Kxk and Kya at the load
+Fz/lambda (every load term enters as Fz/(lambda*FNOMIN), and every force as
+Fz times a function of that ratio -- checked equation by equation, and
+asserted to 1e-12 in self_check step 13), PROVIDED three things go with it:
+FZMAX scales by lambda (the per-instance `_fzmax`), the carcass stiffnesses
+CFX/CFY scale by lambda (so the relaxation lengths are the file tyre's at the
+equivalent load, not lambda times shorter), and a TWIN pair is one tyre at 2x
+lambda. `tyre_for(..., lfzo=)` does all three; lfzo 1.0 is the file tyre and
+the SAME cached objects as before, so every car that does not declare a
+scale is bit-for-bit what it was. What the scale means physically: the same
+coefficient set, i.e. the same mu at the same FRACTION of rated load, on a
+tyre rated lambda times higher. The load-sensitivity slope becomes
+s = PDY2/(lambda*FNOMIN) -- exactly the thing the paragraph above forbids for
+a CAR, because a car's tyre IS the file's size class and a different slope
+would move the study; a truck tyre is not, and that is the only place it is
+allowed (cars.py's `tyre_lfzo_f/_r`).
 
 Symmetrisation
 --------------
@@ -136,7 +162,7 @@ class TyreModel:
     __slots__ = tuple(
         ["R0", "width", "aspect", "rim_radius", "LFZO", "LMUX", "LMUY",
          "LKY", "LKX", "CFX", "CFY", "FNOMIN", "LONGVL", "VXLOW", "symmetrised",
-         "_Fz0", "_inv_Fz0", "_R0_over_Fz0", "_inv_CFX", "_inv_CFY",
+         "_Fz0", "_inv_Fz0", "_R0_over_Fz0", "_inv_CFX", "_inv_CFY", "_fzmax",
          "_Cx", "_Cy", "_KyaC", "_PKY2_Fz0", "_PKY5_Fz0", "_Br0",
          "_R0_SSZ1_LS", "_R0_SSZ2_LS_inv_Fz0", "_R0_SSZ3_LS", "_R0_SSZ4_LS"]
         + _COEFFS + _SCALERS)
@@ -176,7 +202,11 @@ class TyreModel:
         self.CFX = CFX               # N/m file LONGITUDINAL_STIFFNESS (published)
         self.CFY = CFY               # N/m file LATERAL_STIFFNESS      (published)
 
-        self.LFZO = LFZO             # (derived) must be 1.0, see module docstring
+        self.LFZO = LFZO             # (derived) 1.0 on every car tyre -- see
+                                     # the module docstring; != 1.0 ONLY on a
+                                     # declared load-scaled (truck) tyre, and
+                                     # then via tyre_for(), which scales CFX/
+                                     # CFY with it
         self.LMUX = LMUX             # (derived) 1.0 -> mu_x(2477)=1.0737, 1.05 g
         self.LMUY = LMUY             # (derived) 1.0 -> reproduces qss mu(Fz)
         self.LKY = LKY               # (estimated) band 0.85-1.05, feel only:
@@ -186,6 +216,9 @@ class TyreModel:
 
         self._Fz0 = LFZO * self.FNOMIN
         self._inv_Fz0 = 1.0 / self._Fz0
+        #: the file's FZMAX, scaled with the rated load. 10000.0 * 1.0 is
+        #: 10000.0 exactly, so an unscaled tyre clamps where it always did.
+        self._fzmax = FZMAX * LFZO
         self._R0_over_Fz0 = R0 / self._Fz0
         self._inv_CFX = 1.0 / CFX
         self._inv_CFY = 1.0 / CFY
@@ -219,8 +252,8 @@ class TyreModel:
         # --- PRE ---------------------------------------------------------
         if Fz <= FZ_EPS or mu_scale <= 0.0:
             return (0.0, 0.0, 0.0)
-        if Fz > FZMAX:
-            Fz = FZMAX
+        if Fz > self._fzmax:
+            Fz = self._fzmax
 
         dfz = (Fz - self._Fz0) * self._inv_Fz0                        # E1
         LMX_ = self.LMUX * mu_scale                                   # E2
@@ -350,8 +383,8 @@ class TyreModel:
         """
         if Fz <= 0.0:
             return (0.0, 0.0)
-        if Fz > FZMAX:
-            Fz = FZMAX
+        if Fz > self._fzmax:
+            Fz = self._fzmax
         dfz = (Fz - self._Fz0) * self._inv_Fz0
         Kxk = Fz * (self.PKX1 + self.PKX2 * dfz) * exp(self.PKX3 * dfz) * self.LKX
         Kya = (self._KyaC * (1.0 - self.PKY3 * fabs(gamma))
@@ -371,8 +404,8 @@ class TyreModel:
         """MF D-term lateral friction. IS qss.py's mu(Fz) to 1.05e-4 absolute."""
         if Fz <= 0.0:
             return 0.0
-        if Fz > FZMAX:
-            Fz = FZMAX
+        if Fz > self._fzmax:
+            Fz = self._fzmax
         dfz = (Fz - self._Fz0) * self._inv_Fz0
         return (self.PDY1 + self.PDY2 * dfz) * self.LMUY * mu_scale
 
@@ -381,8 +414,8 @@ class TyreModel:
         braking grip legitimately exceeds cornering grip on this tyre."""
         if Fz <= 0.0:
             return 0.0
-        if Fz > FZMAX:
-            Fz = FZMAX
+        if Fz > self._fzmax:
+            Fz = self._fzmax
         dfz = (Fz - self._Fz0) * self._inv_Fz0
         return (self.PDX1 + self.PDX2 * dfz) * self.LMUX * mu_scale
 
@@ -436,20 +469,38 @@ CORSA_TYRE = TyreModel(_TIR_PATH)
 #  moment differ, through R0. Grip differences between cars are carried by
 #  `VehicleConfig.mu_scale`, which is a labelled calibration.
 _TYRE_CACHE = {(_TIR_PATH, 0.2915, 0.175): CORSA_TYRE}
+#: the file's carcass stiffnesses (TyreModel's defaults), which a load-scaled
+#: tyre multiplies by its lambda so its relaxation lengths stay the file's
+CFX_FILE = 381913.4
+CFY_FILE = 157632.5
 
 
-def tyre_for(tir_path=None, R0=0.2915, width=0.175):
+def tyre_for(tir_path=None, R0=0.2915, width=0.175, lfzo=1.0):
     """The TyreModel for one tyre size, built at most once per size.
 
     `tyre_for()` with no arguments, and `tyre_for` on any of the Corsa's own
     numbers, IS `CORSA_TYRE` -- identity, not equality. Call it at
     construction time; never from `step()`.
+
+    `lfzo` is the declared LOAD SCALE (module docstring, "Load scaling"):
+    1.0 -- every car tyre -- keeps the three-part key and so the very same
+    cached object as before task 41; anything else is a truck tyre with
+    LFZO, FZMAX, CFX and CFY all scaled by it, cached under a four-part key.
     """
+    lfzo = float(lfzo)
+    if not (lfzo > 0.0):
+        raise ValueError(f"tyre load scale must be positive, got {lfzo!r}")
     key = (os.path.abspath(str(tir_path)) if tir_path else _TIR_PATH,
            float(R0), float(width))
+    if lfzo != 1.0:
+        key = key + (lfzo,)
     t = _TYRE_CACHE.get(key)
     if t is None:
-        t = TyreModel(key[0], R0=key[1], width=key[2])
+        if lfzo == 1.0:
+            t = TyreModel(key[0], R0=key[1], width=key[2])
+        else:
+            t = TyreModel(key[0], R0=key[1], width=key[2], LFZO=lfzo,
+                          CFX=CFX_FILE * lfzo, CFY=CFY_FILE * lfzo)
         _TYRE_CACHE[key] = t
     return t
 
@@ -465,9 +516,20 @@ def mu_curve_matches(tyre, ref=None, loads=(100.0, 1000.0, 2477.0, 4000.0, 8000.
     does, because there is one coefficient set and mu(Fz) has no geometry in
     it. This is the assertion that says so, so that the day somebody adds a
     genuinely different .tir the readout stops being silently wrong.
+
+    A LOAD-SCALED tyre (task 41: LFZO = lambda != ref's) matches when its
+    curve is `ref`'s with the load axis stretched by lambda -- mu(lambda*Fz)
+    == ref's mu(Fz) -- which is exactly the statement that `qss.tyre_ref
+    (lambda)` is its reference. Compared to 1e-12, not bit for bit: the two
+    sides round differently, and that is the only difference.
     """
     ref = CORSA_TYRE if ref is None else ref
-    return all(tyre.mu_y(fz) == ref.mu_y(fz) and tyre.mu_x(fz) == ref.mu_x(fz)
+    if tyre.LFZO == ref.LFZO:
+        return all(tyre.mu_y(fz) == ref.mu_y(fz) and tyre.mu_x(fz) == ref.mu_x(fz)
+                   for fz in loads)
+    k = tyre.LFZO / ref.LFZO
+    return all(abs(tyre.mu_y(k * fz) - ref.mu_y(fz)) <= 1e-12
+               and abs(tyre.mu_x(k * fz) - ref.mu_x(fz)) <= 1e-12
                for fz in loads)
 
 
@@ -918,6 +980,51 @@ def self_check():
                and got_bal["limits"] == ref_bal["limits"] == "front")
     print(f"    the sim and the QSS analysis share ONE tyre  "
           f"{chk(ok_all, 'qss reproduction')}")
+
+    # ------------------------------------------ 13. load scaling (task 41) --
+    print("\n13. load scaling: a tyre with LFZO = lambda is the file tyre at "
+          "Fz/lambda, times lambda")
+    ok_all = True
+    same = (tyre_for() is CORSA_TYRE and tyre_for(None, 0.2915, 0.175, 1.0) is CORSA_TYRE
+            and CORSA_TYRE._fzmax == FZMAX and CORSA_TYRE.LFZO == 1.0)
+    print(f"   lfzo 1.0 is the file tyre, the SAME object, FZMAX {CORSA_TYRE._fzmax:.0f} N  "
+          f"{chk(same, 'lfzo 1.0 is the singleton')}")
+    ok_all &= same
+    worst = [0.0] * 6
+    for lam in (6.644, 12.233):
+        big = tyre_for(None, 0.4783, 0.275, lam)
+        again = tyre_for(None, 0.4783, 0.275, lam)
+        ok_all &= big is again and big._fzmax == FZMAX * lam
+        ok_all &= abs(big.CFX - CFX_FILE * lam) < 1e-6 and abs(big.CFY - CFY_FILE * lam) < 1e-6
+        ref = TyreModel(_TIR_PATH, R0=0.4783, width=0.275)    # same R0, unscaled
+        for Fz, k, a in trips[:80]:
+            p = ref.evaluate(Fz, k, a)
+            q = big.evaluate(lam * Fz, k, a)
+            for i in range(3):
+                worst[i] = max(worst[i], abs(q[i] - lam * p[i]) / max(abs(lam * p[i]), 1.0))
+            ks, ka = ref.stiffnesses(Fz)
+            kb, kab = big.stiffnesses(lam * Fz)
+            worst[3] = max(worst[3], abs(kb - lam * ks) / max(lam * abs(ks), 1.0),
+                           abs(kab - lam * ka) / max(lam * abs(ka), 1.0))
+            s0 = ref.relax_lengths(Fz)
+            s1 = big.relax_lengths(lam * Fz)
+            worst[4] = max(worst[4], abs(s1[0] - s0[0]), abs(s1[1] - s0[1]))
+            worst[5] = max(worst[5], abs(big.mu_y(lam * Fz) - ref.mu_y(Fz)),
+                           abs(big.mu_x(lam * Fz) - ref.mu_x(Fz)))
+        ok_all &= mu_curve_matches(big) and mu_curve_matches(big, big)
+        #  the clamp moved with the rated load: past 10 kN the scaled tyre
+        #  still grows, and it stops at lambda * 10 kN
+        f_mid = abs(big.evaluate(3.0 * FZMAX, 0.0, 0.10)[1])
+        f_cap = abs(big.evaluate(lam * FZMAX, 0.0, 0.10)[1])
+        f_past = abs(big.evaluate(1.5 * lam * FZMAX, 0.0, 0.10)[1])
+        ok_all &= f_cap > f_mid and f_past == f_cap
+    print(f"   lambda 6.644 / 12.233 (a 275/70R22.5 single / twin), 80 random triples:")
+    print(f"   worst relative |F(lambda*Fz) - lambda*F(Fz)|: Fx {worst[0]:.1e}  Fy {worst[1]:.1e}  "
+          f"Mz {worst[2]:.1e}  Kxk/Kya {worst[3]:.1e}")
+    print(f"   relaxation lengths unchanged to {worst[4]:.1e} m, mu(lambda*Fz) == mu(Fz) to "
+          f"{worst[5]:.1e}; FZMAX clamp at lambda*10 kN, cached once per lambda")
+    ok_all &= max(worst[:4]) < 1e-12 and worst[4] < 1e-12 and worst[5] < 1e-12
+    print(f"   {chk(ok_all, 'load scaling')}")
 
     # -------------------------------------------------------------- done --
     print("\n" + "=" * 78)

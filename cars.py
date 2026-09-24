@@ -187,6 +187,82 @@ class CarSpec:
     #: one-line provenance for the whole entry
     source: str = "corsa_c.py (unchanged)"
 
+    # --- PER-CAR PHYSICS THE THREE STOCK CARS DO NOT USE (task 41) ----------
+    #  A 12 m city bus broke six things that had quietly been the Corsa's on
+    #  every car (the probe notes are in .handoff; each field names what it
+    #  fixes). Every field below DEFAULTS TO TODAY'S BEHAVIOUR -- None means
+    #  "the module constant", 1.0 / False / "" mean "as before" -- and the
+    #  Corsa, the MX-5 and the 540i set none of them except `vmax_by`, which
+    #  is bookkeeping for `self_check` and never reaches the physics. So the
+    #  three stock cars are bit-for-bit what they were (vehicle.py asserts
+    #  the Corsa at import; `self_check` below asserts all three).
+    #:
+    #: TYRE LOAD SCALE per axle, the Magic Formula's own LFZO (drive/tyre.py,
+    #: "Load scaling"). 1.0 IS the file tyre, and CONTRACT section 2's "do
+    #: not rescale LFZO" holds for every car at 1.0. A truck tyre is rated
+    #: 6-12x a car tyre and cannot be the file's tyre at the file's load, so
+    #: it is the same coefficient set on a tyre rated lambda times higher:
+    #:     lambda = (published rated load, N) x 0.86 / FNOMIN 4000 N
+    #: -- the 0.86 is this repo's own nominal-to-rated ratio (tyre.py: "a
+    #: 175/65R14 82T is 4660 N max, so 4000 N is 86 %"). A TWIN pair of rear
+    #: tyres is modelled as ONE tyre at twice a single's dual-rated lambda.
+    tyre_lfzo_f: float = 1.0
+    tyre_lfzo_r: float = 1.0
+    #: front share of the lateral load transfer. None = `VehicleConfig.
+    #: roll_dist_f`, the study's 0.74 CALIBRATION, which every car used to
+    #: get. On a rear-engined bus (36 % front) 0.74 lifts the inner front at
+    #: wdist_f*t/(2*0.74*h) = 0.44 g, so a car whose layout is that far from
+    #: the Corsa's declares its own (est, and labelled so).
+    roll_dist_f: float | None = None
+    #: front compliance steer, rad per N of front-axle side force. None =
+    #: `VehicleConfig.eps_f` (the Corsa's 5.40e-6). A per-N number cannot
+    #: carry to an axle ten times as heavy: 11 deg of compliance steer at
+    #: 0.6 g on the bus. Scaled by front-axle load it is the same degrees
+    #: per g as the Corsa's.
+    eps_f: float | None = None
+    #: engine, front-wheel and rear-wheel rotational inertias, kg m^2. None
+    #: = powertrain's Corsa estimates (0.16 / 0.76 / 0.73). A truck wheel on
+    #: a Corsa's 0.73 kg m^2 is a 1 kHz spin mode at h*wn 1.17: the brakes
+    #: chatter and the car cannot stop (measured, the probe). The clutch's
+    #: numerical compliance K_c/C_c scales with `I_eng` so the locked mode
+    #: keeps its 11.3 Hz and its damping ratio.
+    I_eng: float | None = None
+    I_wf: float | None = None
+    I_wr: float | None = None
+    #: scale the rest of the rev-range constants with the engine: the soft
+    #: limiter band (120 rpm), the brake-downshift line (2200), stall /
+    #: crank / fire speeds and the starter torque (with displacement). Off,
+    #: they are the Corsa's absolute numbers on every car, and a diesel that
+    #: cuts at 2500 rpm sticks in 2nd for ever 2 rpm under its own upshift
+    #: point (measured). The three stock cars keep them off.
+    rev_scaled: bool = False
+    #: road-speed governor, m/s; 0.0 = none. A bus's is a legal fitment (EU
+    #: speed limitation devices, 92/6/EEC) and its operator's setting.
+    v_governor: float = 0.0
+    #: AIR brakes. `brk_piston_d` / `brk_wc_d` are then the front / rear
+    #: brake CHAMBER effective diameters, `brk_lever` the caliper's lever
+    #: ratio, and "line pressure" is chamber pressure: the air-brake
+    #: EQUIVALENT of the hydraulic formula, labelled as such. False / 1.0 is
+    #: the hydraulic caliper every car had.
+    brk_air: bool = False
+    brk_lever: float = 1.0
+    #: the rear pressure law: 'fixed' is the Corsa's fixed reducing valve
+    #: (30 bar knee, 0.30 slope, absolute) on every car, as before; 'scaled'
+    #: the same valve with its knee scaled by this car's full-pedal pressure;
+    #: 'none' no valve -- the axle split is the actuator sizes alone, which
+    #: is what an EBS's load-dependent distribution settles to on one load.
+    brk_valve: str = "fixed"
+    #: WHAT LIMITS THE PUBLISHED TOP SPEED, for `self_check`'s power
+    #: balance: '' = judged there from the gearing (drag or gearing),
+    #: 'limiter' = an electronic limiter or a governor. Bookkeeping only --
+    #: nothing in the physics reads it. It replaces a `key == "540i"` test.
+    vmax_by: str = ""
+    #: the driving aids and the scripted drivers read THIS car's wheelbase,
+    #: grip, understeer and steering lock instead of the Corsa's calibration
+    #: (input.py's steer aid, drive.py's PathFollower). False on the three
+    #: stock cars, whose aided and scripted laps are frozen numbers.
+    own_aids: bool = False
+
     # --- derived (identical to CorsaC) --------------------------------------
     @property
     def a(self) -> float:
@@ -445,8 +521,283 @@ E39_540I = CarSpec(
     mu_scale=1.08,          # est  a 235/45R17 performance tyre. Same
                             # reasoning and the same caveat as the MX-5's.
     drive_layout="rwd",
+    vmax_by="limiter",      # the 250 km/h electronic limiter (see Vmax)
     tyre_note="235/45R17 geometry on the study's coefficients; +8 % mu_scale",
     source="Wikipedia (E39), carfolio bmw-540i-96305, auto-data.net; inertias/CG est",
+)
+
+
+# ======================================================================= #
+#  Renault Express 1.4 (E7J, 1994-1997) -- the tall van                    #
+# ======================================================================= #
+#  Task 41: a car to put bigger wings on. The OLDER, Renault 5-based
+#  Express (1985-2000; Extra in the UK, Rapid in German-speaking markets),
+#  the owner's choice over the Kangoo that replaced it. The engine is the
+#  E7J "Energy" 1.4 of the 1991-1997 cars, and it is chosen over the older
+#  C3J/C2J pushrod 1.4s for a reason that suits this study: its published
+#  pair -- 55 kW at 5600 rpm, 109 N.m at 4000 -- lands on the Corsa's own
+#  anchor speeds, so `engine_curve` re-anchors the Corsa's validated shape
+#  with no rpm warp below the cut at all. The van is, to within a newton-
+#  metre, the Corsa's engine in a 1.78 m tall box: the difference between
+#  the two cars is the BODY, which is what the wings are about.
+#
+#  SOURCES DISAGREE on this engine's output and the conflict is stated,
+#  not smoothed: Wikipedia's Express table gives the E7J 55 kW (74 hp) @
+#  5600 / 109 N.m @ 4000 (1991-1997); L'argus lists the 1995 1.4e as
+#  "80 ch / 55 kW" (the two halves disagree with each other); autotitre.com
+#  and French Wikipedia give the 1994-1997 1.4 80 ch @ 6000 / 107 N.m @
+#  4000; car.info's Swedish register gives the 1997 Express Van 1.4 M5 as
+#  55 kW / 75 hp. Three of four say 55 kW, so 55 kW, with Wikipedia's rpm.
+EXPRESS_14 = CarSpec(
+    name="Renault Express 1.4 (E7J, 1995)",
+
+    # "Poids a vide" 840 kg for the 1994-1997 1.4 RT (autotitre.com), taken
+    # as the DIN kerb (fluids and fuel in); + 75 kg driver for the EU
+    # convention. French Wikipedia's range for the whole family is 775-1245
+    # kg, so 840 is a light but plausible panel van.
+    m=915.0,
+    wdist_f=0.60,           # est +/-0.03  an EMPTY front-drive van: the
+                            # engine and the driver sit ahead of a light box
+    L=2.580,                # m  published (Wikipedia; French Wikipedia agrees)
+    t_f=1.326,              # m  published (French Wikipedia, "voies avant /
+    t_r=1.288,              # m  arriere 1 326 / 1 288 mm")
+    h_cg=0.62,              # est +/-0.05  h/H = 0.35 of the 1.776 m roof: a
+                            # tall body, but an empty box on a low floor
+
+    Izz=1170.0,             # est  DI = Izz/(m*a*b) = 0.80, as the other cars
+    Ixx=245.0,              # est  the Corsa's 267 scaled by sprung mass and
+                            # track^2 (203), +20 % for the taller body
+    Iyy=1170.0,             # est
+    m_s=805.0,              # est  kg sprung
+    m_us_f=50.0,            # est  MacPherson front, 13 in wheels
+    m_us_r=60.0,            # est  trailing arms on transverse torsion bars
+                            # (the Renault 5's), drums
+
+    tyre="155/80R13",       # published (autotitre.com, 1.4 RT 1994-1997)
+    r_roll=0.2804,          # m  0.2891 OD radius x 0.97
+
+    Cd=0.42,                # = CdA / A, derived, not published
+    A=2.36,                 # est +/-0.10  = 0.85 x 1.566 width x 1.776 height:
+                            # a box van fills more of its width x height
+                            # rectangle than a car's 0.81
+    CdA=0.986,              # m^2  BACK-SOLVED from the 150 km/h top speed
+                            # (below) at 0.86 x 55 kW, so the self-check's
+                            # drag balance holds by construction -- it does
+                            # NOT validate this number, it defines it. The
+                            # other published top speed, car.info's 141 km/h
+                            # for the 1997 panel van, would need 1.195 (Cd
+                            # 0.51), which is not a plausible van.
+    Crr=0.012,              # est  the Corsa's rolling class
+
+    # Renault JB1 5-speed family (the E7J's transaxle in the Clio and the
+    # Express): ratios as quoted for the JB1 (cliosport.net). The Express's
+    # own final drive is NOT in any source reached; 4.500 is the JB1's
+    # quoted pair (est, band 4.07-4.50). 5th is an overdrive: 150 km/h is
+    # 5076 rpm, below the 5600 power peak, as a 1990s van's was.
+    gear=(3.727, 2.048, 1.321, 0.967, 0.795),
+    gear_rev=3.545,         # est  JB1
+    finaldrive=4.500,       # est  see above
+    eta_drive=0.86,         # est  the Corsa's FWD manual class
+    P_max=55e3,             # W  @ 5600 rpm  published (Wikipedia, E7J)
+    T_max=109.0,            # Nm @ 4000 rpm  published (Wikipedia; autotitre
+                            # 10.9 mkg = 107 N.m @ 4000)
+    n_peak_torque=4000.0,   # rpm, published
+    n_peak_power=5600.0,    # rpm, published
+    n_idle=800.0,           # est band 750-850
+    n_cut=6000.0,           # est band 5800-6300; not published for the E7J
+    displacement=1.390e-3,  # m^3  1390 cc, published (75.8 x 77 mm)
+    Vmax=41.67,             # m/s  150 km/h published (autotitre.com, 1.4 RT
+                            # 1994-1997). A DRAG limit: 5th reaches 177 km/h
+                            # at the cut.
+    steer_ratio=20.0,       # est +/-2  no power steering on the 1.4
+                            # (L'argus: "Direction assistee NON"), so a slow rack
+    steer_turns=3.8,        # est: -> 34.2 deg, which with L 2.580 reproduces
+                            # the published 10.4 m turning circle (French
+                            # Wikipedia, "rayon de braquage") at the outer front
+                            # wheel within the rack's own Ackermann spread
+
+    # --- suspension: EVERY VALUE HERE IS AN ESTIMATE. Pseudo-MacPherson
+    #  front, trailing arms on torsion bars behind (French Wikipedia).
+    k_wheel_f=16.0e3,       # est
+    k_wheel_r=18.0e3,       # est  a van's rear is sprung for its payload
+    k_tyre=190e3,           # est
+    h_rc_f=0.080,           # est  strut
+    h_rc_r=0.050,           # est  trailing arms: the roll centre is near the
+                            # ground
+    Kphi_f=245.5, Kphi_r=260.6,          # springs only, 0.5*k_wheel*t^2
+    Kphi_tot=700.0,         # est  with the bars: ~6 deg/g, a van rolls more
+                            # than the Corsa's 4.7-5.1
+    rollsteer_r=0.0,        # trailing arms do not roll-steer
+    rollcamber_r=1.0,       # est  the wheel leans with the body
+
+    #  Renault 5-family brakes: solid front discs, rear drums (French
+    #  Wikipedia: "AV : Disques / AR : Tambours"). Sizes est.
+    brk_front_d=0.238,      # m  est
+    brk_rear_d=0.180,       # m  est
+    brk_rear_disc=False,
+    brk_piston_d=0.0480,    # m  est
+    brk_wc_d=0.01746,       # m  est: an 11/16 in wheel cylinder. With the
+                            # Corsa's fixed valve and a 3/4 in or larger one
+                            # the EMPTY van's light rear (40 %) locks FIRST
+                            # (measured: 70 bar rear vs 81 front); the real
+                            # vans had a load-sensing limiter for that
+    tyre_file=TYRE_REF,
+    tyre_R0=0.2891,         # 0.1651 rim radius + 0.155 * 0.80 section
+    tyre_width=0.155,
+    tyre_aspect=0.80,
+    tyre_rim_r=0.1651,
+    mu_scale=0.95,          # est  a narrow 1990s commercial ("C") tyre
+                            # against the Corsa's 175/65R14. CALIBRATION.
+    drive_layout="fwd",
+    own_aids=True,          # a new car: no frozen aided lap to protect
+    tyre_note="155/80R13 geometry on the study's coefficients; -5 % mu_scale",
+    source="Wikipedia + fr.wikipedia (Express), autotitre.com 1.4 RT, L'argus; "
+           "gearing/brakes/inertias/CG est",
+)
+
+
+# ======================================================================= #
+#  Mercedes-Benz Citaro O530, 12 m (OM 906 hLA, 2005) -- the city bus      #
+# ======================================================================= #
+#  Task 41: the car for the largest wings. A 12 m low-floor city bus, the
+#  owner's choice, empty but for its driver. It is modelled as a CAR with
+#  four wheel stations -- the rear "wheel" on each side is the TWIN pair --
+#  and it needs every new field above. Two published sources carry it:
+#
+#   * DaimlerChrysler press release, 10 Aug 2006 ("Erste Linienbusse
+#     Mercedes-Benz Citaro mit Euro 5-Motoren ausgeliefert"): OM 906 hLA,
+#     205 kW (279 PS), 1120 N.m at 1300/min, lying six in line, a 6-speed
+#     automatic, disc brakes all round with ABS and ASR, independent front
+#     suspension on lower wishbones with an anti-roll bar;
+#   * traditionsbus.de, BVG Berlin's own Citaro O530 fleet data: 11 950 x
+#     2 550 x 3 076 mm, and for the 2005 OM 906 hLA 279 PS cars (fleet nos.
+#     1451-1480) Leergewicht 11 384 kg and a governed 80 km/h; dual-circuit
+#     air brakes with ABS/ASR/EBS; 330 l tank.
+#  and the gearbox is the ZF Ecomat 2 HP 502 C (ZF data sheet: 1100 N.m
+#  city-bus rating, the 6-speed ratios below). BVG's own cars had a Voith
+#  DIWA 4-speed; the press release's 6-speed is the one that fits this
+#  sim's stepped box, which has no torque converter (see known gaps).
+CITARO_O530 = CarSpec(
+    name="Mercedes-Benz Citaro O530 12 m bus (2005)",
+
+    # Leergewicht 11 384 kg (traditionsbus.de, BVG 1451-1480), taken as the
+    # kerb with fuel in; + 75 kg driver. No passengers: the convention. If
+    # that figure is DRY, 90 % of the 330 l tank would add 250 kg (+2 %).
+    m=11459.0,
+    wdist_f=0.36,           # est +/-0.03  rear-engined: the six sits behind
+                            # the rear axle
+    L=5.845,                # m  published (Mercedes-Benz Citaro data sheet)
+    t_f=2.100,              # m  est  independent front axle
+    t_r=1.840,              # m  est  to the centre of the twin pair
+    h_cg=1.10,              # est +/-0.10  h/H = 0.36 of the 3.076 m roof:
+                            # floor, axles, engine low; body and A/C high
+
+    Izz=150000.0,           # est  band 130 000-170 000: a uniform 12 x 2.55 m
+                            # slab is 142 600, the engine and axles at the ends
+                            # add ~5 %
+    Ixx=14000.0,            # est  band 12 000-17 000
+    Iyy=150000.0,           # est
+    m_s=9259.0,             # est  kg sprung
+    m_us_f=700.0,           # est  two 22.5 in wheels, 430 mm discs, knuckles,
+                            # half the wishbones
+    m_us_r=1500.0,          # est  a portal drive axle (~900 kg), four wheels,
+                            # two discs
+
+    tyre="275/70R22.5, twin rear",       # published (Citaro standard fit)
+    r_roll=0.464,           # m  0.4783 OD radius x 0.97
+
+    Cd=0.65,                # est  band 0.55-0.80 for a flat-fronted city bus
+    A=6.80,                 # est  0.95 x 2.550 width x (3.076 - 0.28) m
+    CdA=4.42,               # = Cd * A. NOT validated by Vmax and it cannot
+                            # be: the top speed is a governor (below).
+    Crr=0.007,              # est  band 0.005-0.008, truck tyres
+
+    # ZF Ecomat 2 6 HP 502 C: 3.43 / 2.01 / 1.42 / 1.00 / 0.83 / 0.59 (ZF
+    # data sheet "HP 502 C HP 592 C HP 602 C", standard ratios). Reverse:
+    # the sheet's R 11.76 includes the converter's stall ratio (its 1st is
+    # quoted 8.33 = 3.43 x 2.43 on the same basis), so 11.76 / 2.43 = 4.84.
+    gear=(3.43, 2.01, 1.42, 1.00, 0.83, 0.59),
+    gear_rev=4.84,
+    finaldrive=6.21,        # est  band 5.74-6.50, city-bus portal axles; at
+                            # 6.21 the governed 80 km/h is 1676 rpm in 6th
+    eta_drive=0.85,         # est  converter locked, angle drive, the portal
+                            # hubs' extra gear stage
+    P_max=205e3,            # W  published (press release 2006; traditionsbus)
+    T_max=1120.0,           # Nm @ 1300 rpm  published (press release 2006)
+    n_peak_torque=1300.0,   # rpm, published
+    n_peak_power=2200.0,    # rpm  est: the OM 906 family's rated speed; the
+                            # press release gives the power without it
+    n_idle=600.0,           # est band 550-650
+    n_cut=2500.0,           # est band 2400-2600, the governor's high idle
+    displacement=6.374e-3,  # m^3  6374 cc, published (traditionsbus.de)
+    Vmax=22.22,             # m/s  80 km/h, BVG's governor setting on these
+                            # cars (traditionsbus.de; other batches 85/95).
+    steer_ratio=20.0,       # est +/-2  power-assisted bus box
+    steer_turns=4.2,        # est -> 37.8 deg at the road wheel: a 12 m bus
+                            # turns a ~21 m circle, which on a 5.845 m wheel-
+                            # base is a car-like 34-38 deg bicycle angle
+
+    # --- suspension: EVERY VALUE HERE IS AN ESTIMATE. Air springs all
+    #  round; wishbones and a bar in front (press release), a rigid portal
+    #  axle on four links behind.
+    k_wheel_f=250.0e3,      # est
+    k_wheel_r=400.0e3,      # est
+    k_tyre=900e3,           # est  truck tyre, ~900 N/mm
+    h_rc_f=0.35,            # est  wishbones
+    h_rc_r=0.75,            # est  a rigid axle's links: a high roll centre
+    Kphi_f=3500.0, Kphi_r=5500.0,        # est, springs + bars, N.m/deg
+    Kphi_tot=9000.0,        # est  -> 5.0 deg/g, a bus rolls
+    rollsteer_r=0.0,        # rigid axle
+    rollcamber_r=0.0,       # a rigid axle's wheels stay square to the road
+
+    #  AIR DISC brakes all round (press release; traditionsbus: dual-circuit
+    #  air, ABS/ASR/EBS). 430 mm discs on 22.5 in wheels est. The formula
+    #  is the air-brake EQUIVALENT (brk_air): chamber area x caliper lever x
+    #  pad mu x effective radius, and "line pressure" is chamber pressure.
+    brk_front_d=0.430,      # m  est
+    brk_rear_d=0.430,       # m  est
+    brk_rear_disc=True,
+    brk_air=True,
+    brk_piston_d=0.1404,    # m  est: a type 24 chamber, 24 in^2 effective
+    brk_wc_d=0.1282,        # m  est: type 20 EQUIVALENT -- the rear share the
+                            # EBS gives an EMPTY bus, 0.83 of the front's, so
+                            # the front axle locks first as ECE R13 wants
+    brk_lever=15.6,         # est  air-disc caliper lever ratio, class value
+    brk_valve="none",       # an EBS, not a reducing valve (see brk_valve)
+    tyre_file=TYRE_REF,
+    tyre_R0=0.4783,         # 0.28575 rim radius + 0.275 * 0.70 section
+    tyre_width=0.275,
+    tyre_aspect=0.70,
+    tyre_rim_r=0.28575,
+    #  275/70R22.5 148/145 (the city-bus load index pair, e.g. Michelin X
+    #  InCity): 3150 kg single, 2900 kg per tyre in twin. With the 0.86
+    #  nominal-to-rated ratio (see `tyre_lfzo_f`):
+    tyre_lfzo_f=6.644,      # = 3150 kg x 9.81 x 0.86 / 4000 N
+    tyre_lfzo_r=12.233,     # = 2 x 2900 kg x 9.81 x 0.86 / 4000 N, the pair
+    #  -> the static loads, 20.2 kN front and 36.0 kN per rear pair, are 3046
+    #  and 2941 N at the equivalent car load: the Corsa's own range.
+    mu_scale=0.80,          # est band 0.75-0.90: a truck tyre's dry peak
+                            # friction runs 20-25 % under a car tyre's (heavy-
+                            # vehicle handling literature). CALIBRATION.
+    drive_layout="rwd",
+    roll_dist_f=0.45,       # est: wishbones + bar in front, a stiff air-sprung
+                            # rigid axle behind; the inner front then lifts at
+                            # 0.72 g instead of 0.44
+    eps_f=8.06e-7,          # = 5.40e-6 x (Corsa front axle 616 kg / 4125 kg):
+                            # the Corsa's compliance steer per g
+    I_eng=2.0,              # est band 1.5-2.5: a 6.4 l six's crank, flywheel
+                            # and converter impeller
+    I_wf=13.0,              # est  275/70R22.5 on steel (tyre ~60 kg at r_g 0.40)
+                            # + disc + hub; keeps R^2*CFX/I at the Corsa's
+    I_wr=26.0,              # est  the twin pair + disc + portal gears
+    rev_scaled=True,
+    v_governor=22.22,       # m/s  the 80 km/h above
+    vmax_by="limiter",
+    own_aids=True,
+    tyre_note="275/70R22.5 geometry on the study's coefficients, LOAD-SCALED "
+              "x6.644 front / x12.233 rear twin; -20 % mu_scale",
+    source="DaimlerChrysler press release 2006-08-10, traditionsbus.de (BVG), "
+           "ZF HP 502 C data sheet; axle/inertia/CG/brake sizes est",
 )
 
 
@@ -601,15 +952,28 @@ CARS = {
     "corsa": CORSA_C,
     "mx5": MX5_NB,
     "540i": E39_540I,
+    "express": EXPRESS_14,
+    "bus": CITARO_O530,
 }
 #: cycle order for the CLI and the Settings page; the Corsa is first and default
-CAR_ORDER = ("corsa", "mx5", "540i")
+CAR_ORDER = ("corsa", "mx5", "540i", "express", "bus")
 CAR_DEFAULT = "corsa"
 CAR_TITLES = {
     "corsa": "Opel Corsa C 1.2",
     "mx5": "Mazda MX-5 1.8",
     "540i": "BMW 540i",
+    "express": "Renault Express 1.4",
+    "bus": "Mercedes Citaro bus",
 }
+#: the three cars whose physics is frozen (every acceptance number, medal
+#: and checkpoint was measured on them): `self_check` asserts they set none
+#: of the task-41 physics fields
+STOCK_CARS = ("corsa", "mx5", "540i")
+#: the task-41 fields and the value each takes when a car does not use it
+PHYSICS_DEFAULTS = dict(tyre_lfzo_f=1.0, tyre_lfzo_r=1.0, roll_dist_f=None,
+                        eps_f=None, I_eng=None, I_wf=None, I_wr=None,
+                        rev_scaled=False, v_governor=0.0, brk_air=False,
+                        brk_lever=1.0, brk_valve="fixed", own_aids=False)
 
 
 def get(name: str | None = None) -> CarSpec:
@@ -670,18 +1034,26 @@ def self_check(verbose: bool = True) -> bool:
         #             rev cut in top. Only then is CdA VALIDATED by Vmax.
         #   'gearing' Vmax is at (or within 2 % of) the rev cut in top gear:
         #             the engine runs out of revs before the air stops it.
-        #   'limiter' an electronic speed limiter, below both.
+        #   'limiter' an electronic speed limiter or a governor, below both.
+        #             DECLARED by the car (`vmax_by`), because nothing in the
+        #             numbers can tell a limiter from a power shortfall.
         n_cut = float(getattr(car, "n_cut", 6200.0))
         v_at_cut = kmh_per_1000 * n_cut / 1000.0
         v_pub = car.Vmax * 3.6
         surplus = kW_have / max(kW_need, 1e-9)
-        if key == "540i":
+        if getattr(car, "vmax_by", "") == "limiter":
             mech = "limiter"
         elif v_pub > 0.98 * v_at_cut:
             mech = "gearing"
         else:
             mech = "drag"
-        gear_ok = 1500.0 < rpm_at_vmax < 7200.0
+        #  top gear at Vmax must be a speed the ENGINE can run at: above
+        #  1.5 x idle and not past its own cut (3 % slack for the published
+        #  redline vs the cut). Relative, so a 2500 rpm diesel is judged on
+        #  its own range: the old absolute 1500-7200 rpm band passed the
+        #  three petrol cars and would have passed a bus geared to lug.
+        n_idle = float(getattr(car, "n_idle", 850.0))
+        gear_ok = 1.5 * n_idle < rpm_at_vmax < 1.03 * n_cut
         # drag-limited cars must balance; the other two must have a SURPLUS
         # (if they did not, the quoted Vmax would be unreachable)
         pwr_ok = (0.98 <= surplus <= 1.06) if mech == "drag" else (surplus > 1.0)
@@ -702,6 +1074,7 @@ def self_check(verbose: bool = True) -> bool:
         rep("drive.tyre importable", False, str(exc))
         TyreModel = None
     if TyreModel is not None:
+        from drive.tyre import tyre_for
         for key in CAR_ORDER:
             car = CARS[key]
             try:
@@ -733,6 +1106,26 @@ def self_check(verbose: bool = True) -> bool:
             except Exception as exc:
                 rep(f"{key:6s} {car.tyre_file.split('/')[-1]}", False,
                     f"{type(exc).__name__}: {exc}")
+            #  the tyre the car ACTUALLY runs (per axle, at its declared load
+            #  scale), at its OWN static load and at the loaded outer wheel
+            #  of 1 g with this car's transfer split: grip in the car-tyre
+            #  band at the static load, and the loaded wheel inside that
+            #  tyre's FZMAX -- the clamp that pinned an unscaled bus at 10 kN
+            rd = car.roll_dist_f if car.roll_dist_f is not None else 0.74
+            dfz_1g = car.m * G * car.h_cg / car.t
+            rows = []
+            fine = True
+            for ax, lam, share, split in (("f", car.tyre_lfzo_f, car.wdist_f, rd),
+                                          ("r", car.tyre_lfzo_r, 1.0 - car.wdist_f, 1.0 - rd)):
+                ta = tyre_for(car.tyre_file, car.tyre_R0, car.tyre_width, lam)
+                fz_s = 0.5 * car.m * G * share
+                fz_hi = fz_s + split * dfz_1g
+                mu_s = ta.mu_y(fz_s)
+                fine = fine and (0.80 < mu_s < 0.95 and fz_hi < ta._fzmax
+                                 and ta.LFZO == lam)
+                rows.append(f"{ax} x{lam:g}: Fz {fz_s / 1e3:5.1f} kN mu {mu_s:.3f}, "
+                            f"1 g outer {fz_hi / 1e3:5.1f} < FZMAX {ta._fzmax / 1e3:5.1f} kN")
+            rep(f"{key:6s} loads inside its tyre's range", fine, "; ".join(rows))
         # the finding that shaped this module, asserted so it cannot rot
         base = TyreModel(TYRE_REF)
         same = TyreModel(f"{TYRE_DIR}/car145_70R13.tir")
@@ -741,6 +1134,33 @@ def self_check(verbose: bool = True) -> bool:
             and base.evaluate(4000.0, 0.05, 0.10) == same.evaluate(4000.0, 0.05, 0.10),
             "car145_70R13 gives identical Fx/Fy/Mz to TNO_car205_60R15 -- "
             "which is why mu_scale, not a different file, carries grip")
+
+    # --- 3b. the stock three do not touch the task-41 physics fields ----
+    #  CONTRACT section 2 ("do not rescale LFZO") and every frozen number
+    #  hold on the Corsa, the MX-5 and the 540i because each of them leaves
+    #  every one of these at its "as before" default, and their Vehicle
+    #  gets the unscaled file tyre -- the Corsa's is the singleton itself.
+    set_ = {k: [f for f, v in PHYSICS_DEFAULTS.items() if getattr(CARS[k], f) != v]
+            for k in STOCK_CARS}
+    rep("the three stock cars leave every task-41 physics field at its default",
+        not any(set_.values()), str(set_) if any(set_.values()) else
+        f"{len(PHYSICS_DEFAULTS)} fields x {STOCK_CARS}; the two new cars set "
+        + ", ".join(f"{k}: {sum(getattr(CARS[k], f) != v for f, v in PHYSICS_DEFAULTS.items())}"
+                    for k in CAR_ORDER if k not in STOCK_CARS))
+    try:
+        from drive.vehicle import Vehicle
+        from drive.tyre import CORSA_TYRE as _CT
+        unscaled = {}
+        for k in STOCK_CARS:
+            v = Vehicle(CARS[k])
+            unscaled[k] = (all(t.LFZO == 1.0 for t in v.der.tyres)
+                           and all(r is __import__("qss").TYRE for r in v.der.tyre_refs)
+                           and ((v.der.tyres[0] is _CT) == (k == "corsa")))
+        rep("the stock cars run the UNSCALED file tyre and qss.TYRE itself",
+            all(unscaled.values()), str(unscaled))
+    except Exception as exc:                       # pragma: no cover
+        rep("the stock cars run the UNSCALED file tyre", False,
+            f"{type(exc).__name__}: {exc}")
 
     # --- 4. added mass: the identity, then that everything really moved ---
     if verbose:
@@ -794,7 +1214,7 @@ def self_check(verbose: bool = True) -> bool:
             print(f"  {c2.name[:24]:24s} {c2.m:6.0f} {c2.L:6.3f} {100 * c2.wdist_f:5.0f} "
                   f"{c2.P_max / 1e3:5.0f} {c2.T_max:5.0f} {c2.CdA:5.2f} {c2.mu_scale:5.2f} {c2.engine_scale:5.2f} "
                   f"{c2.drive_layout:>4s} {len(c2.gear):6d}")
-        print("\n  NOTE: drive_layout is now BEHAVIOUR -- the two rwd cars drive their"
+        print("\n  NOTE: drive_layout is now BEHAVIOUR -- the rwd cars drive their"
               "\n  rear wheels (powertrain.driven). 'awd' is refused, not guessed.")
         print("  ALL PASS" if ok else "  FAILURES ABOVE")
     return ok
