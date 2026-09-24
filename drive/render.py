@@ -791,6 +791,9 @@ class HudData:
     # BEST, and the top-5 place the last lap took ('P2'), briefly
     pb_lap: float = 0.0
     lap_rank: str = ''
+    # --- task 41: this session's build has a wing past its car's physical
+    # span limit: its laps (and so the PB shown) are the UNLIMITED book's
+    unlimited: bool = False
     # --- medals (drive/medals.py): the medal the lap that just landed earned
     lap_medal: str = ''
     # --- the live delta to the class PB and the sector flash (drive/ghosts.py);
@@ -3979,6 +3982,8 @@ class Renderer:
             col, head = C_BAR_BRK, 'LAP NOT COUNTED'
         else:
             col, head = C_HUD_DIM, 'LAP'
+        if rc.get('unlimited'):            # task 41: filed apart, never official
+            head = 'UNLIMITED ' + ('PB' if head == 'NEW PB' else head)
         self._blit(head, x, y, self.f_lbl, col)
         medal = str(rc.get('medal', '') or '')
         t = medal.upper()
@@ -4933,6 +4938,13 @@ class Renderer:
         if medal:
             self._blit(medal.upper(), r.x + 250 * u, r.y + 76 * u, self.f_lbl,
                        C_MEDAL.get(medal, C_HUD_TEXT))
+        elif getattr(aux, 'unlimited', False):
+            # an Unlimited session (task 41): the PB beside it is the
+            # Unlimited book's, and the run is never official -- said
+            # plainly, where the medal tag goes (the lap's card says it too)
+            tag = 'UNLIMITED'
+            self._blit(tag, r.right - 10 * u - self.f_lbl.size(tag)[0], r.y + 76 * u,
+                       self.f_lbl, C_YELLOW)
 
         # 'minimal' is the race HUD: speed, timing, a one-line wing chip and
         # the warnings (the minimap is drawn by draw_frame); the engineering

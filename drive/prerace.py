@@ -35,6 +35,15 @@ owns the menu and dispatches the actions (`drive.drive.Sim._prerace_event`).
 It imports no pygame. Scripted and headless runs never see the screen
 (`wanted`).
 
+An UNLIMITED session (task 41: a build with a wing past its car's physical
+span limit, drive/bodies.py) says so on every part of the page: the build
+row and the subtitle carry the tag, an UNLIMITED section names what is past
+its limit and the official PB it is NOT competing with, and the top 5 and
+the medals are headed as the Unlimited book's -- which `book` then is
+(records.unlimited_book). A build's best on the pick page is read from the
+book its OWN build files into (`judge`), so an official build shows its
+official best in an Unlimited session and the other way round.
+
 Actions the rows return: 'pr_race', 'pr_edit', 'pr_pick', 'pr_back',
 'pr_build:<name>' (the PICK page), 'set:pr_ghost' (task 22's ghost slot) and
 'set:pr_ghosts' (both ghosts shown / hidden: J's toggle, for a pad; task 33).
@@ -164,13 +173,24 @@ class PreRace:
     """The screen's content for one class and one build.
 
     `builds` is the garage library's `{name: CarBuild json}`; `build_json`
-    None means the published one-panel car (a legacy `WingDesign`)."""
+    None means the published one-panel car (a legacy `WingDesign`).
+
+    Task 41: `over` is this session's wings past the car's span limit
+    (`bodies.over_limits`; non-empty = an UNLIMITED session, and `book` is
+    then the Unlimited book); `books` = {'official': book, 'unlimited': book}
+    and `judge(build_json) -> bool` (is that build Unlimited on this car)
+    route each PICK row's best to its own book. Without them every best is
+    read from `book`, as before."""
 
     def __init__(self, key: str, book, build_name: str = "", build_json=None,
-                 builds=None, titles=None, can_edit: bool = True):
+                 builds=None, titles=None, can_edit: bool = True,
+                 over=None, books=None, judge=None):
         self.key = key
         self.can_edit = bool(can_edit)     # False: no garage this session (no EDIT row)
         self.book = book
+        self.over = [dict(o) for o in (over or [])]
+        self.books = dict(books or {})
+        self.judge = judge
         self.build_name = str(build_name or "")
         self.build_json = build_json
         self.builds = dict(builds or {})
@@ -184,16 +204,39 @@ class PreRace:
         b = self.builds.get(self.build_name)
         return b is not None and _same_build(b, self.build_json)
 
+    @property
+    def unlimited(self) -> bool:
+        """This session's build is past its car's span limit (task 41)."""
+        return bool(self.over)
+
+    def is_unlimited(self, build_json) -> bool:
+        """Would `build_json` be an Unlimited build on this car? The session's
+        own build is what `over` says; another is asked of `judge` (False
+        without one: nothing to judge it with)."""
+        if build_json is self.build_json or _same_build(build_json, self.build_json):
+            return self.unlimited
+        try:
+            return bool(self.judge(build_json)) if self.judge is not None else False
+        except Exception:                  # noqa: BLE001 -- a bad build is not a crash
+            return False
+
     def build_best(self, name: str, build_json=None) -> float:
         """A build's best lap in THIS class (nan when it has none): by the
         car's content (`records.build_id`), so a saved build is not credited
-        with a lap an edited car drove under its name."""
-        return self.book.build_best(self.key, name, build_json)
+        with a lap an edited car drove under its name. Read from the book
+        that build files into (task 41: official or Unlimited)."""
+        book = self.book
+        if self.books:
+            want = "unlimited" if self.is_unlimited(build_json) else "official"
+            book = self.books.get(want, self.book)
+        return book.build_best(self.key, name, build_json)
 
     # -- the main page ------------------------------------------------------
     def items(self) -> list:
         name = self.build_name or "(unnamed)"
         tag = "" if self.saved() or not self.builds else "  (not saved)"
+        if self.unlimited:
+            tag += "  UNLIMITED"
         rows = [("RACE", "pr_race"),
                 (f"{'Build':<9s}{name}{tag}", "pr_pick")]
         if self.can_edit:
@@ -209,13 +252,27 @@ class PreRace:
         ttl = self.titles                  # the proper names, when the session gave them
         parts = [ttl.get(k) for k in ("track", "car", "engine", "surface")]
         cls = "  ·  ".join(map(str, parts)) if all(parts) else rec.class_label(self.key)
-        return f"{cls}   build: {self.build_name or '(unnamed)'}"
+        unl = "   UNLIMITED: not official" if self.unlimited else ""
+        return f"{cls}   build: {self.build_name or '(unnamed)'}{unl}"
 
     def sections(self) -> list:
         t, c, e, s = rec.split_key(self.key)
         ttl = self.titles
         secs = [("CLASS", [("map", ttl.get("track", t)), ("car", ttl.get("car", c)),
                            ("engine", ttl.get("engine", e)), ("surface", ttl.get("surface", s))])]
+        unl = "UNLIMITED " if self.unlimited else ""
+        if self.unlimited:
+            #  task 41: what is past its limit, and what the run is NOT
+            rows_u = [(str(o.get("slot", "")),
+                       f"{o.get('wing', '')}  span {float(o.get('span', 0.0)):.2f} m "
+                       f"> max {float(o.get('limit', 0.0)):.2f} m") for o in self.over]
+            off = self.books.get("official")
+            if off is not None:
+                rows_u.append(("official PB", rec.fmt_time(off.pb_time(self.key))
+                               + "  (not raced: this run is filed apart)"))
+            rows_u.append(("", "laps and medals go to this class's Unlimited"))
+            rows_u.append(("", "book: never official, never on a public board"))
+            secs.append(("UNLIMITED", rows_u))
         laps = self.book.laps(self.key)
         rows = []
         for i, lp in enumerate(laps):
@@ -228,7 +285,7 @@ class PreRace:
                          f"{str(lp.get('date', '') or '')[:10]}"))
         if not rows:
             rows = [("--", "none yet: your first valid lap is the PB")]
-        secs.append((f"TOP {rec.TOP_N}", rows))
+        secs.append((f"{unl}TOP {rec.TOP_N}", rows))
         tg = _medal_table(self.key)
         if tg and tg.get("author"):
             best = self.book.load(self.key).get("best_medal")
@@ -248,9 +305,9 @@ class PreRace:
                 mrows.append(("next", f"{nx[0].upper()} {rec.fmt_time(nx[1])}  "
                                       + (f"({nx[2]:.3f} s to go)" if nx[2] is not None
                                          else "(your first valid lap)")))
-            secs.append(("MEDALS", mrows))
+            secs.append((f"{unl}MEDALS", mrows))
         else:
-            secs.append(("MEDALS", [("--", "no reference lap for this class")]))
+            secs.append((f"{unl}MEDALS", [("--", "no reference lap for this class")]))
         return secs + PR_HELP
 
     # -- the pick page ----------------------------------------------------------
@@ -397,6 +454,34 @@ def self_check(verbose: bool = True) -> bool:
     rep("the ghosts row (J, for a pad) before it, when set",
         pr.items()[-2:] == [("Ghosts   hidden  (J)", "set:pr_ghosts"),
                             ("Ghost 2  reference bot", "set:pr_ghost")], str(pr.items()[-2:]))
+    #  task 41: an UNLIMITED session says so on every part of the page, reads
+    #  its top 5 and medals from the Unlimited book, and routes each PICK
+    #  row's best to the book that build files into
+    ubook = rec.unlimited_book(root)
+    b_huge = dict(version=2, name="huge", mirror=True, builtin=False,
+                  slots={"top": {"wing": "huge-top"}})
+    ru = rec._fake_rec(57.0, [19.0, 19.0, 19.0])
+    ru.update(build=dict(name="huge", json=b_huge), unlimited=True)
+    ubook.insert(key, ru)
+    over = [dict(slot="top", wing="huge-top", span=2.6, limit=1.9752)]
+    books = dict(official=book, unlimited=ubook)
+    judge = lambda js_: bool(js_) and js_.get("name") == "huge"      # noqa: E731
+    pu = PreRace(key, ubook, "huge", b_huge, builds={"fast": b_fast, "huge": b_huge},
+                 over=over, books=books, judge=judge)
+    su = dict(pu.sections())
+    rep("an Unlimited session: the build row, the subtitle and the sections say UNLIMITED",
+        pu.unlimited and "UNLIMITED" in pu.items()[1][0] and "UNLIMITED" in pu.subtitle()
+        and "UNLIMITED" in su and f"UNLIMITED TOP {rec.TOP_N}" in su
+        and "UNLIMITED MEDALS" in su and f"TOP {rec.TOP_N}" not in su
+        and su[f"UNLIMITED TOP {rec.TOP_N}"][0][0].startswith("1  57.000")
+        and any("58.400" in v for _k, v in su["UNLIMITED"]),       # the official PB
+        str(su["UNLIMITED"][:2]))
+    pk_u = {a: t for t, a in pu.pick_items()}
+    rep("...and a PICK row's best is its OWN book's: official for an official build",
+        "57.000" in pk_u["pr_build:huge"] and "1:00.900" in pk_u["pr_build:fast"]
+        and not pr.unlimited and "UNLIMITED" not in pr.subtitle()
+        and "UNLIMITED" not in dict(pr.sections()),
+        f"{pk_u['pr_build:huge'].strip()} / {pk_u['pr_build:fast'].strip()}")
     from types import SimpleNamespace
     o = SimpleNamespace()
     stock = key.replace("sport", "stock")

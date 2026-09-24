@@ -2,7 +2,9 @@
 
 One small player file with a SECTION per feature: `tutorial` (the driving
 tutorial, drive/tutorial.py: offered, the step reached, done, the wing laps
-it measured) and, from task 25, `challenges` (stars per challenge). Each
+it measured), from task 25 `challenges` (stars per challenge) and, from task
+41, `challenges_unlimited` (the same for a build past its car's span limit:
+kept in its own section, never counted with the official stars). Each
 feature reads and writes only its own section; `save(section)` re-reads the
 file and replaces that one section, so two writers (the tutorial, the
 challenges, a second instance of the game) never drop each other's work.

@@ -60,6 +60,26 @@ Player files are never read by a scripted or headless run: only
 `drive.drive._interactive_session` attaches a recorder to `runs/records/`;
 the self-checks write to a temporary directory.
 
+UNLIMITED RUNS (task 41)
+------------------------
+The owner's rule: a wing may be given a span past its car's PHYSICAL limit
+(`drive/bodies.py`: a flank panel's lower tip at the car's ground clearance,
+a top wing 1.2 x the car's width) "just for fun", and such runs "won't go
+towards the public leaderboard". Whether a run is one is COMPUTED at every
+session's start from the build, the garage library and the car
+(`bodies.over_limits`) -- never stored in a build, because a build names its
+wings and a wing can be re-saved at another span. A session with any wing
+past its limit is an UNLIMITED session and its recorder files into a
+SEPARATE BOOK, `runs/records/unlimited/`, under the SAME class key
+(`unlimited_book`): so an Unlimited lap never touches an official PB, top 5,
+build best, best sector, best medal or ghost, and the medal targets and the
+reference ghost still apply to it (it earns its medal into the Unlimited
+book, shown as Unlimited). Every such lap also carries `unlimited: true` and
+the reasons (`over_limits`: slot, wing, span, limit), and an official book
+REFUSES a lap that says it is Unlimited. `runs/records/last_builds.json`
+stays in the official folder whichever book asks. `publishable(lap)` is the
+one test the planned public leaderboard (T28) must apply.
+
     python3 -m drive.records      the self-check
 """
 
@@ -80,6 +100,8 @@ RECORDS_KIND = "carsim-records-1"
 LAST_BUILDS_KIND = "carsim-last-builds-1"
 RECORDS_DIR = os.path.join("runs", "records")
 LAST_BUILDS_FILE = "last_builds.json"
+#: the Unlimited book's folder, under the official one (task 41)
+UNLIMITED_DIR = "unlimited"
 TOP_N = 5
 
 #: the tracks a lap time exists on (the dragstrip is excluded, see above).
@@ -461,9 +483,16 @@ class RecordBook:
     written over. A file that does not PARSE is moved aside, and the last
     good copy (`.bak`) is used when there is one."""
 
-    def __init__(self, root: str = RECORDS_DIR):
+    def __init__(self, root: str = RECORDS_DIR, last_root: str | None = None,
+                 unlimited: bool = False):
         import threading
         self.root = root
+        #: task 41: an UNLIMITED book (`unlimited_book`) files the laps of a
+        #: build past its car's span limit; an official one refuses them.
+        #: `last_root` is where last_builds.json lives (default `root`): the
+        #: Unlimited book keeps the official folder's.
+        self.unlimited = bool(unlimited)
+        self.last_root = last_root
         self._cache: dict = {}
         self._lock = threading.RLock()
         self.notes: list = []          # what was ignored on load, and why
@@ -627,7 +656,10 @@ class RecordBook:
         top N, or None when it is not fast enough. The best sectors and the
         build's best are updated either way (a slow lap can still hold the
         class's best S2). An equal time goes BEHIND the one already there:
-        the first to set a time keeps it."""
+        the first to set a time keeps it. An OFFICIAL book refuses a lap that
+        says it is Unlimited (task 41: ValueError; the recorder shows it)."""
+        if rec.get("unlimited") and not self.unlimited:
+            raise ValueError("an Unlimited lap is never filed in the official book")
         with self._lock:
             d = self.load(key)
             self._merge_sectors(d, rec.get("sectors") or [])
@@ -678,7 +710,7 @@ class RecordBook:
 
     # ---- the pre-race screen's per-track default build (task 20) ------
     def _last_path(self) -> str:
-        return os.path.join(self.root, LAST_BUILDS_FILE)
+        return os.path.join(self.last_root or self.root, LAST_BUILDS_FILE)
 
     def last_builds(self) -> dict:
         p = self._last_path()
@@ -711,6 +743,23 @@ class RecordBook:
             print(f"records: {LAST_BUILDS_FILE} not saved ({exc})")
             return False
         return True
+
+
+def unlimited_book(root: str = RECORDS_DIR) -> RecordBook:
+    """The UNLIMITED book beside the official one at `root` (task 41):
+    `<root>/unlimited/<class>.json`, the same class keys, its own PBs, top 5,
+    build bests and best medal; last_builds.json stays in `root`."""
+    return RecordBook(os.path.join(root, UNLIMITED_DIR), last_root=root, unlimited=True)
+
+
+def publishable(lap) -> bool:
+    """May this lap go to a PUBLIC leaderboard? THE ONE HOOK the planned
+    public boards (plan T28: `leaderboard.submit`, the local and the Steam
+    backends) must call before they submit anything -- a lap from a build
+    with any wing past its car's physical span limit (`unlimited`, task 41)
+    is never published, whatever book it came from. False for an Unlimited
+    lap (and for anything that is not a lap record), True otherwise."""
+    return isinstance(lap, dict) and not bool(lap.get("unlimited"))
 
 
 # ==================================================================== #
@@ -905,6 +954,8 @@ class LapRecorder:
         res = dict(time=float(sim.lap.last_lap), valid=False, pos=None,
                    pb_before=self.book.pb_time(self.key), key=self.key,
                    why=self._why or "not recorded")
+        if self.meta.get("unlimited"):
+            res["unlimited"] = True
         self.last = res
         if self.on_lap is not None:
             self.on_lap(res)
@@ -915,6 +966,8 @@ class LapRecorder:
         t = float(sim.lap.last_lap)
         res = dict(time=t, valid=bool(sim.lap.lap_valid), pos=None,
                    pb_before=self.book.pb_time(self.key), key=self.key, why="")
+        if self.meta.get("unlimited"):     # task 41: the card and the note say so
+            res["unlimited"] = True
         self._trace_row(sim, lap)
         n_sec = max(len(getattr(sim.lap, "lines", [0.0])), 1)
         secs = ([lap["sectors"].get(i) for i in range(n_sec)] if n_sec > 1 else [])
@@ -1009,10 +1062,14 @@ class LapRecorder:
         a busy physics loop the filing thread can take seconds to encode
         (the GIL), and the ghost of a new PB has to race the very next lap."""
         m = self.meta
-        return dict(version=1, time=t, sectors=list(secs), date=lap["date"], key=self.key,
-                    build=dict(name=m.get("build_name", ""), json=m.get("build_json")),
-                    assists=dict(m.get("assists", {})), settings=dict(m.get("settings", {})),
-                    _pending=True, _trace_arr=np.asarray(lap["trace"], dtype=np.float64))
+        out = dict(version=1, time=t, sectors=list(secs), date=lap["date"], key=self.key,
+                   build=dict(name=m.get("build_name", ""), json=m.get("build_json")),
+                   assists=dict(m.get("assists", {})), settings=dict(m.get("settings", {})),
+                   _pending=True, _trace_arr=np.asarray(lap["trace"], dtype=np.float64))
+        if m.get("unlimited"):             # task 41: the flag and the reasons, on the lap
+            out["unlimited"] = True
+            out["over_limits"] = [dict(o) for o in m.get("over_limits", [])]
+        return out
 
     @staticmethod
     def _heavy(lap: dict) -> dict:
@@ -1048,13 +1105,16 @@ def lap_note(res: dict) -> tuple:
         return f"LAP {fmt_time(t)} NOT SAVED ({res['save_error'][:40]})", 8.0
     medal = res.get("medal")
     tag = (f" {str(medal).upper()}" + ("!" if res.get("medal_best") else "")) if medal else ""
+    #  an Unlimited lap (task 41) says so first: its PB and its place are the
+    #  Unlimited book's, never the official ones
+    lap_w, pb_w = ("UNLIMITED LAP", "UNLIMITED PB") if res.get("unlimited") else ("LAP", "NEW PB")
     if pos == 1:
         gain = (f" ({float(t) - pb0:+.3f})" if isinstance(pb0, float) and math.isfinite(pb0)
                 else " (first)")
-        return f"NEW PB {fmt_time(t)}{gain} P1/{TOP_N}{tag}", 8.0
+        return f"{pb_w} {fmt_time(t)}{gain} P1/{TOP_N}{tag}", 8.0
     if pos is not None:
-        return f"LAP {fmt_time(t)} P{pos}/{TOP_N}{tag}", 6.0
-    return f"LAP {fmt_time(t)} outside the top {TOP_N}{tag}", 5.0
+        return f"{lap_w} {fmt_time(t)} P{pos}/{TOP_N}{tag}", 6.0
+    return f"{lap_w} {fmt_time(t)} outside the top {TOP_N}{tag}", 5.0
 
 
 def assists_of(settings) -> dict:
@@ -1064,10 +1124,15 @@ def assists_of(settings) -> dict:
 
 
 def session_recorder(opts, settings, wet_scale: float, root: str = RECORDS_DIR,
-                     on_lap=None):
+                     on_lap=None, over=None):
     """The interactive session's recorder, or (None, reason) when this
     session records nothing. The ONE place `runs/records/` is attached:
-    `drive.drive._interactive_session` calls it, nothing scripted does."""
+    `drive.drive._interactive_session` calls it, nothing scripted does.
+
+    `over` (task 41): the session build's wings past the car's physical span
+    limit (`bodies.over_limits`, computed at the session's start). Any, and
+    the recorder files into the UNLIMITED book (`unlimited_book`) and every
+    lap carries `unlimited` and those reasons."""
     if getattr(opts, "headless", False) or getattr(opts, "script", None):
         return None, "a headless run: no records"
     if getattr(opts, "ml_drive", None):
@@ -1079,7 +1144,11 @@ def session_recorder(opts, settings, wet_scale: float, root: str = RECORDS_DIR,
     meta = dict(build_name=str(getattr(opts, "build_name", "") or ""),
                 build_json=getattr(opts, "build_json", None),
                 assists=assists_of(settings), settings=dict(settings.as_dict()))
-    rec = LapRecorder(RecordBook(root), key, meta,
+    over = [dict(o) for o in (over or [])]
+    if over:
+        meta.update(unlimited=True, over_limits=over)
+    book = unlimited_book(root) if over else RecordBook(root)
+    rec = LapRecorder(book, key, meta,
                       expect_global_wet=surface_global_wet(settings.wet, wet_scale),
                       dt=float(getattr(opts, "dt", 0.001)), on_lap=on_lap)
     return rec, ""
@@ -1349,6 +1418,66 @@ def self_check(verbose: bool = True) -> bool:
     with contextlib.redirect_stdout(io.StringIO()):
         huge = RecordBook(root).laps(k3)
     rep("an out-of-range number in a file is a bad file, not a crash", huge == [])
+
+    # -- task 41: an UNLIMITED session files apart -------------------------
+    #  a build past its car's span limit gets its own book under the SAME
+    #  class key; the official PB, top 5, build bests, best medal and the
+    #  per-map builds never see its laps, and no Unlimited lap is publishable
+    ku = class_key("arena", "corsa", "stock", "none")
+    off = RecordBook(root)
+    off.insert(ku, _fake_rec(62.0, [20.0, 21.0, 21.0]))
+    off.set_best_medal(ku, "bronze")
+    off.set_last_build("arena", "mine", {"slots": {}})
+    st = _NS(track="arena", car="corsa", engine="stock", wet="none", abs=False, tc=False,
+             steer_aid=True, gearbox="auto", as_dict=lambda: dict(track="arena"))
+    over = [dict(slot="top", wing="huge", span=2.6, limit=1.9752)]
+    who = _NS(build_name="huge", build_json={"slots": {}})
+    ru, _w = session_recorder(who, st, 0.63, root=root, over=over)
+    ro, _w = session_recorder(who, st, 0.63, root=root)
+    lu = ru._light(dict(date="d", trace=[(0.0,) * 9]), 55.0, [18.0, 18.5, 18.5])
+    lo = ro._light(dict(date="d", trace=[(0.0,) * 9]), 55.0, [18.0, 18.5, 18.5])
+    rep("an Unlimited session records into its own book, the same class key",
+        ru.book.unlimited and ru.book.root == os.path.join(root, UNLIMITED_DIR)
+        and ru.key == ro.key == ku and not ro.book.unlimited and ro.book.root == root
+        and lu.get("unlimited") is True and lu.get("over_limits") == over
+        and "unlimited" not in lo and "over_limits" not in lo,
+        f"{os.path.relpath(ru.book.root, root)}/{class_file(ku)}; the lap carries "
+        f"unlimited + {len(lu['over_limits'])} reason")
+    lap_u = dict(_fake_rec(55.0, [18.0, 18.5, 18.5]), unlimited=True, over_limits=over)
+    pos_u = ru.book.insert(ku, lap_u)
+    ru.book.set_best_medal(ku, "gold")
+    fresh_o, fresh_u = RecordBook(root), unlimited_book(root)
+    rep("...where it is P1 and gold, and the official book is untouched",
+        pos_u == 1 and fresh_u.pb_time(ku) == 55.0 and fresh_u.load(ku)["best_medal"] == "gold"
+        and fresh_o.pb_time(ku) == 62.0 and fresh_o.load(ku)["best_medal"] == "bronze"
+        and len(fresh_o.laps(ku)) == 1 and fresh_o.best_sectors(ku) == [20.0, 21.0, 21.0]
+        and len(fresh_o.load(ku)["build_bests"]) == len(off.load(ku)["build_bests"]),
+        f"Unlimited PB {fresh_u.pb_time(ku)} {fresh_u.load(ku)['best_medal']}, official PB "
+        f"{fresh_o.pb_time(ku)} {fresh_o.load(ku)['best_medal']}")
+    try:
+        off.insert(ku, lap_u)
+        refused = False
+    except ValueError:
+        refused = True
+    rep("an official book refuses a lap that says it is Unlimited",
+        refused and [lp["time"] for lp in RecordBook(root).laps(ku)] == [62.0])
+    ru.book.set_last_build("linden", "huge", {"slots": {}})
+    rep("the per-map builds stay in the official folder whichever book writes them",
+        ru.book.last_build("arena")["name"] == "mine"
+        and RecordBook(root).last_build("linden")["name"] == "huge"
+        and not os.path.exists(os.path.join(root, UNLIMITED_DIR, LAST_BUILDS_FILE)))
+    rep("publishable(): the public boards' one hook -- never an Unlimited lap",
+        publishable(fresh_o.laps(ku)[0]) is True and publishable(fresh_u.laps(ku)[0]) is False
+        and publishable(lu) is False and publishable(lo) is True and publishable(None) is False)
+    n_pb = lap_note(dict(time=55.0, valid=True, pos=1, pb_before=float("nan"), unlimited=True))[0]
+    n_p3 = lap_note(dict(time=57.0, valid=True, pos=3, pb_before=55.0, unlimited=True))[0]
+    rep("the HUD note says UNLIMITED plainly", n_pb.startswith("UNLIMITED PB 55.000")
+        and n_p3.startswith("UNLIMITED LAP 57.000 P3")
+        and lap_note(dict(time=57.0, valid=True, pos=3, pb_before=55.0))[0].startswith("LAP 57"),
+        f"{n_pb!r}, {n_p3!r}")
+    rep("a scripted / headless run still records nothing, Unlimited or not",
+        session_recorder(_NS(headless=True), st, 0.63, root=root, over=over)[0] is None
+        and session_recorder(_NS(script="x"), st, 0.63, root=root, over=over)[0] is None)
 
     # -- a real lap: recorded, filed, re-simulated bit for bit ------------
     # (the full scripted 3-lap acceptance is drive.py's V31; this one is a
