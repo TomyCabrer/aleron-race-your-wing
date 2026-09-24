@@ -7100,7 +7100,8 @@ def _v41_builds(tmp, verbose=True):
               and not d2.has_any(lib) and "no wings" in n2 and "F" in n2
               and d3 is None and not n3
               and d4 is None and "no longer" in n4
-              and d5 is not None and not d5.has_any(lib) and "no longer" in n5 and "no wings" in n5
+              and d5 is not None and not d5.has_any(lib) and "gone" in n5 and "no wings" in n5
+              and max(len(n) for n in (n1, n2, n4, n5, n6)) <= 120
               and d6 is not None and d6.name == "mx fast" and "last build" in n6)
     #  _resolve_design at launch: a last garage car of another car -> this
     #  car's default; --build / --wing win untouched; an any-car car is kept
@@ -8521,9 +8522,10 @@ def _car_build(grg, lib, design, car: str, settings, track: str | None = None, o
             return d2, note or f"the {car_label(car)} opens with its last build on this map"
     d = grg.new_build(car)
     d.clamp(lib)
-    why = (f"'{design.name}' is the {car_label(design.car)}'s: the {car_label(car)} starts "
-           f"with no wings (garage F: its default)")
-    return d, f"{note}; {why}" if note else why
+    whose = f"'{design.name}' is the {car_label(design.car)}'s"
+    if note:                               # (the first screen shows 120 characters)
+        return d, f"the {car_label(car)}'s default '{name}' is gone: no wings ({whose})"
+    return d, f"the {car_label(car)} starts with no wings ({whose}): garage F sets its default"
 
 
 def _stamp_car(design, entered, car: str) -> None:
