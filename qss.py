@@ -254,6 +254,27 @@ def sweep():
         print(f"  h_w = {h_w:4.2f} m   {V:6.2f} m/s   {(V/V0-1)*100:+5.2f}%{tag}")
 
 
+def self_check() -> bool:
+    """Task 41's addition, `tyre_ref`: 1.0 IS `TYRE` (the same object), and
+    a load-scaled reference is exactly lambda x the study's tyre at
+    Fz/lambda -- the statement drive/tyre.py's step 13 makes for the Magic
+    Formula itself. The cross-check and the sweep below are the study."""
+    import cars
+    ok = tyre_ref(1.0) is TYRE and all(
+        r is TYRE for k in cars.STOCK_CARS for r in car_tyre_refs(cars.CARS[k]))
+    worst = 0.0
+    for lam in (6.644, 12.233):
+        r = tyre_ref(lam)
+        for fz in (500.0, 1932.0, 2477.0, 3022.0, 5463.0, 9000.0):
+            a, b = fy_max(lam * fz, **r), lam * fy_max(fz, **TYRE)
+            worst = max(worst, abs(a - b) / b)
+    ok = ok and worst < 1e-12
+    print(f"  [{'ok' if ok else 'FAIL'}] tyre_ref: 1.0 is TYRE on every stock car; "
+          f"scaled == lambda x TYRE at Fz/lambda to {worst:.1e}")
+    return ok
+
+
 if __name__ == "__main__":
+    self_check()
     cross_check()
     sweep()
