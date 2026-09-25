@@ -139,6 +139,9 @@ GARAGE_HELP_KB = [
     ("SPACE", "deploy preview (0.45 s actuator)"),
     ("D", "design a wing: mission -> section -> wing"),
     ("A / L", "airfoil library / wing + build library"),
+    ("S / SHIFT+S", "save the build (in place) / as a new name"),
+    ("B / SHIFT+B", "next / previous saved build of this car"),
+    ("F", "make this build the car's default"),
     ("R / C", "car defaults / reset camera"),
     ("ENTER", "drive this car"),
     ("H", "wing tutorial's box: hide / show"),
@@ -156,7 +159,7 @@ GARAGE_HELP_PAD = [
     ("L3", "design a wing for this slot (mission first)"),
     ("R3", "reset camera"),
     ("CROSS", "drive this car"),
-    ("OPTIONS", "this menu"),
+    ("OPTIONS", "this menu: save / load a build, the car default"),
 ]
 GARAGE_MENU_KEYS = {
     pygame.K_UP: "nav_up", pygame.K_DOWN: "nav_down",
@@ -356,12 +359,20 @@ class CarBuild:
     draws. A build whose flanks carry the SAME published panel and no top
     wing maps onto the closed-form path exactly (that is the study's car)."""
 
-    name: str = "my corsa"
+    name: str = "my corsa"        # = default_build_name("corsa")
     left: Slot = field(default_factory=lambda: Slot("", 0.97, 0.90, 0.0))
     right: Slot = field(default_factory=lambda: Slot("", 0.97, 0.90, 0.0))
     top: Slot = field(default_factory=lambda: Slot("", -0.90, 1.55, 6.0, "active"))
     mirror: bool = True
     builtin: bool = False
+    #: task 41: the car this build was made for, a `cars.py` key. "" is a
+    #: build saved before builds knew their car: made for ANY car, and still
+    #: offered to every one. The garage stamps its own car on every save; a
+    #: LABEL, like the name -- `records.BUILD_META` strips it wherever two
+    #: builds are compared or a PB is filed, so tagging a build moves no
+    #: record. It decides only what a car is OFFERED: its own builds first,
+    #: and never another car's build without the player choosing it.
+    car: str = ""
 
     def slot(self, key: str) -> Slot:
         return getattr(self, key)
@@ -571,8 +582,10 @@ class CarBuild:
 
     # -- persistence ---------------------------------------------------------
     def to_json(self) -> dict:
+        #  still version 2: "car" is one more label, and a version-2 file
+        #  without it (every build saved before task 41) reads as car ""
         return dict(version=2, name=self.name, mirror=self.mirror, builtin=self.builtin,
-                    slots={k: asdict(self.slot(k)) for k in SLOTS})
+                    car=self.car, slots={k: asdict(self.slot(k)) for k in SLOTS})
 
     @classmethod
     def from_json(cls, d: dict) -> "CarBuild":
@@ -601,9 +614,13 @@ class CarBuild:
                 return default
 
         base = cls()
-        return cls(name=str(d.get("name", "my corsa")), left=_slot("left", base.left),
+        car = d.get("car", "")
+        car = car if isinstance(car, str) else ""       # a hand-edited tag: any car
+        return cls(name=str(d.get("name", default_build_name(car or "corsa"))),
+                   left=_slot("left", base.left),
                    right=_slot("right", base.right), top=_slot("top", base.top),
-                   mirror=bool(d.get("mirror", True)), builtin=bool(d.get("builtin", False)))
+                   mirror=bool(d.get("mirror", True)), builtin=bool(d.get("builtin", False)),
+                   car=car)
 
     def save(self, path: str = DESIGN_PATH) -> str:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -632,6 +649,31 @@ class CarBuild:
 
     def copy(self) -> "CarBuild":
         return CarBuild.from_json(self.to_json())
+
+
+def default_build_name(car: str = "corsa") -> str:
+    """A new build's name on `car` (task 41): 'my corsa', 'my mx5', 'my bus'
+    -- the key, not the title, so the Corsa's is the name every build had
+    before and a name stays short enough for a list row."""
+    return f"my {car or 'corsa'}"
+
+
+def new_build(car: str = "corsa") -> CarBuild:
+    """The EMPTY build for `car` (task 41): no wings, the car's own default
+    slots (`bodies.slot_defaults`; the three stock cars' are `CarBuild()`'s
+    own numbers), named `default_build_name(car)` and tagged with the car.
+    What a car starts with when it has no default and the build in hand was
+    made for another car."""
+    b = CarBuild(name=default_build_name(car), car=str(car or ""))
+    try:
+        from . import bodies
+        d = bodies.slot_defaults(car or "corsa")
+        (fx, fh), (tx, th, ti) = d["flank"], d["top"]
+        b.left, b.right = Slot("", fx, fh, 0.0), Slot("", fx, fh, 0.0)
+        b.top = Slot("", tx, th, ti, "active")
+    except Exception:                      # noqa: BLE001 -- an unknown car: the stock slots
+        pass
+    return b
 
 
 def _could_not_save(exc: Exception) -> str:
@@ -1578,13 +1620,15 @@ class GarageView:
              "D design, A airfoils, L library", C_TEXT),
             ("mouse drag orbit | wheel zoom | LEFT/RIGHT x | UP/DOWN h | [ ] incidence | M mirror | "
              "T top mode | SPACE deploy preview | V vectors | R defaults | C camera", C_TEXT_DIM),
-            ("ENTER drive  |  ESC: wing tutorial, controls, defaults, quit", C_TEXT_DIM),
+            ("ENTER drive  |  S save build  B next build  F car default  |  "
+             "ESC: wing tutorial, controls, defaults, quit", C_TEXT_DIM),
         ]
         if pad_name:
             lines[2] = (f"PS5 {pad_name}:  L-stick move | R-stick orbit | L1/R1 incidence | "
                         "TRIANGLE slot | SQUARE wing | CIRCLE deploy | L3 design | CROSS drive | "
-                        "OPTIONS menu", C_OK)
-            lines.append(("ENTER drive  |  ESC: wing tutorial, controls, defaults, quit", C_TEXT_DIM))
+                        "OPTIONS menu, builds", C_OK)
+            lines.append(("ENTER drive  |  S save build  B next build  F car default  |  "
+                          "ESC: wing tutorial, controls, defaults, quit", C_TEXT_DIM))
         else:
             lines.append(("no controller: pair the DualSense over Bluetooth and press PS - "
                           "it hot-plugs here and in the drive", C_TEXT_DIM))
@@ -2717,10 +2761,13 @@ class LibraryPage:
         self.g, self.lib = g, g.lib
         self.wings = ui.ListBox(title="WINGS  (ENTER: put in the selected slot)")
         self.builds = ui.ListBox(title="BUILDS  (ENTER: load the whole car)")
+        self.other: set = set()          # other cars' builds: drawn dim (task 41)
         self.focus = "wings"
         self.refresh()
 
-    def refresh(self) -> None:
+    def refresh(self, keep: str | None = None) -> None:
+        """Re-list both. `keep`: the build the cursor goes to (a rename,
+        task 41); else each list keeps the row it was on."""
         keep_w = self.wings.current()[0] if self.wings.current() else None
         keep_b = self.builds.current()[0] if self.builds.current() else None
         items = []
@@ -2736,11 +2783,25 @@ class LibraryPage:
                 sub = f"{w.airfoil}  b {w.span:.2f} c {w.chord:.2f}  (not analysed)"
             items.append((name, sub, f"{w.role}{' *' if w.builtin else ''}"))
         self.wings.set_items(items, keep=keep_w)
-        items = []
-        for name in sorted(self.lib.builds):
+        #  task 41: the BUILDS of the car in the garage first, then the any-car
+        #  ones saved before builds knew their car, then every other car's --
+        #  the PICK page's order (`prerace.pick_order`), which B cycles too.
+        #  Another car's build stays loadable (a bus wing on a Corsa is the
+        #  player's own experiment) but is tagged with its car and drawn dim;
+        #  the car's own default is tagged "(default)".
+        from .prerace import pick_order, car_label
+        car, dflt = self.g.car, self.g.default_name()
+        self.builds.title = f"BUILDS for the {car_label(car)}  (ENTER: load the whole car)"
+        items, self.other = [], set()
+        for name in pick_order(self.lib.builds, car):
             b = CarBuild.from_json(self.lib.builds[name])
-            items.append((name, b.summary(self.lib)[:90], "build"))
-        self.builds.set_items(items, keep=keep_b)
+            tag = car_label(b.car) if b.car else "any car"
+            sub = b.summary(self.lib)[:90]
+            if b.car and b.car != car:
+                self.other.add(name)
+                sub = f"the {car_label(b.car)}'s: " + sub
+            items.append((name, sub, ("(default) " if name == dflt else "") + tag))
+        self.builds.set_items(items, keep=keep_b if keep is None else keep)
 
     def draw(self, screen, text: ui.Text, u: float) -> None:
         R = lambda x, y, w, h: (int(x * u), int(y * u), int(w * u), int(h * u))   # noqa: E731
@@ -2748,6 +2809,14 @@ class LibraryPage:
                         focus=(self.focus == "wings"))
         self.builds.draw(screen, text, ui.panel(screen, R(12, 356, 640, 320)), row_h=int(33 * u), size=13,
                          focus=(self.focus == "builds"), empty="(no saved builds: S saves the current car)")
+        #  another car's build, dimmed: a veil of the panel colour over its row
+        #  (the list draws every row alike; the rows it drew are its `_hits`)
+        for i, ry, rh in getattr(self.builds, "_hits", ()):
+            if (self.builds.items[i][0] in self.other
+                    and not (i == self.builds.idx and self.focus == "builds")):
+                veil = pygame.Surface((self.builds._rect.w - 8, rh - 2), pygame.SRCALPHA)
+                veil.fill((*C_HUD_BG, 120))
+                screen.blit(veil, (self.builds._rect.x + 4, ry - 2))
         r = ui.panel(screen, R(660, 12, 608, 664))
         x, y = r.x + 12, r.y + 10
         b = self.g.build
@@ -2787,8 +2856,11 @@ class LibraryPage:
                       f"a {w.role} wing does not fit the {self.g.sel} slot: select a {'flank' if w.role == 'flank' else 'top'} slot first (1/2/3)"),
                       x, y, 12, C_OK if role_ok else C_WARN)
         elif it and self.focus == "builds":
+            from .prerace import car_label
             bb = CarBuild.from_json(self.lib.builds[it[0]])
-            text.blit(screen, f"BUILD '{bb.name}'", x, y, 14, ui.C_SECTION, bold=True)
+            car = self.g.car
+            text.blit(screen, f"BUILD '{bb.name}'" + ("   (default)" if bb.name == self.g.default_name()
+                                                     else ""), x, y, 14, ui.C_SECTION, bold=True)
             y += 22
             for key in SLOTS:
                 s = bb.slot(key)
@@ -2796,12 +2868,36 @@ class LibraryPage:
                           x, y, 13, C_TEXT_DIM)
                 y += 20
             y += 8
-            text.blit(screen, "ENTER loads it as the current car", x, y, 12, C_OK)
+            #  whose it is (task 41), and whether its wings are past THIS
+            #  car's span limits (`bodies.over_limits`: computed, never stored)
+            if not bb.car:
+                whose, col = "for any car (saved before builds knew their car)", C_TEXT_DIM
+            elif bb.car == car:
+                whose, col = f"made for this car, the {car_label(car)}", C_OK
+            else:
+                whose, col = (f"made for the {car_label(bb.car)}: on the {car_label(car)} its "
+                              f"slots are fitted to this body"), C_WARN
+            text.blit(screen, whose[:90], x, y, 12, col)
+            y += 18
+            try:
+                from . import bodies
+                over = bodies.over_limits(self.lib.builds[it[0]], self.lib, car)
+            except Exception:              # noqa: BLE001 -- a tag is never worth a crash
+                over = []
+            if over:
+                text.blit(screen, f"UNLIMITED on the {car_label(car)}: {bodies.limits_text(over)}"[:90],
+                          x, y, 12, C_WARN)
+                y += 18
+            y += 6
+            text.blit(screen, "ENTER loads it as the current car   D makes it the car's default   "
+                      "R renames it", x, y, 12, C_OK)
         y = r.bottom - 60
-        text.blit(screen, "TAB wings/builds   ENTER use/load   S save car as build   N new wing (designer)   "
-                  "DEL delete (user items)   ESC back", x, y, 12, C_TEXT_DIM)
+        text.blit(screen, "TAB wings/builds   ENTER use/load   S save car (SHIFT: as new)   "
+                  "N new wing", x, y, 12, C_TEXT_DIM)
+        text.blit(screen, "D the car's default build   R rename a build   DEL delete (user items)   "
+                  "ESC back", x, y + 16, 12, C_TEXT_DIM)
         if self.g.hint:
-            text.blit(screen, self.g.hint[:90], x, y + 20, 12, ui.C_KEY)
+            text.blit(screen, self.g.hint[:90], x, y + 34, 12, ui.C_KEY)
 
 
 # =========================================================================== #
@@ -4710,8 +4806,9 @@ class Garage:
                    (f"Design the {self.sel} wing  (mission -> section -> wing)", "design")]
                   + tut_rows
                   + [("Airfoil library", "airfoils"),
-                     ("Wing & build library", "library"),
-                     ("Reset car to defaults", "defaults"),
+                     ("Wing & build library", "library")]
+                  + self._build_rows()
+                  + [("Reset car to defaults", "defaults"),
                      ("Reset camera", "camera"),
                      ("Drive this car", "drive"),
                      ("Quit", "quit")],
@@ -4719,6 +4816,18 @@ class Garage:
             subtitle=self.build.summary(self.lib)[:120],
             footer="ESC / OPTIONS resume   R defaults   C camera   ENTER / CROSS select")
         self._menu_stick = StickNav()
+
+    def _build_rows(self) -> list:
+        """The pause menu's build rows (task 41): the pad's way to what S,
+        SHIFT+S, B and F do on the car page, whose buttons are all taken."""
+        from .prerace import car_label
+        n, dflt = self.build.name, self.default_name()
+        return [(f"Save build  '{n[:24]}'" + ("" if self._own_build(n) else "  (asks a name)"),
+                 "build_save"),
+                ("Save build as a new name ...", "build_save_as"),
+                ("Load a build ...  (the library's builds)", "build_load"),
+                (f"Make it the {car_label(self.car)} default  (now: {dflt[:24] or 'none'})",
+                 "build_default")]
 
     def _first_wing_choice(self) -> bool:
         """The first time a player opens the designer, ask ONCE: the guided
@@ -4766,6 +4875,15 @@ class Garage:
             self.open_airfoils()
         elif action == "library":
             self.open_library()
+        elif action == "build_save":
+            self.save_build()
+        elif action == "build_save_as":
+            self.save_build(as_new=True)
+        elif action == "build_load":
+            self.open_library()
+            self.lib_page.focus = "builds"
+        elif action == "build_default":
+            self.make_default()
         elif action in ("wt_start", "wt_resume"):
             self._first_wing_answered()
             from .wing_tutorial import WingTutor, saved_state
@@ -4916,9 +5034,33 @@ class Garage:
         self._prompt_kind = "naca"
         self.prompt.show("new NACA 4-digit section (e.g. 4415)", "")
 
-    def prompt_build(self) -> None:
+    #: a name prompt a pad can answer too (task 41: `_poll_pad`)
+    PROMPT_HINT = "ENTER / CROSS ok   ESC / CIRCLE cancel"
+
+    def prompt_build(self, as_new: bool = False) -> None:
+        """The name prompt for saving the car as a build: on its own name
+        (ENTER overwrites that build), or -- `as_new`, SHIFT+S / the menu's
+        "Save build as" -- on the first free name after it, so ENTER alone
+        (or a pad's CROSS) saves a new build beside it."""
         self._prompt_kind = "build"
-        self.prompt.show("save the current car as a build", self.build.name)
+        base = self.build.name.strip() or default_build_name(self.car)
+        self.prompt.show("save the car as a NEW build" if as_new else "save the current car as a build",
+                         self.lib.unique_name("builds", base) if as_new else base,
+                         hint=self.PROMPT_HINT)
+
+    def prompt_rename_build(self) -> None:
+        """R on the library's BUILDS list (task 41): rename the build under
+        the cursor (`Library.rename`)."""
+        it = self.lib_page.builds.current()
+        if not it or it[0] not in self.lib.builds:
+            self.hint = "no build here to rename"
+            return
+        if self.lib.builds[it[0]].get("builtin"):
+            self.hint = "built-in builds cannot be renamed"
+            return
+        self._prompt_kind = "rename_build"
+        self._rename_from = it[0]
+        self.prompt.show(f"rename the build '{it[0]}'", it[0], hint=self.PROMPT_HINT)
 
     def _prompt_done(self, value: str) -> None:
         kind = self._prompt_kind
@@ -4947,18 +5089,25 @@ class Garage:
         elif kind == "build":
             #  the SAME name overwrites that build (it was asked for); a name
             #  that only folds onto another build's file ('Kestrel Fast' /
-            #  'kestrel-fast') is saved beside it instead
+            #  'kestrel-fast') is saved beside it instead -- and so (task 41)
+            #  is a name another CAR's build holds: typing 'bus wings' on the
+            #  Corsa must not re-tag the bus's build as a Corsa one
+            from .prerace import car_label
             name = value[:32]
-            new = name if name in self.lib.builds else self.lib.unique_name("builds", name)
-            self.build.name = new
-            try:
-                self.lib.save_build(self.build.to_json())
-            except (OSError, ValueError) as exc:
-                self.hint = _could_not_save(exc)
+            held = self.lib.builds.get(name)
+            if held is not None and not self._own_build(name):
+                new = self.lib.unique_name("builds", name)
+                c = held.get("car", "") if isinstance(held, dict) else ""
+                why = f"'{name}' is the {car_label(c)}'s build" if c else f"'{name}' is built in"
+            else:
+                new = name if held is not None else self.lib.unique_name("builds", name)
+                why = f"'{name}' already exists"
+            if not self._write_build(new):
                 return
-            self.lib_page.refresh()
             self.hint = (f"build '{new}' saved to the library" if new == name
-                         else f"'{name}' already exists - saved as '{new}'")
+                         else f"{why} - saved as '{new}'")
+        elif kind == "rename_build":
+            self._rename_build(getattr(self, "_rename_from", ""), value)
 
     # -- slot editing (car page) ---------------------------------------------
     def _past_limit(self, key: str, spec: "WingSpec", h: float | None = None) -> float | None:
@@ -5077,6 +5226,15 @@ class Garage:
         if self.menu.open:
             return self._poll_pad_menu()
         if self.prompt.open:
+            #  task 41: a pad answers a name prompt (the menu's "Save build
+            #  as", which opens on a free name): CROSS takes the name as it
+            #  stands, CIRCLE cancels. Typing stays the keyboard's.
+            e = {n: self._pad_edge(n) for n in PAD_NAMES_POLLED}
+            if e["cross"]:
+                self.prompt.open_ = False
+                self._prompt_done(self.prompt.value)
+            elif e["circle"]:
+                self.prompt.open_ = False
             return None
         e = {n: self._pad_edge(n) for n in PAD_NAMES_POLLED}
         lx, ly = p.stick("left")
@@ -5141,6 +5299,12 @@ class Garage:
                 self.af_page.request_xfoil()
             elif self.page == "library":
                 self._save_build_quick()
+        if e["r1"] and self.page == "library":         # task 41: the car's default
+            lp = self.lib_page
+            if lp.focus == "builds" and lp.builds.current():
+                self.make_default(lp.builds.current()[0])
+            else:
+                self.hint = "R1 makes a BUILD the car's default: TRIANGLE to the builds"
         if e["triangle"]:
             if self.page == "section":
                 self.design_page.focus = ("rows" if self.design_page.focus == "nav" else "nav")
@@ -5326,21 +5490,196 @@ class Garage:
             it = lp.builds.current()
             if not it:
                 return
-            self.build = CarBuild.from_json(self.lib.builds[it[0]]).clamp(self.lib)
-            self.designer = None
-            self.hint = f"loaded build '{self.build.name}'"
+            self._load_build(it[0])
             self.page = "car"
 
-    def _save_build_quick(self) -> None:
-        name = self.lib.unique_name("builds", self.build.name)     # never over another build
-        self.build.name = name
+    # -- builds: save, switch, the car's own default (task 41) ---------------
+    #  The owner: "There has to be an easy way to save and change the wing
+    #  cars. Also a custom default for each car the user wants." On the car
+    #  page S saves (in place when the car already IS one of this car's saved
+    #  builds, else it asks the name), SHIFT+S saves as a new name, B / SHIFT+B
+    #  steps through this car's saved builds the way W steps a slot's wings,
+    #  and F makes the car in hand this car's DEFAULT: the build the drive
+    #  loads when the player switches to this car (drive.drive, Settings.
+    #  car_build). A pad has the same four in the pause menu (OPTIONS), whose
+    #  buttons on the car page are all taken; the library page adds D (R1),
+    #  R and DEL on the build under the cursor.
+    def default_name(self) -> str:
+        """This car's default build (the drive's Settings.car_build), by
+        library name; "" when none was chosen or the garage has no Settings."""
+        bo = getattr(self.settings, "build_of", None)
+        return bo(self.car) if bo is not None else ""
+
+    def _own_build(self, name: str) -> bool:
+        """Is `name` a user build in the library that this car may write
+        over: its own, or an any-car one from before task 41? Another car's
+        build (or a built-in) is saved BESIDE, never over."""
+        b = self.lib.builds.get(name)
+        return (isinstance(b, dict) and not b.get("builtin")
+                and b.get("car", "") in ("", self.car))
+
+    def saved_as(self) -> str | None:
+        """The library build the car in hand IS -- same wings, stations and
+        angles (`prerace._same_build`) -- its own name first; None: unsaved."""
+        from .prerace import _same_build
+        js = self.build.to_json()
+        if _same_build(self.lib.builds.get(self.build.name), js):
+            return self.build.name
+        for n, b in self.lib.builds.items():
+            if _same_build(b, js):
+                return n
+        return None
+
+    def car_builds(self) -> list:
+        """The builds B steps through: this car's own, then the any-car ones
+        (`prerace.pick_order`). Other cars' builds are the library page's."""
+        from .prerace import pick_order
+        return [n for n in pick_order(self.lib.builds, self.car)
+                if self.lib.builds[n].get("car", "") in ("", self.car)]
+
+    def _write_build(self, name: str) -> bool:
+        """Save the car in hand as the library build `name`, stamped with this
+        car. False (and the hint says why) when the write failed; the car
+        keeps its old name and tag then."""
+        was = self.build.name, self.build.car
+        self.build.name, self.build.car = name, self.car
         try:
             self.lib.save_build(self.build.to_json())
         except (OSError, ValueError) as exc:
+            self.build.name, self.build.car = was
+            self.hint = _could_not_save(exc)
+            return False
+        self.lib_page.refresh()
+        return True
+
+    def save_build(self, as_new: bool = False) -> None:
+        """S: the car in hand into the library. Already one of this car's
+        saved builds under its name: written over in place (nothing changed:
+        said, not rewritten). Anything else -- a new car, another car's build
+        -- asks the name first. SHIFT+S (`as_new`): the prompt, on a free name."""
+        from .prerace import _same_build
+        n = self.build.name
+        if as_new or not self._own_build(n):
+            self.prompt_build(as_new=as_new)
+            return
+        held = self.lib.builds[n]
+        if _same_build(held, self.build.to_json()) and held.get("car", "") == self.car:
+            self.hint = f"build '{n}' is saved (nothing changed)"
+            return
+        if self._write_build(n):
+            self.hint = f"build '{n}' saved"
+
+    def _save_build_quick(self) -> None:
+        """The pad's SQUARE on the library page: saved WITHOUT a prompt. The
+        car's own saved build is written over in place (it used to pile up
+        'my corsa-2', '-3' ... on every press); anything else is saved under
+        the first free name after its own. The menu's "Save build as" is the
+        explicit new-name path."""
+        n = self.build.name
+        name = n if self._own_build(n) else self.lib.unique_name("builds", n)
+        if self._write_build(name):
+            self.hint = f"build '{name}' saved"
+
+    def _load_build(self, name: str) -> None:
+        """The library build `name` becomes the car in hand."""
+        self.build = CarBuild.from_json(self.lib.builds[name]).clamp(self.lib)
+        self.designer = None
+        self.hint = f"loaded build '{self.build.name}'" + (
+            "  (default)" if name == self.default_name() else "")
+
+    def cycle_build(self, d: int = 1) -> None:
+        """B / SHIFT+B: the next / previous of this car's saved builds, in
+        place. A car with unsaved wings is not dropped on the first press:
+        the hint says so and a second B (the car unchanged) goes on."""
+        names = self.car_builds()
+        if not names:
+            from .prerace import car_label
+            self.hint = f"no saved builds for the {car_label(self.car)} yet: S saves this one"
+            return
+        cur = self.saved_as()
+        if cur is None and self.build.has_any(self.lib):
+            key = json.dumps(self.build.to_json(), sort_keys=True)
+            if getattr(self, "_b_warned", None) != key:
+                self._b_warned = key
+                self.hint = "unsaved car: B again drops it (S saves it first)"
+                return
+        self._b_warned = None
+        #  where the car in hand stands in the list: the build it IS, else the
+        #  one it was loaded as (its name) -- a load that the clamp moved, or
+        #  an edit, steps on from there rather than from the top
+        at = cur if cur in names else (self.build.name if self.build.name in names else None)
+        i = names.index(at) if at is not None else (-1 if d > 0 else 0)
+        j = (i + d) % len(names)
+        self._load_build(names[j])
+        self.hint = f"build {j + 1}/{len(names)}: '{names[j]}'" + (
+            "  (default)" if names[j] == self.default_name() else "")
+
+    def _set_default(self, name: str) -> bool:
+        """Settings.car_build[this car] = `name`, saved. False with a hint
+        when there is no Settings (a bare garage) or the file did not save."""
+        st = self.settings
+        if st is None or not hasattr(st, "car_build"):
+            self.hint = "no drive settings here: set a car's default from the drive's garage"
+            return False
+        cb = dict(st.car_build) if isinstance(st.car_build, dict) else {}
+        if name:
+            cb[self.car] = name
+        else:
+            cb.pop(self.car, None)
+        st.car_build = cb
+        st.save()
+        if getattr(st, "save_note", ""):
+            self.hint = st.save_note
+            return False
+        return True
+
+    def make_default(self, name: str | None = None) -> None:
+        """F (car page), the menu row, D / R1 (library page): a build becomes
+        THIS car's default -- `name`, or the car in hand, saved first when it
+        is no saved build yet (as SQUARE saves: in place, or a free name)."""
+        from .prerace import car_label
+        if self.settings is None:
+            self.hint = "no drive settings here: set a car's default from the drive's garage"
+            return
+        if name is None:
+            name = self.saved_as()
+            if name is None or not self._own_build(name):
+                self._save_build_quick()
+                name = self.saved_as()
+                if name is None:
+                    return                 # the save failed: its hint stands
+        if name not in self.lib.builds:
+            self.hint = f"'{name}' is not in the library"
+            return
+        if self._set_default(name):
+            c = self.lib.builds[name].get("car", "")
+            self.hint = (f"'{name}' is the {car_label(self.car)}'s default build"
+                         + (f" (a {car_label(c)} build)" if c and c != self.car else ""))
+            self.lib_page.refresh()
+
+    def _rename_build(self, old: str, new: str) -> None:
+        """The rename prompt's ENTER: `Library.rename`, and every reference
+        to the old name moved with it -- the car in hand, and any car's
+        default in Settings (a default is a NAME, task 41)."""
+        try:
+            got = self.lib.rename("builds", old, new)
+        except KeyError:
+            self.hint = f"'{old}' is no longer in the library"
+            return
+        except (OSError, ValueError) as exc:
             self.hint = _could_not_save(exc)
             return
-        self.lib_page.refresh()
-        self.hint = f"build '{name}' saved"
+        if self.build.name == old:
+            self.build.name = got
+        st = self.settings
+        cb = getattr(st, "car_build", None)
+        moved = [c for c, n in (cb or {}).items() if n == old] if isinstance(cb, dict) else []
+        if moved:
+            st.car_build = {c: (got if n == old else n) for c, n in cb.items()}
+            st.save()
+        self.lib_page.refresh(keep=got)
+        self.hint = f"build '{old}' renamed '{got}'" + (
+            f" (still the default of {len(moved)} car{'s' if len(moved) > 1 else ''})" if moved else "")
 
     def _new_wing(self) -> None:
         slot = self.build.slot(self.sel)
@@ -5366,6 +5705,16 @@ class Garage:
             if it and it[0] in self.lib.builds:
                 self.lib.delete("builds", it[0])
                 self.hint = f"deleted build '{it[0]}'"
+                #  a car whose default it was has none now (task 41): said
+                #  here, rather than found out the next time that car is chosen
+                cb = getattr(self.settings, "car_build", None)
+                gone = [c for c, n in cb.items() if n == it[0]] if isinstance(cb, dict) else []
+                if gone:
+                    from .prerace import car_label
+                    self.settings.car_build = {c: n for c, n in cb.items() if n != it[0]}
+                    self.settings.save()
+                    self.hint += (f" - it was the {', '.join(car_label(c) for c in gone)}'s "
+                                  f"default: none now")
         lp.refresh()
 
     # -- keyboard / mouse -----------------------------------------------------
@@ -5486,6 +5835,14 @@ class Garage:
             self.open_airfoils()
         elif k == pygame.K_l:
             self.open_library()
+        #  task 41: the car's builds, one key each. D (the obvious "default")
+        #  is the designer's, so the default is F -- the player's Favourite
+        elif k == pygame.K_s:
+            self.save_build(as_new=fine)
+        elif k == pygame.K_b:
+            self.cycle_build(-1 if fine else 1)
+        elif k == pygame.K_f:
+            self.make_default()
         return None
 
     def _handle_page_key(self, ev) -> str | None:
@@ -5548,12 +5905,23 @@ class Garage:
             elif k == pygame.K_n:
                 self.prompt_naca()
         elif self.page == "library":
+            lp = self.lib_page
             if k == pygame.K_s:
-                self.prompt_build()
+                self.prompt_build(as_new=fine)
             elif k in (pygame.K_DELETE, pygame.K_BACKSPACE):
                 self._delete_library_item()
             elif k == pygame.K_n:
                 self._new_wing()
+            elif k == pygame.K_d:                     # task 41: the car's default
+                if lp.focus == "builds" and lp.builds.current():
+                    self.make_default(lp.builds.current()[0])
+                else:
+                    self.hint = "D makes a BUILD the car's default: TAB to the builds"
+            elif k == pygame.K_r:                     # task 41: rename a build
+                if lp.focus == "builds":
+                    self.prompt_rename_build()
+                else:
+                    self.hint = "R renames a BUILD (TAB to the builds); a wing: N in its designer"
         return None
 
     # -- drawing ------------------------------------------------------------------
@@ -5594,9 +5962,11 @@ class Garage:
         else:
             self.lib_page.draw(self.screen, self.text, u)
             hints = [("UP/DOWN", "item"), ("TAB", "wings / builds"), ("ENTER", "use / load"),
-                     ("S", "save car as build"), ("N", "new wing"), ("DEL", "delete"), ("ESC", "back")]
+                     ("S", "save car as build"), ("D", "car default"), ("R", "rename"),
+                     ("N", "new wing"), ("DEL", "delete"), ("ESC", "back")]
             pad_h = [("stick", "item"), ("TRIANGLE", "wings/builds"), ("CROSS", "use / load"),
-                     ("SQUARE", "save build"), ("CIRCLE", "back")] if pad_name else None
+                     ("SQUARE", "save build"), ("R1", "car default"),
+                     ("CIRCLE", "back")] if pad_name else None
         title = {"mission": "MISSION", "section": "DESIGN",
                  "airfoil": "AIRFOIL LIBRARY",
                  "library": "WING & BUILD LIBRARY"}[self.page]
@@ -5694,6 +6064,181 @@ class Garage:
 # =========================================================================== #
 #  SELF-CHECK                                                                  #
 # =========================================================================== #
+class _FakeSettings:
+    """What the garage reads of the drive's Settings for the builds (task 41):
+    the per-car defaults and a save() that counts."""
+
+    def __init__(self):
+        self.car_build, self.saves, self.save_note = {}, 0, ""
+
+    def build_of(self, car=None):
+        return self.car_build.get(car or "corsa", "")
+
+    def save(self):
+        self.saves += 1
+
+
+def _check_builds(g: "Garage", lib: Library, key, rep) -> bool:
+    """Task 41's build keys on a headless garage `g` on the Corsa, with a car
+    in hand that is the library's 'test-car': S in place vs the name prompt,
+    another car's build never written over, SHIFT+S, B's order and its
+    unsaved-car guard, F / D / R1 (the default) with and without Settings,
+    R (rename, the default moving with it), DEL (the default cleared), the
+    pad's SQUARE in place and its CROSS on a prompt, and the menu rows."""
+    ok = True
+
+    def chk(tag, passed, msg=""):
+        nonlocal ok
+        ok = ok and bool(passed)
+        rep(tag, passed, msg)
+
+    def typed(text):
+        g.prompt.value = ""
+        for ch in text:
+            g._handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_a, mod=0, unicode=ch))
+        g._handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN, mod=0, unicode="\r"))
+
+    SH = pygame.KMOD_SHIFT
+    g.page = "car"
+    chk("a build saved in the garage is tagged with its car",
+        lib.builds["test-car"].get("car") == "corsa" and g.build.car == "corsa",
+        str(lib.builds["test-car"].get("car")))
+    #  S: in place (no prompt, no copy) on the car's own saved build
+    n0 = len(lib.builds)
+    g.build.left.inc_deg += 1.0
+    g.build.sync_mirror("left")
+    key(pygame.K_s)
+    from .prerace import _same_build
+    in_place = (not g.prompt.open and len(lib.builds) == n0
+                and _same_build(lib.builds["test-car"], g.build.to_json()))
+    key(pygame.K_s)
+    chk("S writes this car's saved build over in place; unchanged, it says so",
+        in_place and not g.prompt.open and "nothing changed" in g.hint, g.hint)
+    #  S on a car with no saved name: the prompt, on its own name
+    g.build.name = "fresh one"
+    key(pygame.K_s)
+    asked = g.prompt.open and g.prompt.value == "fresh one"
+    typed("fresh one")
+    key(pygame.K_s, SH)
+    as_new = g.prompt.open and g.prompt.value == "fresh one-2"
+    g._handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, mod=0, unicode=""))
+    chk("S on an unsaved name asks it; SHIFT+S opens on a free new name",
+        asked and "fresh one" in lib.builds and as_new and not g.prompt.open
+        and "fresh one-2" not in lib.builds, g.hint)
+    #  another car's build is never written over, by S or by its typed name
+    bus_js = dict(CarBuild(name="bus wings", car="bus").to_json())
+    lib.save_build(bus_js)
+    lib.save_build(dict(CarBuild(name="old any").to_json(), car=""))
+    g.build.name = "bus wings"
+    key(pygame.K_s)
+    prompted = g.prompt.open
+    typed("bus wings")
+    chk("another car's build is saved BESIDE, never over (S asks; the typed name gets -2)",
+        prompted and lib.builds["bus wings"] == bus_js and g.build.name == "bus wings-2"
+        and lib.builds["bus wings-2"]["car"] == "corsa", g.hint)
+    #  the library page: this car's builds, the any-car ones, then the bus's
+    g.lib_page.refresh()
+    order = [it[0] for it in g.lib_page.builds.items]
+    tags = {it[0]: it[2] for it in g.lib_page.builds.items}
+    chk("the library lists this car's builds, then any-car, then other cars' (tagged, dim)",
+        order == ["bus wings-2", "fresh one", "test-car", "old any", "bus wings"]
+        and tags["bus wings"] == "Citaro" and tags["old any"] == "any car"
+        and g.lib_page.other == {"bus wings"}, f"{order} {tags}")
+    #  B / SHIFT+B: this car's own and the any-car ones, in that order, in place
+    g._load_build("test-car")
+    seen = []
+    for _ in range(4):
+        key(pygame.K_b)
+        seen.append(g.build.name)
+    key(pygame.K_b, SH)
+    back = g.build.name
+    chk("B steps this car's saved builds in the library's order (never another car's); "
+        "SHIFT+B steps back",
+        seen == ["old any", "bus wings-2", "fresh one", "test-car"] and back == "fresh one",
+        f"{seen} then {back}")
+    g.build.top.inc_deg += 2.0                        # an unsaved change
+    key(pygame.K_b)
+    held = g.build.name == "fresh one" and "unsaved" in g.hint
+    key(pygame.K_b)
+    chk("B does not drop an unsaved car on the first press; the second goes on",
+        held and g.build.name == "test-car", g.hint)
+    #  F with no Settings (a bare garage): said, nothing written
+    key(pygame.K_f)
+    bare = "no drive settings" in g.hint
+    st = _FakeSettings()
+    g.settings = st
+    g.build.left.inc_deg -= 1.0                       # unsaved again: F saves it first
+    g.build.sync_mirror("left")
+    key(pygame.K_f)
+    chk("F: no Settings -> a hint; with them, the car in hand (saved first, in place) is "
+        "the car's default",
+        bare and st.car_build == {"corsa": "test-car"} and st.saves == 1
+        and _same_build(lib.builds["test-car"], g.build.to_json()), f"{st.car_build} {g.hint}")
+    #  the library: D on another build, R renames it (the default follows), DEL clears it
+    g.open_library()
+    g.lib_page.focus = "builds"
+    g.lib_page.builds.set_items(g.lib_page.builds.items, keep="fresh one")
+    key(pygame.K_d)
+    d_ok = st.build_of("corsa") == "fresh one" and "(default)" in dict(
+        (it[0], it[2]) for it in g.lib_page.builds.items)["fresh one"]
+    key(pygame.K_r)
+    rn_open = g.prompt.open and g.prompt.value == "fresh one"
+    typed("Fresh Two")
+    rn_ok = ("Fresh Two" in lib.builds and "fresh one" not in lib.builds
+             and st.build_of("corsa") == "Fresh Two"
+             and g.lib_page.builds.current()[0] == "Fresh Two")
+    key(pygame.K_DELETE)
+    chk("library D makes the build under the cursor the default; R renames it (the default "
+        "follows); DEL deletes it and clears the default",
+        d_ok and rn_open and rn_ok and "Fresh Two" not in lib.builds
+        and st.build_of("corsa") == "" and "none now" in g.hint, g.hint)
+    #  the pad: SQUARE saves in place (no '-2' pile), R1 the default, CROSS a prompt
+    fp = type("_P", (), dict(name="DualSense Wireless Controller", layout="ps",
+                             held=set(), pressed=lambda self, n: n in self.held,
+                             stick=lambda self, w="left": (0.0, 0.0)))()
+    g.pad, g._pad_seeded = fp, False
+    g.frame(1.0 / 60.0)
+
+    def press(btn):
+        fp.held.add(btn)
+        g.frame(1.0 / 60.0)
+        fp.held.discard(btn)
+        g.frame(1.0 / 60.0)
+    g._load_build("test-car")
+    g.page, g.lib_page.focus = "library", "builds"
+    n1 = len(lib.builds)
+    g.build.left.inc_deg += 1.0
+    g.build.sync_mirror("left")
+    press("square")
+    press("square")
+    sq_ok = len(lib.builds) == n1 and _same_build(lib.builds["test-car"], g.build.to_json())
+    g.lib_page.builds.set_items(g.lib_page.builds.items, keep="old any")
+    press("r1")
+    r1_ok = st.build_of("corsa") == "old any"
+    g._menu_action("build_save_as")
+    cross_ok = g.prompt.open and g.prompt.value == "test-car-2"
+    press("cross")
+    chk("pad: SQUARE saves in place (no copies), R1 sets the default, CROSS takes a "
+        "prompt's name",
+        sq_ok and r1_ok and cross_ok and not g.prompt.open and "test-car-2" in lib.builds,
+        g.hint)
+    g.pad = None
+    #  the pause menu's rows: what the pad has for S, SHIFT+S, B and F
+    g.page = "car"
+    g._menu_open()
+    acts = [a for _, a in g.menu.items]
+    rows = dict((a, lbl) for lbl, a in g.menu.items)
+    g.menu.hide()
+    g._menu_action("build_load")
+    chk("the pause menu has Save / Save as / Load / Make default (showing the default)",
+        {"build_save", "build_save_as", "build_load", "build_default"} <= set(acts)
+        and "(now: old any)" in rows["build_default"] and g.page == "library"
+        and g.lib_page.focus == "builds", rows.get("build_default", ""))
+    g.page = "car"
+    g.settings = None
+    return ok
+
+
 def _budget(ms: float, limit: float, calib=None):
     """`(passed, detail)` for a wall-clock frame-budget check, normalised by
     how slow the machine is RIGHT NOW.
@@ -5805,6 +6350,25 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     b.save(path)
     back = CarBuild.load(path)
     rep("build json round-trip", back is not None and back.to_json() == b.to_json(), "")
+    #  task 41: a build knows its car. The tag survives the file; a file from
+    #  before (no "car") and a hand-edited non-string tag read as "" (any car);
+    #  a new car's empty build is `CarBuild()` on its own slots, named for it
+    tagged = b.copy()
+    tagged.car = "mx5"
+    old_js = {k: v for k, v in b.to_json().items() if k != "car"}
+    stock_new = {k: v for k, v in new_build("corsa").to_json().items() if k != "car"}
+    rep("the build's car: round trip, old files any-car, a bad tag any-car; new builds "
+        "named and tagged for their car",
+        CarBuild.from_json(tagged.to_json()).car == "mx5"
+        and CarBuild.from_json(tagged.to_json()).to_json() == tagged.to_json()
+        and CarBuild.from_json(old_js).car == "" and CarBuild.from_json(dict(old_js, car=7)).car == ""
+        and tagged.to_json()["version"] == 2
+        and default_build_name("corsa") == CarBuild().name == "my corsa"
+        and default_build_name("bus") == "my bus"
+        and stock_new == {k: v for k, v in CarBuild().to_json().items() if k != "car"}
+        and new_build("bus").car == "bus" and new_build("bus").name == "my bus"
+        and not new_build("bus").left.wing and new_build("bus").left.h > CarBuild().left.h,
+        f"bus flank h {new_build('bus').left.h:.2f} m")
     with open(path, "w") as f:
         json.dump(asdict(d), f)
     up = CarBuild.load(path)
@@ -6553,6 +7117,7 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     g.build.reset()
     g._library_select()
     rep("loading the build restores the car", g.build.left.wing == dsn.spec.name and g.build.top.wing == "rear-s1223", g.build.summary(lib)[:60])
+    ok = _check_builds(g, lib, key, rep) and ok
     # --- the pad guard, as before
     class _FakePad:
         name, layout = "DualSense Wireless Controller", "ps"
@@ -6596,7 +7161,7 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     g.frame(1.0 / 60.0)
     if screenshot_dir:
         pygame.image.save(g.screen, os.path.join(screenshot_dir, "garage_menu.png"))
-    for _ in range(7):
+    for _ in range([a_ for _, a_ in g.menu.items].index("quit")):
         key(pygame.K_DOWN)
     a = key(pygame.K_RETURN)
     rep("menu 'Quit' returns quit", a == "quit" and not g.menu.open, str(a))

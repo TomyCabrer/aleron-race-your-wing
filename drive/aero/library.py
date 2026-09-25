@@ -12,6 +12,12 @@ its wings by name the same way. Built-in entries (the published fin/plate,
 the bundled sections) are re-seeded if deleted; user entries are files the
 user owns.
 
+Builds are one list for every car; since task 41 each carries the car it was
+made for (`"car"`, "" for a build saved before -- any car), which decides
+only the ORDER a car is offered them in (`drive.prerace.pick_order`). A car's
+own default build is a NAME in the drive's Settings (`car_build`), so
+`rename` leaves it to the caller to move that reference (the garage does).
+
 XFOIL is never run on the caller's thread: `polar()` returns immediately
 with the cached XFOIL polar when there is one, otherwise the ESTIMATE, and
 queues the XFOIL run; `poll()` hands back the names whose polar just
@@ -108,20 +114,21 @@ class Library:
                 except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
                     self.log.append(f"{d}/{f}: {exc}")
 
-    def _write(self, kind: str, name: str, obj: dict) -> str:
+    def _write(self, kind: str, name: str, obj: dict, replaces: str | None = None) -> str:
         path = os.path.join(self.dirs[kind], _safe(name) + ".json")
         #  the file is named by the FOLDED name, so 'Kestrel Fast' and
         #  'kestrel-fast' are one file. Callers take `unique_name` first; this
         #  is the guard behind it: another record's file is never overwritten.
         #  A built-in (re-seeded on every start) stays in memory only rather
-        #  than take a user's file.
+        #  than take a user's file. `replaces`: the record being RENAMED, whose
+        #  own file this may be ('fast' -> 'Fast' is one file, task 41).
         try:
             with open(path) as fh:
                 held = json.load(fh)
             held = held.get("name") if isinstance(held, dict) else None
         except (OSError, ValueError):
             held = None
-        if held is not None and held != name:
+        if held is not None and held != name and held != replaces:
             if obj.get("builtin"):
                 self.log.append(f"{kind}/{os.path.basename(path)} holds '{held}': built-in '{name}' not written")
                 return path
@@ -161,6 +168,51 @@ class Library:
         if getattr(obj, "builtin", False) or (isinstance(obj, dict) and obj.get("builtin")):
             self.seed_defaults()
         return True
+
+    def rename(self, kind: str, old: str, new: str) -> str:
+        """Rename the user build `old` to `new` (task 41); returns the name it
+        has now. The new name must be free as a FILE, as every save's is: one
+        that folds onto another record's file is taken as `unique_name` gives
+        it ('Fast' beside a 'fast' becomes 'Fast-2'), while one that folds onto
+        the build's OWN file ('fast' -> 'Fast') is simply that file rewritten.
+        The new file is written before the old one goes, so a write that fails
+        (a full disk, the guard) leaves the build as it was, under its old
+        name. Only builds: a wing is named by the builds that carry it, so a
+        wing rename would have to rewrite them (not offered). Raises KeyError
+        for a name not in the library, ValueError for a built-in, an empty
+        name, another kind, or a failed write's guard.
+
+        Whatever else points at the old name -- a car's default build in the
+        drive's Settings (`car_build`), the per-map memory -- is the caller's
+        to update: the garage moves the Settings reference with it."""
+        if kind != "builds":
+            raise ValueError(f"only builds are renamed, not {kind}")
+        store = self.builds
+        if old not in store:
+            raise KeyError(old)
+        rec = store[old]
+        if isinstance(rec, dict) and rec.get("builtin"):
+            raise ValueError(f"'{old}' is built in")
+        new = str(new or "").strip()[:32]
+        if not new:
+            raise ValueError("an empty name")
+        if new == old:
+            return old
+        same_file = _safe(new) == _safe(old)
+        if not same_file:
+            taken = {_safe(n) for n in store if n != old}
+            if _safe(new) in taken:
+                new = self.unique_name(kind, new)
+        obj = dict(rec, name=new)
+        self._write(kind, new, obj, replaces=old)
+        if not same_file:
+            try:
+                os.remove(os.path.join(self.dirs[kind], _safe(old) + ".json"))
+            except OSError:
+                pass
+        store.pop(old, None)
+        store[new] = obj
+        return new
 
     def unique_name(self, kind: str, base: str) -> str:
         """`base`, else `base-2`, `base-3`...: the first whose FILE is free.
@@ -388,6 +440,38 @@ def self_check(verbose: bool = True) -> bool:
             lib2.unique_name("wings", "MINE") == "MINE-2" and refused and "Mine" not in lib2.wings
             and lib5.wings["mine"].name == "mine" and not lib5.builds and any("junk" in s for s in lib5.log),
             lib2.unique_name("wings", "MINE"))
+        #  task 41: RENAME a build. A plain rename moves the file; one onto a
+        #  name another build's file holds is saved beside it (folded, as a
+        #  save is); a case-only rename rewrites its own file; a built-in and a
+        #  missing name are refused; a reload sees exactly the new names.
+        b1 = dict(version=2, name="fast", mirror=True, builtin=False, car="corsa", slots={})
+        lib2.save_build(b1)
+        lib2.save_build(dict(b1, name="wet"))
+        r1 = lib2.rename("builds", "fast", "quick")
+        r2 = lib2.rename("builds", "quick", "WET")            # wet.json holds 'wet'
+        r3 = lib2.rename("builds", "wet", "Wet")              # its own file
+        bad = []
+        for args in (("builds", "nope", "x"), ("builds", "Wet", "  "), ("wings", "mine", "x")):
+            try:
+                lib2.rename(*args)
+                bad.append(args)
+            except (KeyError, ValueError):
+                pass
+        lib2.builds["builtin-b"] = dict(b1, name="builtin-b", builtin=True)
+        try:
+            lib2.rename("builds", "builtin-b", "mine now")
+            bad.append("builtin")
+        except ValueError:
+            pass
+        lib2.builds.pop("builtin-b")
+        lib6 = Library(tmp, use_xfoil=False)
+        files = sorted(f for f in os.listdir(os.path.join(tmp, "builds")) if f != "junk.json")
+        rep("Library.rename: moves the file, keeps the folding guard, refuses the rest",
+            (r1, r2, r3) == ("quick", "WET-2", "Wet") and not bad
+            and sorted(lib6.builds) == ["WET-2", "Wet"] and lib6.builds["WET-2"]["car"] == "corsa"
+            and files == ["wet-2.json", "wet.json"], f"{(r1, r2, r3)} files {files} {bad}")
+        for n in list(lib2.builds):
+            lib2.delete("builds", n)
         lib2.delete("wings", "fin")
         rep("deleting a built-in re-seeds it", "fin" in lib2.wings, "")
         lib2.delete("wings", "mine")
