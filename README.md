@@ -468,7 +468,9 @@ A build is saved for the car you made it on; builds saved before this update
 are *any car*, and every car can still use them.
 
 - **In the garage.** `S` saves the build: over itself when it is already one
-  of this car's saved builds, otherwise it asks for a name. `SHIFT+S` saves it
+  of this car's saved builds, otherwise it asks for a name (an any-car build
+  that another car uses as its default counts as that car's: it is saved
+  beside, never over). `SHIFT+S` saves it
   under a new name. `B` / `SHIFT+B` step through this car's saved builds the
   way `W` steps a slot's wings (the first press on an unsaved car only warns
   you). `F` makes the build in hand this car's **default**, saving it first if

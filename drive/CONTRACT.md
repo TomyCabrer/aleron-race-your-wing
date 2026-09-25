@@ -1966,6 +1966,11 @@ legacy one-panel `WingDesign`) counts as official.
   (`RecordBook.rename_last_build(old, new)`: every `last_builds.json` entry
   whose name or build name is `old`, one atomic rewrite, in the garage's
   `records_root`). Wings cannot be renamed.
+* `Garage._own_build(name)` (what `S` / SQUARE / F may write over): this
+  car's own or an any-car user build -- except an any-car build that ANOTHER
+  car's `Settings.car_build` names (review of task 41): that one is saved
+  beside (the prompt's hint says whose default it is), so another car's
+  default is never edited or re-tagged from here.
 * Garage keys: car page `S` (save in place / prompt), `SHIFT+S` (save as),
   `B` / `SHIFT+B` (this car's builds, in place), `F` (this car's default;
   `D` stays "design"); library page `D` / pad `R1` (default), `R` (rename);

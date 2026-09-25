@@ -5146,7 +5146,10 @@ class Garage:
             if held is not None and not self._own_build(name):
                 new = self.lib.unique_name("builds", name)
                 c = held.get("car", "") if isinstance(held, dict) else ""
-                why = f"'{name}' is the {car_label(c)}'s build" if c else f"'{name}' is built in"
+                other = self._default_of_other(name)
+                why = (f"'{name}' is the {car_label(c)}'s build" if c else
+                       f"'{name}' is the {car_label(other)}'s default" if other else
+                       f"'{name}' is built in")
             else:
                 new = name if held is not None else self.lib.unique_name("builds", name)
                 why = f"'{name}' already exists"
@@ -5593,10 +5596,23 @@ class Garage:
     def _own_build(self, name: str) -> bool:
         """Is `name` a user build in the library that this car may write
         over: its own, or an any-car one from before task 41? Another car's
-        build (or a built-in) is saved BESIDE, never over."""
+        build (or a built-in) is saved BESIDE, never over -- and so is an
+        any-car build that ANOTHER car's Settings default names (review of
+        task 41, finding 12): writing over it, and stamping this car on it,
+        would edit that car's default from here and drop it from its B list."""
         b = self.lib.builds.get(name)
-        return (isinstance(b, dict) and not b.get("builtin")
-                and b.get("car", "") in ("", self.car))
+        if not (isinstance(b, dict) and not b.get("builtin")
+                and b.get("car", "") in ("", self.car)):
+            return False
+        return not (b.get("car", "") == "" and self._default_of_other(name))
+
+    def _default_of_other(self, name: str) -> str:
+        """The first OTHER car whose Settings default is the build `name`
+        ("" when none, or the garage has no Settings)."""
+        cb = getattr(self.settings, "car_build", None)
+        if not isinstance(cb, dict):
+            return ""
+        return next((c for c, n in sorted(cb.items()) if n == name and c != self.car), "")
 
     def saved_as(self) -> str | None:
         """The library build the car in hand IS -- same wings, stations and
@@ -6227,6 +6243,32 @@ def _check_builds(g: "Garage", lib: Library, key, rep) -> bool:
     chk("another car's build is saved BESIDE, never over (S asks; the typed name gets -2)",
         prompted and lib.builds["bus wings"] == bus_js and g.build.name == "bus wings-2"
         and lib.builds["bus wings-2"]["car"] == "corsa", g.hint)
+    #  an any-car build that is ANOTHER car's default is not this car's to
+    #  write over (review of task 41, finding 12): S asks and saves beside
+    #  it, SQUARE's quick save takes a free name; it keeps its content and
+    #  stays any-car, so the MX-5 still opens with it unchanged
+    shared = dict(CarBuild(name="shared any").to_json(), car="")
+    lib.save_build(shared)
+    st0, g.settings = g.settings, _FakeSettings()
+    g.settings.car_build = {"mx5": "shared any"}
+    g._load_build("shared any")
+    g.build.left.inc_deg += 2.0
+    g.build.sync_mirror("left")
+    key(pygame.K_s)
+    asked_sh = g.prompt.open and g.prompt.value == "shared any"
+    typed("shared any")
+    hint_sh = g.hint
+    beside = g.build.name == "shared any-2" and lib.builds["shared any-2"]["car"] == "corsa"
+    g._load_build("shared any")
+    g.build.left.inc_deg += 1.0
+    g.build.sync_mirror("left")
+    g._save_build_quick()
+    chk("another car's any-car default is saved beside, never over (S asks, SQUARE a free name)",
+        asked_sh and beside and "MX-5's default" in hint_sh and g.build.name == "shared any-3"
+        and lib.builds["shared any"] == shared, f"{hint_sh}; then {g.hint}")
+    g.settings = st0
+    for n_ in ("shared any", "shared any-2", "shared any-3"):
+        lib.delete("builds", n_)
     #  the library page: this car's builds, the any-car ones, then the bus's
     g.lib_page.refresh()
     order = [it[0] for it in g.lib_page.builds.items]
