@@ -232,11 +232,28 @@ def bot_test_T(tr=None, T=None) -> float:
     return T * max(1.0, L / BOT_TEST_L)
 
 
+def bot_test_scale(car) -> float:
+    """Task 41: how much longer than the arena budget a car's Test runs. A
+    car that brings its own numbers (`own_aids`: the Express, the bus) and
+    corners below the Corsa gets T x sqrt(ay_Corsa / ay_car) -- lap time goes
+    as 1 / sqrt(a_y) on a grip-limited lap -- from `baseline._ay_peak` at
+    the car's own grip scale; never less than 1, and exactly 1 on every
+    stock car (they are not scaled at all). The bus: 0.80 grip, x1.13, so
+    its 150 s becomes 169 s -- its standing lap (~80 s) and a flying one
+    (~76 s) now fit, where 150 s left it no flying lap."""
+    if car is None or not getattr(car, "own_aids", False):
+        return 1.0
+    from .baseline import _ay_peak, _AY_REF
+    ay = _ay_peak(car, float(getattr(car, "mu_scale", 1.0) or 1.0))
+    return max(1.0, float(np.sqrt(_AY_REF / ay))) if ay > 0.0 else 1.0
+
+
 def bot_lap(job: dict) -> dict:
     """One cell of the RACE page's test: a bot in one car, best flying lap
     at DT_EVAL. `job`: `spec` ('anchor' or a checkpoint path), `car` (a
     `cars.CarSpec`), `cfg_kwargs` (the car's whole `VehicleConfig`), `tr`
-    (the session's Track) and `T` (an arena budget: `bot_test_T`). Plain
+    (the session's Track) and `T` (an arena budget: `bot_test_T`, times the
+    car's own `bot_test_scale`, 1.0 on every stock car). Plain
     data back, for a pool worker; a failure comes back as `error` instead of
     killing the other cars' cells."""
     try:
@@ -244,8 +261,8 @@ def bot_lap(job: dict) -> dict:
         pol = Policy() if spec in (None, "", "anchor") else Policy.load(spec)
         tr = job.get("tr")
         return lap_time(pol, getattr(tr, "name", "arena"), dt=DT_EVAL,
-                        T=bot_test_T(tr, job.get("T")), car=job.get("car"),
-                        cfg_kwargs=job.get("cfg_kwargs"), tr=tr)
+                        T=bot_test_T(tr, job.get("T")) * bot_test_scale(job.get("car")),
+                        car=job.get("car"), cfg_kwargs=job.get("cfg_kwargs"), tr=tr)
     except Exception as exc:
         return dict(best=None, error=f"{type(exc).__name__}: {exc}")
 
