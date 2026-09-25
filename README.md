@@ -478,8 +478,9 @@ are *any car*, and every car can still use them.
 - **The library page** (`L`) lists this car's builds first, then the any-car
   ones, then other cars' builds, dimmed and tagged with their car (they still
   load). `D` (pad `R1`) makes the build under the cursor this car's default,
-  `R` renames it (a default pointing at it follows), `DEL` deletes it (and
-  clears a default that pointed at it). The pad's `□` saves over the car's own
+  `R` renames it (a default pointing at it, and every map that remembers
+  it, follow), `DEL` deletes it (and clears a default that pointed at it).
+  The pad's `□` saves over the car's own
   build instead of adding '-2' copies. A build whose wings are past this car's
   span limit is marked UNLIMITED.
 - **Changing car** (Settings > Car) opens the new car with its default build.

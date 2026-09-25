@@ -4763,6 +4763,10 @@ class Garage:
         if isinstance(build, WingDesign):
             build = CarBuild.from_json(asdict(build))
         self._held = None                 # (the build handed in, its fitted JSON)
+        #: where the per-map memory a rename updates lives (records.RECORDS_DIR;
+        #: a self-check points it at a scratch folder)
+        from .records import RECORDS_DIR
+        self.records_root = RECORDS_DIR
         self.build: CarBuild = self._fit_in(build or CarBuild.load()
                                             or CarBuild.for_car(self.car))
         self.view = GarageView(self.screen, self.car)
@@ -5736,7 +5740,8 @@ class Garage:
 
     def _rename_build(self, old: str, new: str) -> None:
         """The rename prompt's ENTER: `Library.rename`, and every reference
-        to the old name moved with it -- the car in hand, and any car's
+        to the old name moved with it -- the car in hand, the per-map memory
+        (runs/records/last_builds.json, under `records_root`), and any car's
         default in Settings (a default is a NAME, task 41)."""
         try:
             got = self.lib.rename("builds", old, new)
@@ -5748,6 +5753,13 @@ class Garage:
             return
         if self.build.name == old:
             self.build.name = got
+        #  the per-map memory names builds too (review of task 41, finding 9):
+        #  it follows, or the next map change drives the old, deleted name
+        try:
+            from .records import RecordBook
+            RecordBook(self.records_root).rename_last_build(old, got)
+        except Exception as exc:           # noqa: BLE001 -- the rename itself stands
+            print(f"garage: last_builds.json not updated ({type(exc).__name__}: {exc})")
         st = self.settings
         cb = getattr(st, "car_build", None)
         moved = [c for c, n in (cb or {}).items() if n == old] if isinstance(cb, dict) else []
@@ -6177,6 +6189,8 @@ def _check_builds(g: "Garage", lib: Library, key, rep) -> bool:
 
     SH = pygame.KMOD_SHIFT
     g.page = "car"
+    from .records import RecordBook
+    g.records_root = os.path.join(os.path.dirname(lib.root), "records")   # never runs/
     chk("a build saved in the garage is tagged with its car",
         lib.builds["test-car"].get("car") == "corsa" and g.build.car == "corsa",
         str(lib.builds["test-car"].get("car")))
@@ -6258,15 +6272,22 @@ def _check_builds(g: "Garage", lib: Library, key, rep) -> bool:
     key(pygame.K_d)
     d_ok = st.build_of("corsa") == "fresh one" and "(default)" in dict(
         (it[0], it[2]) for it in g.lib_page.builds.items)["fresh one"]
+    #  (the per-map memory names it on one map: the rename moves it there too)
+    rb_ = RecordBook(g.records_root)
+    rb_.set_last_build("linden", "fresh one", lib.builds["fresh one"], car="corsa")
+    rb_.set_last_build("arena", "test-car", lib.builds["test-car"], car="corsa")
     key(pygame.K_r)
     rn_open = g.prompt.open and g.prompt.value == "fresh one"
     typed("Fresh Two")
+    lb_ = RecordBook(g.records_root).last_builds()
     rn_ok = ("Fresh Two" in lib.builds and "fresh one" not in lib.builds
              and st.build_of("corsa") == "Fresh Two"
-             and g.lib_page.builds.current()[0] == "Fresh Two")
+             and g.lib_page.builds.current()[0] == "Fresh Two"
+             and (lb_["linden|corsa"]["name"], lb_["linden|corsa"]["build"]["name"])
+             == ("Fresh Two", "Fresh Two") and lb_["arena|corsa"]["name"] == "test-car")
     key(pygame.K_DELETE)
     chk("library D makes the build under the cursor the default; R renames it (the default "
-        "follows); DEL deletes it and clears the default",
+        "and the per-map memory follow); DEL deletes it and clears the default",
         d_ok and rn_open and rn_ok and "Fresh Two" not in lib.builds
         and st.build_of("corsa") == "" and "none now" in g.hint, g.hint)
     #  the pad: SQUARE saves in place (no '-2' pile), R1 the default, CROSS a prompt

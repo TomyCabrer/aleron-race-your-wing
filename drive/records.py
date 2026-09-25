@@ -808,6 +808,35 @@ class RecordBook:
             return False
         return True
 
+    def rename_last_build(self, old: str, new: str) -> int:
+        """A library build renamed `old` -> `new` (the garage's R; review of
+        task 41, finding 9): every per-map entry whose name -- or whose
+        build's name -- is `old` now says `new`, so the next map change does
+        not bring the build back under its deleted name. The number of
+        entries moved; the file is rewritten (atomically, `_atomic_json`)
+        only when one moved, and a failed write is noted, never raised."""
+        tracks = self.last_builds()
+        moved = 0
+        for e in tracks.values():
+            if not isinstance(e, dict):
+                continue
+            b = e.get("build")
+            b_hit = isinstance(b, dict) and b.get("name") == old
+            if e.get("name") == old or b_hit:
+                e["name"] = str(new)
+                if b_hit:
+                    b["name"] = str(new)
+                moved += 1
+        if not moved:
+            return 0
+        try:
+            _atomic_json(self._last_path(), dict(kind=LAST_BUILDS_KIND, tracks=tracks))
+        except OSError as exc:
+            self.notes.append(f"{LAST_BUILDS_FILE}: not saved ({exc})")
+            print(f"records: {LAST_BUILDS_FILE} not saved ({exc})")
+            return 0
+        return moved
+
 
 def unlimited_book(root: str = RECORDS_DIR) -> RecordBook:
     """The UNLIMITED book beside the official one at `root` (task 41):
@@ -1435,6 +1464,14 @@ def self_check(verbose: bool = True) -> bool:
         and rb.last_build("arena")["name"] == "fast one"
         and "arena|bus" in rb.last_builds() and "arena|corsa" not in rb.last_builds(),
         str(lb))
+    #  a library rename moves the per-map memory with it (review finding 9):
+    #  the entry's name and its build's name; an unknown name moves nothing
+    moved = b3.rename_last_build("mine", "mine pro")
+    e_ = RecordBook(root).last_build("ashdown", "corsa") or {}
+    rep("a renamed build is renamed in the per-map memory too",
+        moved == 1 and e_.get("name") == "mine pro"
+        and e_.get("build", {}).get("name") == "mine pro"
+        and b3.rename_last_build("nobody", "x") == 0, f"{moved} entry moved")
     #  and the BUILD_META strip: tagging a build with its car (task 41) moves
     #  no PB -- the id is the pre-task-41 formula's, for the old JSON and the
     #  tagged one alike

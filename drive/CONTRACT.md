@@ -1957,7 +1957,10 @@ legacy one-panel `WingDesign`) counts as official.
   content changed.
 * `Library.rename('builds', old, new)` writes the new file before removing
   the old one (folding guard kept; a case-only rename rewrites its own file);
-  the caller moves `Settings.car_build` references. Wings cannot be renamed.
+  the caller moves `Settings.car_build` references and the per-map memory
+  (`RecordBook.rename_last_build(old, new)`: every `last_builds.json` entry
+  whose name or build name is `old`, one atomic rewrite, in the garage's
+  `records_root`). Wings cannot be renamed.
 * Garage keys: car page `S` (save in place / prompt), `SHIFT+S` (save as),
   `B` / `SHIFT+B` (this car's builds, in place), `F` (this car's default;
   `D` stays "design"); library page `D` / pad `R1` (default), `R` (rename);
