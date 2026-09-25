@@ -93,7 +93,11 @@ GRID_R_MIN = 80.0        # m   est  no grid row in a bend tighter than this
 GRID_NOSE = 1.75         # m   a grid car's nose ahead of its CG, and its tail
 GRID_TAIL = 2.07         # m   behind (render.CAR_X_FRONT / CAR_X_REAR)
 GRID_BOX_HALF = 1.0      # m   est  half a box: a 1.65 m car + 0.18 m either
-                         #     side; slots 2.2 m apart keep a 0.2 m gap
+                         #     side; slots 2.2 m apart keep a 0.2 m gap.
+                         #     Task 41: race_grid.grid_layout reads these
+                         #     GRID_* numbers; a car wider than a box (the
+                         #     2.55 m bus) lines up behind every row painted
+                         #     here, so the paint itself is unchanged
 CHEQUER_L = 1.2          # m   the start chequer's length (render._draw_marks)
 STRIPE_W = 9.0           # m   est  mowing-stripe width
 DRAG_LANE_HALF = 2.6     # m   est  the dragstrip race lane, either side of n=0

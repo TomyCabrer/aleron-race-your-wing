@@ -2766,6 +2766,13 @@ class Sim:
         if not rivals:
             self._race_note("race: no bot loaded (see the terminal)", 4.0)
             return False
+        # task 41: a car too big for a painted grid box (the bus) lines up
+        # behind the painted grid, and a user's bus keeps the bots off the
+        # boxes it covers (race_grid.grid_layout); when every car fits it is
+        # RACE_GRID exactly, so a stock race lines up where it always did
+        lay = race_grid.grid_layout(self.veh.car, [(rv.slot, rv.veh.car) for rv in rivals])
+        for rv in rivals:
+            rv.grid_n, rv.grid_s = float(lay[rv.slot][0]), float(lay[rv.slot][1])
         self.rivals = rivals
         self.reset(to_checkpoint=False)    # every car to the line
         return True
@@ -6502,14 +6509,38 @@ def _v36_grid(tmp, verbose=True):
         s1.step_physics(s1.dt)
     t_grid = (time.perf_counter() - t0) / (k * s1.dt)
     frame_ms = 1e3 / FPS * t_grid
-    ok = same and full and moved and slot_ok and col_ok and own_ok and hud_ok and agree and bred_ok
+    # task 41, start_race's own path with the bus (race_grid.grid_layout): a
+    # bus bot lines up behind the painted grid on the centreline while a
+    # Corsa bot keeps its box; you in the bus -> a Corsa bot at (2.2, -14),
+    # clear of the boxes your body covers
+    bus_ok, bus_msg = False, ""
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            sb = _build("arena", driver=lambda t, v, T_: Controls())
+            sb.race_opts.update(bot=RACE_BOT_ANCHOR, car="bus", bot2=RACE_BOT_ANCHOR,
+                                car2="corsa")
+            ok_b = sb.start_race()
+            su = _build("arena", driver=lambda t, v, T_: Controls(), car=cars.get("bus"))
+            su.race_opts.update(bot=RACE_BOT_ANCHOR, car="corsa")
+            ok_u = su.start_race()
+        g_b = [(r.grid_n, r.grid_s) for r in sb.rivals]
+        g_u = [(r.grid_n, r.grid_s) for r in su.rivals]
+        bus_ok = (ok_b and ok_u and len(g_b) == 2 and g_b[0][0] == 0.0
+                  and g_b[0][1] + race_grid.footprint("bus")[0] < -34.5 and g_b[1] == RACE_GRID[1]
+                  and g_u == [race_grid.grid_slot(5)])
+        bus_msg = f"bus bot at {g_b[0][1]:.1f} m, corsa bot {g_b[1]}; you in the bus: bot {g_u}"
+    except Exception as exc:               # noqa: BLE001
+        bus_msg = f"{type(exc).__name__}: {exc}"
+    ok = (same and full and moved and slot_ok and col_ok and own_ok and hud_ok and agree
+          and bred_ok and bus_ok)
     if verbose:
         print(f"  V36 race grid   : {n} bots (RACE_GRID_MAX {RACE_GRID_MAX}); your car identical "
               f"with and without {same}; all moved {moved} "
               f"({', '.join(f'{r.progress:.0f}' for r in rv)} m); slots {slot_ok}; colours "
               f"{col_ok}; the 540i checkpoint drives its own 540i {own_ok}; HUD ghosts + gaps "
               f"{hud_ok}; render budget grid = {rnd.V22_GRID_BOTS} {agree}; a swarm's saved bot "
-              f"carries its bred car (state and checkpoint) {bred_ok}; cost: RTF "
+              f"carries its bred car (state and checkpoint) {bred_ok}; the bus on the grid "
+              f"{bus_ok} ({bus_msg}); cost: RTF "
               f"{1 / t_one:.1f} alone, {1 / t_grid:.2f} with the grid = {frame_ms:.1f} ms of "
               f"physics in a {1e3 / FPS:.1f} ms frame  -> {'ok' if ok else 'FAIL'}")
     return ok, dict(n=n, rtf_one=1 / t_one, rtf_grid=1 / t_grid, frame_ms=frame_ms)

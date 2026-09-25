@@ -141,39 +141,48 @@ _STYLE_SHELL3 = {
         (-2.5483, 0.26, 0.56, 0.62, 0.78, 0.68),   # bumper face
     ), ('nose', 'bonnet', 'bonnet', 'screen', 'roof', 'roof', 'rglass', 'deck',
         'tail', 'bumper')),
-    #  the Express: a Renault 5 front end and cab, then the tall load box
-    #  that steps up behind the cab roof to the published 1.776 m. First
-    #  draft (task 41); the drawing detail is render.py's to refine, and any
-    #  change here moves the span limits with it -- they read these numbers.
+    #  the Express: the Renault 5's nose, bonnet, raked screen and two-door
+    #  cab (its roof at the hatch's height), then the tall blind load box,
+    #  whose front face stands almost upright on the cab roof and runs at the
+    #  published 1.776 m to a roof edge rolled over the rear doors. The LAST
+    #  station is the whole rear face -- the two doors -- so the tail cap is
+    #  one flat panel and its lamps, door glass and plate are drawn on it at
+    #  their own heights (render.car_mesh3, 'van'). Kinds: 'box' is a band
+    #  with NO side glass (a blind van's panel). The four numbers the span
+    #  limits read are held: 4.056 m from bumper to rear face, 1.566 m wide
+    #  (the 0.783 half-width), 1.776 m tall, 0.16 m underbody.
     'van': ((
-        (1.752, 0.24, 0.52, 0.58, 0.690, 0.52),    # bumper face
-        (1.62, 0.18, 0.64, 0.70, 0.760, 0.60),
-        (1.10, 0.16, 0.74, 0.80, 0.783, 0.64),     # over the front wheels
-        (0.55, 0.16, 0.82, 0.88, 0.783, 0.66),     # scuttle: the screen's foot
-        (-0.15, 0.16, 0.86, 1.38, 0.783, 0.64),    # cab roof front
-        (-0.55, 0.16, 0.88, 1.40, 0.783, 0.66),    # cab roof rear
-        (-0.62, 0.16, 0.90, 1.776, 0.783, 0.74),   # load box front top
-        (-2.20, 0.20, 0.92, 1.776, 0.783, 0.74),   # load box rear top
-        (-2.27, 0.26, 0.60, 1.74, 0.770, 0.72),    # rear doors
-        (-2.304, 0.27, 0.54, 0.60, 0.720, 0.62),   # bumper face
-    ), ('nose', 'bonnet', 'bonnet', 'screen', 'roof', 'roof', 'roof', 'tail',
-        'bumper')),
-    #  the Citaro: a flat front face that is nearly all windscreen, a flat
-    #  roof with the air-conditioning pod amidships (the published 3.120 m),
-    #  the engine bay behind the rear axle. First draft, as the van's.
+        (1.752, 0.22, 0.56, 0.60, 0.690, 0.54),    # bumper face
+        (1.64, 0.18, 0.66, 0.72, 0.760, 0.62),     # headlamp tops
+        (1.10, 0.16, 0.76, 0.82, 0.783, 0.66),     # over the front wheels
+        (0.55, 0.16, 0.84, 0.90, 0.783, 0.68),     # scuttle: the screen's foot
+        (-0.05, 0.16, 0.88, 1.40, 0.783, 0.66),    # A-pillar top
+        (-0.55, 0.16, 0.90, 1.42, 0.783, 0.68),    # cab roof rear: the B-pillar
+        (-0.62, 0.16, 0.91, 1.776, 0.783, 0.74),   # load box front top
+        (-2.22, 0.20, 0.92, 1.776, 0.783, 0.74),   # load box rear top
+        (-2.304, 0.26, 0.90, 1.72, 0.770, 0.71),   # rear face: the two doors
+    ), ('nose', 'bonnet', 'bonnet', 'screen', 'roof', 'box', 'box', 'box')),
+    #  the Citaro: a flat front face that is nearly all windscreen (the FIRST
+    #  station is that whole face, as the van's last is its rear), one long
+    #  glazed side from the front corner pillar to the rear roof edge, a flat
+    #  roof at 2.94 m (est: the O530 without its roof unit) with the air-
+    #  conditioning pod amidships to the published 3.120 m, and the engine
+    #  bay's rear face (the LAST station) behind the rear axle. Kinds: 'win'
+    #  is a band whose greenhouse is the passenger windows; the doors on the
+    #  right, the pillars, the painted strip above the glass and the engine
+    #  tower on the left are drawn on it (render.car_mesh3, 'bus'). Held:
+    #  11.950 m face to face, 2.550 m wide, 3.120 m at the pod, 0.28 m under.
     'bus': ((
-        (6.446, 0.34, 0.95, 2.90, 1.200, 1.12),    # front face
-        (6.36, 0.30, 1.00, 3.00, 1.260, 1.20),
-        (6.10, 0.28, 1.02, 3.02, 1.275, 1.23),     # front roof edge
-        (2.50, 0.28, 1.02, 3.02, 1.275, 1.23),
-        (2.00, 0.28, 1.02, 3.12, 1.275, 1.10),     # air-con pod front
-        (-0.50, 0.28, 1.02, 3.12, 1.275, 1.10),    # air-con pod rear
-        (-1.00, 0.28, 1.02, 3.02, 1.275, 1.23),
-        (-5.30, 0.30, 1.02, 3.00, 1.275, 1.22),    # rear roof edge
-        (-5.46, 0.34, 0.80, 2.95, 1.260, 1.18),    # engine cover
-        (-5.504, 0.38, 0.62, 0.70, 1.200, 1.10),   # rear bumper face
-    ), ('nose', 'screen', 'roof', 'roof', 'roof', 'roof', 'roof', 'tail',
-        'bumper')),
+        (6.446, 0.34, 1.02, 2.90, 1.215, 1.13),    # front face: the windscreen
+        (6.40, 0.30, 1.02, 2.94, 1.262, 1.21),     # the front corner, rounded
+        (6.20, 0.28, 1.02, 2.94, 1.275, 1.23),     # front roof edge
+        (3.00, 0.28, 1.02, 2.94, 1.275, 1.23),     # air-con pod: front foot
+        (2.88, 0.28, 1.02, 3.12, 1.275, 1.23),     # ... its front top
+        (0.42, 0.28, 1.02, 3.12, 1.275, 1.23),     # ... its rear top
+        (0.30, 0.28, 1.02, 2.94, 1.275, 1.23),     # ... its rear foot
+        (-5.36, 0.30, 1.02, 2.94, 1.275, 1.23),    # rear roof edge
+        (-5.504, 0.36, 1.00, 2.86, 1.230, 1.14),   # rear face: the engine bay
+    ), ('nose', 'win', 'win', 'win', 'win', 'win', 'win', 'tail')),
 }
 
 #: which body each car in `cars.CARS` wears, by KEY. A key not listed here
