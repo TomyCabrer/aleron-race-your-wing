@@ -7,7 +7,8 @@ chase camera:
 
   * SMOKE from a tyre that slides or spins on tarmac or a kerb, and ONLY past
     the grip peak (see "When a tyre smokes" below): lateral |alpha| past the
-    car's onset (SLIP_ALPHA0_CAR: Corsa 11.0, MX-5 11.7, 540i 13.8 deg), or
+    car's onset (SLIP_ALPHA0_CAR: Corsa 11.0, MX-5 11.7, 540i 13.8, Express
+    10.9, Citaro bus 16.6 deg), or
     |kappa| past SLIP_KAPPA_HOLD (0.40) over N_LOCK (4) frames and T_LOCK
     (120 ms). A plough past the limit, a rear axle in a slide, a driven
     wheel spinning, a locked wheel: all read off the same two numbers, so
@@ -47,6 +48,16 @@ driver the contract names -- and straight-line stops and launches; runs of
     (+2.5 s: 15.1-19.6 deg) -- that is the slide that smokes, full at
     onset + 7 deg; in the rig its first puff comes 0.11-0.96 s after the
     peak (every car, 8-40 m/s).
+    Task 41, the same rig: the Express's largest is 10.55 deg wing off (12
+    m/s) and 10.65 with the plate (36 m/s) -> 10.9; the Citaro's, 8-22 m/s
+    (its governor holds 80 km/h), 9.71-16.32 deg wing off, largest at 18
+    m/s -> 16.6. The bus's load-scaled truck tyres (drive.tyre, lambda
+    6.6 / 12.2) keep building side force 4-5 deg further than a car tyre.
+    Neither new car smokes before its peak; the bus ploughs into 102 puffs
+    in the 2.5 s after it. A clutch dump cannot spin the bus's twin rears
+    (43.7 kN of first-gear thrust on 71.9 kN of axle load: kappa 0.45 for
+    108 ms, then grip), so it makes no wheelspin smoke -- the self-check
+    holds it to exactly that.
   * with the flank panel deployed (VehicleConfig wing 'fin' or 'plate') the
     peak is the tyres' to 22 m/s (Corsa 10.79, MX-5 11.21, 540i 12.89 deg
     with the plate). Faster, the panel's side force keeps a_y climbing
@@ -223,6 +234,11 @@ SLIP_ALPHA0_CAR = {
     'corsa': math.radians(11.0),     # 10.71 (40 m/s, wing off)
     'mx5': math.radians(11.7),       # 11.41 (40 m/s, wing off)
     '540i': math.radians(13.8),      # 13.51 (40 m/s, plate; 13.36 wing off)
+    #  task 41, the same rig, 8-40 m/s (the bus 8-22: its governor holds
+    #  80 km/h), wing off / fin / plate:
+    'express': math.radians(10.9),   # 10.65 (36 m/s, plate; 10.55 wing off, 12 m/s)
+    'bus': math.radians(16.6),       # 16.32 (18 m/s, wing off): a truck tyre's
+    #                                  fronts run 4-5 deg further to their peak
 }
 SLIP_ALPHA0 = SLIP_ALPHA0_CAR['corsa']   # an unknown car: the Corsa's
 SLIP_ALPHA_SPAN = math.radians(7.0)  # full at onset + 7 deg (Corsa: 18)
@@ -627,7 +643,7 @@ class Effects:
     @staticmethod
     def alpha0(aux) -> float:
         """The car's lateral smoke onset, rad (SLIP_ALPHA0_CAR): by
-        aux.car_key ('corsa' | 'mx5' | '540i'), else a guess from
+        aux.car_key ('corsa' | 'mx5' | '540i' | 'express' | 'bus'), else a guess from
         aux.car_name the way drive/audio.py's profile_key makes it (the
         session fills only the name today), else the Corsa's."""
         a0 = SLIP_ALPHA0_CAR.get(str(getattr(aux, 'car_key', '') or '').lower())
@@ -638,6 +654,10 @@ class Effects:
             return SLIP_ALPHA0_CAR['mx5']
         if '540' in name:
             return SLIP_ALPHA0_CAR['540i']
+        if 'express' in name or 'renault' in name:
+            return SLIP_ALPHA0_CAR['express']
+        if 'citaro' in name or 'bus' in name.split():
+            return SLIP_ALPHA0_CAR['bus']
         return SLIP_ALPHA0
 
     @classmethod
@@ -1529,7 +1549,8 @@ def _rig_smoke() -> dict:
 
     # the speed at which each car's |alpha| up to the peak is largest
     # (wing off): the tightest case for its onset
-    V_WORST = {'corsa': 40.0, 'mx5': 40.0, '540i': 12.0}
+    V_WORST = {'corsa': 40.0, 'mx5': 40.0, '540i': 12.0,
+               'express': 12.0, 'bus': 18.0}                # task 41
     ABS_FPS = ((144, 0.0, 0), (60, 0.0, 0), (30, 0.0, 0),
                (24, 0.5, 1), (24, 0.5, 2), (24, 0.5, 3))
     out = {'ramp': {}, 'plate22': {}, 'abs': {}, 'lock': {}, 'spin': {}}
@@ -1555,8 +1576,14 @@ def _rig_smoke() -> dict:
         tr = record(key, VH.VehicleConfig(),
                     VH.Controls(throttle=1.0, auto_clutch=False, clutch=1.0),
                     VH._MU1, 3.0, 1, 2800, dump=800)
+        #    task 41: and how long the wheels stayed spun past the hold --
+        #    the longest run of 1 ms steps with any |kappa| > SLIP_KAPPA_HOLD
+        run_, best_ = 0, 0
+        for w in tr:
+            run_ = run_ + 1 if float(np.abs(w[6]).max()) > SLIP_KAPPA_HOLD else 0
+            best_ = max(best_, run_)
         out['spin'][key] = (replay(tr, key, 62.5),
-                            max(float(np.abs(w[6]).max()) for w in tr))
+                            max(float(np.abs(w[6]).max()) for w in tr), best_ * DTP)
     # 5. the worst on-road ABS case: the 540i at mu 0.632 from 15 m/s
     #    (above 0.40 for 84 ms at a time)
     tr = record('540i', VH.VehicleConfig(abs_on=True),
@@ -1734,10 +1761,23 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
         all(v >= 10 for v in rig['lock'].values()),
         ' / '.join(f'{k} {v}' for k, v in rig['lock'].items())
         + ' puffs in 1 s from 25 m/s')
-    rep('smoke from wheelspin (a clutch dump), every car',
-        all(v[0] >= 3 for v in rig['spin'].values()),
-        ' / '.join(f'{k} {v[0]} (kappa {v[1]:.2f})' for k, v in rig['spin'].items())
-        + ' puffs')
+    # task 41: a clutch dump SPINS the driven wheels of every car but the bus.
+    # The Citaro's 1120 N.m through 3.43 x 6.21 x 0.85 on 0.464 m wheels is
+    # 43.7 kN of first-gear thrust against 71.9 kN of load on its twin rears
+    # (x a peak mu near 1): the dump's shock slips them to kappa 0.45 for
+    # 108 ms and they hook up -- a real 11.5 t bus cannot light its tyres on
+    # a dry road.
+    # So the assert is what the smoke gate promises: a car whose wheels stay
+    # past SLIP_KAPPA_HOLD for T_LOCK smokes (>= 3 puffs), and one whose
+    # wheels do not (the bus) must not smoke at all
+    sp = rig['spin']
+    spun = {k: v[2] >= T_LOCK for k, v in sp.items()}
+    rep('smoke from wheelspin (a clutch dump): every car that spins, none that cannot',
+        all((v[0] >= 3) if spun[k] else (v[0] == 0) for k, v in sp.items())
+        and all(spun[k] for k in ('corsa', 'mx5', '540i') if k in sp),
+        ' / '.join(f'{k} {v[0]} (kappa {v[1]:.2f}, {v[2] * 1000:.0f} ms past '
+                   f'{SLIP_KAPPA_HOLD:.2f}{"" if spun[k] else ": no sustained spin"})'
+                   for k, v in sp.items()) + ' puffs')
 
     # ---- 3. the cap, ageing, pausing, determinism, robustness ---------------
     fx.reset()
