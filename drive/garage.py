@@ -664,15 +664,8 @@ def new_build(car: str = "corsa") -> CarBuild:
     own numbers), named `default_build_name(car)` and tagged with the car.
     What a car starts with when it has no default and the build in hand was
     made for another car."""
-    b = CarBuild(name=default_build_name(car), car=str(car or ""))
-    try:
-        from . import bodies
-        d = bodies.slot_defaults(car or "corsa")
-        (fx, fh), (tx, th, ti) = d["flank"], d["top"]
-        b.left, b.right = Slot("", fx, fh, 0.0), Slot("", fx, fh, 0.0)
-        b.top = Slot("", tx, th, ti, "active")
-    except Exception:                      # noqa: BLE001 -- an unknown car: the stock slots
-        pass
+    b = CarBuild.for_car(car or "corsa")   # the car's own slots (part A's reset)
+    b.name, b.car = default_build_name(car), str(car or "")
     return b
 
 
@@ -5479,10 +5472,17 @@ class Garage:
             if w.role != SLOT_ROLE[self.sel]:
                 self.hint = f"'{w.name}' is a {w.role} wing: select a matching slot first"
                 return
+            #  Real mode (task 41): the library page fits no wing past this
+            #  slot's span limit on this car either -- the same rule as W
+            lim = None if self.unlimited else self._past_limit(self.sel, w)
+            if lim is not None:
+                self.hint = (f"'{w.name}' ({w.span:.2f} m) is past this slot's {lim:.2f} m "
+                             f"span limit; Settings > Wing limits: Unlimited allows it")
+                return
             slot = self.build.slot(self.sel)
             slot.wing = w.name
             self.build.sync_mirror(self.sel)
-            self.build.clamp(self.lib)
+            self.build.clamp(self.lib, self.car)
             self.designer = None
             self.hint = f"{self.sel}: {w.name}"
             self.page = "car"
@@ -5582,7 +5582,7 @@ class Garage:
 
     def _load_build(self, name: str) -> None:
         """The library build `name` becomes the car in hand."""
-        self.build = CarBuild.from_json(self.lib.builds[name]).clamp(self.lib)
+        self.build = CarBuild.from_json(self.lib.builds[name]).clamp(self.lib, self.car)
         self.designer = None
         self.hint = f"loaded build '{self.build.name}'" + (
             "  (default)" if name == self.default_name() else "")
@@ -5698,7 +5698,7 @@ class Garage:
                     self.hint = "built-in wings cannot be deleted"
                     return
                 self.lib.delete("wings", it[0])
-                self.build.clamp(self.lib)
+                self.build.clamp(self.lib, self.car)
                 self.hint = f"deleted wing '{it[0]}'"
         else:
             it = lp.builds.current()

@@ -7829,7 +7829,11 @@ def run_interactive_cli(opts) -> int:
                                       track=settings.track, opts=opts)
                 if d2 is not None:
                     design = d2
-                    _apply_design(opts, design, lib)
+                else:
+                    #  the build in hand stays (this car's, or any-car): fitted
+                    #  to the new car's slot bands before it is driven
+                    design.clamp(lib, settings.car)
+                _apply_design(opts, design, lib)
                 if note:
                     print(f"builds: {note}")
                     opts.screen_notes = list(getattr(opts, "screen_notes", None) or []) + [note]
@@ -7875,7 +7879,7 @@ def run_interactive_cli(opts) -> int:
                 #  one first, so a pick never loses it
                 _autosave_build(design, lib)
                 design = grg.CarBuild.from_json(pick[1])
-                design.clamp(lib)
+                design.clamp(lib, settings.car)
                 _apply_design(opts, design, lib)
                 print(f"pre-race: driving the build '{pick[0]}'")
             if getattr(sim, "wing_tutor_start", False) and grg is not None:
@@ -8540,7 +8544,9 @@ def _resolve_design(opts, settings=None):
         if design is None:
             design = grg.CarBuild.from_json(dict(wing=opts.wing, x_w=opts.wing_x, h_w=opts.wing_h,
                                                  inc_deg=getattr(opts, "wing_inc", 0.0)))
-        design.clamp(lib)
+        #  fitted to the car it will be driven on (task 41); a standalone
+        #  swarm has no settings and uses the build's own tag / the Corsa
+        design.clamp(lib, getattr(settings, "car", None) or getattr(opts, "car", None))
         _apply_design(opts, design, lib)
         opts.garage_lib = lib              # the pre-race page's PICK lists its builds
     except Exception as exc:
@@ -8663,7 +8669,7 @@ def _track_build(grg, lib, design, track, opts, car: str | None = None):
         if not lb or (_same_build(lb["build"], js) and lb["build"].get("name") == js.get("name")):
             return None                    # the car in hand (its tag aside) already
         d2 = grg.CarBuild.from_json(lb["build"])
-        d2.clamp(lib)
+        d2.clamp(lib, car)
         print(f"pre-race: {track} opens with the build last used there, '{lb.get('name', '')}'")
         return d2
     except Exception as exc:               # noqa: BLE001 -- a bad file: keep the car
@@ -8698,7 +8704,7 @@ def _car_build(grg, lib, design, car: str, settings, track: str | None = None, o
         js = lib.builds.get(name) if lib is not None else None
         if isinstance(js, dict):
             d = grg.CarBuild.from_json(js)
-            d.clamp(lib)
+            d.clamp(lib, car)
             return d, f"the {car_label(car)} opens with its default build '{name}'"
         note = f"the {car_label(car)}'s default '{name}' is no longer in the library"
     if design is None or getattr(design, "car", "") in ("", car):
@@ -8708,7 +8714,7 @@ def _car_build(grg, lib, design, car: str, settings, track: str | None = None, o
         if d2 is not None:
             return d2, note or f"the {car_label(car)} opens with its last build on this map"
     d = grg.new_build(car)
-    d.clamp(lib)
+    d.clamp(lib, car)
     whose = f"'{design.name}' is the {car_label(design.car)}'s"
     if note:                               # (the first screen shows 120 characters)
         return d, f"the {car_label(car)}'s default '{name}' is gone: no wings ({whose})"
