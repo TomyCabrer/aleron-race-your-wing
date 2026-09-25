@@ -24,6 +24,11 @@ sector has ever been driven in the class (`RecordBook.best_sectors`, which
 every valid lap updates, not only the top 5), GREEN when it beats the PB
 lap's own sector, RED when it does not.
 
+In an UNLIMITED session (task 41: the build has a wing past its car's span
+limit) the book is the class's Unlimited book (`records.unlimited_book`), so
+the PB ghost, the delta and the flashes race the Unlimited laps -- never the
+official ones -- and the ghosts say so: `UNL PB`, `UNL P3`.
+
 `J` toggles both ghosts (the delta stays). Nothing here touches physics: the
 `Sim` calls `event` for each `LapTimer` event and reads `ghost_tuples`,
 `delta` and `flash` when it builds the HUD.
@@ -63,7 +68,8 @@ def slot_label(slot: str, book=None, key: str | None = None) -> str:
             laps = book.laps(key)
             if len(laps) >= i:
                 t = float(laps[i - 1]["time"])
-        return f"your P{i}" + (f" ({rec.fmt_time(t)})" if math.isfinite(t) else " (none yet)")
+        unl = "Unlimited " if getattr(book, "unlimited", False) else ""
+        return f"your {unl}P{i}" + (f" ({rec.fmt_time(t)})" if math.isfinite(t) else " (none yet)")
     return str(slot)
 
 
@@ -140,6 +146,7 @@ class GhostSet:
         """(Re)load the PB and the slot when either has changed: a new PB
         lands at a line crossing, and the next lap races it."""
         self._ver = getattr(self.book, "version", None)
+        unl = "UNL " if getattr(self.book, "unlimited", False) else ""   # task 41
         pb = self.book.pb(self.key)
         #  a lap the recorder has just filed is LIGHT until its filing thread
         #  adds the trace: its signature changes again when the trace lands
@@ -152,7 +159,7 @@ class GhostSet:
                 try:
                     arr = _trace_of(pb)
                     if len(arr) >= 2:
-                        self.pb = _replay(arr, C_GHOST_PB, "PB")
+                        self.pb = _replay(arr, C_GHOST_PB, unl + "PB")
                         self.curve = Curve(arr)
                     self.pb_secs = list(pb.get("sectors") or [])
                 except Exception as exc:   # noqa: BLE001 -- a bad trace: no ghost
@@ -170,7 +177,7 @@ class GhostSet:
                 laps = self.book.laps(self.key)
                 if len(laps) >= i and _has_trace(laps[i - 1]):
                     try:
-                        arr, label = _trace_of(laps[i - 1]), f"P{i}"
+                        arr, label = _trace_of(laps[i - 1]), f"{unl}P{i}"
                     except Exception:      # noqa: BLE001
                         arr = None
             if arr is not None and len(arr) >= 2:
@@ -384,6 +391,19 @@ def self_check(verbose: bool = True) -> bool:
         slot_label("top2", book, key))
     rep("a finished ghost waits on the line",
         abs(GhostSet(book, key, slot="none").pb.pose(400.0)[0] - L) < 1e-6)
+    #  task 41: an Unlimited session races the Unlimited book's laps, and its
+    #  ghosts say so; the official book's PB is not in it
+    ubook = rec.unlimited_book(root)
+    ubook.insert(key, dict(lap(24.0, L / 24.0, [16.0, 16.5, 16.5]), unlimited=True))
+    ubook.insert(key, dict(lap(22.0, L / 22.0, [18.0, 18.0, 18.5]), unlimited=True))
+    gu = GhostSet(ubook, key, slot="top2", ref_fn=lambda k: ref)
+    gu.event(sim, ("start", 0, sim.t, float("nan")))
+    rep("an Unlimited session's ghosts are its own book's, labelled UNL",
+        gu.pb is not None and gu.pb.label == "UNL PB" and gu.g2.label == "UNL P2"
+        and abs(ubook.pb_time(key) - L / 24.0) < 1e-9 and book.pb_time(key) == 60.0
+        and slot_label("top2", ubook, key).startswith("your Unlimited P2")
+        and [x[4] for x in gs.ghost_tuples(sim)] != [] and GhostSet(book, key).pb.label == "PB",
+        f"{gu.pb.label} / {gu.g2.label}; {slot_label('top2', ubook, key)}")
     gs.event(sim, ("lap", 1, sim.t, 30.0))        # a crossing, then backwards over it
     drive_to(L - 5.0, sim.t + 1.0, 20)
     rep("no delta for a car behind the line", math.isnan(gs.delta(sim)))

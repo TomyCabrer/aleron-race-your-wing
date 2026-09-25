@@ -51,6 +51,7 @@ from corsa_c import CorsaC, RHO, G
 import crossover
 from .menu import Menu, StickNav
 from . import garage_ui as ui
+from . import bodies
 from .aero.library import Library
 from .aero.wing import (WingSpec, BOUNDS, V_REF, RIDE_H0, design_point, spanwise,
                         re_bank_snap, design_bounds, design_x0,
@@ -312,6 +313,42 @@ def deck_z(x: float) -> float:
     return float(np.interp(x, xs, zs))
 
 
+#  ---- the car a build is FITTED to (task 41) --------------------------------
+#  Until task 41 every slot band below was the Corsa's, whichever car was
+#  driven. They are per car now, read off the car's own body shell
+#  (`drive/bodies.py`), and the three stock cars' bands and default slots are
+#  the old constants exactly (bodies' self-check pins it) -- so no saved
+#  build moves. The one number the garage keeps for itself is the Corsa's
+#  DECK: its mesh below (STATIONS) is the shell the top wing's stowed-height
+#  rule was always read from, and the renderer's re-cut hatch tail (bodies'
+#  shell) sits up to 0.17 m lower aft of the roof, which would let a saved
+#  Corsa top wing come down. Every other car reads its own body's deck.
+def _fit_car(build, car):
+    """The car `build` is clamped to: `car` when given (a `cars.py` key or a
+    CarSpec), else the car the build says it was made for (`build.car`,
+    when the build carries one), else the Corsa (None)."""
+    if car is not None:
+        return car
+    return getattr(build, "car", "") or None
+
+
+def top_h_band(car, x: float) -> tuple[float, float]:
+    """The top wing's height band at station x on `car`: clear of THAT car's
+    deck by the stowed gap + 0.08 m, up to 0.41 m over its roof
+    (`bodies.top_h_band`; a Citaro's top wing rides ~3.3 m up)."""
+    lo, hi = bodies.top_h_band(car, x)
+    if bodies.style_of(car) == "hatch":
+        lo = deck_z(x) + TOP_STOW_GAP + 0.08        # the garage's rule, unchanged
+    return lo, hi
+
+
+def flank_h_floor(car, span: float) -> float:
+    """The lowest mount height a flank panel of `span` may take on `car` in
+    Real mode: its lower tip at the car's ground clearance, h = ground +
+    span / 2 (`bodies.span_limit`'s rule, solved for h)."""
+    return bodies.body(car).ground + 0.5 * float(span)
+
+
 @dataclass
 class CarBuild:
     """Three slots, a name, and the mirror lock. `cfg_kwargs(lib)` turns it
@@ -330,19 +367,29 @@ class CarBuild:
         return getattr(self, key)
 
     # -- geometry limits -----------------------------------------------------
-    def clamp(self, lib: "Library | None" = None) -> "CarBuild":
+    def clamp(self, lib: "Library | None" = None, car=None) -> "CarBuild":
+        """Hold every slot inside the bands of the car it is FITTED to (task
+        41: `car`, a `cars.py` key or a CarSpec; None = `_fit_car`'s rule).
+        The SPAN is not clamped here: a wing past its car's physical limit is
+        kept, and whether the build is then an Unlimited one is a question
+        for `bodies.over_limits`, asked at each run's start."""
+        car = _fit_car(self, car)
+        h_lo, h_hi = bodies.flank_h_band(car)
         for key in ("left", "right"):
             s = self.slot(key)
             c = DEV_CHORD
             if lib is not None and s.wing in lib.wings:
                 c = lib.wings[s.wing].chord
-            s.x = min(max(s.x, CAR_X_REAR + 0.5 * c), CAR_X_FRONT - 0.5 * c)
-            s.h = min(max(s.h, H_W_MIN), H_W_MAX)
+            x_lo, x_hi = bodies.flank_x_band(car, c)
+            s.x = min(max(s.x, x_lo), x_hi)
+            s.h = min(max(s.h, h_lo), h_hi)
             s.inc_deg = min(max(s.inc_deg, INC_MIN), INC_MAX)
             s.mode = "active"
         t = self.top
-        t.x = min(max(t.x, TOP_X_MIN), TOP_X_MAX)
-        t.h = min(max(t.h, deck_z(t.x) + TOP_STOW_GAP + 0.08), TOP_H_MAX)
+        x_lo, x_hi = bodies.top_x_band(car)
+        t.x = min(max(t.x, x_lo), x_hi)
+        t_lo, t_hi = top_h_band(car, t.x)
+        t.h = min(max(t.h, t_lo), t_hi)
         t.inc_deg = min(max(t.inc_deg, BOUNDS["top"]["inc_deg"][0]), BOUNDS["top"]["inc_deg"][1])
         t.mode = "active" if t.mode == "active" else "fixed"
         if lib is not None:
@@ -368,11 +415,23 @@ class CarBuild:
     def has_any(self, lib: "Library") -> bool:
         return any(w is not None for w in self.wings(lib).values())
 
-    def reset(self) -> None:
-        self.left = Slot("", 0.97, 0.90, 0.0)
-        self.right = Slot("", 0.97, 0.90, 0.0)
-        self.top = Slot("", -0.90, 1.55, 6.0, "active")
+    def reset(self, car=None) -> None:
+        """No wings, every slot at `car`'s default station (task 41:
+        `bodies.slot_defaults`; the stock cars' are the old (0.97, 0.90) /
+        (-0.90, 1.55, 6 deg), a Citaro's top wing sits 3.30 m up)."""
+        d = bodies.slot_defaults(_fit_car(self, car))
+        (fx, fh), (tx, th, ti) = d["flank"], d["top"]
+        self.left = Slot("", fx, fh, 0.0)
+        self.right = Slot("", fx, fh, 0.0)
+        self.top = Slot("", tx, th, ti, "active")
         self.mirror = True
+
+    @classmethod
+    def for_car(cls, car=None) -> "CarBuild":
+        """The empty car for `car`: no wings, its own default slots."""
+        b = cls()
+        b.reset(car)
+        return b
 
     # -- what the physics sees ---------------------------------------------
     def cfg_kwargs(self, lib: "Library") -> dict:
@@ -652,16 +711,22 @@ def _between(x0, x1, lo_hi):
     return (x0 <= lo + 1e-9 and x1 >= hi - 1e-9)
 
 
-def build_car_mesh(paint=C_PAINT) -> list[tuple[np.ndarray, tuple, str]]:
+def build_car_mesh(paint=C_PAINT, car=None) -> list[tuple[np.ndarray, tuple, str]]:
     """(verts (n,3), colour, kind). Kind is 'body' | 'wheel' | 'trim'.
 
     `paint` is the body colour (the player's paint, drive/paint.py); the nose
     and tail caps are a darker tone of it. The stock yellow keeps its own
     hand-picked cap tone, C_PAINT_DARK; any other paint gets 0.75 of itself,
-    about what C_PAINT_DARK is of C_PAINT (0.744-0.757 by channel)."""
+    about what C_PAINT_DARK is of C_PAINT (0.744-0.757 by channel).
+
+    `car` (task 41): the car being fitted, a `cars.py` key. None and
+    'corsa' are the garage's own hatch below, exactly as it always was;
+    any other car is lofted from its own body shell (`_body_mesh`)."""
     paint = tuple(int(c) for c in paint)
     dark = (C_PAINT_DARK if paint == C_PAINT
             else tuple(int(round(0.75 * c)) for c in paint))
+    if car not in (None, "corsa"):
+        return _body_mesh(paint, dark, car)
     polys = []
     inside = np.array([-0.15, 0.0, 0.70])
     rings = [_ring(s) for s in STATIONS]
@@ -715,6 +780,130 @@ def build_car_mesh(paint=C_PAINT) -> list[tuple[np.ndarray, tuple, str]]:
         rim[:, 1] += side * 0.003
         polys.append((_orient(rim, centre), C_RIM, "wheel"))
     return polys
+
+
+#: The preview's glass on a lofted shell, read off the shell's own BAND kinds
+#: (`bodies._STYLE_SHELL3`): a windscreen or a rear window on the roof quads,
+#: side glass between the belt and the roof along the cabin. The Express is
+#: a panel van behind its cab (no side glass on the load box: its first two
+#: roof bands are the cab), a roadster's cockpit is open (the dark interior),
+#: and a Citaro's front face is nearly all windscreen.
+_ROOF_GLASS = ("screen", "rglass")
+_SIDE_GLASS = ("screen", "roof", "rglass")
+_SIDE_GLASS_MAX_BAND = {"van": 4}
+#: a wheel's radius when `cars.py` does not carry the car yet (est: the
+#: Express's 145R13 / 155R13 van tyre, a Citaro's 275/70R22.5)
+_WHEEL_R_EST = {"van": 0.285, "bus": 0.4815}
+
+
+def _ring_body(st):
+    """`_ring` for a lofted shell: the sill's knee is 0.28 m up the side on
+    the Corsa, and on a low bumper face (a van's, a bus's rear) that is above
+    the belt, so it is held at most half way from the floor to the belt."""
+    x, zb, zbelt, ztop, w, wr = st
+    knee = min(zb + 0.28, zb + 0.5 * (zbelt - zb))
+    return np.array([
+        (x, -0.92 * w, zb), (x, -w, knee), (x, -w, zbelt), (x, -wr, ztop),
+        (x, 0.0, ztop + 0.02),
+        (x, wr, ztop), (x, w, zbelt), (x, w, knee), (x, 0.92 * w, zb),
+        (x, 0.0, zb - 0.02),
+    ])
+
+
+def _body_mesh(paint, dark, car) -> list:
+    """The preview of any car but the Corsa: its body shell
+    (`bodies.body(car).stations`, the same six numbers per station as
+    STATIONS) lofted exactly as the hatch is, glass where its bands say, and
+    its own wheels -- `cars.py`'s a / b / t_f / t_r / tyre when it carries
+    the car, the style car's axles and an est tyre when it does not yet."""
+    b = bodies.body(car)
+    spec = bodies._spec(car)
+    kinds = bodies._STYLE_SHELL3[b.style][1]
+    st = b.stations
+    inside = np.array([0.5 * (b.x_front + b.x_rear), 0.0, 0.5 * (b.ground + b.height)])
+    rings = [_ring_body(s_) for s_ in st]
+    side_max = _SIDE_GLASS_MAX_BAND.get(b.style, len(kinds))
+    polys = []
+    for i in range(len(rings) - 1):
+        a, c = rings[i], rings[i + 1]
+        kind = kinds[i] if i < len(kinds) else "roof"
+        for j in range(N_RING):
+            k = (j + 1) % N_RING
+            quad = np.array([a[j], a[k], c[k], c[j]])
+            if j in (3, 4):                              # roof
+                col = (C_GLASS if kind in _ROOF_GLASS
+                       else (C_UNDER if kind == "cockpit" else paint))
+            elif j in (2, 5):                            # belt -> roof edge
+                col = C_GLASS if (kind in _SIDE_GLASS and i <= side_max) else paint
+            elif j in (8, 9):                            # floor
+                col = C_UNDER
+            else:
+                col = paint
+            polys.append((_orient(quad, inside), col, "body"))
+    polys.append((_orient(rings[0], inside), C_GLASS if b.style == "bus" else dark, "body"))
+    polys.append((_orient(rings[-1], inside), dark, "body"))
+    a_, L, t_f, t_r = bodies.axles(spec if spec is not None else object(), b.style)
+    R = float(getattr(spec, "tyre_R0", 0.0) or _WHEEL_R_EST.get(b.style, WHEEL_R))
+    W = float(getattr(spec, "tyre_width", 0.0) or WHEEL_W * R / WHEEL_R)
+    wheels = ((a_, 0.5 * t_f), (a_, -0.5 * t_f), (a_ - L, 0.5 * t_r), (a_ - L, -0.5 * t_r))
+    arch_r = R + 0.0485                                  # the Corsa's 0.34 m over its 0.2915
+    for wx, wy in wheels:
+        side = 1.0 if wy > 0 else -1.0
+        y = side * (b.half_w_at(wx) + 0.004)
+        arch = [(wx + arch_r * math.cos(t), y, R + arch_r * math.sin(t))
+                for t in np.linspace(0.0, math.pi, 9)]
+        arch += [(wx - arch_r, y, b.ground + 0.01), (wx + arch_r, y, b.ground + 0.01)]
+        polys.append((_orient(arch, inside), C_ARCH, "trim"))
+    for wx, wy in wheels:
+        side = 1.0 if wy > 0 else -1.0
+        yc = side * (abs(wy) + 0.0305)                   # the Corsa's 0.745 over its 0.7145
+        centre = np.array([wx, yc, R])
+        ts = np.linspace(0.0, 2 * math.pi, 15)[:-1]
+        outer = np.array([(wx + R * math.cos(t), yc + side * 0.5 * W, R + R * math.sin(t))
+                          for t in ts])
+        inner = outer.copy()
+        inner[:, 1] = yc - side * 0.5 * W
+        for j in range(len(ts)):
+            k = (j + 1) % len(ts)
+            quad = np.array([outer[j], outer[k], inner[k], inner[j]])
+            polys.append((_orient(quad, centre), C_TYRE, "wheel"))
+        polys.append((_orient(outer, centre), C_TYRE, "wheel"))
+        polys.append((_orient(inner, centre), C_TYRE, "wheel"))
+        rim = outer.copy()
+        rim[:, 0] = wx + 0.62 * (rim[:, 0] - wx)
+        rim[:, 2] = R + 0.62 * (rim[:, 2] - R)
+        rim[:, 1] += side * 0.003
+        polys.append((_orient(rim, centre), C_RIM, "wheel"))
+    return polys
+
+
+class PreviewGeo:
+    """What the car page draws round, for the car being fitted (task 41):
+    the body side the flank panels stand off (`half_w`), the deck a top wing
+    stows on (`deck_z`), the car's extents for the ground and the shadow, and
+    how far the orbit camera stands back. The Corsa's are the garage's own
+    constants and mesh, exactly -- the preview's pixel checks pin them."""
+
+    def __init__(self, car=None):
+        self.car = car or "corsa"
+        self.corsa = self.car == "corsa"
+        if self.corsa:
+            self.half_w, self.height = CAR_HALF_W, CAR_H
+            self.x_front, self.x_rear = CAR_X_FRONT, CAR_X_REAR
+            self.deck_z = deck_z
+            self.scale = 1.0
+            self.target = (-0.15, 0.0, 0.70)
+            self.top_dim_y = 0.5 * 1.7 + 0.15
+        else:
+            b = bodies.body(self.car)
+            self.half_w, self.height = b.half_w, b.height
+            self.x_front, self.x_rear = b.x_front, b.x_rear
+            self.deck_z = b.deck_z
+            #  a 12 m bus has to fit the view the 3.8 m Corsa does
+            self.scale = max(1.0, (b.x_front - b.x_rear) / (CAR_X_FRONT - CAR_X_REAR),
+                             b.height / CAR_H)
+            self.target = (0.5 * (b.x_front + b.x_rear), 0.0, 0.5 * b.height)
+            self.top_dim_y = b.half_w + 0.15
 
 
 class Batch:
@@ -810,7 +999,8 @@ def _loft(rings: list[np.ndarray], col, kind="wing", caps=True) -> list:
 
 
 def wing_polys(spec: "WingSpec | None", key: str, slot: Slot, deploy: float,
-               lib: "Library | None", selected: bool = False, legacy_type: str = "") -> list:
+               lib: "Library | None", selected: bool = False, legacy_type: str = "",
+               geo: "PreviewGeo | None" = None) -> list:
     """The polygons of one slot's wing at this deploy fraction.
 
     Flank: a vertical loft of the section (suction side towards the car,
@@ -818,8 +1008,10 @@ def wing_polys(spec: "WingSpec | None", key: str, slot: Slot, deploy: float,
     DEV_OUT0 + DEV_OUT1 * deploy, two struts, optional end plates.
     Top: an inverted loft across the car; stowed it lies on the deck,
     deployed it rises to the slot height and takes its incidence; end
-    plates hang towards the road; two pylons."""
+    plates hang towards the road; two pylons. `geo` is the car being fitted
+    (its body side and deck; None: the Corsa)."""
     polys = []
+    half_w = geo.half_w if geo is not None else CAR_HALF_W
     role = SLOT_ROLE[key]
     if spec is None and not legacy_type:
         return polys
@@ -834,7 +1026,7 @@ def wing_polys(spec: "WingSpec | None", key: str, slot: Slot, deploy: float,
     if role == "flank":
         s = 1.0 if key == "left" else -1.0
         out = DEV_OUT0 + DEV_OUT1 * deploy
-        yc = s * (CAR_HALF_W + out)
+        yc = s * (half_w + out)
         rings = []
         for i in range(n_st):
             eta = -1.0 + 2.0 * i / (n_st - 1)          # -1 bottom .. +1 top
@@ -851,7 +1043,7 @@ def wing_polys(spec: "WingSpec | None", key: str, slot: Slot, deploy: float,
         polys += _loft(rings, col, "wingsel" if selected else "wing")
         for dz in (-0.28 * span, 0.28 * span):
             z = slot.h + dz
-            polys += _box(slot.x - 0.015, slot.x + 0.015, min(s * CAR_HALF_W, yc), max(s * CAR_HALF_W, yc),
+            polys += _box(slot.x - 0.015, slot.x + 0.015, min(s * half_w, yc), max(s * half_w, yc),
                           z - 0.012, z + 0.012, C_STRUT)
         if plate > 0.0:
             for sgn in (-1.0, 1.0):
@@ -859,7 +1051,7 @@ def wing_polys(spec: "WingSpec | None", key: str, slot: Slot, deploy: float,
                 polys += _box(slot.x - 0.6 * chord * taper, slot.x + 0.6 * chord * taper,
                               yc - 0.5 * plate, yc + 0.5 * plate, z - 0.006, z + 0.006, C_PLATE, "plate")
     else:
-        deck = deck_z(slot.x)
+        deck = (geo.deck_z if geo is not None else deck_z)(slot.x)
         z_stow = deck + TOP_STOW_GAP
         zc = z_stow + (slot.h - z_stow) * deploy
         ang = math.radians(slot.inc_deg) * deploy
@@ -909,14 +1101,24 @@ class Orbit:
 
     def __init__(self, W: int, H: int):
         self.W, self.H = W, H
+        #  the car being framed (task 41): 1 and the Corsa's centre unless
+        #  `fit` says otherwise -- a 12 m bus stands the camera ~3x back
+        self.scale = 1.0
+        self.target0 = (-0.15, 0.0, 0.70)
         self.reset()
         self.fov_deg = 38.0
+
+    def fit(self, geo: "PreviewGeo") -> None:
+        """Frame `geo`'s car: its centre, and the distance (and the zoom's
+        range) scaled to its size. The Corsa's view is unchanged."""
+        self.scale, self.target0 = float(geo.scale), tuple(geo.target)
+        self.reset()
 
     def reset(self) -> None:
         self.yaw = math.radians(38.0)        # from the front-left quarter
         self.pitch = math.radians(19.0)
-        self.dist = 7.6
-        self.target = np.array([-0.15, 0.0, 0.70])
+        self.dist = 7.6 * self.scale
+        self.target = np.array(self.target0)
 
     def eye(self) -> np.ndarray:
         cp = math.cos(self.pitch)
@@ -949,14 +1151,39 @@ class Orbit:
                          math.radians(80.0))
 
     def zoom(self, k: float) -> None:
-        self.dist = min(max(self.dist * k, 3.2), 16.0)
+        self.dist = min(max(self.dist * k, 3.2 * self.scale), 16.0 * self.scale)
 
 
 # =========================================================================== #
 #  THE 3-D VIEW (the CAR page)                                                 #
 # =========================================================================== #
+def car_spec(car=None):
+    """`cars.py`'s spec of `car` for the page's read-outs (%mg, (x + b)/b,
+    the front / rear split): the Corsa's for None, and for a key `cars.py`
+    does not carry yet (bodies draws its shell from the style car alone)."""
+    import cars
+    return cars.CARS.get(car or "corsa") or cars.CARS["corsa"]
+
+
+def limit_rows(build: "CarBuild", lib: "Library", car=None) -> list:
+    """Each FITTED wing's span against its physical limit on `car` (task 41;
+    `bodies.span_limit`): [(slot, span, limit, past)] in slot order -- what
+    the car page's SPAN LIMITS panel lists. `past` is `bodies.over_limits`'
+    own test, so the panel and a run's Unlimited flag cannot disagree."""
+    over = {o["slot"] for o in bodies.over_limits(build, lib, car)}
+    out = []
+    for key in SLOTS:
+        slot = build.slot(key)
+        spec = lib.wings.get(slot.wing) if slot.wing else None
+        if spec is None:
+            continue
+        out.append((key, float(spec.span), bodies.span_limit(SLOT_ROLE[key], car, slot.h),
+                    key in over))
+    return out
+
+
 class GarageView:
-    def __init__(self, screen: pygame.Surface):
+    def __init__(self, screen: pygame.Surface, car: str = "corsa"):
         self.screen = screen
         self.W, self.H = screen.get_size()
         self.ui = min(self.W / 1280.0, self.H / 800.0)
@@ -966,7 +1193,12 @@ class GarageView:
         self.f_val = self.fonts.get(16)
         self.f_big = self.fonts.get(26, bold=True)
         self.paint = C_PAINT
-        self.car = Batch(build_car_mesh(self.paint))
+        #: task 41: the car being fitted -- its key, what the preview draws
+        #: round, and its spec for the read-outs
+        self.car_key = car or "corsa"
+        self.geo = PreviewGeo(self.car_key)
+        self.spec = car_spec(self.car_key)
+        self.car = Batch(build_car_mesh(self.paint, self.car_key))
         self.n_polys = 0
         self.frame_ms = 0.0
         self.show_vectors = True
@@ -975,13 +1207,13 @@ class GarageView:
         """Paint the preview car `rgb` (None: the stock C_PAINT yellow). The
         body Batch is rebuilt only when the colour changes (~2.4 ms); the next
         frame draws it. Cosmetic: nothing in the build or its JSON changes.
-        The preview is the old hatch shell whatever car is fitted, so the
-        caller passes the fitted car's paint RESOLVED (its factory colour
-        for 'factory', render.factory_colour)."""
+        The caller passes the fitted car's paint RESOLVED (its factory
+        colour for 'factory', render.factory_colour); the preview is that
+        car's own body since task 41."""
         rgb = C_PAINT if rgb is None else tuple(int(c) for c in rgb)
         if rgb != self.paint:
             self.paint = rgb
-            self.car = Batch(build_car_mesh(rgb))
+            self.car = Batch(build_car_mesh(rgb, self.car_key))
 
     def _txt(self, s, x, y, font=None, col=C_TEXT):
         surf = (font or self.f_val).render(s, True, col)
@@ -998,7 +1230,8 @@ class GarageView:
         wings = build.wings(lib)
         polys = []
         for key in SLOTS:
-            polys += wing_polys(wings[key], key, build.slot(key), deploy, lib, selected=(key == selected))
+            polys += wing_polys(wings[key], key, build.slot(key), deploy, lib,
+                                selected=(key == selected), geo=self.geo)
         b = Batch.join(self.car, Batch(polys)) if polys else self.car
         view = eye - b.centroids
         vlen = np.linalg.norm(view, axis=1, keepdims=True)
@@ -1029,13 +1262,15 @@ class GarageView:
                 pygame.draw.polygon(sc, (255, 236, 200), pts, 1)
 
     def draw(self, build: CarBuild, lib: Library, cam: Orbit, deploy: float, selected: str,
-             pad_name: str | None, hint: str = "", status: str = "") -> None:
+             pad_name: str | None, hint: str = "", status: str = "",
+             unlimited: bool = False) -> None:
         t0 = time.perf_counter()
         self.draw_scene(build, lib, cam, deploy, selected)
         if self.show_vectors:
             self._draw_vectors(build, lib, cam, deploy)
         self._draw_dimensions(build, selected, cam)
         self._draw_info(build, lib, selected, deploy)
+        self._draw_limits(build, lib, unlimited)
         self._draw_help(pad_name, hint, status)
         self.frame_ms = (time.perf_counter() - t0) * 1e3
 
@@ -1090,12 +1325,13 @@ class GarageView:
             if not dp:
                 continue
             if key == "top":
-                z_stow = deck_z(slot.x) + TOP_STOW_GAP
+                z_stow = self.geo.deck_z(slot.x) + TOP_STOW_GAP
                 base = np.array([slot.x, 0.0, z_stow + (slot.h - z_stow) * deploy])
                 f_dir = np.array([0.0, 0.0, -1.0])
             else:
                 s = 1.0 if key == "left" else -1.0
-                base = np.array([slot.x, s * (CAR_HALF_W + DEV_OUT0 + DEV_OUT1 * deploy), slot.h])
+                base = np.array([slot.x, s * (self.geo.half_w + DEV_OUT0 + DEV_OUT1 * deploy),
+                                 slot.h])
                 f_dir = np.array([0.0, -s, 0.0])
             d_dir = np.array([-1.0, 0.0, 0.0])
             for F, dv, kind in ((dp["F"], f_dir, "F"), (dp["D"], d_dir, "D")):
@@ -1118,19 +1354,24 @@ class GarageView:
                       12 * u, 668 * u, self.f_lbl, C_TEXT_DIM)
 
     def _draw_ground(self, cam: Orbit) -> None:
-        quad = np.array([(-6.0, -5.0, 0.0), (6.0, -5.0, 0.0),
-                         (6.0, 5.0, 0.0), (-6.0, 5.0, 0.0)])
+        geo = self.geo
+        k, xc = geo.scale, (0.0 if geo.corsa else geo.target[0])   # the Corsa's: 1, 0
+        quad = np.array([(xc - 6.0 * k, -5.0 * k, 0.0), (xc + 6.0 * k, -5.0 * k, 0.0),
+                         (xc + 6.0 * k, 5.0 * k, 0.0), (xc - 6.0 * k, 5.0 * k, 0.0)])
         scr, d = cam.project(quad)
         if np.all(d > 0.05):
             pygame.draw.polygon(self.screen, C_GROUND, scr.astype(np.int32).tolist())
-        for x in np.arange(-4.0, 4.01, 0.5):
-            self._line3(cam, (x, -3.0, 0.0), (x, 3.0, 0.0), C_GRID)
-        for y in np.arange(-3.0, 3.01, 0.5):
-            self._line3(cam, (-4.0, y, 0.0), (4.0, y, 0.0), C_GRID)
-        foot = np.array([(CAR_X_FRONT - 0.05, 0.62, 0.003), (CAR_X_FRONT - 0.35, 0.86, 0.003),
-                         (CAR_X_REAR + 0.30, 0.86, 0.003), (CAR_X_REAR, 0.66, 0.003),
-                         (CAR_X_REAR, -0.66, 0.003), (CAR_X_REAR + 0.30, -0.86, 0.003),
-                         (CAR_X_FRONT - 0.35, -0.86, 0.003), (CAR_X_FRONT - 0.05, -0.62, 0.003)])
+        for x in np.arange(-4.0 * k, 4.0 * k + 0.01, 0.5):
+            self._line3(cam, (xc + x, -3.0 * k, 0.0), (xc + x, 3.0 * k, 0.0), C_GRID)
+        for y in np.arange(-3.0 * k, 3.0 * k + 0.01, 0.5):
+            self._line3(cam, (xc - 4.0 * k, y, 0.0), (xc + 4.0 * k, y, 0.0), C_GRID)
+        xf, xr = geo.x_front, geo.x_rear
+        wa, wb, wr = ((0.62, 0.86, 0.66) if geo.corsa else
+                      (0.75 * geo.half_w, 1.045 * geo.half_w, 0.80 * geo.half_w))
+        foot = np.array([(xf - 0.05, wa, 0.003), (xf - 0.35, wb, 0.003),
+                         (xr + 0.30, wb, 0.003), (xr, wr, 0.003),
+                         (xr, -wr, 0.003), (xr + 0.30, -wb, 0.003),
+                         (xf - 0.35, -wb, 0.003), (xf - 0.05, -wa, 0.003)])
         scr, d = cam.project(foot)
         if np.all(d > 0.05):
             pygame.draw.polygon(self.screen, C_SHADOW, scr.astype(np.int32).tolist())
@@ -1139,7 +1380,7 @@ class GarageView:
         """CG marker, x along the ground, h up the side, for the selected slot."""
         slot = build.slot(key)
         s = -1.0 if key == "right" else 1.0
-        y_side = s * (CAR_HALF_W + DEV_OUT0 + 0.45)
+        y_side = s * (self.geo.half_w + DEV_OUT0 + 0.45)
         self._line3(cam, (-0.15, 0.0, 0.0), (0.15, 0.0, 0.0), C_DIM, 2)
         self._line3(cam, (0.0, -0.15, 0.0), (0.0, 0.15, 0.0), C_DIM, 2)
         p = cam.project(np.array([(0.0, 0.0, 0.0)]))[0][0]
@@ -1149,7 +1390,8 @@ class GarageView:
         self._line3(cam, (slot.x, y_side - 0.1, 0.0), (slot.x, y_side + 0.1, 0.0), C_DIM, 2)
         p = cam.project(np.array([(0.5 * slot.x, y_side + s * 0.15, 0.0)]))[0][0]
         self._txt(f"x {slot.x:+.2f} m", p[0] - 40, p[1] + 4, self.f_lbl, C_DIM)
-        yp = s * (CAR_HALF_W + DEV_OUT0 + 0.5 * DEV_THICK + 0.10) if key != "top" else 0.5 * 1.7 + 0.15
+        yp = (s * (self.geo.half_w + DEV_OUT0 + 0.5 * DEV_THICK + 0.10) if key != "top"
+              else self.geo.top_dim_y)
         self._line3(cam, (slot.x, yp, 0.0), (slot.x, yp, slot.h), C_DIM, 2)
         p = cam.project(np.array([(slot.x, yp, slot.h)]))[0][0]
         self._txt(f"h {slot.h:.2f} m", p[0] + 8, p[1] - 10, self.f_lbl, C_DIM)
@@ -1242,8 +1484,9 @@ class GarageView:
                 y += put(f"CL {dp['CL']:.2f}  F {dp['F']:4.0f} N  D {dp['D']:3.0f} N  L/D {dp['LD']:.1f}",
                          y, self.f_val)
                 y += 22 * u
+                car = self.spec                  # the fitted car's (task 41)
                 if spec.role == "flank":
-                    y += put(f"= {100 * dp['F'] / (CAR.m * G):.2f}% of mg  (x+b)/b x{(slot.x + CAR.b) / CAR.b:.2f}",
+                    y += put(f"= {100 * dp['F'] / (car.m * G):.2f}% of mg  (x+b)/b x{(slot.x + car.b) / car.b:.2f}",
                              y, self.f_lbl, C_TEXT_DIM)
                     y += 22 * u
                     y += put("corner-speed gain (crossover.gain)", y, self.f_lbl, C_TEXT_DIM)
@@ -1261,11 +1504,11 @@ class GarageView:
                         y += put(s_, y, self.f_val, c)
                         y += 22 * u
                 else:
-                    share_f = (slot.x + CAR.b) / CAR.L
+                    share_f = (slot.x + car.b) / car.L
                     y += put(f"downforce split  front {100 * share_f:.0f}%  rear {100 * (1 - share_f):.0f}%",
                              y, self.f_lbl, C_OK if share_f > 0.3 else C_WARN)
                     y += 22 * u
-                    y += put(f"= {100 * dp['F'] / (CAR.m * G):.2f}% of mg; a front-limited car wants it forward",
+                    y += put(f"= {100 * dp['F'] / (car.m * G):.2f}% of mg; a front-limited car wants it forward",
                              y, self.f_lbl, C_TEXT_DIM)
                     y += 22 * u
                 if dp.get("stalled"):
@@ -1279,6 +1522,52 @@ class GarageView:
         self._txt(self._fit(f"preview: {'DEPLOYED' if deploy > 0.5 else 'stowed'}   {build.summary(lib)}",
                             self.f_lbl, wmax), x, y, self.f_lbl,
                   C_PANEL_ON if deploy > 0.5 else C_TEXT_DIM)
+
+    def _draw_limits(self, build: CarBuild, lib: Library, unlimited: bool) -> None:
+        """SPAN LIMITS, under the slot panel (task 41): every fitted wing's
+        span against its physical limit on THIS car -- a flank's lower tip
+        at the car's ground clearance, a top wing 1.2 x its width -- PAST THE
+        LIMIT in red, and what that means for a run: in Real mode a build
+        that is past (a bus build on a Corsa) is kept and the page says its
+        runs count as Unlimited; in Unlimited mode it wears the tag."""
+        rows = limit_rows(build, lib, self.car_key)
+        if not rows:
+            return
+        past = any(r[3] for r in rows)
+        u = self.ui
+        lines = 1 + len(rows) + (2 if past else 0)
+        r = self._panel((884, 490, 384, 10 + 19 * lines))
+        x, y = r.x + 12 * u, r.y + 6 * u
+        wmax = r.right - 12 * u - x
+        #  the SETTING in mixed case; the capital UNLIMITED is kept for the tag
+        #  a build past its limit wears (the line under the rows)
+        mode = "limits: Unlimited" if unlimited else "limits: Real"
+        import cars
+        who = cars.CAR_TITLES.get(self.car_key, self.car_key)
+        self._txt(self._fit(f"SPAN LIMITS  {who}", self.f_lbl,
+                            wmax - self.f_lbl.size(mode)[0] - 8 * u), x, y, self.f_lbl, C_TEXT_DIM)
+        self._txt(mode, r.right - 12 * u - self.f_lbl.size(mode)[0], y, self.f_lbl,
+                  C_PANEL_ON if unlimited else C_TEXT_DIM)
+        for key, span, lim, over in rows:
+            y += 19 * u
+            row = f"{key:<6s}span {span:.2f} m / max {lim:.2f} m"
+            if over and self.f_lbl.size(row + "  PAST THE LIMIT")[0] > wmax:
+                row = f"{key:<6s}span {span:.2f} / max {lim:.2f} m"
+            self._txt(row, x, y, self.f_lbl, C_WARN if over else C_TEXT)
+            if over:
+                mark = "PAST THE LIMIT"
+                if self.f_lbl.size(f"{row}  {mark}")[0] > wmax:
+                    mark = "PAST"
+                self._txt(mark, r.right - 12 * u - self.f_lbl.size(mark)[0], y, self.f_lbl, C_WARN)
+        if past:
+            y += 19 * u
+            self._txt(self._fit("UNLIMITED: runs are filed apart" if unlimited
+                                else "runs with this build count as UNLIMITED", self.f_lbl, wmax),
+                      x, y, self.f_lbl, C_WARN)
+            y += 19 * u
+            self._txt(self._fit("never official, never on a public board" if unlimited
+                                else "(Settings > Wing limits: Real / Unlimited)", self.f_lbl, wmax),
+                      x, y, self.f_lbl, C_TEXT_DIM)
 
     def _draw_help(self, pad_name, hint, status="") -> None:
         u = self.ui
@@ -1302,9 +1591,15 @@ class GarageView:
         for s, c in lines:
             self._txt(s, x, y, self.f_lbl, c)
             y += 18 * u
-        if hint:
+        if hint and len(hint) <= 60:
             self._txt(hint[:60], r.right - 10 * u - self.f_lbl.size(hint[:60])[0], r.y + 6 * u,
                       self.f_lbl, C_PANEL_ON)
+        elif hint:
+            #  a longer hint -- a wing skipped for its span limit says why and
+            #  where to change it (task 41) -- gets its own line over the bar,
+            #  right of the vectors' legend, instead of being cut at 60
+            s_ = self._fit(hint, self.f_lbl, 700 * u)
+            self._txt(s_, r.right - 10 * u - self.f_lbl.size(s_)[0], 668 * u, self.f_lbl, C_PANEL_ON)
         if status:
             self._txt(status, r.right - 10 * u - self.f_lbl.size(status)[0], r.y + 42 * u,
                       self.f_lbl, C_TEXT_DIM)
@@ -1423,8 +1718,12 @@ class Designer:
         #  It opens on `wing.BOUNDS` -- the packaging bands -- and a row
         #  narrowed here narrows the search and nothing else. `design_bounds`
         #  has always taken per-variable overrides; until now nothing handed
-        #  it any but the span's.
-        self.box = {k: [float(lo), float(hi)]
+        #  it any but the span's. The packaging bands were drawn round the
+        #  Corsa, so on a TALLER body (task 41: the Express, a 3.12 m bus) the
+        #  span and area rows open in proportion to its height -- the car's
+        #  own limit (`_span_band`) still caps what is searched.
+        k_box = self._box_scale()
+        self.box = {k: [float(lo), float(hi) * (k_box if k in ("span", "area") else 1.0)]
                     for k, (lo, hi) in BOUNDS[self.role].items()}
         self.lap = None
         self.result = None
@@ -1504,9 +1803,47 @@ class Designer:
         slot height the page is showing (`wing.span_fit`). One function, so
         the page cannot offer a panel the optimiser may not propose -- which
         it did: at h = 1.15 m the row went to 1.05 m and the optimiser
-        stopped at 0.40 m."""
+        stopped at 0.40 m. Task 41: the fit is the car being fitted's own
+        physical limit (a flank's lower tip at its ground clearance, a top
+        wing 1.2 x its width), three times that with Settings' Wing limits on
+        Unlimited -- so in Real mode no row and no search passes the limit."""
         lo = BOUNDS[self.role]["span"][0]
-        return lo, span_fit(self.role, self.g.build.slot(self.key).h)
+        return lo, span_fit(self.role, self.g.build.slot(self.key).h, self.g.car,
+                            self.g.unlimited)
+
+    def _pack_band(self, attr: str) -> tuple[float, float]:
+        """The PACKAGING band of one design variable on this car (task 41):
+        `wing.BOUNDS`, except the span (`_span_band`), the reference area,
+        whose top grows with that span (`bodies.area_ceiling`, so a
+        bus-sized span is not forced into a Corsa's area), and a top wing's
+        ride height, which reaches this car's top-slot ceiling. (The top's
+        ride row in the BOX is inert in the search -- the slot height is the
+        ride the lattice is flown at -- so only its ceiling moves.)"""
+        lo, hi = BOUNDS[self.role][attr]
+        if attr == "span":
+            return self._span_band()
+        if attr == "area":
+            h = self.g.build.slot(self.key).h
+            return lo, bodies.area_ceiling(self.role, self.g.car, h, self.g.unlimited)
+        if attr == "ride_h" and self.role == "top":
+            return lo, max(hi, top_h_band(self.g.car, self.g.build.slot(self.key).x)[1])
+        return lo, hi
+
+    def _box_scale(self) -> float:
+        """How much wider than `wing.BOUNDS` the span and area rows of the
+        design box OPEN on this car: its height over the Corsa's, never below
+        1 (the three stock cars open exactly where they always did)."""
+        return max(1.0, bodies.body(self.g.car).height / CAR_H)
+
+    def _ride_band(self) -> tuple[float, float]:
+        """The ride-height ROW's band: a flank's standoff is the wing's own
+        (`wing.BOUNDS`); a top wing's ride IS its slot height, so it is this
+        car's top-slot band at the slot's station (task 41: clear of THIS
+        deck, up to 0.41 m over THIS roof -- a Citaro's top wing rides ~3.3 m
+        up, past the Corsa's 1.85 m)."""
+        if self.role != "top":
+            return tuple(BOUNDS[self.role]["ride_h"])
+        return top_h_band(self.g.car, self.g.build.slot(self.key).x)
 
     def _set_ride(self, v):
         """The ride-height row. For a TOP wing the slot's height IS the gap to
@@ -1514,14 +1851,14 @@ class Designer:
         for a FLANK panel it is the deployed standoff to the car's own side,
         which is the wing's alone -- the slot's h is a packaging number there
         and the image plane never sees it."""
-        lo, hi = BOUNDS[self.role]["ride_h"]
+        lo, hi = self._ride_band()
         v = min(max(float(v), lo), hi)
         self.spec.ride_h = v
         self.spec.clamp()
         if self.role == "top":
             slot = self.g.build.slot(self.key)
             slot.h = v
-            self.g.build.clamp(self.lib)
+            self.g.build.clamp(self.lib, self.g.car)
             self.g.build.sync_mirror(self.key)
         self.dirty = True
         self.update()
@@ -1529,8 +1866,11 @@ class Designer:
     def _slot_set(self, attr):
         def f(v):
             slot = self.g.build.slot(self.key)
+            old = getattr(slot, attr)
             setattr(slot, attr, v)
-            self.g.build.clamp(self.lib)
+            self.g.build.clamp(self.lib, self.g.car)
+            if attr == "h":                      # Real mode's ground stop (task 41)
+                self.g._h_stop(self.key, old, self.spec.span)
             self.g.build.sync_mirror(self.key)
             self.update()
         return f
@@ -1538,6 +1878,8 @@ class Designer:
     def _build_params(self):
         b = BOUNDS[self.role]
         slot = self.g.build.slot(self.key)
+        body = bodies.body(self.g.car)             # the car being fitted (task 41)
+        h_band = bodies.flank_h_band(self.g.car)
         names = sorted(self.lib.airfoils)
         P = ui.Param
         rows = [
@@ -1600,15 +1942,19 @@ class Designer:
               help="tip plates in the lattice: cut induced drag, add wetted area"),
             P("ride", "ride height" if self.role == "top" else "standoff",
               lambda: self.spec.ride_h_flown, self._set_ride,
-              step=0.05, fine=0.01, lo=b["ride_h"][0], hi=b["ride_h"][1], unit="m",
+              step=0.05, fine=0.01, lo=lambda: self._ride_band()[0],
+              hi=lambda: self._ride_band()[1], unit="m",
               help="AeroBO's ride_height row: the gap to the wall the wing is imaged in, "
                    "which is what ground effect is a function of. The TRACK for a top wing; "
                    "the car's own flank for a flank panel, where it is the deployed standoff"),
             P("span", "span" if self.role == "top" else "span (vertical)", lambda: self.spec.span,
               self._set("span", *b["span"], cap=self._span_band),
-              step=0.02, fine=0.005, lo=b["span"][0], hi=b["span"][1], unit="m",
-              help="the lattice's first-order variable: at fixed area span IS aspect ratio; "
-                   "a flank panel is also capped by the sill/roof fit at this slot height"),
+              step=0.02, fine=0.005, lo=b["span"][0], hi=lambda: self._span_band()[1], unit="m",
+              help="the lattice's first-order variable: at fixed area span IS aspect ratio. "
+                   "Capped by this car's physical limit: a flank panel's lower tip at the "
+                   "car's ground clearance (so it follows the slot height), a top wing 1.2 x "
+                   "the car's width. Settings > Wing limits: Unlimited allows 3x, and a run "
+                   "past the limit is an Unlimited one, filed apart"),
             #  DERIVED, not a row. AeroBO sizes by area and span and lets the
             #  chord fall out; carrying a free chord alongside both would let a
             #  candidate be scored against an area it does not have.
@@ -1679,7 +2025,7 @@ class Designer:
                    "score has to be read in FORCES, not in CZ"),
             P("mt", "MOUNT (this slot)", None, kind="label"),
             P("x", "station x", lambda: self.g.build.slot(self.key).x, self._slot_set("x"),
-              step=0.05, fine=0.01, lo=CAR_X_REAR, hi=CAR_X_FRONT, unit="m", fmt="{:+.2f}",
+              step=0.05, fine=0.01, lo=body.x_rear, hi=body.x_front, unit="m", fmt="{:+.2f}",
               help="forward of the CG: (x + b)/b multiplies the flank gain; a top wing behind the rear axle unloads the front"),
         ]
         if self.role == "flank":
@@ -1688,8 +2034,10 @@ class Designer:
             #  the sill/roof span fit), which the image plane never sees.
             rows.append(
                 P("h", "height h", lambda: self.g.build.slot(self.key).h, self._slot_set("h"),
-                  step=0.05, fine=0.01, lo=H_W_MIN, hi=H_W_MAX, unit="m",
-                  help="the flank panel's roll arm, and what its span fit is measured from"))
+                  step=0.05, fine=0.01, lo=h_band[0], hi=h_band[1], unit="m",
+                  help="the flank panel's roll arm, and what its span limit is measured "
+                       "from: in Real mode it stops where the panel's lower tip reaches "
+                       "the car's ground clearance"))
         if self.role == "top":
             rows.append(P("mode", "deploys", lambda: self.g.build.slot(self.key).mode, self._slot_set("mode"),
                           kind="choice", choices=["active", "fixed"],
@@ -1749,10 +2097,10 @@ class Designer:
         invert it -- an inverted band reaches `optimize.maximise` as a box
         with no interior and comes back as 'every candidate was refused',
         which is a true sentence about the wrong thing."""
-        lo_p, hi_p = BOUNDS[self.role][attr]
         pad = 1e-4 if attr not in ("taper",) else 1e-3
 
         def f(v):
+            lo_p, hi_p = self._pack_band(attr)       # this car's (task 41)
             v = min(max(float(v), lo_p), hi_p)
             row = self.box[attr]
             if end == 0:
@@ -1812,7 +2160,7 @@ class Designer:
         P = ui.Param
         rows = [P("bx", "THE BANDS  (what the search may propose)", None, kind="label")]
         for attr, _owner, label, unit, *_b in design_table(self.role, self.area_free):
-            lo_p, hi_p = BOUNDS[self.role][attr]
+            lo_p, hi_p = self._pack_band(attr)      # this car's (task 41)
             step = 0.05 if unit == "m2" else (0.5 if unit == "deg" else 0.02)
             fmt = "{:+.1f}" if unit == "deg" else "{:.3f}"
             for end, tag in ((0, "min"), (1, "max")):
@@ -1822,13 +2170,14 @@ class Designer:
                 mark = " *" if attr == "span" else ""
                 rows.append(P(f"bx.{attr}.{tag}", f"{label}  {tag}{mark}",
                               self._get_box(attr, end), self._set_box(attr, end),
-                              step=step, fine=step / 5.0, lo=lo_p, hi=hi_p,
+                              step=step, fine=step / 5.0, lo=lo_p,
+                              hi=(lambda a=attr: self._pack_band(a)[1]),
                               unit=unit, fmt=fmt,
                               help=f"the {tag} of the band `optimize.maximise` searches "
                                    f"{label} over. The packaging band is "
                                    f"{lo_p:g} to {hi_p:g} {unit} and this row may only "
                                    f"narrow it"
-                                   + ("   (*) and the sill/roof fit at this slot "
+                                   + ("   (*) and this car's span limit at this slot "
                                       "height narrows it again -- the value shown is "
                                       "the one the search will actually get"
                                       if attr == "span" else "")))
@@ -1886,7 +2235,7 @@ class Designer:
         slot = self.slot
         slot.wing = spec.name
         self.g.build.sync_mirror(self.key)
-        self.g.build.clamp(self.lib)
+        self.g.build.clamp(self.lib, self.g.car)
         self.origin = spec.name
         self.dirty = False
         self.update()
@@ -1967,11 +2316,13 @@ class Designer:
                                                area=self.area_free), dtype=float),
                           b[:, 0], b[:, 1]))
         V = self.V_design          # the MISSION row, not a module constant
+        body = bodies.body(self.g.car)     # the chord stays alongside THIS car (task 41)
 
         def f(x):
             sp = self.spec.copy()
             inc = apply_design(sp, x, clamp=False, area=self.area_free)
-            if role == "flank" and (slot.x + 0.5 * sp.chord > CAR_X_FRONT or slot.x - 0.5 * sp.chord < CAR_X_REAR):
+            if role == "flank" and (slot.x + 0.5 * sp.chord > body.x_front
+                                    or slot.x - 0.5 * sp.chord < body.x_rear):
                 return -math.inf
             try:
                 sp.aero = _analyse(sp, polar, V=V, ride_h=ride, plate_polar=plate_pol)
@@ -2148,18 +2499,19 @@ class Designer:
         dp = self.dp
         if dp:
             V = dp["V"]
+            car_ = car_spec(self.g.car)             # the fitted car's (task 41)
             line = (f"AT {V:.1f} m/s, inc {slot.inc_deg:+.1f} deg:   CL {dp['CL']:.3f}   "
-                    f"{'F' if self.role == 'flank' else 'Fz'} {dp['F']:.0f} N ({100 * dp['F'] / (CAR.m * G):.1f}% mg)   "
+                    f"{'F' if self.role == 'flank' else 'Fz'} {dp['F']:.0f} N ({100 * dp['F'] / (car_.m * G):.1f}% mg)   "
                     f"D {dp['D']:.1f} N   L/D {dp['LD']:.2f}   margin {dp['stall_margin_deg']:.1f} deg")
             text.blit(screen, line, x, y, 14, C_WARN if dp.get("stalled") else C_TEXT)
             y += 20
             if self.role == "flank":
                 g = dp.get("gain_pct")
                 gtxt = "runaway" if g is None else f"{g:+.2f}%"
-                text.blit(screen, f"corner-speed gain at R = 100 m: {gtxt}   (x + b)/b x{(slot.x + CAR.b) / CAR.b:.2f}   "
+                text.blit(screen, f"corner-speed gain at R = 100 m: {gtxt}   (x + b)/b x{(slot.x + car_.b) / car_.b:.2f}   "
                           f"cap +{GAIN_CAP_PCT:.2f}%", x, y, 13, C_OK if (g or 0) > 0 else C_TEXT_DIM)
             else:
-                share = (slot.x + CAR.b) / CAR.L
+                share = (slot.x + car_.b) / car_.L
                 text.blit(screen, f"downforce split front {100 * share:.0f}% / rear {100 * (1 - share):.0f}%   "
                           f"ground effect at h {slot.h:.2f} m   deploys: {slot.mode}", x, y, 13,
                           C_OK if share > 0.3 else C_WARN)
@@ -4258,8 +4610,11 @@ class Garage:
         import cars as _cars
         #: task 41: the car being driven (a `cars.py` key) -- its body, slot
         #: bands, span limits and default build -- and the drive's Settings
-        #: (None in a bare garage: 'real' limits, no per-car defaults)
-        self.car = car if isinstance(car, str) and car in _cars.CARS else "corsa"
+        #: (None in a bare garage: 'real' limits, no per-car defaults). A key
+        #: `drive/bodies.py` draws but `cars.py` does not carry yet (the
+        #: Express, the bus) is fitted on its body alone.
+        self.car = (car if isinstance(car, str) and (car in _cars.CARS or car in bodies.STYLE_OF)
+                    else "corsa")
         self.settings = settings
         if not pygame.get_init():
             pygame.init()
@@ -4270,9 +4625,11 @@ class Garage:
         self.lib = lib or library()
         if isinstance(build, WingDesign):
             build = CarBuild.from_json(asdict(build))
-        self.build: CarBuild = (build or CarBuild.load() or CarBuild()).clamp(self.lib)
-        self.view = GarageView(self.screen)
+        self.build: CarBuild = (build or CarBuild.load()
+                                or CarBuild.for_car(self.car)).clamp(self.lib, self.car)
+        self.view = GarageView(self.screen, self.car)
         self.cam = Orbit(*self.screen.get_size())
+        self.cam.fit(self.view.geo)
         self.text = self.view.text
         self.plot = ui.Plot(self.text)
         self.pad = pad
@@ -4394,8 +4751,8 @@ class Garage:
         if action in (None, "resume"):
             return None
         if action == "defaults":
-            self.build.reset()
-            self.build.clamp(self.lib)
+            self.build.reset(self.car)
+            self.build.clamp(self.lib, self.car)
             self.designer = None
             self.hint = "car reset: no wings"
         elif action == "camera":
@@ -4604,24 +4961,73 @@ class Garage:
                          else f"'{name}' already exists - saved as '{new}'")
 
     # -- slot editing (car page) ---------------------------------------------
+    def _past_limit(self, key: str, spec: "WingSpec", h: float | None = None) -> float | None:
+        """This slot's physical span limit on this car when `spec` would be
+        past it (mounted at `h`, default the slot's own), else None
+        (`bodies.span_limit`, with `over_limits`' tolerance)."""
+        h = self.build.slot(key).h if h is None else h
+        lim = bodies.span_limit(SLOT_ROLE[key], self.car, h)
+        return lim if float(spec.span) > lim + bodies.LIMIT_TOL else None
+
     def _cycle_wing(self, d: int = 1) -> None:
+        """W: the next library wing of the slot's role. In Real mode (task 41)
+        a wing past this slot's span limit on this car is SKIPPED, and the
+        hint says why and where that changes."""
         slot = self.build.slot(self.sel)
         role = SLOT_ROLE[self.sel]
         names = [""] + sorted(n for n, w in self.lib.wings.items() if w.role == role)
         i = names.index(slot.wing) if slot.wing in names else 0
-        slot.wing = names[(i + d) % len(names)]
+        skipped, lim = [], None
+        for _ in range(len(names)):
+            i = (i + d) % len(names)
+            w = self.lib.wings.get(names[i]) if names[i] else None
+            past = None if (w is None or self.unlimited) else self._past_limit(self.sel, w)
+            if past is None:
+                break
+            skipped.append(names[i])
+            lim = past
+        slot.wing = names[i]
         self.build.sync_mirror(self.sel)
-        self.build.clamp(self.lib)
+        self.build.clamp(self.lib, self.car)
         if self.designer is not None and self.designer.key == self.sel:
             self.designer = None
         self.hint = f"{self.sel}: {slot.wing or 'none'}"
+        if skipped:
+            self.hint += (f"  ({len(skipped)} skipped: past this slot's {lim:.2f} m span limit;"
+                          f" Settings > Wing limits: Unlimited allows them)")
+
+    def _h_stop(self, key: str, h_old: float, span: float | None = None) -> bool:
+        """Real mode's stop on a FLANK slot moved down (task 41): the fitted
+        panel's lower tip may come to the car's ground clearance and no
+        further, h >= ground + span / 2 (`flank_h_floor`). A slot already
+        lower than that (a build loaded past its limit) does not move further
+        down. `span` is the panel's (default the slot's library wing). True
+        when it stopped the move; the hint says so."""
+        if self.unlimited or key == "top":
+            return False
+        slot = self.build.slot(key)
+        if span is None:
+            w = self.lib.wings.get(slot.wing) if slot.wing else None
+            if w is None:
+                return False
+            span = w.span
+        floor = flank_h_floor(self.car, span)
+        if slot.h >= floor - 1e-9 or slot.h >= h_old:
+            return False
+        slot.h = min(h_old, floor)
+        self.hint = (f"{key}: the panel's lower tip is at the ground clearance (h {floor:.2f} m "
+                     f"for {span:.2f} m) - Settings > Wing limits: Unlimited goes lower")
+        return True
 
     def _move(self, dx: float = 0.0, dh: float = 0.0, dinc: float = 0.0) -> None:
         slot = self.build.slot(self.sel)
+        h_old = slot.h
         slot.x += dx
         slot.h += dh
         slot.inc_deg += dinc
-        self.build.clamp(self.lib)
+        self.build.clamp(self.lib, self.car)
+        if dh < 0.0:
+            self._h_stop(self.sel, h_old)
         self.build.sync_mirror(self.sel)
         if self.designer is not None and self.designer.key == self.sel:
             self.designer.update()
@@ -5065,8 +5471,8 @@ class Garage:
         elif k == pygame.K_SPACE:
             self.deploy_cmd = 1.0 - self.deploy_cmd
         elif k == pygame.K_r:
-            self.build.reset()
-            self.build.clamp(self.lib)
+            self.build.reset(self.car)
+            self.build.clamp(self.lib, self.car)
             self.designer = None
             self.hint = "car reset: no wings"
         elif k == pygame.K_c:
@@ -5156,7 +5562,8 @@ class Garage:
         pad_name = self.pad.name if self.pad is not None else None
         if self.page == "car":
             dep = self.deploy * self.deploy * (3.0 - 2.0 * self.deploy)
-            self.view.draw(self.build, self.lib, self.cam, dep, self.sel, pad_name, self.hint, self.status)
+            self.view.draw(self.build, self.lib, self.cam, dep, self.sel, pad_name, self.hint,
+                           self.status, unlimited=self.unlimited)
             return
         self.screen.fill(C_BG)
         help_ = ""
@@ -5278,7 +5685,7 @@ class Garage:
                 action = self.frame(dt)
                 pygame.display.flip()
                 if action:
-                    self.build.clamp(self.lib)
+                    self.build.clamp(self.lib, self.car)
                     return action
         finally:
             pygame.key.set_repeat()
@@ -5492,6 +5899,121 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     key(pygame.K_w, pygame.KMOD_SHIFT)
     rep("SHIFT+W cycles back", g.build.left.wing == "flank-e423", g.build.left.wing)
     rep("ENTER -> drive", key(pygame.K_RETURN) == "drive", "")
+
+    # --- task 41: the car the garage is given -------------------------------
+    #  its slot bands: the MX-5's own body (longer, its deck lower) and a
+    #  synthetic 12 m bus (a CarSpec-like stand-in: bodies reads its axles
+    #  and its style from its name) keep slots a Corsa would clamp
+    from types import SimpleNamespace as _NS
+    tall = _NS(name="test bus", L=5.845, wdist_f=1.0 - 3.741 / 5.845, t_f=2.110, t_r=2.110)
+
+    def fitted(car, fx, fh, tx, th):
+        cb = CarBuild()
+        cb.left, cb.top = Slot("", fx, fh, 0.0), Slot("", tx, th, 6.0, "active")
+        cb.clamp(lib, car)
+        return (round(cb.left.x, 4), round(cb.left.h, 4), round(cb.top.x, 4), round(cb.top.h, 4))
+    f_c, f_m = fitted("corsa", 1.65, 0.90, -0.90, 1.10), fitted("mx5", 1.65, 0.90, -0.90, 1.10)
+    f_cb, f_b = fitted("corsa", 3.00, 1.60, -4.50, 3.30), fitted(tall, 3.00, 1.60, -4.50, 3.30)
+    rep("CarBuild.clamp fits the car it is given: the MX-5's longer nose and lower deck, a "
+        "bus's 1.60 m flank and 3.30 m top wing (a Corsa clamps all four)",
+        f_c == (round(CAR_X_FRONT - 0.5 * DEV_CHORD, 4), 0.9, -0.9, round(deck_z(-0.9) + 0.14, 4))
+        and f_m == (1.65, 0.9, -0.9, 1.1) and f_b == (3.0, 1.6, -4.5, 3.3)
+        and f_cb[1] == H_W_MAX and f_cb[3] == TOP_H_MAX,
+        f"corsa {f_c}  mx5 {f_m}  bus {f_b}")
+    rb = CarBuild.for_car(tall)
+    rep("a fresh car and R's reset put the slots at the car's own defaults",
+        (rb.left.x, rb.left.h, rb.top.x, rb.top.h) == (3.00, 1.60, -4.50, 3.30)
+        and CarBuild.for_car("mx5").to_json() == CarBuild().to_json(),
+        f"bus flank ({rb.left.x}, {rb.left.h}) top ({rb.top.x}, {rb.top.h})")
+    #  the preview is that car's body; the Corsa's mesh is the one above, bit for bit
+    bus_mesh = build_car_mesh(car="bus")
+    bb_ = bodies.body("bus")
+    zs_b = np.concatenate([q[0][:, 2] for q in bus_mesh])
+    xs_b = np.concatenate([q[0][:, 0] for q in bus_mesh])
+    in_b = np.array([0.5 * (bb_.x_front + bb_.x_rear), 0.0, 0.5 * (bb_.ground + bb_.height)])
+    bad_b = sum(1 for v_, _c, k_ in bus_mesh if k_ == "body"
+                and np.dot(np.cross(v_[1] - v_[0], v_[2] - v_[0]), v_.mean(axis=0) - in_b) < 0)
+    same_c = all(np.array_equal(a_[0], b_[0]) and a_[1:] == b_[1:]
+                 for a_, b_ in zip(build_car_mesh(), build_car_mesh(car="corsa")))
+    rep("the preview draws the fitted car: a 12 m bus lofted from its own shell, outward",
+        same_c and bad_b == 0 and abs(zs_b.max() - (bb_.height + 0.02)) < 1e-9
+        and abs(xs_b.max() - bb_.x_front) < 1e-9 and abs(xs_b.min() - bb_.x_rear) < 1e-9,
+        f"{len(bus_mesh)} polys, x {xs_b.min():.2f}..{xs_b.max():.2f}, z to {zs_b.max():.2f}")
+    real, unl = _NS(wing_limits="real"), _NS(wing_limits="unlimited")
+    wide = lib.wings["flank-e423"].copy(name="tall-fin", builtin=False)
+    wide.span = 1.60                        # past a Corsa flank's 1.50 m limit at h 0.90
+    lib.save_wing(wide)
+    gb = Garage((1280, 800), CarBuild.for_car("bus"), headless=True, lib=lib, car="bus",
+                settings=real)
+    gb.frame(1.0 / 60.0)
+    rep("the orbit camera stands back for the bus (the Corsa's view unchanged)",
+        abs(gb.cam.dist - 7.6 * gb.view.geo.scale) < 1e-9 and gb.view.geo.scale > 3.0
+        and g.cam.scale == 1.0 and gb.car == "bus", f"scale {gb.view.geo.scale:.2f}, "
+        f"distance {gb.cam.dist:.1f} m")
+    #  REAL: W skips a wing past this slot's limit and says why; DOWN stops
+    #  where the panel's lower tip reaches the ground clearance
+    gr = Garage((1280, 800), CarBuild.for_car("corsa"), headless=True, lib=lib, settings=real)
+    seen = set()
+    for _ in range(12):
+        gr._cycle_wing(1)
+        seen.add(gr.build.left.wing)
+    gr._cycle_wing(1)
+    while gr.build.left.wing != "flank-e423":
+        gr._cycle_wing(1)
+    hint_w = ""
+    for _ in range(8):
+        gr._cycle_wing(1)
+        hint_w = gr.hint if "skipped" in gr.hint else hint_w
+    rep("Real: W never fits a wing past this slot's span limit, and says why and where",
+        "tall-fin" not in seen and "flank-e423" in seen and "1.50 m span limit" in hint_w
+        and "Unlimited" in hint_w, hint_w)
+    while gr.build.left.wing != "flank-e423":
+        gr._cycle_wing(1)
+    gr.build.left.h = 0.60
+    gr.build.sync_mirror("left")
+    gr.sel = "left"
+    h_seen = []
+    for _ in range(4):
+        gr._handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN, mod=0))
+        h_seen.append(round(gr.build.left.h, 4))
+    floor = 0.15 + 0.5 * lib.wings["flank-e423"].span
+    rep("Real: DOWN stops with the panel's lower tip at the ground clearance",
+        h_seen == [round(floor, 4)] * 4 and "ground clearance" in gr.hint
+        and bodies.over_limits(gr.build, lib, "corsa") == [],
+        f"h 0.60 -> {h_seen} (floor {floor:.2f} m = 0.15 + {lib.wings['flank-e423'].span:.2f}/2)")
+    gu = Garage((1280, 800), gr.build.copy(), headless=True, lib=lib, settings=unl)
+    gu.sel = "left"
+    for _ in range(4):
+        gu._handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN, mod=0))
+    names_u = set()
+    for _ in range(12):
+        gu._cycle_wing(1)
+        names_u.add(gu.build.left.wing)
+    rep("Unlimited: no stop (the band's floor only), and W reaches every wing",
+        abs(gu.build.left.h - H_W_MIN) < 1e-9 and "tall-fin" in names_u,
+        f"h {gu.build.left.h:.2f}, wings {sorted(n for n in names_u if n)}")
+    #  a build already past the limit, loaded in Real mode, is KEPT, and the
+    #  page says its runs count as Unlimited
+    bp = CarBuild.for_car("corsa")
+    bp.left.wing = "tall-fin"
+    bp.sync_mirror("left")
+    gp = Garage((1280, 800), bp, headless=True, lib=lib, settings=real)
+    gp.frame(1.0 / 60.0)
+    rows_p = limit_rows(gp.build, lib, "corsa")
+    h0 = gp.build.left.h
+    gp.sel = "left"
+    gp._move(dh=-STEP_H)
+    rep("Real: a build already past its limit is kept, listed PAST THE LIMIT, not moved lower",
+        gp.build.left.wing == "tall-fin" and [r_[0] for r_ in rows_p if r_[3]] == ["left", "right"]
+        and abs(rows_p[0][2] - 1.50) < 1e-9 and gp.build.left.h == h0,
+        f"{rows_p[0]}")
+    #  a Param's band may be a callable, read at every step (the span row's)
+    pc = ui.Param("t", "t", lambda: 1.0, lambda v: None, lo=0.0, hi=lambda: 1.25, step=0.5)
+    got_pc = []
+    pc.set = got_pc.append
+    pc.adjust(+1)
+    rep("a row's band may move: a callable hi is read at the step", got_pc == [1.25]
+        and pc.band() == (0.0, 1.25), str(got_pc))
 
     # --- the designer
     key(pygame.K_d)
@@ -5905,6 +6427,20 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
         f"typed {typed:.2f} m, searched "
         f"{b_sp[design_vars(dsn.role).index('span')][1]:.3f} m")
     dsn.box["span"][1] = BOUNDS[dsn.role]["span"][1]
+    #  task 41: the span ROW's own band is the car's limit at this slot height
+    #  -- Real: the lower tip at the ground clearance; Unlimited: 3x -- so
+    #  RIGHT cannot step it past what the setter would then have to undo
+    p_span = {p_.key: p_ for p_ in dsn.params.params}["span"]
+    h_s = dsn.slot.h
+    real_hi = p_span.band()[1]
+    g.settings = _NS(wing_limits="unlimited")
+    unl_hi = p_span.band()[1]
+    g.settings = None
+    rep("the span row's ceiling is this car's limit at this height, 3x in Unlimited",
+        abs(real_hi - 2.0 * (h_s - 0.15)) < 1e-12 and abs(unl_hi - 3.0 * real_hi) < 1e-12
+        and abs(dsn._span_band()[1] - real_hi) < 1e-12
+        and abs(dsn._pack_band("area")[1] - bodies.area_ceiling("flank", "corsa", h_s)) < 1e-12,
+        f"h {h_s:.2f}: Real {real_hi:.3f} m, Unlimited {unl_hi:.3f} m")
 
     #  FREEING THE REFERENCE AREA adds a row, one ahead of the span, exactly
     #  where AeroBO's `CarWingProblem` puts it. The whole vector has to move

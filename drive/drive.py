@@ -690,6 +690,19 @@ class Settings:
         elif key == "paint":
             c = car or self.car
             self.paint = {**self.paint, c: step(pnt.PAINT_ORDER, self.paint_of(c))}
+        elif key == "wing_limits":
+            self.wing_limits = step(WING_LIMIT_MODES, self.wing_limits)
+
+
+#: task 41: the Wing limits row (drive/bodies.py). It gates the garage's
+#: EDITORS only -- Real holds every span to its car's physical limit (a
+#: flank's lower tip at the car's ground clearance, a top wing 1.2 x the
+#: car's width), Unlimited lets it go UNLIMITED_FACTOR (3x) past it for fun.
+#: Whether a RUN is Unlimited is computed from the build, the library and the
+#: car at the session's start (`_session_over_limits`), never from this row.
+WING_LIMIT_MODES = ("real", "unlimited")
+WING_LIMIT_LABELS = {"real": "Real (each car's own limit)",
+                     "unlimited": "Unlimited (to 3x, filed apart)"}
 
 
 # The settings whose change is a new session (a new map, or a new CarSpec:
@@ -715,6 +728,8 @@ SETTINGS_HELP = [
         ("", "both rear-wheel drive"),
         ("", "each car has its own records and medals"),
         ("Paint", "per car, looks only: no class, ranking or medal"),
+        ("Wing limits", "Real: every span within the car's own limit;"),
+        ("", "Unlimited: 3x, for fun; runs filed apart"),
     ]),
     ("BALLAST", [
         ("Mass", "0-200 kg, and it moves everything it really moves:"),
@@ -784,6 +799,18 @@ SETTINGS_ROW_HELP = {
         ("", "no class, ranking or medal"),
         ("New car", "browse it on the Car row, paint it here,"),
         ("", "then ENTER on the Car row: it arrives painted")])],
+    "set:wing_limits": [("WING LIMITS", [
+        ("Real", "every wing within its car's physical span"),
+        ("", "limit: a flank panel's lower tip at the"),
+        ("", "car's ground clearance, a top wing 1.2 x"),
+        ("", "the car's width. The garage stops there"),
+        ("Unlimited", "the garage lets a span go to 3x that --"),
+        ("", "impossible wings, just for fun"),
+        ("Records", "a run with ANY wing past its limit is"),
+        ("", "UNLIMITED, whichever this row says: its"),
+        ("", "laps, medals and challenge stars are kept"),
+        ("", "in their own spot, never official and"),
+        ("", "never on a public leaderboard")])],
     "set:ballast": [("BALLAST", [
         ("Mass", "0-200 kg; it moves what it really moves:"),
         ("", "axle loads, CG height and station, Izz,"),
@@ -1561,6 +1588,11 @@ class Sim:
         # lap records (drive/records.py, task 19): the interactive session
         # attaches a LapRecorder; a scripted or headless Sim never has one
         self.recorder = None
+        #  task 41: this session's build has wings past the car's physical
+        #  span limit (`bodies.over_limits`, computed at the session's start):
+        #  an UNLIMITED session -- its recorder files into the Unlimited book
+        self.over_limits: list = []
+        self.unlimited = False
         self._rec_msg = ""
         self._rec_msg_until = -1
         self._rec_tag_until = -1           # the lap's place / medal tags: THAT lap's note only
@@ -2070,7 +2102,7 @@ class Sim:
         if key == "gearbox" and tut is not None and tut.gearbox_prev is not None:
             tut.set_gearbox_prev(None)         # the player chose a box: it stays theirs
         if self.recorder is not None and key not in ("sound", "camera", "shake", "graphics",
-                                                     "paint"):
+                                                     "paint", "wing_limits"):
             self.recorder.discard(f"{key} changed")   # the lap cannot be replayed
             self.recorder.retarget(s, self._pending)   # the engine is in the class,
             #                                             the aids go with the lap
@@ -2288,8 +2320,9 @@ class Sim:
             wing = "garage build: " + ", ".join(dict.fromkeys(names))
         run = self._pending.get("car", self.settings.car)   # not a car only browsed
         title = self.track.title or trk.TRACK_TITLES.get(self.track.name, self.track.name)
+        unl = "   UNLIMITED (not official)" if self.unlimited else ""    # task 41
         return (f"{title}   {cars.car_name(run)}   lap {self.lap.lap}   "
-                f"{wing}   {GEARBOX_HUD.get(self.gearbox, '')}")
+                f"{wing}   {GEARBOX_HUD.get(self.gearbox, '')}{unl}")
 
     def _menu_show_main(self, idx: int = 0) -> None:
         """The pause page: resume / settings / resets / garage / quit."""
@@ -2342,6 +2375,7 @@ class Sim:
                 (f"{'Car':<11s}{cars.car_name(s.car)}  "
                  f"{s.car_base.m:.0f} kg{mark['car']}", "set:car"),
                 (f"{'Paint':<11s}{pnt.PAINT_LABELS[s.paint_of()]}{whose}", "set:paint"),
+                (f"{'Wing limits':<11s} {WING_LIMIT_LABELS[s.wing_limits]}", "set:wing_limits"),
                 (f"{'Ballast':<11s}{s.ballast_text()}{mark['ballast']}", "set:ballast"),
                 (f"{'Ballast at':<11s}{cars.BALLAST_LABELS[s.ballast_at]}"
                  f"{mark['ballast_at']}", "set:ballast_at"),
@@ -3748,6 +3782,7 @@ class Sim:
         )
         if self.recorder is not None:      # the class PB, and where the last lap landed
             d["pb_lap"] = self.recorder.book.pb_time(self.recorder.key)
+            d["unlimited"] = bool(getattr(self.recorder.book, "unlimited", False))
             last = self.recorder.last
             if last and last.get("pos") and self.n < self._rec_tag_until:
                 d["lap_rank"] = f"P{last['pos']}"
@@ -6067,6 +6102,118 @@ def _v37_results_page(tmp, verbose=True):
     return ok, dict(kept=kept)
 
 
+def _v42_wing_limits(tmp, verbose=True):
+    """Task 41's Wing limits and the Unlimited flag, by events with no window
+    (V37's style). The Settings row sits right after Paint, cycles Real <->
+    Unlimited, is saved and read back, has its own help, and never costs the
+    lap being recorded (it changes no physics and no class: it gates the
+    garage's editors only). The session's flag is COMPUTED from the build,
+    the library and the car (`_session_over_limits`): a build past the car's
+    span limit gets a recorder on the Unlimited book whatever the row says,
+    and the HUD's PB tag, the lap note, the results card and the pause page
+    say UNLIMITED; an official build's session is untouched, and a scripted
+    run still records nothing."""
+    from types import SimpleNamespace
+    from . import records as recm
+    from . import garage as grg
+    from .aero.library import Library
+    from .records import session_recorder
+    sim = _build("arena", driver=lambda t, v, tr: Controls(brake=1.0))
+    sim.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"),
+                                   card_size=lambda c: (360, 100),
+                                   draw_card=lambda *a, **k: None)
+    path = os.path.join(tmp, "v42_settings.json")
+    sim.settings.path = path
+    ev = sim.handle_event
+
+    def goto(action):
+        i = [a for _, a in sim.menu.items].index(action)
+        while sim.menu.idx != i:
+            ev("nav_down")
+        return i
+
+    disc = []
+    sim.recorder = SimpleNamespace(discard=disc.append, retarget=lambda *a: disc.append(a),
+                                   book=SimpleNamespace(unlimited=False, pb_time=lambda k: 60.0),
+                                   key="arena|corsa|stock|patch", last=None)
+    ev("menu")
+    goto("settings")
+    ev("select")
+    acts = [a for _, a in sim.menu.items]
+    i_w = goto("set:wing_limits")
+    row0 = sim.menu.items[i_w][0]
+    help_ok = any(t == "WING LIMITS" for t, _r in sim._settings_help(i_w))
+    ev("select")                                    # Real -> Unlimited
+    on = (sim.settings.wing_limits == "unlimited" and Settings.load(path).wing_limits
+          == "unlimited" and "Unlimited" in sim.menu.items[i_w][0])
+    ev("nav_left")                                  # LEFT: back to Real, live and saved
+    back = sim.settings.wing_limits == "real" and Settings.load(path).wing_limits == "real"
+    row_ok = (acts.index("set:wing_limits") == acts.index("set:paint") + 1
+              and row0.startswith("Wing limits") and "Real" in row0 and help_ok and on
+              and back and not disc and not sim.quit and sim._menu_page == "settings")
+    ev("menu")
+    ev("menu")
+    # the flag, computed: a 2.6 m top wing is past a Corsa's 1.2 x 1.646 m
+    lib = Library(os.path.join(tmp, "v42_library"), use_xfoil=False)
+    huge = lib.wings["rear-s1223"].copy(name="huge-top", builtin=False)
+    huge.span = 2.6
+    lib.save_wing(huge)
+    b = grg.CarBuild.for_car("corsa")
+    b.left.wing = "flank-e423"
+    b.sync_mirror("left")
+    opts = SimpleNamespace(garage_lib=lib, build_name="huge", headless=False, script=None,
+                           ml_drive=None, radius=50.0, cw=False, dt=DT_PHYS)
+    _apply_design(opts, b, lib)
+    over_o = _session_over_limits(opts, sim.settings)
+    b.top.wing = "huge-top"
+    _apply_design(opts, b, lib)
+    over_u = _session_over_limits(opts, sim.settings)
+    none_lib = _session_over_limits(SimpleNamespace(build_json=opts.build_json), sim.settings)
+    flag_ok = (over_o == [] and [o["slot"] for o in over_u] == ["top"] and none_lib == []
+               and sim.settings.wing_limits == "real")      # the row does not decide it
+    root = os.path.join(tmp, "v42_records")
+    st = Settings(path="", track="arena", car="corsa", engine="stock", wet="patch")
+    rec_u, _w = session_recorder(opts, st, MU_WET_SCALE, root=root, over=over_u)
+    rec_o, _w = session_recorder(opts, st, MU_WET_SCALE, root=root, over=over_o)
+    rec_s, _w = session_recorder(SimpleNamespace(**dict(vars(opts), script="lap")),
+                                 st, MU_WET_SCALE, root=root, over=over_u)
+    book_ok = (rec_u.book.unlimited and rec_u.book.root == os.path.join(root, recm.UNLIMITED_DIR)
+               and not rec_o.book.unlimited and rec_o.book.root == root and rec_s is None)
+    # threaded to what the player reads
+    sim.recorder, sim.over_limits, sim.unlimited = rec_u, over_u, True
+    rec_u.key = sim.recorder.key
+    sim._rec_lap(dict(time=61.0, valid=True, pb_before=float("nan"), key=rec_u.key, pos=1,
+                      sectors=[], unlimited=True))
+    hud = sim.hud_data()
+    ev("menu")
+    tags_ok = (sim._rec_msg.startswith("UNLIMITED PB") and sim._results.get("unlimited")
+               and getattr(hud, "unlimited", False) is True
+               and "UNLIMITED" in sim.menu.subtitle)
+    ev("menu")
+    #  its medal is the Unlimited book's, never the official one's
+    rec_u.flush()
+    m_u = sim._results.get("medal") or None
+    medal_ok = (recm.unlimited_book(root).load(rec_u.key)["best_medal"] == m_u
+                and recm.RecordBook(root).load(rec_u.key)["best_medal"] is None)
+    sim.recorder, sim.over_limits, sim.unlimited = rec_o, [], False
+    sim._rec_lap(dict(time=62.0, valid=True, pb_before=float("nan"), key=rec_o.key, pos=1,
+                      sectors=[]))
+    hud_o = sim.hud_data()
+    tags_ok = tags_ok and (sim._rec_msg.startswith("NEW PB") and not sim._results.get("unlimited")
+                           and getattr(hud_o, "unlimited", True) is False) and medal_ok
+    rec_u.close()
+    rec_o.close()
+    ok = row_ok and flag_ok and book_ok and tags_ok
+    if verbose:
+        print(f"  V42 wing limits : the row after Paint, Real <-> Unlimited, saved, its help, "
+              f"no lap lost {row_ok}; the flag from the build ({[o['slot'] for o in over_u]} "
+              f"past, [] official, not the row) {flag_ok}; the Unlimited book, a script "
+              f"records nothing {book_ok}; note / card / HUD PB / pause page say UNLIMITED, "
+              f"its medal ({m_u}) the Unlimited book's, an official session untouched "
+              f"{tags_ok}  -> {'ok' if ok else 'FAIL'}")
+    return ok, dict(over=over_u)
+
+
 def _v36_grid(tmp, verbose=True):
     """A FULL race grid (RACE_GRID_MAX bots, plan D3 slots). The user's car
     is bit-identical with and without it (V30's rule, with five cars); every
@@ -6980,6 +7127,7 @@ def self_check(verbose=True) -> bool:
                      ("V35", lambda: _v35_challenges(tmp, verbose)),
                      ("V36", lambda: _v36_grid(tmp, verbose)),
                      ("V37", lambda: _v37_results_page(tmp, verbose)),
+                     ("V42", lambda: _v42_wing_limits(tmp, verbose)),
                      ("V38", lambda: _v38_airbrake(tmp, verbose)),
                      ("V39", lambda: _v39_controls(tmp, verbose)),
                      ("V40", lambda: _v40_swarm_numbers(tmp, verbose)),
@@ -8123,6 +8271,45 @@ def _resolve_design(opts):
     return grg, design, lib
 
 
+def _prerace_books(sim, lib, car) -> dict:
+    """The pre-race page's task-41 arguments: this session's over-limit
+    reasons, both books of the class (the session's own and the other --
+    official and Unlimited share a root, `records.unlimited_book`), and the
+    judge that files a PICK row's best under its own build's book."""
+    from . import records as recm
+    rb = sim.recorder.book
+    root = rb.last_root or rb.root
+    books = (dict(official=recm.RecordBook(root), unlimited=rb) if rb.unlimited
+             else dict(official=rb, unlimited=recm.unlimited_book(root)))
+
+    def judge(js):
+        if not isinstance(js, dict) or lib is None:
+            return False
+        from .bodies import over_limits
+        return bool(over_limits(js, lib, car))
+    return dict(over=list(sim.over_limits), books=books, judge=judge)
+
+
+def _session_over_limits(opts, settings) -> list:
+    """The wings of this session's build past its car's PHYSICAL span limit
+    (task 41, `bodies.over_limits`: [{slot, wing, span, limit}], [] = an
+    official session). The build is `opts.build_json` as `_apply_design`
+    left it, judged with the garage's library on `settings.car` -- the car
+    the session drives, whatever car the build was designed for. No library
+    (the garage could not load) or no build JSON (the published one-panel
+    car of an old caller): nothing to judge, []."""
+    js = getattr(opts, "build_json", None)
+    lib = getattr(opts, "garage_lib", None)
+    if not isinstance(js, dict) or lib is None:
+        return []
+    try:
+        from .bodies import over_limits
+        return over_limits(js, lib, settings.car)
+    except Exception as exc:               # noqa: BLE001 -- never stops a drive
+        print(f"wing limits: not judged ({type(exc).__name__}: {exc})")
+        return []
+
+
 def _save_design(design, opts) -> None:
     """The garage's working car to runs/garage_design.json. A failure never
     stops the drive: it is printed, and the next session shows it."""
@@ -8391,11 +8578,21 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     sim.track_radius, sim.track_cw = float(opts.radius), bool(opts.cw)
     #  lap records (drive/records.py): the ONE place runs/records/ is
     #  attached -- scripted and headless runs never read player files
+    #  task 41: is this an UNLIMITED session? Computed HERE, at every session's
+    #  start, from the build, the library and the car -- any of the three may
+    #  have changed since the last one -- never stored with the build
+    sim.over_limits = _session_over_limits(opts, settings)
+    sim.unlimited = bool(sim.over_limits)
     try:
         from .records import session_recorder
-        sim.recorder, why = session_recorder(opts, settings, MU_WET_SCALE, on_lap=sim._rec_lap)
+        sim.recorder, why = session_recorder(opts, settings, MU_WET_SCALE, on_lap=sim._rec_lap,
+                                             over=sim.over_limits)
         if why:
             print(f"records: {why}")
+        elif sim.unlimited:
+            from .bodies import limits_text
+            print(f"records: UNLIMITED session, filed apart ({limits_text(sim.over_limits)})")
+            sim._rec_note("UNLIMITED run: its laps are kept apart", 6.0)
     except Exception as exc:               # noqa: BLE001 -- a broken record file
         print(f"records unavailable ({type(exc).__name__}: {exc})")   # never stops a drive
         sim.recorder = None
@@ -8416,7 +8613,8 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
                                               car=cars.car_name(settings.car),
                                               engine=engine_label(settings.engine, car),
                                               surface=SURFACE_LABELS[settings.wet]),
-                                  can_edit=bool(garage))
+                                  can_edit=bool(garage),
+                                  **_prerace_books(sim, lib, settings.car))
             pr_key, pr_wanted = sim.recorder.key, wanted(opts, settings)
         except Exception as exc:           # noqa: BLE001
             print(f"pre-race screen unavailable ({type(exc).__name__}: {exc})")

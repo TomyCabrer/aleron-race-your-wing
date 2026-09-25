@@ -49,6 +49,18 @@ and again at the session's start); a refusal says what is wrong and what to
 do about it, the garage's gating style. Progress (best value, stars) is the
 `challenges` section of `runs/progress.json` (drive/progress.py). Only a
 player session opens it.
+
+UNLIMITED RUNS (task 41). A build with any wing past its car's PHYSICAL span
+limit (drive/bodies.py: a flank's lower tip at the car's ground clearance, a
+top wing 1.2 x the car's width) is an Unlimited build: `build_stats` says so
+(`unlimited`, and the reasons in `over_limits`). It is still judged by the
+challenge's own rules -- its refusals stand, an impossible wing may well be
+over `max_wing_area` -- and earns stars by the same thresholds, but its best
+and its stars go to a SEPARATE progress section, `challenges_unlimited` (not
+nested in `challenges`, whose entries `_collect` replaces whole), and are
+shown in their own Unlimited spot beside the official one: on the box, the
+list and the detail page. `total_stars` and `menu_row` count official stars
+only.
 """
 from __future__ import annotations
 
@@ -61,6 +73,8 @@ from corsa_c import G
 KIND = "carsim-challenge-1"
 DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "challenges")
 SECTION = "challenges"
+#: an Unlimited build's best and stars (task 41): kept apart, never official
+SECTION_UNLIMITED = "challenges_unlimited"
 #: 1 / 2 / 3 stars: the medal multipliers (plan D4; drive.medals)
 STAR_X = (1.12, 1.06, 1.02)
 METRICS = {
@@ -232,10 +246,14 @@ def build_stats(build_json, lib, car, ballast_kg: float) -> dict:
     slot (m^2, `WingSpec.S`), the fitted wings' mass (kg, the garage's own
     `mass_points`), the ballast (kg), the slots with a wing, and the drag
     area with everything deployed (m^2: the car's CdA + the top wing's CD*S +
-    EACH fitted flank panel's own D/q: G can put both out)."""
+    EACH fitted flank panel's own D/q: G can put both out). And (task 41)
+    whether it is an UNLIMITED build on `car` -- any wing past the car's
+    physical span limit (`unlimited`, with `bodies.over_limits`' reasons in
+    `over_limits`): judged on the build as fitted to `car`."""
     from .garage import CarBuild, SLOTS
     from .aero.wing import design_point, V_REF
-    b = CarBuild.from_json(build_json or {}).clamp(lib)
+    from .bodies import over_limits
+    b = CarBuild.from_json(build_json or {}).clamp(lib, car)
     area = {}
     for k in SLOTS:
         w = lib.wings.get(b.slot(k).wing)
@@ -254,7 +272,9 @@ def build_stats(build_json, lib, car, ballast_kg: float) -> dict:
         if dp and dp.get("q", 0.0) > 0.0 and dp.get("D", 0.0) > 0.0:
             flank_cda += dp["D"] / dp["q"]
     cda = float(car.CdA) + float(ma.cd_a) + float(flank_cda)
-    return dict(area=area, mass=mass, ballast=float(ballast_kg or 0.0), slots=slots, cda=cda)
+    over = over_limits(b, lib, car)
+    return dict(area=area, mass=mass, ballast=float(ballast_kg or 0.0), slots=slots, cda=cda,
+                unlimited=bool(over), over_limits=over)
 
 
 def refusals(bounds: dict, stats: dict) -> list:
@@ -455,7 +475,13 @@ class ChallengeRun:
         self.stats = stats
         self.meter = Meter(ch["goal"], track)
         self.progress = progress
-        self.best, self.stars = _best(progress, ch["id"])
+        #  task 41: an Unlimited build's run keeps its best and stars in its
+        #  own section; `best` / `stars` are the section this run counts in,
+        #  `official` the official ones (shown beside them on the box)
+        self.unlimited = bool(stats.get("unlimited")) if isinstance(stats, dict) else False
+        self.section = SECTION_UNLIMITED if self.unlimited else SECTION
+        self.best, self.stars = _best(progress, ch["id"], self.section)
+        self.official = _best(progress, ch["id"])
         self.refused = ""                  # the build breaks a rule: listed, endable, never counted
         from .records import split_key
         from .track import MU_WET_SCALE
@@ -544,8 +570,10 @@ class ChallengeRun:
         metric = self.ch["goal"]["metric"]
         new_best = better(metric, v, self.best)
         self.last, self._counted = (v, n), True
-        self.note = (f"{self.ch['title']}: {fmt_value(metric, v)}  [{stars_text(n)}]"
-                     + ("  NEW BEST" if new_best else ""))
+        unl = "  UNLIMITED" if self.unlimited else ""
+        self.note = (f"{self.ch['title']}: {fmt_value(metric, v)}  [{stars_text(n)}]{unl}"
+                     + (("  NEW UNLIMITED BEST" if self.unlimited else "  NEW BEST")
+                        if new_best else ""))
         if n == 2:                         # fast enough for 3: say what the build lacks
             t3 = thresholds(self.ch)[2]
             if (v <= t3) if METRICS[metric]["lower"] else (v >= t3):
@@ -557,9 +585,9 @@ class ChallengeRun:
                 self.best = v
             self.stars = max(self.stars, n)
             if self.progress is not None:
-                sec = self.progress.section(SECTION)
+                sec = self.progress.section(self.section)
                 sec[self.ch["id"]] = dict(best=self.best, stars=self.stars)
-                self.progress.save(SECTION)
+                self.progress.save(self.section)
 
     def _status(self, sim) -> str:
         """The box's live line, in the HUD's number font. A stop keeps its
@@ -572,7 +600,8 @@ class ChallengeRun:
         if self.last is not None:
             v, n = self.last
             last = (f"LAST STOP {fmt_value('stop_distance', v)} "
-                    + (f"[{stars_text(n)}]" if self._counted else "(not counted)") + "   ")
+                    + (f"[{stars_text(n)}]" + (" UNLIMITED" if self.unlimited else "")
+                       if self._counted else "(not counted)") + "   ")
         why = self.class_why(sim) or (
             "slow motion" if getattr(sim, "time_scale", 1.0) != 1.0 else "")
         if why:                            # the attempt is void every step (step())
@@ -594,11 +623,27 @@ class ChallengeRun:
                 f"3 {fmt_value(metric, t3)} with {eff}.")
         best = (f"   best {fmt_value(metric, self.best)} [{stars_text(self.stars)}]"
                 if self.best is not None else "")
+        if self.unlimited:
+            #  task 41: this run counts in the Unlimited spot, said plainly;
+            #  the official best beside it is the one it does NOT touch
+            ob, on = self.official
+            best = ("   UNLIMITED" + (f" best {fmt_value(metric, self.best)} "
+                                      f"[{stars_text(self.stars)}]" if self.best is not None else "")
+                    + (f"   official {fmt_value(metric, ob)} [{stars_text(on)}]"
+                       if ob is not None else "   official: none"))
+            text += ("  UNLIMITED build (" + _over_text(self.stats.get("over_limits")) +
+                     "): results kept in their own spot, never official.")
         return dict(head=f"CHALLENGE  {ch['title']}{best}", text=text,
                     status=self._status(sim),
                     warn=(f"did not count: {self.meter.why}" if self.meter.why else ""),
                     hint="", flash=self.note,
                     foot="ESC > Challenges: end it, or another one")
+
+
+def _over_text(over) -> str:
+    """What is past its limit, short: 'top 2.60 > 1.98 m'."""
+    return "; ".join(f"{o.get('slot', '')} {float(o.get('span', 0.0)):.2f} > "
+                     f"{float(o.get('limit', 0.0)):.2f} m" for o in (over or [])) or "past the limit"
 
 
 def _bound_text(k: str, v) -> str:
@@ -629,15 +674,16 @@ LIST_HELP = [("CHALLENGES", [
 ])]
 
 
-def _best(progress, cid):
+def _best(progress, cid, section: str = SECTION):
     """(best, stars) saved for a challenge; a malformed entry (a hand edit, a
-    future format) is ignored with a note, never a crash."""
-    e = progress.section(SECTION).get(cid) if progress is not None else None
+    future format) is ignored with a note, never a crash. `section` is
+    SECTION (official) or SECTION_UNLIMITED (task 41)."""
+    e = progress.section(section).get(cid) if progress is not None else None
     if e is None:
         return None, 0
     n = e.get("stars", 0) if isinstance(e, dict) else None
     if not isinstance(n, int) or isinstance(n, bool) or not 0 <= n <= 3:
-        note = f"progress.json: challenges.{cid} ignored (malformed)"
+        note = f"progress.json: {section}.{cid} ignored (malformed)"
         if note not in progress.notes:
             progress.notes.append(note)
             print(note)
@@ -647,6 +693,8 @@ def _best(progress, cid):
 
 
 def total_stars(progress, allc=None) -> tuple:
+    """(stars got, stars there are): OFFICIAL stars only -- an Unlimited
+    run's stars are never counted here (task 41)."""
     allc = load_all() if allc is None else allc
     return sum(_best(progress, c)[1] for c in allc), 3 * len(allc)
 
@@ -663,9 +711,13 @@ def list_items(allc, progress, run=None) -> list:
     rows = []
     for cid, ch in allc.items():
         b, n = _best(progress, cid)
+        ub, un = _best(progress, cid, SECTION_UNLIMITED)
         mark = "  <- now" if (run is not None and run.ch["id"] == cid) else ""
+        #  an Unlimited result (task 41) in its own spot after the official one
+        unl = f"  unlimited [{stars_text(un)}]" if ub is not None else ""
         rows.append((f"{ch['title'][:24]:<24s} [{stars_text(n)}] "
-                     f"{fmt_value(ch['goal']['metric'], b) if b is not None else '':>11s}{mark}",
+                     f"{fmt_value(ch['goal']['metric'], b) if b is not None else '':>11s}"
+                     f"{unl}{mark}",
                      f"ch:{cid}"))
     if run is not None:
         rows.append(("End the challenge (your own map / car / engine / surface back)", "ch_end"))
@@ -701,9 +753,17 @@ def detail(ch, stats, why, progress) -> tuple:
         rules += [("wing mass", f"{stats['mass']:.1f} kg"),
                   ("drag area", f"{stats['cda']:.3f} m^2"),
                   ("wings in", ", ".join(stats["slots"]) or "no slot")]
+        if stats.get("unlimited"):         # task 41: said before the start, plainly
+            rules += [("UNLIMITED", _over_text(stats.get("over_limits"))),
+                      ("", "past the car's span limit: this build's results go to"),
+                      ("", "the Unlimited spot, never the official one")]
     b, n = _best(progress, ch["id"])
+    ub, un = _best(progress, ch["id"], SECTION_UNLIMITED)
     mine = [("best", (f"{fmt_value(metric, b)}  [{stars_text(n)}]" if b is not None
                       else "none yet"))]
+    if ub is not None or (stats is not None and stats.get("unlimited")):
+        mine.append(("unlimited", (f"{fmt_value(metric, ub)}  [{stars_text(un)}]  not official"
+                                   if ub is not None else "none yet")))
     secs = [("GOAL: " + {"lap_time": "a lap", "stop_distance": "a stop",
                          "skid_ay": "lateral g", "drag_time": "the time",
                          "trap_speed": "the speed"}[metric].upper(), goal),
@@ -785,7 +845,7 @@ def measure(ch: dict, lib, t_max: float | None = None, probe=None) -> dict:
     opts = SimpleNamespace(track=track, radius=50.0, cw=False, wet=surface, dt=D.DT_PHYS,
                            wing="off", wing_x=0.97, wing_h=0.90, wing_inc=0.0,
                            dev_flank="outer", wing_cfg=None, mass_points=())
-    design = CarBuild.from_json(ref_build(ref.get("build", "none"))).clamp(lib)
+    design = CarBuild.from_json(ref_build(ref.get("build", "none"))).clamp(lib, car_name)
     D._apply_design(opts, design, lib)
     tr, car, cfg_kwargs, gw = D._session_car(opts, settings)
     stats = build_stats(design.to_json(), lib, car, 0.0)
@@ -1155,6 +1215,49 @@ def self_check(verbose: bool = True) -> bool:
     rep("a removed challenge's saved entry counts for nothing and is never read",
         total_stars(old_p)[0] == 0 and "drag_400" not in load_all()
         and all(_best(old_p, cid) == (None, 0) for cid in load_all()))
+    #  task 41: an UNLIMITED build (a wing past the car's span limit) is still
+    #  judged by the challenge's rules, but its best and stars go to their own
+    #  section, shown in their own spot; the official ones never move
+    import cars as _cars
+    huge = lib.wings["rear-s1223"].copy(name="huge-top", builtin=False)
+    huge.span = 2.6                         # the Corsa's top limit is 1.2 x 1.646 = 1.975 m
+    lib.save_wing(huge)
+    corsa = _cars.get("corsa")
+    st_u = build_stats(dict(ref_build("tall"), slots=dict(ref_build("tall")["slots"],
+                                                          top=dict(ref_build("tall")["slots"]["top"],
+                                                                   wing="huge-top"))),
+                       lib, corsa, 0)
+    st_o = build_stats(ref_build("tall"), lib, corsa, 0)
+    rep("build_stats says whether the build is Unlimited on the car, and why",
+        st_u["unlimited"] and [o["slot"] for o in st_u["over_limits"]] == ["top"]
+        and not st_o["unlimited"] and st_o["over_limits"] == [],
+        _over_text(st_u["over_limits"]))
+    up = Progress(os.path.join(tmp, "unl.json"))
+    up.section(SECTION)[ch["id"]] = dict(best=worse(t1), stars=0)
+    up.save(SECTION)
+    usim = SimpleNamespace(track=SimpleNamespace(name=tk), settings=SimpleNamespace(
+        car=ck, engine=ek, wet=sk), global_wet=(MU_WET_SCALE if sk == "all" else 1.0))
+    ru = ChallengeRun(ch, trl, dict(clean, unlimited=True, over_limits=st_u["over_limits"]), up)
+    ru.meter._done(t3)
+    ru._collect(usim)
+    disk = Progress(up.path)
+    ov = ru.overlay(SimpleNamespace(**vars(usim), veh=SimpleNamespace(u=0.0, v=0.0), s=0.0))
+    rep("an Unlimited run: counted in its own section, the official best untouched",
+        ru.last == (t3, 3) and "UNLIMITED" in ru.note
+        and disk.section(SECTION_UNLIMITED)[ch["id"]] == dict(best=t3, stars=3)
+        and disk.section(SECTION)[ch["id"]] == dict(best=worse(t1), stars=0)
+        and total_stars(disk, allc)[0] == 0,
+        f"{ru.note}  |  official {disk.section(SECTION)[ch['id']]}")
+    li = dict((a, t) for t, a in list_items(allc, disk))
+    _i, secs_u, _n = detail(ch, dict(clean, unlimited=True, over_limits=st_u["over_limits"]),
+                            [], disk)
+    rep("the box, the list and the detail page show the Unlimited spot beside the official",
+        "UNLIMITED" in ov["head"] and "official" in ov["head"] and "UNLIMITED" in ov["text"]
+        and "unlimited [***]" in li[f"ch:{ch['id']}"]
+        and ("unlimited", f"{fmt_value(ch['goal']['metric'], t3)}  [***]  not official")
+        in dict(secs_u)["YOURS"] and any(k == "UNLIMITED" for k, _ in dict(secs_u)["RULES"])
+        and menu_row(disk) == f"Challenges: 0 of {3 * len(load_all())} stars",
+        ov["head"])
     if verbose:
         print(f"challenges self-check: {'PASS' if ok else 'FAIL'}")
     return ok

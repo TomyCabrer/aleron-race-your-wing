@@ -19,6 +19,11 @@ The card is also kept (task 32): the session's last `LOG_N` cards, and
 Settings > Last lap (`summary`) opens the LAP RESULTS page -- the last card
 itself, settled (`render.Renderer.draw_card`), and this session's laps
 (`page_rows`).
+
+An UNLIMITED lap (task 41: a build with a wing past its car's physical span
+limit, filed in the Unlimited book -- drive/records.py) says so on the card
+(`unlimited`: the header reads UNLIMITED LAP / UNLIMITED PB) and in its
+summary; its delta, place and medal are the Unlimited book's.
 """
 from __future__ import annotations
 
@@ -42,7 +47,7 @@ def card(res: dict, book=None) -> dict:
     c = dict(time=fmt_time(t), valid=bool(res.get("valid")), why=str(res.get("why") or ""),
              delta="", delta_sign=0, sectors=[], medal=str(res.get("medal") or ""),
              medal_best=bool(res.get("medal_best")), pos="", new_pb=False,
-             key=str(res.get("key") or ""), next="")
+             key=str(res.get("key") or ""), next="", unlimited=bool(res.get("unlimited")))
     if not c["valid"]:
         return c
     pb0 = res.get("pb_before")
@@ -51,7 +56,8 @@ def card(res: dict, book=None) -> dict:
         c["delta"] = f"{d:+.3f}"
         c["delta_sign"] = -1 if d < 0 else (1 if d > 0 else 0)
     else:
-        c["delta"] = "first lap in this class"
+        c["delta"] = ("first Unlimited lap in this class" if c["unlimited"]
+                      else "first lap in this class")
     if _num(t) and c["key"]:               # the medal the PB (this lap counted) goes for next
         try:
             from .prerace import next_medal
@@ -105,16 +111,17 @@ def summary(c, short: bool = False) -> str:
     time, the delta, the medal), which must fit beside the other rows."""
     if not c:
         return "no timed lap yet"
+    unl = "UNLIMITED" if c.get("unlimited") else ""
     if not c.get("valid"):
-        return f"{c.get('time', '')}  not counted" + (
+        return "  ".join(p for p in (f"{c.get('time', '')}", unl) if p) + "  not counted" + (
             "" if short else (f": {c['why']}" if c.get("why") else ""))
     d = str(c.get("delta", "") or "")
     d = d if d.startswith(("+", "-")) else "first in class"
     medal = str(c.get("medal", "") or "").upper()
     if short:
-        return "  ".join(p for p in (str(c.get("time", "")), d, medal) if p)
+        return "  ".join(p for p in (str(c.get("time", "")), d, medal, unl) if p)
     parts = [str(c.get("time", "")), d, str(c.get("pos", "") or ""), medal,
-             "NEW PB" if c.get("new_pb") else ""]
+             "NEW PB" if c.get("new_pb") else "", unl]
     return "  ".join(p for p in parts if p)
 
 
@@ -225,6 +232,19 @@ def self_check(verbose: bool = True) -> bool:
         rows2[0] == ("lap 31", summary(other) + "  (stock engine)")
         and rows2[-1][0] == "lap 22" and len(page_rows([long_why])[0][1]) <= ROW_CHARS
         and summary(c, short=True) == "1:00.900  -0.500  GOLD", str(rows2[:2]))
+    #  task 41: an Unlimited lap's card and summary say so (its place, its
+    #  delta and its medal are the Unlimited book's)
+    cu = card(dict(res2, unlimited=True), book)
+    cu0 = card(dict(time=55.0, valid=True, pb_before=float("nan"), key=key, pos=1,
+                    unlimited=True), None)
+    cu3 = card(dict(c3, valid=False, why="off track", time=40.0, unlimited=True))
+    rep("an Unlimited lap: the card is tagged, the summaries say UNLIMITED",
+        cu["unlimited"] and not c2["unlimited"] and cu["pos"] == c2["pos"]
+        and summary(cu) == summary(c2) + "  UNLIMITED"
+        and summary(cu, short=True).endswith("UNLIMITED")
+        and cu0["delta"] == "first Unlimited lap in this class"
+        and summary(cu3) == "40.000  UNLIMITED  not counted: off track",
+        f"{summary(cu)!r}; {summary(cu3)!r}")
     rep("the card lasts SHOW_S, drops in, pulses only for a new PB's first seconds",
         view(c, 1.0)["age"] == 1.0 and view(c, SHOW_S + 0.1) is None and view(None, 1.0) is None
         and drop(0.0) == 0.0 and drop(DROP_S) == 1.0 and pulse(PULSE_S + 0.1) == 0.0
