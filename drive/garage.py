@@ -2224,7 +2224,46 @@ class Designer:
     def slot(self) -> Slot:
         return self.g.build.slot(self.key)
 
+    def _recap_span(self) -> bool:
+        """Real mode (review of task 41, finding 3): the working wing's span
+        back inside `_span_band()` -- the page was (re)opened, or the slot's
+        height moved under it (the car page's DOWN stops at the LIBRARY
+        wing's span, not this one's) -- so a span the row could no longer
+        offer is not left pending and then saved past the limit. Unlimited
+        mode is untouched. It does not mark the wing edited: a library wing
+        already past the limit (a build loaded past it is kept) is shown cut
+        to the limit, and saved so only if the player saves it -- ESC's
+        commit of an edited wing never rewrites it behind their back. True
+        when it cut the span."""
+        if self.g.unlimited:
+            return False
+        hi = self._span_band()[1]
+        if self.spec.span <= hi + bodies.LIMIT_TOL:
+            return False
+        self.spec.span = hi
+        self.spec.clamp()
+        return True
+
+    def _past_limit_slots(self, spec) -> tuple | None:
+        """Real mode: (slot, limit) of the first slot `spec` would be fitted
+        past its span limit in when committed -- this slot, and every other
+        slot of its role already carrying a wing of that NAME (re-saving it
+        re-spans them all) unless the mirror is about to copy this one over
+        it; None when it fits everywhere, or in Unlimited mode."""
+        if self.g.unlimited:
+            return None
+        b = self.g.build
+        keys = [self.key] + [k for k in SLOTS if k != self.key and SLOT_ROLE[k] == self.role
+                             and b.slot(k).wing == spec.name
+                             and not (b.mirror and self.role == "flank")]
+        for k in keys:
+            lim = bodies.span_limit(self.role, self.g.car, b.slot(k).h)
+            if float(spec.span) > lim + bodies.LIMIT_TOL:
+                return k, lim
+        return None
+
     def update(self) -> None:
+        self._recap_span()
         slot = self.slot
         ride = slot.h if self.role == "top" else None
         aero = self.lib.analyse_wing(self.spec, ride_h=ride, V=self.V_design)
@@ -2263,6 +2302,16 @@ class Designer:
             spec.name = self.lib.unique_name("wings", spec.name)
         spec.builtin = False
         spec.legacy = None
+        #  Real mode holds EVERY edit to the limit (review of task 41, finding
+        #  3): a wing past it in any slot it would sit in is not saved -- the
+        #  same refusal W and the library page give
+        past = self._past_limit_slots(spec)
+        if past is not None:
+            k, lim = past
+            self.msg = (f"'{spec.name}' ({spec.span:.2f} m) is past the {k} slot's {lim:.2f} m "
+                        f"span limit: not saved (shorten it; Settings > Wing limits: "
+                        f"Unlimited allows it)")
+            return ""
         try:
             self.lib.save_wing(spec.copy())
         except (OSError, ValueError) as exc:
@@ -4933,6 +4982,8 @@ class Garage:
         if self.design_page.wing is None or self.design_page.key != self.sel:
             self.design_page.open(self.sel)
         self.designer = self.design_page.wing
+        if self.designer._recap_span():            # reopened: the slot may have moved
+            self.designer.update()
         if airfoil:
             self.designer.spec.airfoil = airfoil
             self.designer.dirty = True
@@ -6652,6 +6703,50 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
         gp.build.left.wing == "tall-fin" and [r_[0] for r_ in rows_p if r_[3]] == ["left", "right"]
         and abs(rows_p[0][2] - 1.50) < 1e-9 and gp.build.left.h == h0,
         f"{rows_p[0]}")
+    #  Real: the designer's S fits no wing past the limit in ANY slot that
+    #  would carry it, and its pending span follows the slot down (review of
+    #  task 41, finding 3). (a) an empty slot at h 0.40: the seeded 0.80 m
+    #  panel opens cut to that slot's 0.50 m; (b) a 2.10 m span set at h 1.20,
+    #  then the car page's DOWN (which stops at the LIBRARY wing's 0.78 m):
+    #  the pending span comes down with it; (c) mirror off, one user wing on
+    #  both flanks at 1.20 / 0.60: 2.00 m is refused for the low one, saying
+    #  why and where Unlimited is; (d) Unlimited saves it
+    def _dz(settings_, wing, hl, hr=None, mirror=True):
+        g_ = Garage((1280, 800), CarBuild.for_car("corsa"), headless=True, lib=lib,
+                    settings=settings_)
+        g_.build.mirror, g_.sel = mirror, "left"
+        g_.build.left.wing, g_.build.left.h = wing, hl
+        g_.build.sync_mirror("left")
+        if hr is not None:
+            g_.build.right.wing, g_.build.right.h = wing, hr
+        g_.build.clamp(lib, "corsa")
+        g_.designer = Designer(g_, "left")
+        return g_, g_.designer
+    ga, da = _dz(real, "", 0.40)
+    a_ok = bool(da.commit()) and da.spec.span <= 0.50 + 1e-9
+    gb_, db_ = _dz(real, "fin", 1.20)
+    db_._set("span", 0.35, 1.30, cap=db_._span_band)(5.0)
+    s_hi = db_.spec.span
+    for _ in range(20):
+        gb_._move(dh=-STEP_H)
+    b_ok = (abs(s_hi - 2.10) < 1e-9 and bool(db_.commit()) and gb_.build.left.h < 0.60
+            and abs(db_.spec.span - 2.0 * (gb_.build.left.h - 0.15)) < 1e-9)
+    mf = lib.wings["flank-e423"].copy(name="my-fin", builtin=False)
+    mf.span = 0.80
+    lib.save_wing(mf)
+    gc_, dc_ = _dz(real, "my-fin", 1.20, 0.60, mirror=False)
+    dc_._set("span", 0.35, 1.30, cap=dc_._span_band)(2.0)
+    c_ok = (dc_.commit() == "" and "right slot's 0.90 m" in dc_.msg and "Unlimited" in dc_.msg
+            and lib.wings["my-fin"].span == 0.80)
+    clean = all(bodies.over_limits(g_.build, lib, "corsa") == [] for g_ in (ga, gb_, gc_))
+    gd_, dd_ = _dz(unl, "my-fin", 1.20, 0.60, mirror=False)
+    dd_._set("span", 0.35, 1.30, cap=dd_._span_band)(2.0)
+    d_ok = dd_.commit() == "my-fin" and lib.wings["my-fin"].span == 2.0
+    rep("Real: the designer's save fits no wing past the limit in any slot that carries it; "
+        "its span follows the slot down; Unlimited saves it",
+        a_ok and b_ok and c_ok and d_ok and clean,
+        f"(a) {da.spec.span:.2f} m at h 0.40; (b) {s_hi:.2f} -> {db_.spec.span:.2f} m at "
+        f"h {gb_.build.left.h:.2f}; (c) {dc_.msg}; (d) {d_ok}")
     #  a Param's band may be a callable, read at every step (the span row's)
     pc = ui.Param("t", "t", lambda: 1.0, lambda v: None, lo=0.0, hi=lambda: 1.25, step=0.5)
     got_pc = []

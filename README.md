@@ -537,9 +537,12 @@ zero) is what keeps a legal panel off the road when the car rolls onto it.
 *Settings > Wing limits* decides what the garage lets you do:
 
 - **Real** (the default) holds every edit to the limit. The designer's span
-  row and its optimiser stop there; `W` and the library page skip a wing that
-  is past the selected slot's limit, and the hint says why; `↓` stops a flank
-  slot where the panel's lower tip reaches the ground clearance.
+  row and its optimiser stop there, its span comes down with the slot when
+  the slot is lowered, and its save (`S`) refuses a wing that would be past
+  the limit in any slot carrying it (with mirror off, the lower flank
+  decides); `W` and the library page skip a wing that is past the selected
+  slot's limit, and the hint says why; `↓` stops a flank slot where the
+  panel's lower tip reaches the ground clearance.
 - **Unlimited** lets spans go to **3x the limit** -- impossible wings, for fun.
 
 The car page's SPAN LIMITS panel lists each fitted wing as *span / max* on this

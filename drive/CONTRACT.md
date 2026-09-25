@@ -1963,7 +1963,13 @@ legacy one-panel `WingDesign`) counts as official.
   `D` stays "design"); library page `D` / pad `R1` (default), `R` (rename);
   pause-menu actions `build_save`, `build_save_as`, `build_load`,
   `build_default`; `_poll_pad` answers a TextPrompt with CROSS / CIRCLE. The
-  library page and W both refuse, in Real mode, a wing past the slot's limit.
+  library page and W both refuse, in Real mode, a wing past the slot's limit,
+  and so does `Designer.commit` for every slot the saved wing would sit in
+  (`_past_limit_slots`: this slot, and each other slot of its role carrying
+  that wing name unless the mirror overwrites it); the designer's span is
+  re-capped to `_span_band()` on every `update()` (the slot's h moved) and
+  when `open_designer` reopens it (`_recap_span`, never marking it edited).
+  Unlimited mode is unaffected.
 * The PICK page: `Sim._picker()` is the pre-race page's `PreRace`, else the
   class-less `sim.build_pick = PreRace(None, None, ...)` made whenever there
   is a garage and a library, so Settings' **Build** row works on every map.
