@@ -205,6 +205,27 @@ CHASE_FOLLOW_W = (5.0, 4.0, 3.5, 3.0)
 CHASE_REAR_REF = -CAR_X_REAR  # m  the Corsa's CG-to-tail, 2.0675: a longer car
                               #    puts the eye back by the difference, so the
                               #    tail keeps its place in the frame
+CHASE_REAR_CAP = 4.0     # m   ... by at most this much (a guard against a junk
+                         #     body, not a framing choice). It was 1.0 while the
+                         #     540i (+0.48) was the longest car; the Citaro's
+                         #     tail is 5.504 m behind its CG, +3.44. The stock
+                         #     three all sit under the old 1.0, so for them the
+                         #     new cap is the old one to the last bit
+CHASE_TOP_REF = 1.440    # m   the Corsa's roof (CAR_H): the body the chase view
+                         #     is framed round. A TALLER body scales the view
+                         #     about its tail by k = height / 1.44 (task 41):
+                         #     the eye's gap behind the tail (4.33 m on the
+                         #     Corsa at zoom 1), its height (2.15 m), its trail,
+                         #     swing and lean, and the look-at point (13.07 m
+                         #     past the tail, 0.85 m up) all times k, so a
+                         #     3.12 m bus stands in the frame as the Corsa does
+                         #     -- at the Corsa's numbers the eye was 0.97 m
+                         #     UNDER the bus's roof, 1.9 m from its tail, and
+                         #     the bus filled the lower half of the screen. k
+                         #     is max(1, ...), and no stock body is taller than
+                         #     1.44 (Corsa 1.440, MX-5 1.235, 540i 1.435), so
+                         #     for the three the view is what it was, bit for
+                         #     bit (the render self-check proves it)
 
 # --- HUD ---------------------------------------------------------------
 RPM_IDLE = 850.0         # est   Z12XE idle
@@ -955,21 +976,54 @@ class Chase3D:
         ])
         self.ppm_ref = self.fl / CHASE_PPM_REF_D
 
+    @staticmethod
+    def size_k(top: float | None) -> float:
+        """The fitted body's scale on the view, height / CHASE_TOP_REF, never
+        under 1; a missing or junk height is 1 (the Corsa's framing)."""
+        if top is None or not math.isfinite(top):
+            return 1.0
+        return max(1.0, float(top) / CHASE_TOP_REF)
+
+    @staticmethod
+    def _rear_of(rear: float | None) -> float:
+        """The body's CG-to-tail as the view uses it: CHASE_REAR_REF when
+        missing, else held to [REF - 0.5, REF + CHASE_REAR_CAP]."""
+        if rear is None or not math.isfinite(rear):
+            return CHASE_REAR_REF
+        return CHASE_REAR_REF + min(max(float(rear) - CHASE_REAR_REF, -0.5), CHASE_REAR_CAP)
+
+    def look_at(self, rear: float | None = None, top: float | None = None) -> tuple:
+        """(x ahead of the CG, z) of the look-at point: CHASE_TARGET_X /
+        CHASE_TARGET_Z, or for a tall body (k > 1) the same point scaled
+        about the tail -- 13.07 m x k past it, 0.85 m x k up."""
+        k = self.size_k(top)
+        if k <= 1.0:
+            return CHASE_TARGET_X, CHASE_TARGET_Z
+        return (k * (CHASE_TARGET_X + CHASE_REAR_REF) - self._rear_of(rear),
+                k * CHASE_TARGET_Z)
+
     def follow_targets(self, V: float, zoom: float, ax: float, ay: float,
-                       rear: float | None = None) -> np.ndarray:
+                       rear: float | None = None, top: float | None = None) -> np.ndarray:
         """Where the spring is pulled this frame: (distance, swing, look,
         height), from the speed, the zoom and the car's accelerations (m/s^2,
         body frame, ay > 0 = LEFT). A non-finite input counts as 0 (a
         replay state with NaN ax / ay, or u = inf): the targets are always
-        finite, so the spring can never be poisoned through them."""
+        finite, so the spring can never be poisoned through them.
+
+        `rear` is the fitted body's CG-to-tail, `top` its height (task 41,
+        CHASE_TOP_REF). With k = 1 -- every stock body -- this is the code
+        it always was, float for float; a taller body takes the Corsa's
+        framing at this speed and zoom and scales it about its own tail."""
         V = float(V) if math.isfinite(V) else 0.0
         zoom = float(zoom) if math.isfinite(zoom) else 1.0
         ax = float(ax) if math.isfinite(ax) else 0.0
         ay = float(ay) if math.isfinite(ay) else 0.0
         d = CHASE_DIST / max(float(zoom), 0.35) + CHASE_DIST_V * min(max(V, 0.0), 200.0)
         d = min(max(d, CHASE_DIST_MIN), CHASE_DIST_MAX)
+        k = self.size_k(top)
+        d_corsa = d                                  # the Corsa's, for a tall body
         if rear is not None and math.isfinite(rear):
-            d += min(max(float(rear) - CHASE_REAR_REF, -0.5), 1.0)
+            d += min(max(float(rear) - CHASE_REAR_REF, -0.5), CHASE_REAR_CAP)
         axg, ayg = float(ax) / G, float(ay) / G
         trail = min(max(CHASE_K_TRAIL * axg, -CHASE_TRAIL_MAX), CHASE_TRAIL_MAX)
         swing = min(max(-CHASE_K_SWING * ayg, -CHASE_SWING_MAX), CHASE_SWING_MAX)
@@ -977,6 +1031,15 @@ class Chase3D:
         # the eye rises a little as it pulls back, so the car never climbs
         # out of the bottom of the frame at the wide end of the zoom
         h = CHASE_HEIGHT + 0.12 * (d - CHASE_DIST) + max(min(CHASE_K_DIP * axg, 0.05), -0.08)
+        if k > 1.0:
+            # a tall body (the van, the bus): the Corsa's eye at this speed
+            # and zoom -- its gap behind ITS tail, its height with the zoom's
+            # rise and the braking dip, its trail, swing and lean -- scaled
+            # by k about THIS body's tail
+            h_c = (CHASE_HEIGHT + 0.12 * (d_corsa - CHASE_DIST)
+                   + max(min(CHASE_K_DIP * axg, 0.05), -0.08))
+            d = self._rear_of(rear) + k * (d_corsa - CHASE_REAR_REF)
+            h, trail, swing, look = k * h_c, k * trail, k * swing, k * look
         # the zoom-in stop holds under braking too: closer than it, the
         # tailgate fills the frame
         return np.array([max(d + trail, CHASE_DIST_MIN), swing, look, h])
@@ -984,7 +1047,8 @@ class Chase3D:
     # ------------------------------------------------------------------ #
     def set_pose(self, x: float, y: float, psi: float, V: float = 0.0,
                  zoom: float = 1.0, dt: float | None = None, ax: float | None = None,
-                 ay: float = 0.0, rear: float | None = None) -> None:
+                 ay: float = 0.0, rear: float | None = None,
+                 top: float | None = None) -> None:
         """Place the eye behind (x, y) along psi and rebuild the basis.
 
         psi is the LAGGED camera heading, not the body heading: at
@@ -1005,6 +1069,9 @@ class Chase3D:
         NaN pose from upstream) is reset to the targets -- once the spring
         holds a NaN it would keep it forever, and every later chase frame
         would raise converting it to pixels.
+
+        `rear` / `top`: the fitted body's CG-to-tail and height, which place
+        the eye and the look-at point for its size (`follow_targets`).
         """
         V = max(float(V), 0.0) if math.isfinite(V) else 0.0
         if ax is None:
@@ -1012,7 +1079,7 @@ class Chase3D:
                   else 0.0)
             ax = min(max(ax, -15.0), 15.0)
         self._V_prev = V
-        tg = self.follow_targets(V, zoom, ax, ay, rear)
+        tg = self.follow_targets(V, zoom, ax, ay, rear, top)
         if dt is None or not (dt > 0.0) or not math.isfinite(dt):
             self._fp, self._fv = tg, np.zeros(4)
         else:
@@ -1029,8 +1096,8 @@ class Chase3D:
         c, s = math.cos(psi), math.sin(psi)
         lx, ly = -s, c                            # the car's LEFT, level
         self.eye = np.array([x - d * c + swing * lx, y - d * s + swing * ly, h])
-        tgt = np.array([x + CHASE_TARGET_X * c + look * lx,
-                        y + CHASE_TARGET_X * s + look * ly, CHASE_TARGET_Z])
+        tx, tz = self.look_at(rear, top)
+        tgt = np.array([x + tx * c + look * lx, y + tx * s + look * ly, tz])
         f = tgt - self.eye
         f /= np.linalg.norm(f)
         r = np.cross(f, np.array([0.0, 0.0, 1.0]))
@@ -2558,9 +2625,10 @@ class Renderer:
             #  without drive/fx.py the shake moves the eye a few centimetres
             #  (task 27's own chase shake); with it, fx's jolt does (draw_frame)
             jx_, jy_ = ((0.012 * ox, 0.012 * oy) if self._fx is None else (0.0, 0.0))
+            g_ = car_geom()
             self._cam3.set_pose(x + jx_, y + jy_, self.psi_cam, V, self.zoom_manual,
                                 dt=0.0 if snap else dt, ax=ax, ay=ay,
-                                rear=-car_geom().x_rear)
+                                rear=-g_.x_rear, top=g_.height)
             self._chase_live = True
             # NB the view now looks along Chase3D.view_psi, which leans off
             # psi_cam in a corner: the world's panorama must scroll by that
