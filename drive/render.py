@@ -448,6 +448,34 @@ def set_paint(rgb=None) -> None:
     _GEOM3['key'] = None
 
 
+def max_ay_car(car, V, k=0.0, x_w=0.0, h_w=0.90, mu_scale=1.0) -> float:
+    """`qss.max_ay` for ANY car: the same residuals (`qss.residuals`, with
+    its default c_cam = 0, so no roll derate), the same 200-step bisection,
+    but `car`'s own mass, axles, CG height, track, declared roll split
+    (else the study's 0.74) and each axle's own tyre reference
+    (`qss.car_tyre_refs`: `qss.TYRE` itself on a car tyre, the load-scaled
+    law on the bus's truck tyres). `qss.max_ay` is bound to the Corsa at
+    module scope; on the Corsa's own numbers this reproduces it (the render
+    self-check asserts 1e-12). Task 41, for the g-g envelope of the cars
+    that bring their own numbers (`own_aids`)."""
+    rd = getattr(car, 'roll_dist_f', None)
+    rd = 0.74 if rd is None else float(rd)
+    tf, tr_ = qss.car_tyre_refs(car)
+    F = k * V * V
+    W = car.m * G
+    L, a_, b_, t_ = car.L, car.a, car.b, car.t
+    lo, hi = 0.1, 30.0
+    for _ in range(200):
+        ay = 0.5 * (lo + hi)
+        Y_f = (b_ * car.m * ay - F * (b_ + x_w)) / L
+        Y_r = (a_ * car.m * ay + F * x_w) / L
+        dFz = (car.m * ay * car.h_cg - F * h_w) / t_
+        cap_f = qss.axle_capacity(W * car.wdist_f, dFz * rd, mu_scale, tf)
+        cap_r = qss.axle_capacity(W * (1 - car.wdist_f), dFz * (1 - rd), mu_scale, tr_)
+        lo, hi = (ay, hi) if max(Y_f / cap_f, Y_r / cap_r) < 1.0 else (lo, ay)
+    return 0.5 * (lo + hi)
+
+
 def gg_envelope(V, mu_scale=1.0, k_eff=0.0, x_w=X_W, h_w=H_W, n=91):
     """Equation 18 as an (M,2) CLOSED curve in (ay_g, ax_g).
 
@@ -460,15 +488,28 @@ def gg_envelope(V, mu_scale=1.0, k_eff=0.0, x_w=X_W, h_w=H_W, n=91):
     Numerically identical to `plots.gg_envelope` (same formula, same order of
     operations); only the default point count differs, 91 here against 181
     there, because this one is rasterised into a 200 px box.
+
+    Task 41: on a car that brings its own numbers (`own_aids`: the Express,
+    the bus) the lateral limit is `max_ay_car`, that car's own; the three
+    stock cars keep `qss.max_ay`, the study's Corsa curve, as before (the
+    MX-5 and the 540i drawing the Corsa's limit is the old behaviour, kept
+    bit for bit and listed as a known gap). The key carries the car, so a
+    car change recomputes instead of reusing the last car's curve.
     """
     _GG_STATS['calls'] += 1
-    key = (round(mu_scale, 6), round(k_eff, 9), round(x_w, 6), round(h_w, 6), n)
+    key = (round(mu_scale, 6), round(k_eff, 9), round(x_w, 6), round(h_w, 6), n,
+           id(_CAR), str(getattr(_CAR, 'name', '')))     # a car change recomputes
     if (_GG_CACHE['key'] == key and _GG_CACHE['V'] is not None
             and abs(V - _GG_CACHE['V']) <= GG_V_TOL):
         return _GG_CACHE['curve']
 
     _GG_STATS['recomputes'] += 1
-    ay_env = qss.max_ay(V, k=k_eff, x_w=x_w, h_w=h_w, mu_scale=mu_scale)
+    if getattr(_CAR, 'own_aids', False):
+        # task 41: a new car's OWN lateral limit (max_ay_car); the stock
+        # three keep the study's qss.max_ay curve, float for float
+        ay_env = max_ay_car(_CAR, V, k=k_eff, x_w=x_w, h_w=h_w, mu_scale=mu_scale)
+    else:
+        ay_env = qss.max_ay(V, k=k_eff, x_w=x_w, h_w=h_w, mu_scale=mu_scale)
     drag = 0.5 * RHO * _CAR.CdA * V * V + _CAR.Crr * _CAR.m * G
     ax_pow = min(_CAR.P_wheel / (_CAR.m * max(V, 3.0)), 0.90 * ay_env)
 
@@ -1033,13 +1074,15 @@ class Chase3D:
         h = CHASE_HEIGHT + 0.12 * (d - CHASE_DIST) + max(min(CHASE_K_DIP * axg, 0.05), -0.08)
         if k > 1.0:
             # a tall body (the van, the bus): the Corsa's eye at this speed
-            # and zoom -- its gap behind ITS tail, its height with the zoom's
-            # rise and the braking dip, its trail, swing and lean -- scaled
-            # by k about THIS body's tail
+            # and zoom -- its gap behind ITS tail with the trail and the
+            # zoom-in stop, its height with the zoom's rise and the braking
+            # dip, its swing and lean -- scaled by k about THIS body's tail,
+            # so the whole frame is the Corsa's, similar about the tail
             h_c = (CHASE_HEIGHT + 0.12 * (d_corsa - CHASE_DIST)
                    + max(min(CHASE_K_DIP * axg, 0.05), -0.08))
-            d = self._rear_of(rear) + k * (d_corsa - CHASE_REAR_REF)
-            h, trail, swing, look = k * h_c, k * trail, k * swing, k * look
+            d_c = max(d_corsa + trail, CHASE_DIST_MIN)
+            return np.array([self._rear_of(rear) + k * (d_c - CHASE_REAR_REF),
+                             k * swing, k * look, k * h_c])
         # the zoom-in stop holds under braking too: closer than it, the
         # tailgate fills the frame
         return np.array([max(d + trail, CHASE_DIST_MIN), swing, look, h])
@@ -1313,9 +1356,15 @@ SPIN_BLUR_A1 = 0.53      # rad/frame ... and are a uniform blur above it. A
 from .bodies import CAR_STYLE_REF, STATIONS3, _STYLE_SHELL3  # noqa: E402
 #: the body colour per style (est; the Corsa keeps the study's C_CAR yellow)
 C_CAR_STYLE = {'hatch': C_CAR, 'roadster': (176, 34, 42), 'saloon': (64, 92, 138),
-               #  task 41 (C1's STUB so the two new cars have a factory
-               #  colour at all; the render-style pass owns the final pick):
-               'van': (228, 228, 220), 'bus': (54, 132, 96)}
+               #  task 41: the Express in a fleet white and the Citaro in a
+               #  city-transit teal. Both are drive/paint.py palette colours
+               #  ('white', 'teal'), so each was already checked at every
+               #  plan tone against the HUD's text and dim grey, the race
+               #  slots' colours, the PB ghost's green and the wing orange
+               #  (paint.py's docstring); the render self-check's paint row
+               #  re-measures them. The white is the WARM one: a cool
+               #  (232, 234, 238) is the HUD text.
+               'van': (226, 226, 220), 'bus': (22, 128, 132)}
 
 
 # --- materials: what the chase shader does with a polygon (_MAT3 rows) ----
@@ -1364,7 +1413,9 @@ C_SEAT3 = (62, 52, 46)
 C_EXHAUST3 = (130, 132, 138)
 C_HOLE3 = (10, 10, 12)
 C_REFLECT3 = (132, 22, 22)
-C_SHADOW3 = (10, 14, 22)         # the contact shadow's tint (alpha does the rest)
+C_DEST3 = (238, 166, 38)         # the bus's destination display, lit amber (M_HOLE:
+                                 # its own colour); not a counted colour
+C_SHADOW3 = (10, 14, 22)        # the contact shadow's tint (alpha does the rest)
 #: light colours: warm low sun, cool sky fill (est, late afternoon)
 SUN_RGB3 = np.array([1.00, 0.96, 0.88])
 SKY_RGB3 = np.array([0.93, 0.97, 1.00])
@@ -1680,6 +1731,71 @@ def _wheel3(S, i, geom, arch=None):
     return wall
 
 
+#: the Citaro's side, in metres forward of ITS CG (the style car's frame; the
+#: map onto a fitted car's axles is applied at build). Est, drawn to the
+#: O530 three-door city bus: door 1 ahead of the front axle, door 2 at the
+#: middle of the wheelbase, door 3 behind the rear axle, all on the RIGHT
+#: (kerb) side; the driver's window and a full row of panes on the left,
+#: whose rear corner is the engine tower (a louvred intake, no glass).
+#: Every pane and door keeps clear of the pod's two 12 cm ramps.
+BUS_DOORS3 = ((6.16, 5.02), (1.64, 0.50), (-2.96, -4.06))
+BUS_PANES_R3 = ((4.92, 3.96), (3.86, 3.06), (2.82, 1.74), (0.24, -0.86),
+                (-0.96, -1.96), (-2.06, -2.86), (-4.16, -5.26))
+BUS_PANES_L3 = ((6.16, 5.02), (4.92, 3.96), (3.86, 3.06), (2.82, 1.74), (1.64, 0.50),
+                (0.24, -0.86), (-0.96, -1.96), (-2.06, -3.06))
+BUS_TOWER3 = (-3.40, -5.10, 1.70, 2.50)       # x0, x1, z0, z1 of its intake
+BUS_GLASS_Z3 = (1.10, 2.58)                   # the passenger windows' sill / head
+BUS_DOOR_Z3 = (0.42, 2.62)                    # the door frame, sill top to head
+
+
+def _bus_sides3(S, g, rings, q, mirror, side_decal) -> None:
+    """The Citaro's sides and roof (car_mesh3's 'bus' style): the windows,
+    the doors on the right, the engine tower's intake on the left, the
+    air-con pod's two fans and the mirrors on their arms. ~50 polygons."""
+    ref = [s_[0] for s_ in _STYLE_SHELL3['bus'][0]][::-1]
+    got = [s_[0] for s_ in g.stations][::-1]
+
+    def X(x):                          # style frame -> the fitted car's
+        return float(np.interp(x, ref, got))
+    z0g, z1g = BUS_GLASS_Z3
+    for side, panes in ((-1.0, BUS_PANES_R3), (1.0, BUS_PANES_L3)):
+        for xa_, xb_ in panes:
+            side_decal(X(xa_), X(xb_), z0g, z1g, side, C_GLASS_BASE3, M_GLASS)
+    for xa_, xb_ in BUS_DOORS3:
+        # a dark frame from the sill to the head, two glazed leaves over it
+        side_decal(X(xa_), X(xb_), BUS_DOOR_Z3[0], BUS_DOOR_Z3[1], -1.0, C_TRIM3, M_TRIM)
+        xm_ = 0.5 * (xa_ + xb_)
+        for l0, l1 in ((xa_ - 0.05, xm_ + 0.03), (xm_ - 0.03, xb_ + 0.05)):
+            side_decal(X(l0), X(l1), 1.04, 2.54, -1.0, C_GLASS_BASE3, M_GLASS, level=2)
+    tx0, tx1, tz0, tz1 = BUS_TOWER3
+    side_decal(X(tx0), X(tx1), tz0, tz1, 1.0, C_TRIM3, M_TRIM)
+    # the pod: the band whose both stations stand at the roof's full
+    # height; two condenser fans side by side on its crown
+    kp = [k for k in range(len(rings) - 1)
+          if g.stations[k][3] == g.height and g.stations[k + 1][3] == g.height]
+    if kp:
+        k = kp[0]
+        ra, rb = rings[k], rings[k + 1]
+        inside = 0.5 * (ra[1:].mean(axis=0) + rb[1:].mean(axis=0))
+        for v0, v1 in ((0.10, 0.44), (0.56, 0.90)):
+            for (i, j, u0, u1) in ((RP_SHOULDER, RP_CROWN, 0.25, 1.0),
+                                   (RP_CROWN, 14 - RP_SHOULDER, 0.0, 0.75)):
+                S.add(_lift3(_band_quad3(ra, rb, i, j, u0, u1, v0, v1), inside),
+                      C_TRIM3, M_TRIM, parents=(q[(k, i)],), level=1)
+    # the mirrors: big housings hung ahead of the windscreen's top corners
+    # on arms from the roof, the Citaro's "rabbit ears" (est size)
+    x_f, st0 = g.x_front, g.stations[0]
+    xm, zm, s_ = x_f + 0.30, 1.90, 2.2
+    mirror(xm, zm, st0[4], s_, C_TRIM3, M_TRIM)
+    for sgn in (-1.0, 1.0):
+        arm = np.array([(x_f + 0.004, sgn * 0.98, st0[3] - 0.10),
+                        (x_f + 0.004, sgn * 1.08, st0[3] - 0.04),
+                        (xm - 0.06, sgn * (st0[4] + 0.20), zm + 0.30),
+                        (xm - 0.06, sgn * (st0[4] + 0.12), zm + 0.26)])
+        for up in (1.0, -1.0):          # both faces: a thin arm seen from anywhere
+            S.add(arm, C_TRIM3, M_TRIM, inside=arm.mean(axis=0) - (0.0, 0.0, 0.3 * up))
+
+
 def car_mesh3(geom=None):
     """The fitted car's body and wheels as `_Soup3` records, BODY frame for
     the body (group 0), HUB frame for each wheel (groups 1-4, spokes 5-8).
@@ -1721,6 +1837,44 @@ def car_mesh3(geom=None):
 
     def rect(y0, y1, z0, z1):
         return ((y0, z0), (y1, z0), (y1, z1), (y0, z1))
+
+    def side_decal(xa_, xb_, z0, z1, side, col, mat, level=1, glow=False):
+        """A decal on the body SIDE (side < 0 the right, > 0 the left) from
+        station xa_ back to xb_ (xa_ > xb_), from height z0 up to z1: one
+        polygon per ring quad it crosses, each cut to the SAME two heights
+        at both of its ends, so a window or a door keeps level edges across
+        bands whose stations differ in height (the bus's pod stretch) and
+        across the sill / crease / belt facets. The van and the bus only:
+        their windows, doors and grilles are laid out in metres along the
+        body, not as fractions of one band."""
+        out_ = []
+        for k in range(len(rings) - 1):
+            xk0, xk1 = g.stations[k][0], g.stations[k + 1][0]
+            hi, lo = min(xa_, xk0), max(xb_, xk1)
+            if hi - lo < 1e-4:
+                continue
+            va, vb = (xk0 - hi) / (xk0 - xk1), (xk0 - lo) / (xk0 - xk1)
+            ra, rb = rings[k], rings[k + 1]
+            inside = 0.5 * (ra[1:].mean(axis=0) + rb[1:].mean(axis=0))
+            for p_ in range(1, 6):             # floor corner .. roof strip
+                j = p_ if side < 0 else 13 - p_
+                ends = []
+                for v in (va, vb):
+                    pi = ra[j] + (rb[j] - ra[j]) * v
+                    pj = ra[j + 1] + (rb[j + 1] - ra[j + 1]) * v
+                    zi, zj = float(pi[2]), float(pj[2])
+                    c0, c1 = max(z0, min(zi, zj)), min(z1, max(zi, zj))
+                    if c1 - c0 < 1e-4:
+                        break
+                    ends.append((pi + (pj - pi) * ((c0 - zi) / (zj - zi)),
+                                 pi + (pj - pi) * ((c1 - zi) / (zj - zi))))
+                if len(ends) < 2:
+                    continue
+                (a0, a1), (b0, b1) = ends
+                v_ = _lift3(np.array([a0, a1, b1, b0]), inside)
+                out_.append(S.add(v_, col, mat, parents=(q[(k, j)],), level=level,
+                                  glow=glow))
+        return out_
 
     # --- the tail: lamps, plate, bumper, exhaust ---------------------------
     zb_t = st_[1]
@@ -1765,6 +1919,52 @@ def car_mesh3(geom=None):
         band_decal('tail', RP_SHOULDER, 14 - RP_SHOULDER, 0.27, 0.73, 0.40, 0.78,
                    C_PLATE3, M_PLATE, _CENTRE3)
         exhausts = (-0.50, 0.50)
+    elif g.style == 'van':
+        # the Express's rear face IS its two doors (bodies.py: the last
+        # station is the whole face, so the tail cap is one flat panel):
+        # the split between them, a window in each, a handle, the small
+        # lamps low on the corners with the reverse lens under each, and the
+        # plate between them over the bumper. Everything here is est, drawn
+        # to the van's published 1.566 m width, not to a photograph.
+        cap_decal('tail', rect(-0.008, 0.008, zb_t + 0.11, st_[3] - 0.06), C_TRIM3, M_TRIM)
+        for sgn in (-1.0, 1.0):
+            y0_, y1_ = sgn * 0.05, sgn * 0.56
+            cap_decal('tail', rect(min(y0_, y1_), max(y0_, y1_), 1.12, 1.58),
+                      C_GLASS_BASE3, M_GLASS)
+            cap_decal('tail', rect(min(y0_, y1_), max(y0_, y1_), 1.40, 1.58),
+                      C_GLASS_SKY3, M_GLASS, level=2)
+            y0_, y1_ = sgn * 0.625, sgn * 0.745
+            cap_decal('tail', rect(min(y0_, y1_), max(y0_, y1_), zb_t + 0.14, zb_t + 0.38),
+                      C_LAMP_TAIL, M_TAIL, glow=True)
+            cap_decal('tail', rect(min(y0_, y1_), max(y0_, y1_), zb_t + 0.14, zb_t + 0.22),
+                      C_LAMP_REV_OFF, M_REV, level=2)
+        cap_decal('tail', rect(-0.10, -0.04, 0.98, 1.02), C_TRIM3, M_TRIM)
+        cap_decal('tail', rect(-0.26, 0.26, zb_t + 0.14, zb_t + 0.25), C_PLATE3, M_PLATE,
+                  level=2)
+        exhausts = (-0.42,)
+    elif g.style == 'bus':
+        # the Citaro's rear face (bodies.py: the engine bay's, its LAST
+        # station): the rear window high up with the sky in its top, the
+        # engine lid's louvred grille under it, tall lamp clusters up both
+        # corners with a reverse lens at their feet, the pair of high lamps
+        # under the roof edge, and the plate over the bumper. No tail pipe:
+        # the O530's exhaust leaves under the left rear corner, pointing
+        # down, out of sight from a chase eye (est). All positions est.
+        cap_decal('tail', rect(-0.95, 0.95, 1.98, 2.58), C_GLASS_BASE3, M_GLASS)
+        cap_decal('tail', rect(-0.95, 0.95, 2.34, 2.58), C_GLASS_SKY3, M_GLASS, level=2)
+        cap_decal('tail', rect(-0.85, 0.85, 1.25, 1.80), C_TRIM3, M_TRIM)
+        for z_ in (1.34, 1.48, 1.62):
+            cap_decal('tail', rect(-0.82, 0.82, z_, z_ + 0.04), _shade_rgb(paint, 0.80),
+                      M_PAINT, level=2)
+        for sgn in (-1.0, 1.0):
+            y0_, y1_ = sorted((sgn * 0.98, sgn * 1.16))
+            cap_decal('tail', rect(y0_, y1_, 0.62, 1.55), C_LAMP_TAIL, M_TAIL, glow=True)
+            cap_decal('tail', rect(y0_ + 0.02, y1_ - 0.02, 0.66, 0.80), C_LAMP_REV_OFF,
+                      M_REV, level=2)
+            y0_, y1_ = sorted((sgn * 0.90, sgn * 1.06))
+            cap_decal('tail', rect(y0_, y1_, 2.66, 2.76), C_LAMP_TAIL, M_TAIL, glow=True)
+        cap_decal('tail', rect(-0.26, 0.26, 0.56, 0.67), C_PLATE3, M_PLATE)
+        exhausts = ()
     else:
         # the roadster: round-cornered lamps on the tail panel, plate on the
         # bumper, and the cockpit's windscreen, seats and roll hoops
@@ -1841,40 +2041,71 @@ def car_mesh3(geom=None):
 
     # --- the front: headlamps, grille, lower intake, plate (seen in a spin)
     zb_n = sn[1]
-    for (i, j, par) in _LAMP_EDGES3:
-        band_decal('nose', i, j, 0.10, 0.85, 0.15, 0.90, C_HEAD3, M_HEAD, par)
-    cap_decal('front', rect(-0.62 * sn[4], 0.62 * sn[4], zb_n + 0.02, zb_n + 0.11), C_TRIM3, M_TRIM)
-    cap_decal('front', rect(-0.26, 0.26, zb_n + 0.13, zb_n + 0.24), C_PLATE3, M_PLATE)
-    cap_decal('front', rect(-0.42 * sn[4] / 0.70, 0.42 * sn[4] / 0.70, zb_n + 0.26,
-                            min(sn[2] - 0.02, zb_n + 0.33)), C_TRIM3, M_TRIM)
+    if g.style == 'bus':
+        # the Citaro's front face IS its first station (bodies.py), nearly
+        # all windscreen: the glass from the belt to 2.52 m, the destination
+        # display over it (dark, with its amber line), the headlamps low in
+        # the corners, the bumper and the plate. The bus's 'nose' band is
+        # its 5 cm rounded corner: a car's headlamp there would stand 1.9 m
+        # tall. All positions est.
+        cap_decal('front', rect(-1.08, 1.08, 1.08, 2.52), C_GLASS_BASE3, M_GLASS)
+        cap_decal('front', rect(-1.08, 1.08, 2.10, 2.52), C_GLASS_SKY3, M_GLASS, level=2)
+        cap_decal('front', rect(-0.92, 0.92, 2.58, 2.80), C_HOLE3, M_HOLE)
+        cap_decal('front', rect(-0.70, 0.40, 2.645, 2.735), C_DEST3, M_HOLE, level=2)
+        for sgn in (-1.0, 1.0):
+            y0_, y1_ = sorted((sgn * 0.80, sgn * 1.08))
+            cap_decal('front', rect(y0_, y1_, 0.66, 0.82), C_HEAD3, M_HEAD)
+        cap_decal('front', rect(-1.10, 1.10, zb_n + 0.02, zb_n + 0.16), C_TRIM3, M_TRIM)
+        cap_decal('front', rect(-0.26, 0.26, 0.52, 0.63), C_PLATE3, M_PLATE)
+    else:
+        for (i, j, par) in _LAMP_EDGES3:
+            band_decal('nose', i, j, 0.10, 0.85, 0.15, 0.90, C_HEAD3, M_HEAD, par)
+        cap_decal('front', rect(-0.62 * sn[4], 0.62 * sn[4], zb_n + 0.02, zb_n + 0.11),
+                  C_TRIM3, M_TRIM)
+        cap_decal('front', rect(-0.26, 0.26, zb_n + 0.13, zb_n + 0.24), C_PLATE3, M_PLATE)
+        cap_decal('front', rect(-0.42 * sn[4] / 0.70, 0.42 * sn[4] / 0.70, zb_n + 0.26,
+                                min(sn[2] - 0.02, zb_n + 0.33)), C_TRIM3, M_TRIM)
 
     # --- the sides: B-pillars, mirrors -----------------------------------
-    if 'roof' in kb:
+    if 'roof' in kb and g.style != 'van':
         k5 = kb['roof'] + 1                      # the second roof band starts at the B-pillar
         for (i, j) in ((RP_BELT, RP_EDGE), (14 - RP_EDGE, 14 - RP_BELT)):
             ra, rb = rings[k5], rings[k5 + 1]
             inside = 0.5 * (ra[1:].mean(axis=0) + rb[1:].mean(axis=0))
             S.add(_lift3(_band_quad3(ra, rb, i, j, 0.0, 1.0, 0.0, 0.11), inside),
                   C_TRIM3, M_TRIM, parents=(q[(k5, i)],), level=1)
-    ksc = kb.get('screen', kb.get('dash'))
-    x_m = g.stations[ksc][0] - 0.06
-    z_m = float(np.interp(x_m, g._xs, np.array([s[2] for s in g.stations][::-1]))) + 0.03
-    w_m = g.half_w_at(x_m)
-    for sgn in (-1.0, 1.0):
-        y0, y1 = sgn * (w_m - 0.02), sgn * (w_m + 0.15)
-        v = np.array([(x, y_, z) for x in (x_m - 0.10, x_m + 0.02) for y_ in (y0, y1)
-                      for z in (z_m, z_m + 0.13)])
-        v[[3, 7], 2] -= 0.03                         # tapered toward the tip
-        v[[2, 6], 2] += 0.01
-        v[[2, 3], 0] += 0.03                         # ... and the back face swept
-        cen = v.mean(axis=0)
-        back = S.add(v[[0, 1, 3, 2]], paint, M_PAINT, inside=cen)
-        for f in ((4, 5, 7, 6), (2, 3, 7, 6), (1, 3, 7, 5)):
-            S.add(v[list(f)], paint, M_PAINT, inside=cen)
-        bv = v[[0, 1, 3, 2]]
-        bc = bv.mean(axis=0)
-        S.add(_lift3(bc + 0.78 * (bv - bc), cen, 0.004), C_GLASS_BASE3, M_GLASS,
-              parents=(back,), level=1)
+    if g.style == 'van':
+        # the van's cab has ONE roof band (bodies.py): its door glass ends
+        # at the B-pillar, the band's rear edge, where the blind box starts
+        for (i, j) in ((RP_BELT, RP_EDGE), (14 - RP_EDGE, 14 - RP_BELT)):
+            band_decal('roof', i, j, 0.0, 1.0, 0.86, 1.0, C_TRIM3, M_TRIM, (i,))
+
+    def mirror(x_m, z_m, w_m, s_=1.0, col=paint, mat=M_PAINT):
+        """Both door mirrors: a tapered box whose swept back face carries
+        the glass. `s_` scales it about its root (exactly 1.0, the same
+        floats, on every car but the bus)."""
+        for sgn in (-1.0, 1.0):
+            y0, y1 = sgn * (w_m - 0.02 * s_), sgn * (w_m + 0.15 * s_)
+            v = np.array([(x, y_, z) for x in (x_m - 0.10 * s_, x_m + 0.02 * s_)
+                          for y_ in (y0, y1) for z in (z_m, z_m + 0.13 * s_)])
+            v[[3, 7], 2] -= 0.03 * s_                    # tapered toward the tip
+            v[[2, 6], 2] += 0.01 * s_
+            v[[2, 3], 0] += 0.03 * s_                    # ... and the back face swept
+            cen = v.mean(axis=0)
+            back = S.add(v[[0, 1, 3, 2]], col, mat, inside=cen)
+            for f in ((4, 5, 7, 6), (2, 3, 7, 6), (1, 3, 7, 5)):
+                S.add(v[list(f)], col, mat, inside=cen)
+            bv = v[[0, 1, 3, 2]]
+            bc = bv.mean(axis=0)
+            S.add(_lift3(bc + 0.78 * (bv - bc), cen, 0.004), C_GLASS_BASE3, M_GLASS,
+                  parents=(back,), level=1)
+    if g.style == 'bus':
+        _bus_sides3(S, g, rings, q, mirror, side_decal)
+    else:
+        ksc = kb.get('screen', kb.get('dash'))
+        x_m = g.stations[ksc][0] - 0.06
+        z_m = float(np.interp(x_m, g._xs, np.array([s[2] for s in g.stations][::-1]))) + 0.03
+        mirror(x_m, z_m, g.half_w_at(x_m))
 
     # --- arches and wheels ------------------------------------------------
     arch_of = []
@@ -3524,18 +3755,35 @@ class Renderer:
             for yc in (-0.34, 0.34):
                 shapes.append(('seat', np.array([(xc1 + 0.52, yc - 0.21), (xc1 + 0.52, yc + 0.21),
                                                  (xc1 + 0.06, yc + 0.22), (xc1 + 0.06, yc - 0.22)])))
+        elif g.style == 'van':
+            # the windscreen and the cab's door glass, then ONE roof from the
+            # A-pillar's top to the rear doors: the cab's and the wider box's
+            k_s = kb['screen']
+            shapes.append(('glass', outline(k_s, k_s + 2, lambda s_: 0.80 * s_[4])))
+            shapes.append(('roof', outline(k_s + 1, n, lambda s_: 0.95 * s_[5], -0.02, 0.0)))
+        elif g.style == 'bus':
+            # from above a bus is its roof, face to engine bay, with the
+            # air-con pod on it (the band standing at the full height)
+            shapes.append(('roof', outline(1, n - 1, lambda s_: 0.95 * s_[5])))
+            kp = [k for k in range(n) if st[k][3] == g.height and st[k + 1][3] == g.height]
+            if kp:
+                xp0, xp1, wp = st[kp[0]][0], st[kp[0] + 1][0], 0.80 * st[kp[0]][5]
+                shapes.append(('pod', np.array([(xp0, -wp), (xp0, wp), (xp1, wp), (xp1, -wp)])))
         else:
             k_s, k_r = kb['screen'], kb['rglass']
             shapes.append(('glass', outline(k_s, k_r + 1, lambda s_: 0.80 * s_[4])))
             shapes.append(('roof', outline(k_s + 1, k_r, lambda s_: 0.95 * s_[5], -0.02, 0.02)))
-        ksc = kb.get('screen', kb.get('dash'))
-        x_m = st[ksc][0] - 0.06
-        w_m = g.half_w_at(x_m)
+        if g.style == 'bus':          # the mesh's "rabbit ears", ahead of the face
+            x_m, w_m, s_ = g.x_front + 0.30, st[0][4], 2.2
+        else:
+            ksc = kb.get('screen', kb.get('dash'))
+            x_m = st[ksc][0] - 0.06
+            w_m, s_ = g.half_w_at(x_m), 1.0
         for sgn in (-1.0, 1.0):
-            shapes.append(('mirror', np.array([(x_m + 0.02, sgn * (w_m - 0.02)),
-                                               (x_m - 0.03, sgn * (w_m + 0.15)),
-                                               (x_m - 0.12, sgn * (w_m + 0.14)),
-                                               (x_m - 0.10, sgn * (w_m - 0.02))])))
+            shapes.append(('mirror', np.array([(x_m + 0.02 * s_, sgn * (w_m - 0.02 * s_)),
+                                               (x_m - 0.03 * s_, sgn * (w_m + 0.15 * s_)),
+                                               (x_m - 0.12 * s_, sgn * (w_m + 0.14 * s_)),
+                                               (x_m - 0.10 * s_, sgn * (w_m - 0.02 * s_))])))
         x0, w0, w1 = st[0][0], st[0][4], st[1][4]
         xr, wt = st[-1][0], st[-1][4]
         for sgn in (-1.0, 1.0):
@@ -3554,7 +3802,9 @@ class Renderer:
         cols = {'body': tone[0.80], 'upper': tone[1.0],
                 'glass': (44, 54, 68), 'roof': tone[1.10],
                 'cockpit': C_INTERIOR3, 'seat': C_SEAT3,
-                'mirror': tone[0.72], 'head': C_HEAD3}
+                'mirror': tone[0.72], 'head': C_HEAD3, 'pod': tone[0.80]}
+        if g.style == 'bus':
+            cols['mirror'] = C_TRIM3      # black housings, as the chase mesh's
         pc = self._plan_cache = (g.key, shapes, block, cuts, cols)
         return pc
 
@@ -3600,7 +3850,7 @@ class Renderer:
         brake = float(getattr(ctl, 'brake', 0.0) or 0.0) if ctl is not None else 0.0
         rev = int(getattr(aux, 'gear', 0) or 0) < 0
         c_tail = C_LAMP_REV_ON if rev else (C_LAMP_BRAKE if brake > 0.05 else C_LAMP_TAIL)
-        for name in ('upper', 'glass', 'roof', 'cockpit', 'seat', 'mirror', 'head', 'tail'):
+        for name in ('upper', 'glass', 'roof', 'pod', 'cockpit', 'seat', 'mirror', 'head', 'tail'):
             col = c_tail if name == 'tail' else cols.get(name)
             for q_ in pts.get(name, ()):
                 pygame.draw.polygon(sc, col, q_)
@@ -3741,6 +3991,21 @@ class Renderer:
             xc0, xc1 = st[kd_][0], st[kc + 1][0]
             xt0, xt1 = xc0 - 0.30, xc1 + 0.10
             zbelt, ztop, wr = st[kd_][3], 1.16, 0.80 * st[kc][5]
+        elif g.style == 'van':
+            # a box to the belt, then the cab's screen and one roof at the
+            # load box's height to its near-upright rear doors
+            k_s = kb['screen']
+            xc0, xc1 = st[k_s][0], xr + 0.12
+            xt0, xt1 = st[k_s + 1][0], xr + 0.10
+            zbelt, ztop, wr = st[k_s][2], g.height, 0.95 * st[k_s + 2][5]
+            zbr = zbelt
+        elif g.style == 'bus':
+            # a box to the belt; the glazed front stands nearly upright,
+            # the roof runs to the engine bay's near-upright rear face
+            xc0, xc1 = xf - 0.30, xr + 0.14
+            xt0, xt1 = xf - 0.35, xr + 0.20
+            zbelt, ztop, wr = st[0][2], g.height, 0.95 * st[2][5]
+            zbf, zbr = zbelt - 0.07, zbelt
         else:
             k_s, k_r = kb['screen'], kb['rglass']
             xc0, xc1 = st[k_s][0], st[k_r + 1][0]
@@ -5740,6 +6005,29 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     rep('gg envelope cached',
         _GG_STATS['recomputes'] < 0.15 * max(_GG_STATS['calls'], 1),
         f'{_GG_STATS["recomputes"]} recomputes in {_GG_STATS["calls"]} calls')
+    # task 41: the envelope's lateral limit is each new car's own. max_ay_car
+    # on the Corsa's CarSpec IS qss.max_ay (with a wing force too); a stock
+    # car keeps the qss curve itself; the Express and the bus, at their own
+    # tyre grip (CarSpec.mu_scale, what HudData.mu_scale_car carries on dry
+    # tarmac), draw their own -- near C1's ramp-steer 0.80 / 0.67 g
+    import cars as _cars_g
+    was_g = _CAR
+    d_corsa = max(abs(max_ay_car(_cars_g.get('corsa'), V_, k_, 0.97, 0.90, 1.0)
+                      - qss.max_ay(V_, k=k_, x_w=0.97, h_w=0.90, mu_scale=1.0))
+                  for V_ in (10.0, 30.0) for k_ in (0.0, 1.5))
+    env = {}
+    for key_ in ('corsa', 'mx5', 'express', 'bus'):
+        c_g = _cars_g.get(key_)
+        set_car(c_g)
+        mu_g = 1.0 if key_ in ('corsa', 'mx5') else float(c_g.mu_scale)
+        env[key_] = float(gg_envelope(20.0, mu_scale=mu_g)[:, 0].max())
+    set_car(was_g)
+    ay_q = qss.max_ay(20.0, k=0.0, x_w=X_W, h_w=H_W, mu_scale=1.0) / G
+    rep('gg envelope: each new car draws its own limit, the stock cars the study\'s',
+        d_corsa < 1e-12 and env['corsa'] == ay_q and env['mx5'] == ay_q
+        and 0.60 < env['bus'] < 0.75 and 0.75 < env['express'] < 0.86,
+        f'max_ay_car(Corsa) - qss.max_ay {d_corsa:.1e}; at 20 m/s ' + ', '.join(
+            f'{k_} {v_:.3f} g' for k_, v_ in env.items()))
 
     # ---- screenshot -------------------------------------------------------
     # A frame a human can judge: T2 (R = 30 m, the tightest corner, so the
@@ -6223,7 +6511,8 @@ def _car_checks(screenshot_dir: str = 'runs') -> list:
         aux_w.dev_left = aux_w.dev_right = True
         aux_w.wing_side, aux_w.wing_deploy = 0, 0.0
         aux_w.top_on, aux_w.top_deploy, aux_w.top_plate = True, 0.0, 0.0
-        want_style = {'corsa': 'hatch', 'mx5': 'roadster', '540i': 'saloon'}
+        want_style = {'corsa': 'hatch', 'mx5': 'roadster', '540i': 'saloon',
+                      'express': 'van', 'bus': 'bus'}      # task 41
         n_old = 138                               # the pre-style body + wheels
         for key in _cars.CAR_ORDER:
             car = _cars.get(key)
@@ -6272,7 +6561,52 @@ def _car_checks(screenshot_dir: str = 'runs') -> list:
         out.append(('car: each car builds its own style; flanks and deck carry the wings',
                     ok_s, '; '.join(rows)))
 
-        # ---- three cars from behind ------------------------------------------
+        # ---- task 41: the van and the bus carry their own details, measured
+        #      off the mesh -- the van's box is blind behind the cab and its
+        #      rear doors have a window each; the bus's doors are all on the
+        #      RIGHT (y < 0), its panes on both sides, its mirrors reach past
+        #      the body; both have glowing tail lamps and reverse lenses, and
+        #      both build a plan-view car and a 15-polygon ghost
+        rows_n, ok_n = [], True
+        rp_ = Renderer(ViewConfig(mode='car_up'), tr, headless=True)
+        for key in ('express', 'bus'):
+            set_car(_cars.get(key))
+            g_ = car_geom()
+            mesh = Mesh(car_mesh3(g_))
+            C_ = mesh.centroids
+            body_ = mesh.group == 0
+            side_ = body_ & (np.abs(C_[:, 1]) > 0.9 * g_.half_w) & (mesh.level >= 1)
+            glass_ = mesh.mat == M_GLASS
+            lamps = (len(mesh.i_glow), len(mesh.i_rev))
+            reach = float(np.abs(mesh.verts[np.repeat(body_, mesh.counts)][:, 1]).max())
+            names = {n_ for n_, _p in rp_._plan_car(g_)[1]}
+            n_ghost = len(rp_._ghost_mesh3(g_)[2])
+            ok_c = lamps[0] >= 2 and lamps[1] >= 2 and 'roof' in names and n_ghost == 15
+            if key == 'express':
+                x_box = g_.stations[g_.bands.index('box')][0]
+                side_any = body_ & (np.abs(C_[:, 1]) > 0.9 * g_.half_w)   # any level
+                n_blind = int((side_any & glass_ & (C_[:, 0] < x_box)).sum())
+                n_rear = int((glass_ & (C_[:, 0] < g_.x_rear + 0.02)).sum())
+                ok_c = ok_c and n_blind == 0 and n_rear == 4
+                rows_n.append(f'express: {n_blind} side glass behind the cab, {n_rear} rear-door '
+                              f'glass polys')
+            else:
+                door_ = side_ & (mesh.mat == M_TRIM) & (C_[:, 2] < 1.02)
+                d_r, d_l = int((door_ & (C_[:, 1] < 0)).sum()), int((door_ & (C_[:, 1] > 0)).sum())
+                p_r = int((side_ & glass_ & (C_[:, 1] < 0) & (mesh.level == 1)).sum())
+                p_l = int((side_ & glass_ & (C_[:, 1] > 0) & (mesh.level == 1)).sum())
+                ok_c = (ok_c and d_r >= 3 and d_l == 0 and p_r >= len(BUS_PANES_R3)
+                        and p_l >= len(BUS_PANES_L3) and reach > g_.half_w + 0.2
+                        and 'pod' in names)
+                rows_n.append(f'bus: door frames {d_r} right / {d_l} left, panes {p_r} / {p_l}, '
+                              f'mirrors to {reach:.2f} m (body {g_.half_w:.3f})')
+            rows_n[-1] += f', lamps {lamps[0]} glow / {lamps[1]} reverse, ghost {n_ghost} polys'
+            ok_n &= ok_c
+        set_car(was)
+        out.append(('car: the van and the bus read as themselves (blind box, doors on the '
+                    'right, lamps, plan, ghost)', ok_n, '; '.join(rows_n)))
+
+        # ---- every car from behind -------------------------------------------
         shots = []
         tra = trk.make_arena()
         i_a = trk_index(tra, 148.0)
@@ -6292,7 +6626,7 @@ def _car_checks(screenshot_dir: str = 'runs') -> list:
             shots.append(os.path.join(os.path.abspath(screenshot_dir), f'render_car_{key}.png'))
             r_.screenshot(shots[-1])
         set_car(was)
-        out.append(('car: screenshots (three cars from behind, braking)',
+        out.append((f'car: screenshots ({len(_cars.CAR_ORDER)} cars from behind, braking)',
                     all(os.path.exists(f) for f in shots) and os.path.exists(shot_b),
                     ', '.join(shots + [shot_b])))
 
@@ -6337,6 +6671,72 @@ def _car_checks(screenshot_dir: str = 'runs') -> list:
                     f'{swing:.2f} m and turns the view {lean:.1f} deg (view_psi); horizon '
                     f'roll {abs(big._r[2]):.0e}; focal length {sorted(fls)[0]:.1f} px at '
                     f'0-45 m/s ({len(fls)} value)'))
+
+        # ---- task 41: a body taller than the Corsa's scales the view about
+        #      its tail; the stock three take the pre-task-41 path exactly
+        def old_targets(V_, z_, ax_, ay_, rear_):
+            """`follow_targets` as it stood before task 41 (rear cap 1.0 m,
+            no height): what every stock body must still get, float for float."""
+            d_ = CHASE_DIST / max(float(z_), 0.35) + CHASE_DIST_V * min(max(V_, 0.0), 200.0)
+            d_ = min(max(d_, CHASE_DIST_MIN), CHASE_DIST_MAX)
+            d_ += min(max(float(rear_) - CHASE_REAR_REF, -0.5), 1.0)
+            axg_, ayg_ = float(ax_) / G, float(ay_) / G
+            tr_ = min(max(CHASE_K_TRAIL * axg_, -CHASE_TRAIL_MAX), CHASE_TRAIL_MAX)
+            sw_ = min(max(-CHASE_K_SWING * ayg_, -CHASE_SWING_MAX), CHASE_SWING_MAX)
+            lk_ = min(max(CHASE_K_LOOK * ayg_, -CHASE_LOOK_MAX), CHASE_LOOK_MAX)
+            h_ = CHASE_HEIGHT + 0.12 * (d_ - CHASE_DIST) + max(min(CHASE_K_DIP * axg_, 0.05), -0.08)
+            return np.array([max(d_ + tr_, CHASE_DIST_MIN), sw_, lk_, h_])
+        sweep = [(V_, z_, ax_, ay_) for V_ in (0.0, 14.0, 60.0) for z_ in (0.5, 1.0, 2.5)
+                 for ax_, ay_ in ((0.0, 0.0), (-13.0, 9.0), (6.0, -14.0))]
+        cam_ = Chase3D(1280, 800)
+        n_same = n_all = 0
+        for key in ('corsa', 'mx5', '540i'):
+            g_ = CarGeom(_cars.get(key))
+            for V_, z_, ax_, ay_ in sweep:
+                n_all += 1
+                n_same += bool(np.array_equal(
+                    cam_.follow_targets(V_, z_, ax_, ay_, -g_.x_rear, g_.height),
+                    old_targets(V_, z_, ax_, ay_, -g_.x_rear)))
+            n_all += 1
+            n_same += cam_.look_at(-g_.x_rear, g_.height) == (CHASE_TARGET_X, CHASE_TARGET_Z)
+        # the new bodies: the eye above the roof and behind the tail over the
+        # whole sweep, and the frame the Corsa's scaled -- the point over the
+        # tail at roof height, and the road under it, land on the Corsa's pixels
+        tall, px_off = {}, 0.0
+
+        def eye_over(key):
+            """(k, the eye's least height over the roof, its least gap behind
+            the tail) over the sweep, and each pose's tail-top and tail-foot
+            pixels."""
+            g_ = CarGeom(_cars.get(key))
+            above = behind = math.inf
+            pxs = []
+            for V_, z_, ax_, ay_ in sweep:
+                c_ = Chase3D(1280, 800)
+                c_.set_pose(0.0, 0.0, 0.0, V_, z_, dt=0.0, ax=ax_, ay=ay_,
+                            rear=-g_.x_rear, top=g_.height)
+                above = min(above, float(c_.eye[2]) - g_.height)
+                behind = min(behind, g_.x_rear - float(c_.eye[0]))
+                pxs.append(c_.project(np.array([(g_.x_rear, 0.0, g_.height),
+                                                (g_.x_rear, 0.0, 0.0)]))[0])
+            return (Chase3D.size_k(g_.height), above, behind), np.array(pxs)
+        ref_c, px_c = eye_over('corsa')
+        ok_k = True
+        for key in ('express', 'bus'):
+            tall[key], px_k = eye_over(key)
+            k_, above, behind = tall[key]
+            ok_k &= (k_ > 1.0 and above >= k_ * ref_c[1] - 1e-9
+                     and behind >= k_ * ref_c[2] - 1e-9)
+            px_off = max(px_off, float(np.abs(px_k - px_c).max()))
+        ok_tall = n_same == n_all and ok_k and tall['bus'][1] > 0.5 and px_off < 0.5
+        out.append(('chase camera: a tall body scales the view about its tail; the stock '
+                    'three exactly as before', ok_tall,
+                    f'stock: {n_same}/{n_all} targets and look-at points equal to the '
+                    f'pre-task-41 formula bit for bit; '
+                    + '; '.join(f'{k_}: k {v_[0]:.3f}, eye >= {v_[1]:.2f} m over its roof and '
+                                f'>= {v_[2]:.2f} m behind its tail' for k_, v_ in tall.items())
+                    + f' (the Corsa: {ref_c[1]:.2f} / {ref_c[2]:.2f} m, 27 poses each); '
+                    f'tail-top and tail-foot pixels within {px_off:.2e} px of the Corsa\'s'))
 
         # ---- NaN / inf in the extras the renderer reads (ax, ay, phi, omega)
         #      never poison the spring or the car, and the next good frame is
