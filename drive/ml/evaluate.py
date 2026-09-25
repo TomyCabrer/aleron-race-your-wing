@@ -40,6 +40,9 @@ TRANSFER_WINGS = ("plate", "off", "fin")
 #: plural -- and the three in the library are genuinely different machines:
 #: 1010 kg FWD 55 kW, 1140 kg RWD 109 kW, 1780 kg RWD 210 kW.
 TRANSFER_CARS = ("corsa", "mx5", "540i")
+#: (task 41: the Express and the Citaro bus are not in the matrix -- they have
+#: no bred checkpoint of their own yet, and a matrix row is a car's OWN best
+#: policy. `--car express|bus` measures any checkpoint on them.)
 
 #: Where the per-car checkpoints live, keyed by the car they trained on. The
 #: `corsa` entry is the arena specialist, because the matrix is measured on the
@@ -595,7 +598,7 @@ def main(argv=None) -> int:
     ap.add_argument("--only-transfer", action="store_true",
                     help="the transfer grid and nothing else")
     ap.add_argument("--car", default=None,
-                    help="cars.py key to MEASURE on: corsa | mx5 | 540i")
+                    help="cars.py key to MEASURE on: corsa | mx5 | 540i | express | bus")
     ap.add_argument("--car-matrix", action="store_true",
                     help="the cross-car matrix: every (trained-on car x "
                          "evaluated-on car) cell, baseline vs learned")

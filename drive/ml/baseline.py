@@ -250,7 +250,7 @@ MU_NEAR_STATIONS = 1
 #: it used to blast through and get away with.
 
 
-def _ay_peak(car, mu_scale: float = 1.0, roll_dist_f: float = 0.74) -> float:
+def _ay_peak(car, mu_scale: float = 1.0, roll_dist_f: float | None = None) -> float:
     """Peak sustainable a_y for this car, m/s^2, from `qss.axle_capacity`.
 
     The same closed form as `drive.drive.car_ay_peak` and deliberately a copy
@@ -267,15 +267,24 @@ def _ay_peak(car, mu_scale: float = 1.0, roll_dist_f: float = 0.74) -> float:
     by a margin that takes 45 % off the 540i, so 4 % the optimistic way is
     absorbed many times over. `drive.drive` needs the ramp steer because it
     plans to this number directly; this does not.
+
+    Task 41, as in `drive.drive.car_ay_peak`: each axle against its OWN
+    tyre reference (`qss.TYRE` itself on a car tyre; a bus's load-scaled
+    law, without which the bus reads 0.24 g) and the car's declared
+    `roll_dist_f`, else 0.74 -- identical arithmetic on the stock cars.
     """
+    if roll_dist_f is None:
+        rd = getattr(car, "roll_dist_f", None)
+        roll_dist_f = 0.74 if rd is None else float(rd)
+    tf, tr_ = qss.car_tyre_refs(car)
     W = car.m * G
     Fz_f, Fz_r = W * car.wdist_f, W * (1.0 - car.wdist_f)
     lo, hi = 0.1, 30.0
     for _ in range(200):
         a = 0.5 * (lo + hi)
         dFz = car.m * a * car.h_cg / car.t
-        cap = (qss.axle_capacity(Fz_f, roll_dist_f * dFz, mu_scale)
-               + qss.axle_capacity(Fz_r, (1.0 - roll_dist_f) * dFz, mu_scale))
+        cap = (qss.axle_capacity(Fz_f, roll_dist_f * dFz, mu_scale, tf)
+               + qss.axle_capacity(Fz_r, (1.0 - roll_dist_f) * dFz, mu_scale, tr_))
         lo, hi = (a, hi) if car.m * a < cap else (lo, a)
     return 0.5 * (lo + hi)
 

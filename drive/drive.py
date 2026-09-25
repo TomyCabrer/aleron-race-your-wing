@@ -356,10 +356,17 @@ def engine_hud(mode: str, car=None) -> str:
     return f"{engine_ps(mode, car)} HP"
 
 
+#: the Corsa's Z12XE by its published pair and displacement. The wording
+#: used to key on P_max == 55 kW alone, and the Renault Express's E7J 1.4 is
+#: ALSO 55 kW (task 41): it would have been labelled "Stock 1.2 16V".
+_Z12XE = (55e3, 110.0, 1.199e-3)
+
+
 def engine_label(mode: str, car=None) -> str:
     """The SETTINGS page row. The Corsa keeps its own wording, because
     "Stock 1.2 16V (75 hp)" says something a number cannot."""
-    if car is None or getattr(car, "P_max", 55e3) == 55e3:
+    if car is None or (getattr(car, "P_max", 55e3), getattr(car, "T_max", 110.0),
+                       getattr(car, "displacement", 1.199e-3)) == _Z12XE:
         return ENGINE_LABELS[mode]
     stem = {"stock": "Stock", "tuned": "Tuned", "sport": "Sport"}[mode]
     return f"{stem} ({engine_ps(mode, car)} hp)"
@@ -790,6 +797,10 @@ SETTINGS_ROW_HELP = {
         ("", "measured; front-wheel drive"),
         ("MX-5 / 540i", "lighter and neutral / heavy and powerful;"),
         ("", "both rear-wheel drive"),
+        ("Express", "Renault's 1990s 1.4 van: the Corsa's"),
+        ("", "power in a 1.78 m tall box; front drive"),
+        ("Citaro bus", "a 12 m, 11.5 t city bus, governed to"),
+        ("", "80 km/h: room for the biggest wings"),
         ("Records", "each car has its own records and medals")])],
     "set:paint": [("PAINT", [
         ("Factory", "the car's own colour: the Corsa yellow,"),
@@ -1786,8 +1797,12 @@ class Sim:
     def _emit_skid(self):
         veh = self.veh
         act = [False] * 4
+        #  each wheel against ITS tyre's reference: qss.TYRE itself on every
+        #  car tyre, the load-scaled law on a bus's (task 41 -- against the
+        #  car tyre's a 20 kN bus wheel reads as far past its grip)
+        refs = veh.der.tyre_refs
         for i in range(4):
-            cap = qss.fy_max(float(veh.Fz[i]), mu_scale=self.mu[i], **qss.TYRE)
+            cap = qss.fy_max(float(veh.Fz[i]), mu_scale=self.mu[i], **refs[i])
             act[i] = (abs(float(veh.Fy[i])) / max(cap, 1.0) > 0.92
                       or abs(float(veh.kappa[i])) > 0.12)
         if any(act):
@@ -4039,7 +4054,11 @@ class PathFollower:
                        I_N_LIM / max(self.ki_n, 1e-9))
         delta = (atan(veh.car.L * kt) - self.kp_n * n
                  - self.ki_n * self.I_n - self.kd * psi_err)
-        lock = radians(DELTA_LOCK_DEG)
+        #  the Corsa's 32.625 deg on the three stock cars, whose scripted
+        #  laps are frozen numbers; a car with `own_aids` (task 41: the van
+        #  and the bus) steers to its OWN lock
+        lock = (veh.lock_rad if getattr(veh.car, "own_aids", False)
+                else radians(DELTA_LOCK_DEG))
         return min(max(delta, -lock), lock), s, n, kt
 
     def __call__(self, t, veh, tr):
@@ -4065,7 +4084,7 @@ class PathFollower:
 #  6.0 m half-width. Everything below is expressed as a RATIO against the
 #  Corsa's own value, so for the Corsa the ratio is exactly 1.0 and
 #  `x * 1.0 == x` -- the acceptance lap is bit-for-bit, not merely close.
-def car_ay_peak(car, mu_scale: float = 1.0, roll_dist_f: float = 0.74) -> float:
+def car_ay_peak(car, mu_scale: float = 1.0, roll_dist_f: float | None = None) -> float:
     """Peak sustainable a_y for THIS car, m/s^2, from `qss.fy_max`/`qss.TYRE`.
 
     The same statement `qss.residuals` makes, minus the device and the yaw
@@ -4078,7 +4097,16 @@ def car_ay_peak(car, mu_scale: float = 1.0, roll_dist_f: float = 0.74) -> float:
 
     Pure, deterministic, ~200 cheap iterations. Called once per script setup,
     never from the 1 kHz driver loop.
+
+    Task 41: each axle reads its OWN tyre reference (`qss.car_tyre_refs`:
+    `qss.TYRE` itself on every car tyre, the load-scaled law on a bus's)
+    and the split is the car's declared `roll_dist_f`, else the study's
+    0.74 -- so for the three stock cars the arithmetic is what it was.
     """
+    if roll_dist_f is None:
+        rd = getattr(car, "roll_dist_f", None)
+        roll_dist_f = 0.74 if rd is None else float(rd)
+    tf, tr_ = qss.car_tyre_refs(car)
     W = car.m * G
     Fz_f, Fz_r = W * car.wdist_f, W * (1.0 - car.wdist_f)
     t_bar = car.t
@@ -4086,8 +4114,8 @@ def car_ay_peak(car, mu_scale: float = 1.0, roll_dist_f: float = 0.74) -> float:
     for _ in range(200):
         a = 0.5 * (lo + hi)
         dFz = car.m * a * car.h_cg / t_bar
-        cap = (qss.axle_capacity(Fz_f, roll_dist_f * dFz, mu_scale)
-               + qss.axle_capacity(Fz_r, (1.0 - roll_dist_f) * dFz, mu_scale))
+        cap = (qss.axle_capacity(Fz_f, roll_dist_f * dFz, mu_scale, tf)
+               + qss.axle_capacity(Fz_r, (1.0 - roll_dist_f) * dFz, mu_scale, tr_))
         lo, hi = (a, hi) if car.m * a < cap else (lo, a)
     return 0.5 * (lo + hi)
 
@@ -4151,6 +4179,24 @@ THR_FLOOR = 0.15
 #: corner too fast in the first place, and the margin is the honest fix.
 MARGIN_FADE = 0.10
 MARGIN_MIN = 0.55
+#: Task 41: the margin a car with `own_aids` also leaves for a SLOW YAW
+#: RESPONSE. The dynamic index DI = Izz/(m*a*b) is 0.80 on the Corsa (and
+#: by construction on the MX-5, the 540i and the van); a 12 m bus is 1.67 --
+#: its yaw inertia lags the front axle's force so far that the scripted
+#: driver's first steer of a corner puts the front past its peak before the
+#: body has turned, and on the arena's wet corner it ploughed 19 m wide at
+#: margin 0.90 (measured; 0.85 -> 3.9 m, 0.80 -> 2.3 m, 0.75 -> 1.5 m, on
+#: a 6 m half-width). `(DI_REF/DI)**DI_EXP` is 1.0 at DI <= 0.80 and 0.83
+#: on the bus. 0.25 is the exponent that lands the bus in that measured
+#: band; it is a DRIVER calibration, like MARGIN_FADE.
+DI_REF = 0.80
+DI_EXP = 0.25
+
+
+def dynamic_index(car) -> float:
+    """Izz / (m a b): how far the car's yaw inertia is from two point
+    masses on the axles (1.0). 0.80 on the Corsa."""
+    return car.Izz / (car.m * car.a * car.b)
 
 def power_grip_ratio(car, mu_scale: float = 1.0) -> float:
     """(P_wheel/m) / peak a_y, as a multiple of the Corsa's. Exactly 1.0 for
@@ -4180,14 +4226,17 @@ def driver_scaling(car, mu_scale: float = 1.0) -> dict:
                 / car_ay_measured(_CORSA_REF, 1.0))
     L_ratio = car.L / L_REF
     pg = power_grip_ratio(car, mu_scale)
+    margin_scale = min(max(1.0 - MARGIN_FADE * (pg - 1.0), MARGIN_MIN), 1.0)
+    if getattr(car, "own_aids", False):
+        #  task 41: the slow-yaw margin (see DI_EXP); never on a stock car
+        margin_scale *= min(1.0, (DI_REF / dynamic_index(car)) ** DI_EXP)
     return dict(ay=AY_MAX_DRY * ay_ratio,
                 kp_n=KP_N * L_ratio,
                 kd_psi=KD_PSI * L_ratio,
                 lookahead=12.0 / ay_ratio,
                 ay_ratio=ay_ratio, L_ratio=L_ratio,
                 power_grip=pg, modulate=pg > POWER_GRIP_MODULATE,
-                margin_scale=min(max(1.0 - MARGIN_FADE * (pg - 1.0),
-                                     MARGIN_MIN), 1.0))
+                margin_scale=margin_scale)
 
 
 def speed_profile(tr, margin=0.90, car=None, global_wet=1.0):
@@ -6622,8 +6671,17 @@ def _v26_settings_and_menu(tmp, verbose=True):
                 and (cv.tyre is CORSA_TYRE) == (name == CAR_DEFAULT)
                 and len(cv.pt_p.gear) == len(stock.gear)
                 and cv.der.I_roll > 0.0 and cv._det_roll > 0.0
+                #  the car's own split (task 41: the bus declares 0.45),
+                #  which is cfg's 0.74 on every car that declares none
                 and abs(cv.der.lltd_geo_f + cv.der.lltd_roll_f
-                        - cv.cfg.roll_dist_f) < 1e-15
+                        - cv.der.roll_dist_f) < 1e-15
+                and (cv.der.roll_dist_f == cv.cfg.roll_dist_f) == (stock.roll_dist_f is None)
+                #  the stock cars on the unscaled file tyre and qss.TYRE
+                #  itself; a declared load scale reaches every wheel
+                and all(t.LFZO == (stock.tyre_lfzo_f if i < 2 else stock.tyre_lfzo_r)
+                        for i, t in enumerate(cv.der.tyres))
+                and ((name in cars.STOCK_CARS)
+                     <= all(r is qss.TYRE for r in cv.der.tyre_refs))
                 and abs(sum(cv.Fz) - cs.m * G) < 1e-6
                 and (cs is stock) == (kg == 0.0))
             cv.step(Controls(throttle=0.5, auto_gearbox=True), (1.0,) * 4,
@@ -7450,7 +7508,8 @@ def build_parser():
                         "ESC > Race vs bot")
     p.add_argument("--race-car", dest="race_car", default=None, metavar="CAR[,CAR2,...]",
                    help="what each bot drives: 'own' (the car it was bred in, the "
-                        "default), 'same' (your car) or a stock corsa / mx5 / 540i, "
+                        "default), 'same' (your car) or a stock corsa / mx5 / 540i / "
+                        "express / bus, "
                         "per bot like --race")
     p.add_argument("--garage", action="store_true",
                    help="open the 3D editor first; ENTER / cross drives the "
@@ -7478,7 +7537,8 @@ def build_parser():
     p.add_argument("--swarm-car", dest="swarm_car", default=None,
                    choices=("same",) + tuple(cars.CAR_ORDER),
                    help="what the swarm breeds in: 'same' (your car, the default) or "
-                        "a stock corsa / mx5 / 540i on your settings, like --race-car")
+                        "a stock corsa / mx5 / 540i / express / bus on your settings, "
+                        "like --race-car")
     p.add_argument("--swarm-fast", dest="swarm_fast", action="store_true",
                    help="no replay: the next generation starts the moment one is "
                         "scored (V in the swarm window toggles it)")
@@ -8863,16 +8923,20 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
             from . import input as inp_mod
             #  the SELECTED car's road-wheel lock, not the Corsa's on every
             #  car. Exactly inp_mod.DELTA_LOCK_DEG for the Corsa, so the
-            #  default session is unchanged.
-            from .vehicle import car_lock_rad
-            lock_deg = math.degrees(car_lock_rad(car))
+            #  default session is unchanged. A car with `own_aids` (task 41:
+            #  the van, the bus) also gets its own wheelbase, grip and limit
+            #  understeer in the soft lock (input.aid_for_car); the stock
+            #  three get K_US_DEG_MEASURED and the Corsa's L / a_y as before.
+            aid = inp_mod.aid_for_car(car)
             kb = inp_mod.KeyboardInput(steer_limit=settings.steer_aid,
-                                       k_us_deg=inp_mod.K_US_DEG_MEASURED,
-                                       lock_deg=lock_deg)
+                                       k_us_deg=aid["k_us_deg"],
+                                       lock_deg=aid["lock_deg"],
+                                       aid_L=aid["aid_L"], aid_ay=aid["aid_ay"])
             if pad is not None:
                 pad.steer_limit = kb.steer_limit
                 pad.k_us_deg = kb.k_us_deg
                 pad.lock_deg = kb.lock_deg
+                pad.aid_L, pad.aid_ay = kb.aid_L, kb.aid_ay
                 pad.delta_deg = 0.0
                 pad.seed_edges()           # the button that ended the last
                 pad.set_menu(False)        # session is not a press in this one
@@ -8881,7 +8945,8 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
                     if inp_mod.GamepadInput.available():
                         pad = inp_mod.GamepadInput(0, steer_limit=settings.steer_aid,
                                                    k_us_deg=kb.k_us_deg,
-                                                   lock_deg=kb.lock_deg)   # this car's lock
+                                                   lock_deg=kb.lock_deg,   # this car's lock
+                                                   aid_L=kb.aid_L, aid_ay=kb.aid_ay)
                 except Exception as exc:
                     print(f"gamepad found but not usable ({exc}) - keyboard only")
                     pad = None

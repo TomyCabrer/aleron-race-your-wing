@@ -12,10 +12,11 @@ A class nobody laps has NO medals ("--" on the screen) rather than an
 invented time: a gold nobody can prove is reachable is worse than none.
 
 The class is records.py's (plan D1): `track|car|engine|surface`. Seven maps
-(four circuits, the open map, the skidpad, the dragstrip) x three cars x
-three engines x three surfaces = 189 classes, every one of which has an
-entry -- an author time, or a reason there is none. The DRAGSTRIP has no
-lap (records.py excludes it for the same reason), so its 27 classes say so.
+(four circuits, the open map, the skidpad, the dragstrip) x five cars (the
+Renault Express and the Citaro bus joined the three in task 41) x three
+engines x three surfaces = 315 classes, every one of which has an entry --
+an author time, or a reason there is none. The DRAGSTRIP has no lap
+(records.py excludes it for the same reason), so its 45 classes say so.
 
 How a reference lap is driven
 -----------------------------
@@ -177,7 +178,7 @@ REGEN = "python3 -m drive.medals --build"
 # ==================================================================== #
 def class_keys() -> list:
     """Every class, in menu order: TRACK_ORDER x CAR_ORDER x ENGINE_MODES x
-    SURFACE_MODES (189)."""
+    SURFACE_MODES (315: 7 maps x 5 cars x 3 x 3)."""
     import cars
     from . import track as trk
     from .drive import ENGINE_MODES, SURFACE_MODES

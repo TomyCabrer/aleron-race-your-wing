@@ -573,7 +573,8 @@ def main(argv=None) -> int:
     ap.add_argument("--gens", type=int, default=10, help="generations to run")
     ap.add_argument("--track", default="arena")
     ap.add_argument("--wing", default="plate", choices=("off", "fin", "plate"))
-    ap.add_argument("--car", default=None, help="corsa (default) | mx5 | 540i")
+    ap.add_argument("--car", default=None,
+                    help="corsa (default) | mx5 | 540i | express | bus")
     ap.add_argument("--seed", default="none",
                     help="'none', a seed-lap json the user drove (runs/swarm/seed_*.json), "
                          "or a Policy checkpoint to breed from")

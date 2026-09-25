@@ -44,12 +44,46 @@ def fy_max(Fz, mu_ref, Fz_ref, s, mu_scale=1.0):
     return max(mu, 0.0) * Fz
 
 
-def axle_capacity(Fz_static_axle, dFz_axle, mu_scale=1.0):
-    """Sum of both tyres' peak lateral force on one axle, after load transfer."""
+def tyre_ref(lfzo=1.0):
+    """The `TYRE`-shaped reference for a tyre whose load scale is `lfzo`.
+
+    Task 41. `TYRE` is the Corsa's tyre, and it stays THE reference: 1.0
+    returns `TYRE` itself -- the same dict object, so every caller that
+    passes `**tyre_ref(car's scale)` on a car tyre computes exactly what it
+    computed with `**TYRE`. A LOAD-SCALED tyre (drive/tyre.py, "Load
+    scaling": the same coefficient set on a tyre rated `lfzo` times higher,
+    a truck's) has the same law with the load axis stretched:
+
+        mu(Fz) = mu_ref + (s / lfzo) * (Fz - lfzo * Fz_ref)
+
+    which is exact, not fitted -- the MF D-term is linear in Fz/(LFZO*FNOMIN)
+    and `TYRE` is its transcription -- so a bus's utilisation is its own
+    tyre's, and at the equivalent load it reads what the Corsa's would.
+    """
+    lfzo = float(lfzo)
+    if lfzo == 1.0:
+        return TYRE
+    return dict(mu_ref=TYRE["mu_ref"], Fz_ref=TYRE["Fz_ref"] * lfzo,
+                s=TYRE["s"] / lfzo)
+
+
+def car_tyre_refs(car):
+    """(front, rear) `tyre_ref`s for a car: its declared per-axle load
+    scales (`cars.CarSpec.tyre_lfzo_f/_r`), 1.0 on any car that has none --
+    and then both are `TYRE` itself."""
+    return (tyre_ref(getattr(car, "tyre_lfzo_f", 1.0)),
+            tyre_ref(getattr(car, "tyre_lfzo_r", 1.0)))
+
+
+def axle_capacity(Fz_static_axle, dFz_axle, mu_scale=1.0, tyre=None):
+    """Sum of both tyres' peak lateral force on one axle, after load transfer.
+
+    `tyre` is a `tyre_ref` dict; None is `TYRE`, the study's own tyre."""
+    t = TYRE if tyre is None else tyre
     out = Fz_static_axle / 2.0 + dFz_axle
     inn = Fz_static_axle / 2.0 - dFz_axle
-    return (fy_max(out, mu_scale=mu_scale, **TYRE)
-            + fy_max(inn, mu_scale=mu_scale, **TYRE))
+    return (fy_max(out, mu_scale=mu_scale, **t)
+            + fy_max(inn, mu_scale=mu_scale, **t))
 
 
 def roll_angle(a_y, F, h_w):
@@ -220,6 +254,27 @@ def sweep():
         print(f"  h_w = {h_w:4.2f} m   {V:6.2f} m/s   {(V/V0-1)*100:+5.2f}%{tag}")
 
 
+def self_check() -> bool:
+    """Task 41's addition, `tyre_ref`: 1.0 IS `TYRE` (the same object), and
+    a load-scaled reference is exactly lambda x the study's tyre at
+    Fz/lambda -- the statement drive/tyre.py's step 13 makes for the Magic
+    Formula itself. The cross-check and the sweep below are the study."""
+    import cars
+    ok = tyre_ref(1.0) is TYRE and all(
+        r is TYRE for k in cars.STOCK_CARS for r in car_tyre_refs(cars.CARS[k]))
+    worst = 0.0
+    for lam in (6.644, 12.233):
+        r = tyre_ref(lam)
+        for fz in (500.0, 1932.0, 2477.0, 3022.0, 5463.0, 9000.0):
+            a, b = fy_max(lam * fz, **r), lam * fy_max(fz, **TYRE)
+            worst = max(worst, abs(a - b) / b)
+    ok = ok and worst < 1e-12
+    print(f"  [{'ok' if ok else 'FAIL'}] tyre_ref: 1.0 is TYRE on every stock car; "
+          f"scaled == lambda x TYRE at Fz/lambda to {worst:.1e}")
+    return ok
+
+
 if __name__ == "__main__":
+    self_check()
     cross_check()
     sweep()

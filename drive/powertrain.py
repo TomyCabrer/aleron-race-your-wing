@@ -396,6 +396,15 @@ class PowertrainParams:
     n_crank: float = 400.0      # rpm  starter torque is applied below this
     n_fire: float = 500.0       # rpm  the engine is running again above this
 
+    # --- road-speed governor (task 41) --------------------------------------
+    #: m/s; 0.0 = none, which is every car before task 41. A governed vehicle
+    #: (the bus: an EU speed limitation device) has its fuel faded to zero
+    #: across `v_gov_band` below `v_gov` -- the same fuelling law as the soft
+    #: rev limiter, keyed on road speed. It never brakes: a bus rolling
+    #: downhill past its setting coasts, which is what a governor does.
+    v_gov: float = 0.0
+    v_gov_band: float = 1.0     # m/s  est: ~3.6 km/h of fade
+
     # --- wheel-ODE regularisation (used by step_wheel and the rigs) --------
     w_eps: float = 1.0      # rad/s  Coulomb brake-sign ramp width
     w_stick: float = 0.5    # rad/s  static-hold window
@@ -446,6 +455,50 @@ class PowertrainParams:
         kbf, kbr, p_max, t_hb = brake_coeffs(car)
         if kbf is not KBF:
             kw.update(kbf=kbf, kbr=kbr, p_max_line=p_max, t_hb_max=t_hb)
+        #  --- task 41: what only a car that DECLARES it gets. Every branch
+        #  below is skipped for the Corsa, the MX-5 and the 540i (their
+        #  fields sit at the "as before" defaults, cars.PHYSICS_DEFAULTS), so
+        #  their parameter blocks are the ones they always had.
+        valve = str(getattr(car, "brk_valve", "fixed"))
+        if valve == "none":
+            #  no reducing valve: the rear gets the line pressure and the axle
+            #  split is the actuators' sizes (an EBS on one load)
+            kw.update(p_knee=math.inf, s_prop=1.0)
+        elif valve == "scaled":
+            kw.update(p_knee=P_KNEE * kw.get("p_max_line", P_MAX_LINE) / P_MAX_LINE)
+        elif valve != "fixed":
+            raise ValueError(f"brk_valve must be 'fixed', 'scaled' or 'none', "
+                             f"not {valve!r}")
+        I_eng = getattr(car, "I_eng", None)
+        if I_eng is not None:
+            #  the clutch's compliance is a NUMERICS term tuned to the engine
+            #  DOF (locked mode 11.3 Hz, zeta 0.66, K_c*dt^2/I_eng << 0.25):
+            #  scaling both with the inertia keeps the mode where it was.
+            #  1120 N.m through the Corsa's 800 N.m/rad is 1.4 rad of windup.
+            r_i = float(I_eng) / 0.16
+            kw.update(I_eng=float(I_eng), K_c=800.0 * r_i, C_c=15.0 * r_i)
+        if getattr(car, "I_wf", None) is not None:
+            kw.update(I_wf=float(car.I_wf))
+        if getattr(car, "I_wr", None) is not None:
+            kw.update(I_wr=float(car.I_wr))
+        if getattr(car, "rev_scaled", False):
+            #  the rest of the rev range, as fractions of THIS engine's: the
+            #  soft limiter's fade band (at the Corsa's absolute 120 rpm a
+            #  2500 rpm diesel settled 2 rpm under its own full-throttle
+            #  upshift line and never left 2nd), the brake-downshift line,
+            #  the rev-match and launch bands; stall / crank / fire with the
+            #  idle; the starter with the displacement it has to turn over
+            f_cut = float(getattr(car, "n_cut", 6200.0)) / 6200.0
+            f_idle = float(getattr(car, "n_idle", 850.0)) / 850.0
+            k_vd = float(getattr(car, "displacement", 1.199e-3)) / 1.199e-3
+            kw.update(n_soft=120.0 * f_cut, n_dn_brake=2200.0 * f_cut,
+                      n_launch_band=400.0 * f_cut, n_blip_band=800.0 * f_cut,
+                      n_blip_min=150.0 * f_cut,
+                      n_stall=450.0 * f_idle, n_crank=400.0 * f_idle,
+                      n_fire=500.0 * f_idle, t_start=60.0 * k_vd)
+        v_gov = float(getattr(car, "v_governor", 0.0) or 0.0)
+        if v_gov > 0.0:
+            kw.update(v_gov=v_gov)
         if k != 1.0:
             base = kw.get("nm_bp", NM_BP)
             cap = kw.get("T_clutch_cap", T_CLUTCH_CAP_STOCK)
@@ -798,6 +851,15 @@ BRK_PAD_H = 0.050
 #: wheel at all (the lock-order tests and the locked-wheel sled both need it)
 #: and still leaves 69 % of travel modulating. Held constant across cars.
 BRK_AUTHORITY = 1.479 / 1.041
+#: the pressure ceilings the authority search may use, Pa. Hydraulic: 400
+#: bar, far past any road car's line (the Corsa's full pedal is 110). AIR
+#: (task 41): 10 bar, a truck/bus reservoir's working pressure -- the most a
+#: brake chamber can ever see. A car whose brakes cannot reach the authority
+#: inside its ceiling is REFUSED with a ValueError: this search used to
+#: saturate silently at 400 bar, which is how a 13 t bus on hydraulic car
+#: formulas "could not lock its wheels" without anyone being told.
+BRK_P_CEIL_HYD = 400e5
+BRK_P_CEIL_AIR = 10e5
 
 
 def brake_coeffs(car) -> tuple:
@@ -824,7 +886,9 @@ def brake_coeffs(car) -> tuple:
            bool(getattr(car, "brk_rear_disc", False)),
            float(getattr(car, "brk_piston_d", 0.0540)),
            float(getattr(car, "brk_wc_d", 0.01905)))
-    if geo == _REF_BRAKES:
+    air = bool(getattr(car, "brk_air", False))
+    lever = float(getattr(car, "brk_lever", 1.0))
+    if geo == _REF_BRAKES and not air and lever == 1.0:
         return KBF, KBR, P_MAX_LINE, T_HB_MAX      # the module's own numbers
     d_f, d_r, rear_disc, d_pist, d_wc = geo
     r_eff_f = 0.5 * (d_f - BRK_PAD_H)
@@ -834,20 +898,50 @@ def brake_coeffs(car) -> tuple:
         kbr = 2.0 * BRK_MU_PAD * (math.pi * d_wc ** 2 / 4.0) * r_eff_r
     else:
         kbr = BRK_CSTAR * (math.pi * d_wc ** 2 / 4.0) * (0.5 * d_r)
+    if lever != 1.0:
+        #  AIR-BRAKE EQUIVALENT (task 41): the "piston" is the brake
+        #  chamber's effective area and the caliper multiplies its push by
+        #  its lever ratio before the pads see it. Same pad mu, same
+        #  effective radius, same two faces -- only the actuator differs.
+        kbf *= lever
+        kbr *= lever
 
     #  hold the pedal's authority: demanded decel at full line pressure,
     #  a = (2*kbf*P + 2*kbr*P_r)/(r_roll*m), against this tyre's own capacity
     mu_x_ref = 1.041 * float(getattr(car, "mu_scale", 1.0))
     m, r = float(car.m), float(car.r_roll)
-    # P_r follows the same proportioning knee, so solve for P with it folded in
-    def demand(P: float) -> float:
-        P_r = P if P <= P_KNEE else P_KNEE + S_PROP * (P - P_KNEE)
-        return (2.0 * kbf * P + 2.0 * kbr * P_r) / (r * m * G)
-    lo, hi = 1e5, 400e5
-    for _ in range(80):
-        mid = 0.5 * (lo + hi)
-        lo, hi = (mid, hi) if demand(mid) < BRK_AUTHORITY * mu_x_ref else (lo, mid)
-    p_max = 0.5 * (lo + hi)
+    # P_r follows the same proportioning knee, so solve for P with it folded
+    # in. The knee is the Corsa's absolute 30 bar unless the car declares a
+    # different valve (task 41): 'none' passes the line pressure through,
+    # 'scaled' moves the knee with the full-pedal pressure -- which is the
+    # unknown here, so that case is a fixed point on the knee.
+    valve = str(getattr(car, "brk_valve", "fixed"))
+    ceil = BRK_P_CEIL_AIR if air else BRK_P_CEIL_HYD
+
+    def solve(knee: float, s_prop: float) -> float:
+        def demand(P: float) -> float:
+            P_r = P if P <= knee else knee + s_prop * (P - knee)
+            return (2.0 * kbf * P + 2.0 * kbr * P_r) / (r * m * G)
+        if demand(ceil) < BRK_AUTHORITY * mu_x_ref:
+            raise ValueError(
+                f"{getattr(car, 'name', 'car')}: its brakes reach "
+                f"{demand(ceil):.3f} g at the {ceil / 1e5:.0f} bar ceiling, short "
+                f"of the {BRK_AUTHORITY * mu_x_ref:.3f} g authority every car "
+                f"is sized to -- bigger actuators, not a silent saturation")
+        lo, hi = 1e5 if not air else 1e3, ceil
+        for _ in range(80):
+            mid = 0.5 * (lo + hi)
+            lo, hi = (mid, hi) if demand(mid) < BRK_AUTHORITY * mu_x_ref else (lo, mid)
+        return 0.5 * (lo + hi)
+
+    if valve == "none":
+        p_max = solve(math.inf, 1.0)
+    elif valve == "scaled":
+        p_max = P_MAX_LINE
+        for _ in range(60):
+            p_max = solve(P_KNEE * p_max / P_MAX_LINE, S_PROP)
+    else:
+        p_max = solve(P_KNEE, S_PROP)
 
     #  the handbrake must still be able to lock the rears with no transfer
     Fz_r_wheel = 0.5 * m * G * (1.0 - float(car.wdist_f))
@@ -975,6 +1069,17 @@ def _auto_target(p: PowertrainParams, s: PowertrainState, inp: PtInput,
                 return 1
         return None
     thr = min(max(inp.throttle, 0.0), 1.0)
+    if p.v_gov > 0.0:
+        # A GOVERNED vehicle (task 41, the bus): the gearbox schedules on the
+        # load the engine is actually allowed, not on the pedal -- which is
+        # what a bus TCU reading engine load off the CAN does. Scheduled on
+        # the pedal, the bus sat at its 80 km/h governor in 5th at 2324 rpm,
+        # 115 rpm under a full-pedal upshift line it could never reach; on
+        # the governed load it cruises in 6th at 1650 rpm. 0.0 on every
+        # ungoverned car, so this line is never reached on them.
+        f_gov = (p.v_gov - v_x) / p.v_gov_band
+        if f_gov < thr:
+            thr = f_gov if f_gov > 0.0 else 0.0
     braking = inp.brake > 0.3
 
     # --- up: never on the brakes, unless the driveline is about to overrev --
@@ -1159,6 +1264,11 @@ def step(p: PowertrainParams, s: PowertrainState, inp: PtInput, omega_w,
     # 6200/6050 latch is the backstop for the case fuelling cannot fix -- the
     # DRIVELINE spinning the engine past the cut on a missed downshift.
     fuel = 0.0 if s.cut_latch else min(max((p.n_cut - n_e) / p.n_soft, 0.0), 1.0)
+    if p.v_gov > 0.0:
+        # the road-speed governor (task 41): the same fade, on road speed
+        f_gov = (p.v_gov - v_x) / p.v_gov_band
+        if f_gov < fuel:
+            fuel = f_gov if f_gov > 0.0 else 0.0
     T_eng = engine_torque(p, n_e, load, fuel)
     if s.stalled:
         # A stalled engine makes nothing until it is cranked. Cranking: the
@@ -2052,6 +2162,82 @@ def self_check(p: PowertrainParams | None = None, car: CorsaC | None = None,
         sens.append(f"{ts:.2f}->{accel_run(p, car, (100/3.6,), 2900.0, ts).get(100.0):.2f}")
     note("ACCEL_sensitivity_shift_time (launch 2900)", "  ".join(sens),
          "14.79 15.02 15.36 15.70", True, hard=False)
+
+    # ---------------- task 41: the per-car fields ----------------
+    #  (1) IDENTITY: the three stock cars declare none of them, so every
+    #  constant a new field can move is the module's own on all three.
+    import cars as _cars
+    import dataclasses as _dc
+    ref = PowertrainParams()
+    t41 = ("I_eng", "I_wf", "I_wr", "K_c", "C_c", "n_soft", "n_dn_brake",
+           "n_launch_band", "n_blip_band", "n_blip_min", "n_stall", "n_crank",
+           "n_fire", "t_start", "p_knee", "s_prop", "v_gov")
+    moved = {k: [f for f in t41 if getattr(PowertrainParams.from_car(_cars.CARS[k]), f)
+                 != getattr(ref, f)] for k in _cars.STOCK_CARS}
+    note("t41_stock_cars_untouched", str(moved) if any(moved.values())
+         else f"{len(t41)} constants x {len(moved)} cars at the module's own",
+         "none moved", not any(moved.values()))
+    bus = _cars.CARS["bus"]
+    pb = PowertrainParams.from_car(bus)
+    note("t41_bus_scaled_block",
+         f"n_soft {pb.n_soft:.1f}, dn_brake {pb.n_dn_brake:.0f}, stall {pb.n_stall:.0f}, "
+         f"I_eng {pb.I_eng}, K_c {pb.K_c:.0f} (K_c dt^2/I_eng {pb.K_c * 1e-6 / pb.I_eng:.4f}), "
+         f"I_w {pb.I_wf}/{pb.I_wr}",
+         "fractions of 2500/600 rpm; 11.3 Hz clutch mode kept",
+         abs(pb.n_soft - 120.0 * 2500 / 6200) < 1e-9 and pb.n_stall < pb.n_idle - 200.0
+         and abs(math.sqrt(pb.K_c / pb.I_eng) - math.sqrt(800.0 / 0.16)) < 1e-9
+         and pb.K_c * 1e-6 / pb.I_eng < 0.25)
+
+    #  (2) the bus leaves 2nd. At the Corsa's absolute 120 rpm fade band it
+    #  settled 2 rpm short of its own WOT upshift line and stayed there.
+    def _bus_run(pp, T):
+        r = _Rig(pp, bus, gear=0, v=0.0, rpm=pp.n_idle)
+        i = PtInput(throttle=1.0, auto_gearbox=True, auto_clutch=True)
+        seen, vmax, t50 = [], 0.0, None
+        while r.t < T:
+            o = r.step(i, 2e-3)
+            if o.gear > 0 and (not seen or seen[-1] != o.gear):
+                seen.append(o.gear)
+            vmax = max(vmax, r.v)
+            if t50 is None and r.v >= 50 / 3.6:
+                t50 = r.t
+        return seen, vmax, t50
+    seen, vmax, t50 = _bus_run(pb, 60.0)
+    note("t41_bus_upshifts_to_the_governor",
+         f"gears {seen}, 0-50 km/h {t50 if t50 else float('nan'):.1f} s, max "
+         f"{vmax * 3.6:.1f} km/h (governor {pb.v_gov * 3.6:.0f})",
+         "every gear in order, top at the governor",
+         seen == list(range(1, len(pb.gear) + 1)) and t50 is not None
+         and pb.v_gov - 1.5 < vmax <= pb.v_gov + 0.05)
+    stuck, _v, _t = _bus_run(_dc.replace(pb, n_soft=120.0), 25.0)
+    note("t41_why_n_soft_scales", f"the Corsa's 120 rpm band: gears {stuck}",
+         "stuck in 2nd (the probe's bug)", max(stuck) == 2, hard=False)
+
+    #  (3) brakes. The bus's air equivalent reaches the authority inside a
+    #  real reservoir's 10 bar; hydraulic car formulas on 11.5 t are REFUSED
+    #  instead of saturating silently at 400 bar.
+    kbf_b, kbr_b, pm_b, _thb = brake_coeffs(bus)
+    try:
+        brake_coeffs(bus.copy(brk_air=False, brk_lever=1.0, brk_piston_d=0.054,
+                              brk_wc_d=0.02, brk_rear_disc=False))
+        refused = False
+    except ValueError:
+        refused = True
+    note("t41_air_brake_equivalent",
+         f"full pedal {pm_b / 1e5:.2f} bar chamber, {kbf_b:.4f}/{kbr_b:.4f} N.m/Pa; "
+         f"car calipers on the bus refused: {refused}",
+         "< 10 bar; refused", pm_b < BRK_P_CEIL_AIR and refused and pb.p_knee == math.inf)
+    #  and on the bus the front axle locks first (the ECE R13 order, the
+    #  same order the Corsa's valve was chosen to keep)
+    pf, pr = lock_pressure(pb, bus, "f", bus.mu_scale), lock_pressure(pb, bus, "r", bus.mu_scale)
+    note("t41_bus_front_locks_first", f"front {pf / 1e5:.2f} bar, rear {pr / 1e5:.2f} bar",
+         "front < rear", pf < pr)
+    #  the van keeps the Corsa's fixed valve and must lock its front first too
+    van = _cars.CARS["express"]
+    pv = PowertrainParams.from_car(van)
+    vf, vr = lock_pressure(pv, van, "f", van.mu_scale), lock_pressure(pv, van, "r", van.mu_scale)
+    note("t41_van_front_locks_first", f"front {vf / 1e5:.1f} bar, rear {vr / 1e5:.1f} bar",
+         "front < rear", vf < vr)
 
     if verbose:
         w = max(len(r[0]) for r in rows) + 2
