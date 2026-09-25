@@ -84,8 +84,9 @@ saved). Scripted and headless runs never read the file.
 | setting | values | applies |
 |---|---|---|
 | Map | Arena circuit / Linden park / Kestrel ring / Ashdown circuit / Open proving ground / Skidpad / Dragstrip (`--track`, `TAB`) | restarts the session on the new map, same car |
-| Car | Opel Corsa C 1.2 / Mazda MX-5 1.8 / BMW 540i (`--car`) | restarts the session: a different car is a different tyre, load set, roll block and gearbox |
+| Car | Opel Corsa C 1.2 / Mazda MX-5 1.8 / BMW 540i / Renault Express 1.4 / Mercedes Citaro bus (`--car`) | restarts the session: a different car is a different tyre, load set, roll block and gearbox. The new car opens with **its own default build** (below, *Your builds, per car*) |
 | Paint | factory (the car's own: Corsa yellow, MX-5 red, 540i blue) / signal yellow / rosso red / estoril blue / arctic white / silver / racing green / midnight purple / cobalt blue / teal / burgundy, with a swatch beside the row; kept per car | at once, on the road and in the garage; looks only: never in the class, a ranking or a medal (a lap's settings snapshot lists it, as it does Graphics) |
+| Wing limits | **Real** (each car's own physical span limit) / **Unlimited** (up to 3x the limit: impossible wings, for fun) | at once, in the garage's editors. A run whose wings are past the limit is filed as **UNLIMITED**, apart from the official records (*Wing limits*, below) |
 | Ballast | None / 25 / 50 / 75 / 100 / 150 / 200 kg (`--ballast`, 0-300) | restarts the session |
 | Ballast at | Nose (front subframe, low) / Passenger seat (at the CG) / Floorpan over the rear axle (low) / Boot floor, behind the rear axle (high) (`--ballast-at`) | restarts the session |
 | Engine | Stock 1.2 16V (75 hp) / Tuned (~110 hp) / Sport (~150 hp) (`--engine`) | at once |
@@ -99,6 +100,8 @@ saved). Scripted and headless runs never read the file.
 | Shake | On / Off: the camera shakes a little on the kerbs and more off the road | at once |
 | Graphics | Full / Low detail (a slower PC) / Classic (the plain look, no scenery) | at once |
 | Last lap | the last lap's results: `ENTER` opens **LAP RESULTS** -- its card, and this session's laps | |
+| Build | the build you are driving: `ENTER` opens **PICK A BUILD** (this car's builds first, the default marked), on every map | restarts on the pick |
+| Default | this car's default build: `ENTER` makes the build you are driving the default (saved to the library first if it is not there) | at once |
 | Garage | opens the 3D panel editor | |
 
 **Engine.** The real car is a 75 hp 1.2 that takes 15 s to 100 km/h, and from
@@ -427,8 +430,9 @@ python3 -m drive.drive --garage --track skidpad --radius 100
 
 The garage is always one keypress away: `BACKSPACE` (touchpad on the pad),
 the *Garage* entry on the pause menu or on its settings page. `--garage` merely
-starts there. A software-rendered Corsa C you can orbit, carrying up to
-**three wings**: a panel on each flank and a wing on top. Each is a slot
+starts there. A software-rendered model of the car you are driving (the
+Corsa, the MX-5, the 540i, the Express van or the Citaro bus, framed to its
+size) you can orbit, carrying up to **three wings**: a panel on each flank and a wing on top. Each is a slot
 holding a wing from the library at a station, a height and an incidence;
 left and right mirror each other until `M` unlocks them. The side panel shows
 what the physics will see for the selected slot: the lift law, the force and
@@ -450,13 +454,87 @@ then comes back for that map (the TIME TRIAL section below).
 | `M` | mirror left ↔ right | `T` | top wing: fixed / active (brake + steer) |
 | `SPACE` | deploy preview (0.45 s actuator) | `D` `A` `L` | design a wing (mission first) / airfoils / library |
 | `R` / `C` | car defaults / reset camera | `ENTER` | drive it |
+| `S` / `SHIFT+S` | save the build (in place, or asks a name) / save as a new name | `B` / `SHIFT+B` | next / previous of this car's saved builds |
+| `F` | make this build the car's **default** | | |
 | `ESC` | menu (the mouse works in it) | `H` | the wing tutorial's box: hide / show |
+
+### Your builds, per car
+
+A build is saved for the car you made it on; builds saved before this update
+are *any car*, and every car can still use them.
+
+- **In the garage.** `S` saves the build: over itself when it is already one
+  of this car's saved builds, otherwise it asks for a name. `SHIFT+S` saves it
+  under a new name. `B` / `SHIFT+B` step through this car's saved builds the
+  way `W` steps a slot's wings (the first press on an unsaved car only warns
+  you). `F` makes the build in hand this car's **default**, saving it first if
+  needed. On a pad the four are rows in the OPTIONS menu -- *Save build*,
+  *Save build as a new name*, *Load a build*, *Make it the <car> default* --
+  and `✕` accepts the name a prompt offers.
+- **The library page** (`L`) lists this car's builds first, then the any-car
+  ones, then other cars' builds, dimmed and tagged with their car (they still
+  load). `D` (pad `R1`) makes the build under the cursor this car's default,
+  `R` renames it (a default pointing at it follows), `DEL` deletes it (and
+  clears a default that pointed at it). The pad's `□` saves over the car's own
+  build instead of adding '-2' copies. A build whose wings are past this car's
+  span limit is marked UNLIMITED.
+- **Changing car** (Settings > Car) opens the new car with its default build.
+  With no default, a build made for another car is never put on it: you get
+  the build that car last drove on this map, else an empty car and a hint. An
+  any-car build is kept. The same rule applies at launch when the last garage
+  car was another car's; `--build` and `--wing` still win.
+- **From the drive**, Settings > **Build** opens PICK A BUILD on every map, the
+  dragstrip included, and Settings > **Default** makes the build you are
+  driving this car's default.
+- **Each map remembers the last build per car**, so driving the bus on the
+  arena no longer replaces the Corsa's arena build.
 
 The published car is still here, bit-for-bit: the built-in wings `fin`
 (CL 0.70) and `plate` (CL 1.25) are the study's 0.35 m² panel with its fixed
 L/D of 3.2, and a build carrying one of them on both flanks and nothing on top
 runs the closed-form device exactly as before (the suite asserts the
 `VehicleConfig` is identical).
+
+## Wing limits: each car's own span, and Unlimited
+
+Every car has its own largest wing span -- its physical limit, read off its
+body (`drive/bodies.py`):
+
+- a **flank panel** may reach down to the car's own ground clearance, no
+  further: `span <= 2 x (mount height - ground clearance)`;
+- a **top wing** may be **1.2 x the car's width**.
+
+| car | ground clearance | width | flank limit at the default slot | flank limit at the highest slot | top limit |
+|---|---|---|---|---|---|
+| Opel Corsa C | 0.15 m | 1.646 m | 1.50 m (h 0.90) | 2.10 m (h 1.20) | 1.975 m |
+| Mazda MX-5 | 0.14 m | 1.680 m | 1.52 m (h 0.90) | 2.12 m (h 1.20) | 2.016 m |
+| BMW 540i | 0.15 m | 1.800 m | 1.50 m (h 0.90) | 2.10 m (h 1.20) | 2.160 m |
+| Renault Express | 0.16 m | 1.566 m | 1.78 m (h 1.05) | 2.75 m (h 1.54) | 1.879 m |
+| Mercedes Citaro bus | 0.28 m | 2.550 m | 2.64 m (h 1.60) | 5.20 m (h 2.88) | 3.060 m |
+
+The rule is static -- the car standing still, as an inspector would measure
+it -- and the clearance margin (the car's own underbody height rather than
+zero) is what keeps a legal panel off the road when the car rolls onto it.
+
+*Settings > Wing limits* decides what the garage lets you do:
+
+- **Real** (the default) holds every edit to the limit. The designer's span
+  row and its optimiser stop there; `W` and the library page skip a wing that
+  is past the selected slot's limit, and the hint says why; `↓` stops a flank
+  slot where the panel's lower tip reaches the ground clearance.
+- **Unlimited** lets spans go to **3x the limit** -- impossible wings, for fun.
+
+The car page's SPAN LIMITS panel lists each fitted wing as *span / max* on this
+car, with **PAST THE LIMIT** in red.
+
+**Any run whose build has a wing past its car's limit is an UNLIMITED run**,
+whatever the setting says (a bus build loaded on a Corsa is one). Unlimited
+runs are recorded in `runs/records/unlimited/`, in the same classes; they earn
+medals and challenge stars there, shown in their own Unlimited spot and never
+counted with the official ones; and they will **never go to a public
+leaderboard** (`records.publishable(lap)` is the one test it must use). The HUD
+PB row, the lap note, the results card, the pre-race page, the ghosts
+(`UNL PB`) and the pause page all say UNLIMITED.
 
 ## Design the wings
 
@@ -673,6 +751,32 @@ parameter sets, selectable from the CLI (`--car`) and from *Settings*:
 | Opel Corsa C 1.2 16V (2003) | 1010 kg | 2.491 m | 61 | 55 kW | 110 N·m | 0.66 | FWD |
 | Mazda MX-5 1.8 (NB2, 2001) | 1140 kg | 2.265 m | 52 | 109 kW | 168 N·m | 0.61 | RWD |
 | BMW 540i (E39, 1998) | 1780 kg | 2.830 m | 51 | 210 kW | 440 N·m | 0.66 | RWD |
+| Renault Express 1.4 (E7J, 1995) | 915 kg | 2.580 m | 60 | 55 kW | 109 N·m | 0.99 | FWD |
+| Mercedes-Benz Citaro O530 12 m bus (2005) | 11 459 kg | 5.845 m | 36 | 205 kW | 1120 N·m | 4.42 | RWD |
+
+**The two big-wing cars (task 41).** The *Renault Express* is the 1990s van
+built on the Renault 5 (the Extra in the UK, the Rapid in German-speaking
+countries): the Corsa's power, 55 kW / 75 hp, in a 1.78 m tall, 915 kg box --
+about 0.80 g of cornering, 0-100 km/h in 15 s, 149 km/h flat out. The
+*Citaro* is a 12 m, 11.5 t city bus: OM 906 hLA six, 205 kW, a 6-speed
+automatic, air disc brakes with ABS, governed to 80 km/h. It corners at about
+0.65 g, reaches 50 km/h in about 11 s and stops from 60 km/h in about 21 m;
+it is slow and heavy, and it is there so the biggest wings have a body to fit
+(its top-wing limit is 3.06 m, its flank panels reach 5.2 m). On both the
+steering aid and the computer drivers use the car's own wheelbase, grip and
+lock.
+
+The bus is the one car the tyre rule below does NOT cover: its wheel loads
+(23-41 kN) are two to four times what the one tyre in `tyre_data/` was
+measured to, and on it the bus cornered at 0.22 g and spun. It runs the same
+coefficients with a declared per-axle **load scale** (`LFZO`, `FZMAX` and the
+carcass stiffnesses together: the tyre is exactly λ times the file tyre at
+Fz/λ; λ 6.6 front, 12.2 for the rear twin pair, from the published load
+index) and a labelled truck-tyre grip calibration (`mu_scale` 0.80), plus its
+own roll split, compliance steer, wheel and engine inertias, rev-scaled
+gearbox bands and an air-brake equivalent -- each an optional CarSpec field
+whose default is the old behaviour, so the Corsa, the MX-5 and the 540i are
+unchanged to the bit (CONTRACT section 2's one declared exception).
 
 Published figures carry their source on the line; everything no manufacturer
 releases — axle weights, CG height, inertias, the whole suspension block — is

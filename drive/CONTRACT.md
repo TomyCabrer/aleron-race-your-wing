@@ -39,7 +39,8 @@ from the repo root.
 | `drive/vehicle.py` | EOM, load transfer, roll, aero+wing, integrator | `tyre`, `powertrain`, `corsa_c`, `cars` |
 | `drive/track.py` | track geometry, projection, surfaces | numpy |
 | `drive/input.py` | keyboard/gamepad → `Controls` | pygame |
-| `drive/render.py` | pygame drawing + HUD; the chase camera and the 3-D car (a body STYLE per fitted car: hatch / roadster / saloon, generic shapes); `look_config` / `Renderer.set_look` (the Graphics setting); `set_paint` / `Renderer.set_paint` / `factory_colour` (the Paint setting) | `track`, `qss`, pygame; `world`, `props`, `fx` inside `Renderer` (built when `ViewConfig.scenery` / `effects`) |
+| `drive/bodies.py` | task 41: the body SHELLS per style (hatch / roadster / saloon / van / bus; moved out of `render.py`), `style_of(car)`, `Body(car)` on the car's own axles (`x_front`, `x_rear`, `width`, `height`, `ground`, `deck_z`), each car's slot bands and default slots, and the owner's SPAN RULE: `span_limit` (flank `2 (h - ground)`, top `1.2 x width`), `span_ceiling` (x `UNLIMITED_FACTOR` 3 when Settings' Wing limits is Unlimited), `area_ceiling`, `over_limits(build, lib, car)` (computed per run, never stored) | numpy; `cars` and `aero.wing` lazily. Never pygame |
+| `drive/render.py` | pygame drawing + HUD; the chase camera and the 3-D car (a body STYLE per fitted car: hatch / roadster / saloon / van / bus, generic shapes, the shells read from `bodies`); `look_config` / `Renderer.set_look` (the Graphics setting); `set_paint` / `Renderer.set_paint` / `factory_colour` (the Paint setting) | `track`, `qss`, pygame; `world`, `props`, `fx` inside `Renderer` (built when `ViewConfig.scenery` / `effects`) |
 | `drive/paint.py` | the player car's paint: `PAINT_ORDER`, `PAINT_LABELS`, `PAINTS` (name -> RGB; `factory` -> None, the car's own colour), `PAINT_DEFAULT`, `rgb(name)`. A fixed palette, every tone of it checked against the colours the self-checks count. Cosmetic: never in the class key, a ranking, a medal, a ghost, the CarSpec or the build JSON (a lap record's `settings` snapshot lists it, as it lists Graphics) | nothing (pure data); `race_grid`, `ghosts` in its self-check only. Never pygame |
 | `drive/scenery.py` | the ground beside the road, laid out from the track's own geometry (a generated track gets it too): verges, gravel traps (slow corners), painted run-off (fast ones), apex + exit kerbs, the racing line, paint (grid boxes at `race_grid`'s slots, sector bars, the dragstrip's lane / numerals), all within 24 m of the edge; `wheel_surfaces(track, pts, on_track4, mu4, scenery=)` -> per wheel `'tarmac' \| 'wet' \| 'kerb' \| 'grass' \| 'gravel'`, read off the SAME tables the drawing uses. Never read by the physics | `track`, numpy |
 | `drive/world.py` | the look's backdrop and ground: sky + a per-map panorama (clouds, ridges, a tree line; scrolled by the chase camera's VIEW heading), grass with mowing stripes, the dressing from `scenery`, detail ON the tarmac (rubber, repairs, water, inset lines, raised kerbs), the horizon haze; the chase view's track layers batched (one projection a layer). The SHARED look: `SUN_DIR`, `HAZE_RGB`, `haze_factor`, `hazed`, `HAZE_LAND` | numpy, pygame, `scenery`; `render` only lazily (it is handed the renderer) |
@@ -167,7 +168,8 @@ has the same developed length and the same wetted area, so the row compares
 SHAPE and not size. What a blend trades is TIP HEIGHT for OUTBOARD REACH, and
 THE WING PAYS FOR THAT REACH OUT OF ITS OWN SPAN (`wing.plate_flown`): the
 span row is what the car is allowed to be wide -- a flank panel's span is its
-vertical extent between sill and roof, a top wing's is the car's width -- and
+vertical extent, down to the car's own ground clearance (task 41,
+`bodies.span_limit`), a top wing's is 1.2 x the car's width -- and
 a plate that leans out of it has to come from somewhere. That accounting is
 load-bearing, not bookkeeping. Without it CZ/CD climbs monotonically to full
 blend against a junction credit that saturated at about 0.1, so nothing in the
@@ -232,6 +234,24 @@ which is `qss.TYRE = dict(mu_ref=0.903, Fz_ref=2477.0, s=-16.1e-6)` rounded.
 **Do NOT rescale FNOMIN or LFZO.** `LFZO = LMUX = LMUY = LKX = LKY = 1.0`.
 Rescale geometry only: `R0 = 0.2915`, width `0.175`, aspect `0.65`,
 rim radius `0.1778` (175/65R14).
+
+*Amended by task 41 -- ONE declared exception.* FNOMIN is never rescaled, and
+LFZO is not rescaled on any car tyre: every CarSpec with
+`tyre_lfzo_f == tyre_lfzo_r == 1.0` (the Corsa, the MX-5, the 540i, the
+Express) reads the file tyre with only its geometry overridden, and
+`cars.self_check`, `vehicle` T41a and the drive self-check's per-car loop
+assert that the three stock cars run the unscaled file tyre and `qss.TYRE`
+itself. A car whose wheel loads lie outside the file's load range (`FZMAX`
+10 kN) because it runs on TRUCK tyres may DECLARE a per-axle load scale
+`lambda = published rated load x 0.86 / FNOMIN`; a twin pair is one tyre at
+twice a single's dual-rated lambda. `tyre.tyre_for(..., lfzo=lambda)` then
+scales `LFZO`, `FZMAX` and `CFX` / `CFY` together, which makes the tyre
+exactly `lambda x` the file tyre at `Fz / lambda` for Fx, Fy, Mz and the
+stiffnesses (tyre self-check step 13, to 1e-12). Its utilisation reference is
+`qss.tyre_ref(lambda) = {mu_ref, lambda Fz_ref, s / lambda}`, the same law with
+the load axis stretched. The only car that declares a scale is the Citaro
+bus: 6.644 front, 12.233 rear pair. Its truck-tyre grip is `mu_scale` 0.80, a
+labelled calibration like the MX-5's and the 540i's.
 
 **Symmetrisation is mandatory.** Zero these 13 camber-EVEN shifts:
 `PHY1 PHY2 PVY1 PVY2 PHX1 PHX2 PVX1 PVX2 QHZ1 QHZ2 QDZ6 QDZ7 QSX1`.
@@ -1252,8 +1272,12 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
   variables and it is the garage DESIGNER page's row order -- `BOUNDS`,
   `design_bounds`, `design_x0`, `design_labels` and `apply_design` all read
   it, so the optimiser's vector cannot drift out of step with the page;
-  `span_fit(role, h)` is the sill/roof packaging fit that BOTH the page's span
-  row and the optimiser's span band must use), `optimize` (numpy GP,
+  `span_fit(role, h, car=None, unlimited=False)` is the car's span ceiling --
+  `bodies.span_ceiling`, the owner's rule of task 41 (the Corsa's old
+  sill 0.28 / roof 1.34 fit is gone) -- that BOTH the page's span row and the
+  optimiser's span band must use; `CLAMP_HI` is `WingSpec.clamp`'s sanity
+  ceiling on span / area / top ride, wide enough for every car's Unlimited
+  wing and pinned by `bodies.self_check`), `optimize` (numpy GP,
   Matern 5/2, EI, Sobol init; `labels` ride through into the result and a
   label list out of step with `bounds` raises),
   `library` (`runs/library/{airfoils,wings,builds,polars}`; 39 seeded
@@ -1813,6 +1837,120 @@ pad map: section 6.
 * `input`: `WINDOWFOCUSLOST` and pad removal emit `menu` once (never while a menu is up).
   Hot-plugged and launch pads get `lock_deg`. `aero.library` compares build names folded;
   `unique_name` gives `-2`.
+
+### Task 41 (wing limits, builds per car, two new cars) -- interface additions
+
+**The span rule.** `bodies.span_limit(role, car, h)` is the PHYSICAL maximum:
+a flank panel's lower tip may come down to the car's own ground clearance (the
+lowest underbody station of its shell), `span <= 2 (h - ground)`; a top wing
+may be `1.2 x` the body's width, wherever it is mounted. The rule is static
+(roll is not charged). `span_ceiling(role, car, h, unlimited)` is what an
+EDITOR may offer: the limit, times `UNLIMITED_FACTOR` (3) when
+`Settings.wing_limits == 'unlimited'`, floored at the packaging band's lower
+end + 0.05 (a floor `flank_h_band` keeps from ever binding on a real slot).
+The garage's span row, the design box and the optimiser's band all read it
+through `wing.span_fit`. `area_ceiling` grows the reference-area band in
+proportion when the span ceiling passes the packaging band's span.
+
+* `CarBuild.clamp(lib, car=None)` holds every slot inside the fitted car's
+  bands (`bodies.flank_x_band / flank_h_band / top_x_band`, the top wing's h
+  floor is that car's deck + 0.14 -- for the hatch the garage's own STATIONS
+  deck, so no Corsa build moves). `car=None` means the build's own `car` tag,
+  else the Corsa. The SPAN is never clamped by a build. `CarBuild.reset(car)`
+  and `CarBuild.for_car(car)` use `bodies.slot_defaults`. Every caller that
+  knows the car it will drive passes it (garage: `Garage.car`; drive:
+  `settings.car`, or `--car` on a settings-less launch).
+* The three stock cars keep the garage's old slot bands and default slots to
+  the bit (`bodies.self_check`); the Corsa's clamp and preview mesh were
+  checked bit-identical on 3000 random builds.
+* `garage_ui.Param` lo / hi may be callables (`Param.band()`): the span row's
+  ceiling follows the slot height, the car and the Wing limits setting.
+
+**Unlimited runs.** A player session whose build has any entry in
+`bodies.over_limits(opts.build_json, opts.garage_lib, settings.car)` is an
+UNLIMITED session (`Sim.over_limits`, `Sim.unlimited`), whatever the setting
+says -- the setting gates the editors only. It is computed at every session
+start, never stored on a build (a wing can be re-saved at another span, a
+build driven on another car). A build that cannot be judged (no library, a
+legacy one-panel `WingDesign`) counts as official.
+* Records: `records.session_recorder(..., over=)` files it in
+  `records.unlimited_book(root)` = `<root>/unlimited/<same class file>`;
+  `last_builds.json` stays in `<root>`. Its laps carry `unlimited: true` and
+  `over_limits: [{slot, wing, span, limit}]`. An official book REFUSES such a
+  lap (ValueError). Medals, top-5s, `build_bests`, ghosts and the HUD PB follow
+  `recorder.book`, so they separate by construction.
+* **`records.publishable(lap)` is the ONLY test the public leaderboard (plan
+  T28, not built) may use before submitting a lap.** False for any Unlimited
+  lap.
+* Challenges: `build_stats` returns `unlimited` and `over_limits`. An
+  Unlimited run is judged by the challenge's own rules and counted in
+  `progress.json`'s section `challenges_unlimited` (`{cid: {best, stars}}`,
+  never nested in `challenges`); the box, the list and the detail show an
+  Unlimited best / stars beside the official one; `total_stars` and
+  `menu_row` are official only.
+* Tags: `LapRecorder` / `lap_note` result dicts, `results.card` and
+  `render.HudData` gain `unlimited`; the pre-race page shows an UNLIMITED
+  section and headings, and each PICK row's best is read from that build's
+  own book (`PreRace(over=, books=, judge=)`, `drive._prerace_books`).
+* `Settings.wing_limits` ('real' | 'unlimited', row `set:wing_limits` after
+  Paint, `WING_LIMIT_MODES` / `WING_LIMIT_LABELS`) never discards or
+  retargets a lap.
+
+**Builds know their car.**
+* `CarBuild` JSON v2 gains `car` (a cars.py key; "" or missing = a legacy,
+  any-car build). `records.BUILD_META = ("name", "builtin", "car")` is the ONLY
+  list of build labels: `records.build_id` and `prerace._same_build` strip
+  exactly it (so no pre-41 PB moves), and anything new that compares builds
+  must use one of the two.
+* `last_builds.json` keys are `track|car`; a bare `track` key is a pre-41
+  entry, read for any car until that car has its own. `RecordBook.last_build(
+  track, car)` never returns another car's build (`records.build_fits`).
+* `Settings.car_build` maps car -> library build NAME. `drive._car_build` is
+  the only resolver, run on a car change (`seen_car` in `run_interactive_cli`;
+  not during a challenge, not right after the garage) and at launch in
+  `_resolve_design(opts, settings)` only when `garage_design.json` belongs to
+  another car and no `--build` / `--wing` was given. Order: the default if it
+  is still in the library; else keep an own or any-car build (re-clamped to
+  the new car); else this car's per-map build; else `garage.new_build(car)`
+  plus a note of 120 characters or less.
+* Stamping: every garage library save stamps `Garage.car`; back from the
+  garage, `_stamp_car` tags the working build with `settings.car` only if its
+  content changed.
+* `Library.rename('builds', old, new)` writes the new file before removing
+  the old one (folding guard kept; a case-only rename rewrites its own file);
+  the caller moves `Settings.car_build` references. Wings cannot be renamed.
+* Garage keys: car page `S` (save in place / prompt), `SHIFT+S` (save as),
+  `B` / `SHIFT+B` (this car's builds, in place), `F` (this car's default;
+  `D` stays "design"); library page `D` / pad `R1` (default), `R` (rename);
+  pause-menu actions `build_save`, `build_save_as`, `build_load`,
+  `build_default`; `_poll_pad` answers a TextPrompt with CROSS / CIRCLE. The
+  library page and W both refuse, in Real mode, a wing past the slot's limit.
+* The PICK page: `Sim._picker()` is the pre-race page's `PreRace`, else the
+  class-less `sim.build_pick = PreRace(None, None, ...)` made whenever there
+  is a garage and a library, so Settings' **Build** row works on every map.
+  `prerace.pick_order(builds, car)` is the one order (this car's, any-car,
+  other cars' tagged); `Settings`' **Default** row saves under a free name
+  and never overwrites a library build.
+
+**Two new cars** (`cars.CAR_ORDER = corsa, mx5, 540i, express, bus`): the
+Renault Express 1.4 (R5-based van, E7J, 1995) and a 12 m Mercedes-Benz Citaro
+O530 (2005, OM 906 hLA, ZF 6-speed, governed 80 km/h). New OPTIONAL CarSpec
+fields, every default the old behaviour (`cars.PHYSICS_DEFAULTS`; the stock
+three set none): `tyre_lfzo_f / tyre_lfzo_r` (section 2's exception),
+`roll_dist_f`, `eps_f`, `I_eng / I_wf / I_wr` (clutch `K_c / C_c` scale with
+`I_eng`), `rev_scaled` (the soft limiter, brake downshift, launch / blip,
+stall / crank / fire speeds scale with the rev range), `v_governor`,
+`brk_air / brk_lever` (an air-brake equivalent), `brk_valve`
+('fixed' | 'scaled' | 'none'), `vmax_by` (replaces `key == "540i"` in
+`cars.self_check`; its rpm band is `1.5 n_idle < rpm at Vmax < 1.03 n_cut`),
+`own_aids` (the steer aid, PathFollower's lock and LapDriver use the car's own
+wheelbase / grip / understeer, `input.aid_for_car`). `CarDerived.tyres` holds
+one tyre per wheel (on `der`, not the Vehicle: records snapshot the Vehicle);
+`util_f / util_r` read `der.tyre_refs[i]`, which IS `qss.TYRE` on every
+unscaled tyre. `powertrain.brake_coeffs` raises ValueError for brakes that
+cannot reach full authority inside 400 bar (hydraulic) / 10 bar (air) instead
+of saturating silently. `roll_dist_f` stays the 0.74 calibration on every car
+that declares none (section 4).
 
 ## 9. Reconciliations (where the subsystem specs disagreed)
 
