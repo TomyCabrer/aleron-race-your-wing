@@ -85,7 +85,7 @@ saved). Scripted and headless runs never read the file.
 |---|---|---|
 | Map | Arena circuit / Linden park / Kestrel ring / Ashdown circuit / Open proving ground / Skidpad / Dragstrip (`--track`, `TAB`) | restarts the session on the new map, same car |
 | Car | Opel Corsa C 1.2 / Mazda MX-5 1.8 / BMW 540i / Renault Express 1.4 / Mercedes Citaro bus (`--car`) | restarts the session: a different car is a different tyre, load set, roll block and gearbox. The new car opens with **its own default build** (below, *Your builds, per car*) |
-| Paint | factory (the car's own: Corsa yellow, MX-5 red, 540i blue) / signal yellow / rosso red / estoril blue / arctic white / silver / racing green / midnight purple / cobalt blue / teal / burgundy, with a swatch beside the row; kept per car | at once, on the road and in the garage; looks only: never in the class, a ranking or a medal (a lap's settings snapshot lists it, as it does Graphics) |
+| Paint | factory (the car's own: Corsa yellow, MX-5 red, 540i blue, Express fleet white, Citaro transit teal) / signal yellow / rosso red / estoril blue / arctic white / silver / racing green / midnight purple / cobalt blue / teal / burgundy, with a swatch beside the row; kept per car | at once, on the road and in the garage; looks only: never in the class, a ranking or a medal (a lap's settings snapshot lists it, as it does Graphics) |
 | Wing limits | **Real** (each car's own physical span limit) / **Unlimited** (up to 3x the limit: impossible wings, for fun) | at once, in the garage's editors. A run whose wings are past the limit is filed as **UNLIMITED**, apart from the official records (*Wing limits*, below) |
 | Ballast | None / 25 / 50 / 75 / 100 / 150 / 200 kg (`--ballast`, 0-300) | restarts the session |
 | Ballast at | Nose (front subframe, low) / Passenger seat (at the CG) / Floorpan over the rear axle (low) / Boot floor, behind the rear axle (high) (`--ballast-at`) | restarts the session |
@@ -139,6 +139,10 @@ over) following the physics' rpm and engine load, tyre squeal from the worst
 wheel's slip, a grass rumble off the tarmac, wind with speed squared and a
 clunk as a gear engages. It streams through one `pygame.mixer` channel about
 50-90 ms behind the physics; the settings page re-levels or drops it live, and
+each car has its own engine voice (the MX-5's four, the 540i's V8, the
+Express's plainer 1.4 four; the Citaro's 6.4-litre turbo-diesel six clatters at
+idle, rumbles at its 1650 rpm cruise, hisses its turbo under load and never
+pops, and the rev bar and shift lights use each car's own range), and
 a machine without an audio device just drives silently. `python3 -m
 drive.audio` checks the synthesis and writes `runs/selfcheck/audio_demo.wav`.
 
@@ -780,7 +784,14 @@ parameter sets, selectable from the CLI (`--car`) and from *Settings*:
 | Renault Express 1.4 (E7J, 1995) | 915 kg | 2.580 m | 60 | 55 kW | 109 N·m | 0.99 | FWD |
 | Mercedes-Benz Citaro O530 12 m bus (2005) | 11 459 kg | 5.845 m | 36 | 205 kW | 1120 N·m | 4.42 | RWD |
 
-**The two big-wing cars (task 41).** The *Renault Express* is the 1990s van
+**The two big-wing cars (task 41).** Both are drawn as themselves: the
+Express as the Renault 5-based van (the R5's nose and cab, a tall blind load
+box, two rear doors with small lamps) in fleet white, the Citaro as a modern
+low-floor city bus in transit teal (a flat glazed front with a destination
+display and mirrors on arms, a long row of windows, three doors on the right,
+the engine tower at the left rear, the air-con pod on the roof). The chase
+camera frames a taller vehicle as it frames the Corsa, rising and pulling back
+with its height. The *Renault Express* is the 1990s van
 built on the Renault 5 (the Extra in the UK, the Rapid in German-speaking
 countries): the Corsa's power, 55 kW / 75 hp, in a 1.78 m tall, 915 kg box --
 about 0.80 g of cornering, 0-100 km/h in 15 s, 149 km/h flat out. The
@@ -909,6 +920,12 @@ trained on one track with one aero configuration, so it is a fast lap on a
 memorised circuit, not a general driver.
 
 ### Race the bots
+
+*A bus on the grid (task 41).* A car that fits a painted grid box takes its
+slot as before; the 12 m Citaro does not, so a bus bot lines up on the
+centreline behind the painted rows (about 42 m back), and if YOU drive the bus
+the bots take the next clear boxes behind you. Stock grids are unchanged. The
+RACE page's *Test* gives a bus bot 169 s so it sets a flying lap.
 
 From the game: `ESC` → **Race vs bot**. The page is a grid of up to **five**
 bots (the most the loop steps in real time: each bot is a second car at

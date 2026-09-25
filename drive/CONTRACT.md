@@ -2014,6 +2014,35 @@ cannot reach full authority inside 400 bar (hydraulic) / 10 bar (air) instead
 of saturating silently. `roll_dist_f` stays the 0.74 calibration on every car
 that declares none (section 4).
 
+**The new cars' presentation.**
+* `render.car_mesh3` draws five styles: hatch, roadster, saloon, van (band
+  kind `'box'` = a blind panel; the LAST station is the rear-door face) and bus
+  (`'win'` = a painted window band with decal panes and doors,
+  `render.side_decal`; the FIRST station is the windscreen face, the last the
+  engine bay). Factory colours: Express (226, 226, 220), bus (22, 128, 132),
+  both palette colours checked at every tone.
+* `Chase3D`: a body taller than `CHASE_TOP_REF` 1.44 m has the Corsa's framing
+  scaled about its tail by `k = height / 1.44`; `k = max(1, .)`, so the three
+  stock bodies take the pre-41 path bit for bit (render self-check: 84/84
+  targets). `CHASE_REAR_CAP` is 4.0 m (was 1.0; every stock car sits under 1.0).
+* `gg_envelope` uses `max_ay_car` (the car's own mass, axles, roll split and
+  tyre references) on `own_aids` cars and `qss.max_ay` on the stock cars.
+  `rev_marks` scales the shift point and amber span by `min(1, n_cut / 6000)`.
+* `audio`: an EngineProfile per new car (E7J four; OM 906 turbo-diesel six,
+  six firings a cycle, idle 600, cut 2500); `EngineProfile.idle_hi` (1800 on
+  every petrol, 950 on the bus) and `rpms` (the self-check's sweep, per
+  profile).
+* `fx.SLIP_ALPHA0_CAR`: Express 10.9 deg, bus 16.6 deg, the same ramp-steer rig.
+  The wheelspin assert follows the smoke gate: a spin held past
+  `SLIP_KAPPA_HOLD` for `T_LOCK` smokes; one that never gets there (a bus's
+  twin rears) makes none.
+* `race_grid.grid_layout`: a car that fits a painted box takes `grid_slot(i)`;
+  one that does not lines up behind the painted rows on the centreline; a
+  user whose body covers boxes pushes the bots to the next clear boxes.
+  `Sim.start_race` places rivals with it. Stock grids are unchanged.
+* `ml.evaluate.bot_test_scale`: own_aids cars get `max(1, sqrt(ay_Corsa /
+  ay_car))` on the Test budget; the stock cars 1.0.
+
 ## 9. Reconciliations (where the subsystem specs disagreed)
 
 1. **Tyre model.** `numerics.txt` proposed a simplified single-shape-function
