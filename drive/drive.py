@@ -7517,12 +7517,12 @@ def _v43_fitted_sessions(tmp, verbose=True):
     """The review of task 41's root design, in the REAL loop (`_loop_run`):
     every session drives a copy of the working build fitted to its car, and
     the working build never moves. (a) a pre-41 any-car build driven Corsa ->
-    Express -> Corsa comes back bit-identical (finding 2); (b) a bus build in
+    Express -> Corsa comes back bit-identical (finding 1); (b) a bus build in
     a Corsa challenge is DRIVEN fitted (flank h 1.20), JUDGED fitted
     (UNLIMITED, as challenges.build_stats says) and never written over the
-    Corsa's own per-map memory (finding 1); (c) a challenge's end is no car
+    Corsa's own per-map memory (finding 0); (c) a challenge's end is no car
     change -- the MX-5 keeps its edited build -- while a real car change
-    autosaves the unsaved build it replaces (finding 3)."""
+    autosaves the unsaved build it replaces (finding 2)."""
     import cars as _cars
     from . import garage as grg
     from .aero.library import Library
@@ -7534,7 +7534,7 @@ def _v43_fitted_sessions(tmp, verbose=True):
     big = lib.wings["flank-e423"].copy(name="bus-fin", builtin=False)
     big.span = 4.40                        # legal on the bus at h 2.50 (2 x 2.22)
     lib.save_wing(big)
-    #  (a) finding 2
+    #  (a) finding 1
     anyc = dict(version=2, name="plate car", mirror=True, builtin=False, slots=dict(
         left=dict(wing="plate", x=0.97, h=0.9, inc_deg=0.0, mode="active"),
         right=dict(wing="plate", x=0.97, h=0.9, inc_deg=0.0, mode="active"),
@@ -7547,7 +7547,7 @@ def _v43_fitted_sessions(tmp, verbose=True):
                and all(e["design"] == la[0]["design"] for e in la)
                and la[1]["car"] == "express" and la[1]["build"]["slots"]["top"]["h"] > 1.85
                and _same_build(mem_a["arena|corsa"]["build"], anyc))
-    #  (b) finding 1
+    #  (b) finding 0
     busb = grg.new_build("bus")
     busb.left.wing, busb.left.h = "bus-fin", 2.50
     busb.sync_mirror("left")
@@ -7566,7 +7566,7 @@ def _v43_fitted_sessions(tmp, verbose=True):
                and mem_b["arena|corsa"]["name"] == "corsa arena"
                and lb_[2]["car"] == "bus" and lb_[2]["build"] == lb_[0]["build"]
                and lb_[2]["design"] == lb_[0]["design"] == busb.to_json())
-    #  (c) finding 3
+    #  (c) finding 2
     for nm, car, wing in (("mxdef", "mx5", ""), ("cdef", "corsa", "fin")):
         d_ = grg.new_build(car)
         d_.name, d_.left.wing = nm, wing
@@ -8212,7 +8212,7 @@ def run_interactive_cli(opts) -> int:
     #  car_build), and never with another car's build (`_car_build`); the
     #  launch's own case is `_resolve_design`'s. A challenge's car is not the
     #  player's: seen_car stays the player's own while one runs, so handing
-    #  the car back at its end is no car change (review finding 3)
+    #  the car back at its end is no car change (review finding 2)
     seen_car = None
     explicit = bool(getattr(opts, "build", None)) or any(
         a.startswith("--wing") for a in sys.argv[1:])
@@ -8288,7 +8288,7 @@ def run_interactive_cli(opts) -> int:
                 if d2 is not None:
                     #  the build in hand is replaced: one that is in no library
                     #  file is saved there first, as a PICK does (review
-                    #  finding 3) -- an empty car carries nothing to lose
+                    #  finding 2) -- an empty car carries nothing to lose
                     if design.has_any(lib):
                         _autosave_build(design, lib)
                     design = d2
@@ -9117,7 +9117,7 @@ def _track_build_used(track, design, opts, car: str | None = None) -> None:
     build as the player holds it, not the session's fitted copy. Never a
     build made for another car (a 540i build in a Corsa challenge): `car`
     could never read it back, so it would only wipe `car`'s own entry
-    (review finding 1; `RecordBook.set_last_build` refuses it too)."""
+    (review finding 0; `RecordBook.set_last_build` refuses it too)."""
     if not _player_session(opts):
         return
     try:

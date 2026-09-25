@@ -792,7 +792,7 @@ class RecordBook:
 
         A build made for ANOTHER car (`build_fits` False: a 540i build driven
         in a Corsa challenge, a bus build the player picked on the Corsa) is
-        never filed under this car's key (review of task 41, finding 1):
+        never filed under this car's key (review of task 41, finding 0):
         `last_build` would never hand it back, so writing it would only wipe
         the build this car really last used there. False, nothing written."""
         if car and not build_fits(build, car):
@@ -1455,7 +1455,7 @@ def self_check(verbose: bool = True) -> bool:
           for t in ("arena", "linden", "kestrel", "ashdown") for c in ("corsa", "bus")}
     rep("last build per map AND car: each car its own; a pre-task-41 entry for any car "
         "until it has one; another car's build never -- not even written over the car's "
-        "own entry (review finding 1)",
+        "own entry (review finding 0)",
         lb == {("arena", "corsa"): "fast one", ("arena", "bus"): "bus wings",
                ("linden", "corsa"): "corsa fast", ("linden", "bus"): None,
                ("kestrel", "corsa"): "corsa own", ("kestrel", "bus"): None,

@@ -498,7 +498,7 @@ def over_limits(build, lib, car=None) -> list[dict]:
     Empty = an official build. `lib` is the wing library (`.wings` by name);
     a wing it does not hold is skipped (nothing is fitted there).
 
-    The build is judged AS FITTED TO `car` (review of task 41, findings 1 and
+    The build is judged AS FITTED TO `car` (review of task 41, findings 0 and
     6): a build is always driven clamped into the car's slot bands
     (`CarBuild.clamp`), so each flank is judged at its height held inside
     `flank_h_band(car)`, the mirror lock is applied, and a wing in a slot of
@@ -673,7 +673,7 @@ def self_check(verbose: bool = True) -> bool:
         o_c == ["top"] and o_b == ["left", "right"], f"corsa {o_c}, bus {o_b}")
     js["slots"]["top"]["wing"] = "gone"
     rep("a wing the library does not hold is skipped", over_limits(js, _L, "corsa") == [], "")
-    #  judged AS FITTED (review of task 41, findings 1 and 6): a bus build's
+    #  judged AS FITTED (review of task 41, findings 0 and 6): a bus build's
     #  4.40 m flank at h 2.50 is driven on a Corsa at its h ceiling 1.20,
     #  where the limit is 2.10 m -- raw, it would have read legal (2 x 2.35)
     _L.wings["b"] = _W(4.40)
