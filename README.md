@@ -485,13 +485,27 @@ are *any car*, and every car can still use them.
 - **Changing car** (Settings > Car) opens the new car with its default build.
   With no default, a build made for another car is never put on it: you get
   the build that car last drove on this map, else an empty car and a hint. An
-  any-car build is kept. The same rule applies at launch when the last garage
-  car was another car's; `--build` and `--wing` still win.
+  any-car build is kept. A build you were driving that is in no library file
+  is saved there first, as '<name> (autosave)', before another replaces it.
+  The same rule applies at launch when the last garage car was another car's
+  (and the default it opens with is not then swapped for the map's last
+  build); `--build` and `--wing` still win, but a `--build` name the library
+  does not hold counts as no `--build`.
+- **A build is always driven fitted to the car under it**: a copy of it,
+  moved into that car's slot bands. The build itself never moves, so taking
+  it to another car -- or into a challenge, which runs in its own car -- and
+  back gives you exactly the build you had, and viewing another car's build
+  in the garage changes nothing unless you edit it. Whether a run is
+  UNLIMITED is judged on that fitted copy, the same on every page. A
+  challenge's car is not a car change: when it ends you get your own car
+  back with the build you had.
 - **From the drive**, Settings > **Build** opens PICK A BUILD on every map, the
   dragstrip included, and Settings > **Default** makes the build you are
   driving this car's default.
 - **Each map remembers the last build per car**, so driving the bus on the
-  arena no longer replaces the Corsa's arena build.
+  arena no longer replaces the Corsa's arena build -- and a build made for
+  another car (a bus build driven in a Corsa challenge) is never remembered
+  as the Corsa's.
 
 The published car is still here, bit-for-bit: the built-in wings `fin`
 (CL 0.70) and `plate` (CL 1.25) are the study's 0.35 m² panel with its fixed

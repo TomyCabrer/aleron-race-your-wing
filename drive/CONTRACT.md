@@ -1919,15 +1919,39 @@ legacy one-panel `WingDesign`) counts as official.
   must use one of the two.
 * `last_builds.json` keys are `track|car`; a bare `track` key is a pre-41
   entry, read for any car until that car has its own. `RecordBook.last_build(
-  track, car)` never returns another car's build (`records.build_fits`).
+  track, car)` never returns another car's build (`records.build_fits`), and
+  `set_last_build(track, name, build, car)` never files one (False, nothing
+  written: it would only wipe that car's own entry).
 * `Settings.car_build` maps car -> library build NAME. `drive._car_build` is
-  the only resolver, run on a car change (`seen_car` in `run_interactive_cli`;
-  not during a challenge, not right after the garage) and at launch in
-  `_resolve_design(opts, settings)` only when `garage_design.json` belongs to
-  another car and no `--build` / `--wing` was given. Order: the default if it
-  is still in the library; else keep an own or any-car build (re-clamped to
-  the new car); else this car's per-map build; else `garage.new_build(car)`
-  plus a note of 120 characters or less.
+  the only resolver, run on a car change (`seen_car` in `run_interactive_cli`
+  is the PLAYER's car: it does not advance while a challenge runs, so the
+  challenge handing the car back is no car change; not right after the
+  garage) and at launch in `_resolve_design(opts, settings)` only when
+  `garage_design.json` belongs to another car and no `--build` the library
+  holds / `--wing` was given. Order: the default if it is still in the
+  library; else keep an own or any-car build; else this car's per-map build;
+  else `garage.new_build(car)` plus a note of 120 characters or less. A car
+  change that replaces a build with wings that is in no library file
+  autosaves it first (`_autosave_build`, as a PICK does). A launch that took
+  the default sets `opts.build_from_car`, and the loop's first pass then
+  skips the per-map switch.
+* **Fitted copies (review of task 41).** The player's working build -- the
+  loop's `design`, the garage's build -- is never moved by fitting it to a
+  car it is merely driven on. `drive._drive_design(opts, design, lib, car)`
+  runs right before EVERY session (the first, after a challenge switch, a car
+  change, a PICK, the garage): `opts.build_json` is a copy fitted to `car`
+  (`_fitted`: what the physics drives and a lap is filed under) and
+  `opts.design_json` the working build (what the library and the per-map
+  memory hold: `_track_build_used` and `Sim.start_timed` store it). `_car_build`,
+  `_track_build` and a PICK return builds as held, unclamped. `PreRace(...,
+  design_json=, fit=)`: `saved()` looks up the held build, and a PICK row's
+  best is read under its fitted id (`drive._fit_json`). The garage edits its
+  own car's build in place, but opens an any-car / other-car build (handed in
+  or loaded) as a fitted copy, `Garage.handed_back()` returning the original
+  when the copy was only looked at; back in the loop `_stamp_car` compares
+  that with the build as it came in. `race_grid.own_car` fits a bred bot's
+  build to the car it was bred in, `tutorial.wing_car(..., car)` to the
+  session's.
 * Stamping: every garage library save stamps `Garage.car`; back from the
   garage, `_stamp_car` tags the working build with `settings.car` only if its
   content changed.

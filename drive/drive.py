@@ -3051,7 +3051,9 @@ class Sim:
         pr = self.prerace
         if pr is not None and pr.build_json is not None and not self.tutorial_car:
             #  (the tutorial's plate car is in memory only: never a map's default)
-            pr.book.set_last_build(self.track.name, pr.build_name, pr.build_json,
+            #  the build as the player holds it, not the session's fitted copy;
+            #  another car's build is never filed under this car (task 41)
+            pr.book.set_last_build(self.track.name, pr.build_name, pr.design_json,
                                    car=getattr(self.settings, "car", None))   # task 41: per car
         self.reset(to_checkpoint=False)
         self._rec_note("TIME TRIAL: rolling start - the clock starts at the line"
@@ -7400,6 +7402,224 @@ def _v41_builds(tmp, verbose=True):
                     default=default_ok, pick=pick_ok)
 
 
+def _loop_run(root, lib, design_json, st_kw, script, argv=(), last=None):
+    """`run_interactive_cli`'s REAL loop, every session stubbed by one step of
+    `script`, in the folder `root` (the loop's runs/ files -- settings, the
+    garage car, last_builds.json, progress -- all land there; the player's
+    runs/ is never touched) with `lib` as the garage library. A step may set
+    `car` (the Settings page's Car row, during the session), `pick` (a
+    challenge id), `end` (the challenge's end), `prerace_pick` ((name, json))
+    and `stop` ('restart' by default; the script ends with 'quit'). `last`:
+    {(track, car): build json} seeded into the per-map memory first.
+    Returns one row per session: its car, the build it DROVE (opts.build_json),
+    the working build (opts.design_json), its over-limit reasons, the challenge."""
+    import contextlib
+    import io
+    import json as _json
+    import pygame
+    from types import SimpleNamespace as NS
+    from . import garage as grg
+    from .records import RecordBook
+    log, steps = [], iter(script)
+
+    def fake(opts, pad=None, settings=None, garage=False):
+        st = next(steps)
+        cp = lambda v: _json.loads(_json.dumps(v))          # noqa: E731
+        log.append(dict(car=settings.car, build=cp(opts.build_json),
+                        design=cp(getattr(opts, "design_json", None)),
+                        over=_session_over_limits(opts, settings),
+                        chal=(getattr(opts, "challenge", None) or {}).get("id")))
+        if "car" in st:
+            settings.car = st["car"]
+            settings.save()
+        return NS(stop_reason=st.get("stop", "restart"), inp=NS(pad=None), race_opts={},
+                  rivals=[], prerace_pick=st.get("prerace_pick"), wing_side_mode=0,
+                  ghosts=None, challenge_pick=st.get("pick"), challenge_end=st.get("end", False),
+                  tutorial=None, wing_tutor_start=False, swarm_launch=None)
+    cwd, argv0, lib0 = os.getcwd(), list(sys.argv), grg._LIB
+    real_is, quit0 = globals()["_interactive_session"], pygame.quit
+    os.makedirs(os.path.join(root, "runs"), exist_ok=True)
+    try:
+        os.chdir(root)
+        grg._LIB = lib
+        if design_json is not None:
+            grg.CarBuild.from_json(design_json).save()
+        Settings(**st_kw).save()
+        for (t_, c_), js_ in (last or {}).items():
+            RecordBook().set_last_build(t_, js_.get("name", ""), js_, car=c_)
+        sys.argv = ["drive"] + list(argv)
+        opts = build_parser().parse_args(list(argv))
+        globals()["_interactive_session"] = fake
+        pygame.quit = lambda: None         # the rest of the self-check keeps its display
+        with contextlib.redirect_stdout(io.StringIO()):
+            run_interactive_cli(opts)
+    finally:
+        globals()["_interactive_session"] = real_is
+        pygame.quit = quit0
+        grg._LIB, sys.argv[:] = lib0, argv0
+        os.chdir(cwd)
+    return log
+
+
+def _v43_fitted_sessions(tmp, verbose=True):
+    """The review of task 41's root design, in the REAL loop (`_loop_run`):
+    every session drives a copy of the working build fitted to its car, and
+    the working build never moves. (a) a pre-41 any-car build driven Corsa ->
+    Express -> Corsa comes back bit-identical (finding 2); (b) a bus build in
+    a Corsa challenge is DRIVEN fitted (flank h 1.20), JUDGED fitted
+    (UNLIMITED, as challenges.build_stats says) and never written over the
+    Corsa's own per-map memory (finding 1); (c) a challenge's end is no car
+    change -- the MX-5 keeps its edited build -- while a real car change
+    autosaves the unsaved build it replaces (finding 3)."""
+    import cars as _cars
+    from . import garage as grg
+    from .aero.library import Library
+    from .challenges import build_stats
+    from .prerace import _same_build
+    from .records import RecordBook
+    root = os.path.join(tmp, "fit43")
+    lib = Library(os.path.join(root, "library"), use_xfoil=False)
+    big = lib.wings["flank-e423"].copy(name="bus-fin", builtin=False)
+    big.span = 4.40                        # legal on the bus at h 2.50 (2 x 2.22)
+    lib.save_wing(big)
+    #  (a) finding 2
+    anyc = dict(version=2, name="plate car", mirror=True, builtin=False, slots=dict(
+        left=dict(wing="plate", x=0.97, h=0.9, inc_deg=0.0, mode="active"),
+        right=dict(wing="plate", x=0.97, h=0.9, inc_deg=0.0, mode="active"),
+        top=dict(wing="rear-s1223", x=-0.9, h=1.60, inc_deg=6.0, mode="active")))
+    la = _loop_run(os.path.join(root, "a"), lib, anyc, dict(car="corsa", track="arena"),
+                   [dict(car="express"), dict(car="corsa"), dict(stop="quit")])
+    mem_a = RecordBook(os.path.join(root, "a", "runs", "records")).last_builds()
+    trip_ok = (len(la) == 3 and la[0]["build"] == la[2]["build"]
+               and _same_build(la[0]["build"], anyc) and _same_build(la[2]["design"], anyc)
+               and all(e["design"] == la[0]["design"] for e in la)
+               and la[1]["car"] == "express" and la[1]["build"]["slots"]["top"]["h"] > 1.85
+               and _same_build(mem_a["arena|corsa"]["build"], anyc))
+    #  (b) finding 1
+    busb = grg.new_build("bus")
+    busb.left.wing, busb.left.h = "bus-fin", 2.50
+    busb.sync_mirror("left")
+    own = grg.new_build("corsa")
+    own.name, own.left.wing = "corsa arena", "fin"
+    own.sync_mirror("left")
+    lb_ = _loop_run(os.path.join(root, "b"), lib, busb.to_json(), dict(car="bus", track="arena"),
+                    [dict(pick="lap_arena"), dict(end=True), dict(stop="quit")],
+                    last={("arena", "corsa"): own.to_json()})
+    mem_b = RecordBook(os.path.join(root, "b", "runs", "records")).last_builds()
+    st_b = build_stats(lb_[1]["design"], lib, _cars.get("corsa"), 0.0) if len(lb_) > 1 else {}
+    chal_ok = (len(lb_) == 3 and lb_[1]["car"] == "corsa" and lb_[1]["chal"] == "lap_arena"
+               and lb_[1]["build"]["slots"]["left"]["h"] == 1.20
+               and [o["slot"] for o in lb_[1]["over"]] == ["left", "right"]
+               and st_b.get("unlimited") is True and lb_[0]["over"] == []
+               and mem_b["arena|corsa"]["name"] == "corsa arena"
+               and lb_[2]["car"] == "bus" and lb_[2]["build"] == lb_[0]["build"]
+               and lb_[2]["design"] == lb_[0]["design"] == busb.to_json())
+    #  (c) finding 3
+    for nm, car, wing in (("mxdef", "mx5", ""), ("cdef", "corsa", "fin")):
+        d_ = grg.new_build(car)
+        d_.name, d_.left.wing = nm, wing
+        d_.sync_mirror("left")
+        lib.save_build(d_.to_json())
+    ed = grg.new_build("mx5")
+    ed.name, ed.left.wing, ed.left.inc_deg = "mx edit", "plate", 4.0
+    ed.sync_mirror("left")
+    lc = _loop_run(os.path.join(root, "c"), lib, ed.to_json(),
+                   dict(car="mx5", track="linden", car_build={"mx5": "mxdef", "corsa": "cdef"}),
+                   [dict(pick="lap_arena"), dict(end=True), dict(car="corsa"), dict(stop="quit")])
+    names = [((e["design"] or {}).get("name"), e["car"]) for e in lc]
+    back_ok = (names == [("mx edit", "mx5"), ("mx edit", "corsa"), ("mx edit", "mx5"),
+                         ("cdef", "corsa")]
+               and _same_build(lib.builds.get("mx edit (autosave)"), ed.to_json()))
+    ok = trip_ok and chal_ok and back_ok
+    if verbose:
+        print(f"  V43 fitted      : any-car build Corsa -> Express -> Corsa bit-identical "
+              f"{trip_ok}; bus build in a Corsa challenge driven at flank h "
+              f"{lb_[1]['build']['slots']['left']['h'] if len(lb_) > 1 else None}, "
+              f"UNLIMITED {bool(lb_[1]['over']) if len(lb_) > 1 else None} (= build_stats "
+              f"{st_b.get('unlimited')}), the Corsa's arena memory kept: {chal_ok}; "
+              f"challenge end is no car change, a car change autosaves: {back_ok} {names}")
+    return ok, dict(trip=trip_ok, chal=chal_ok, back=back_ok, names=names)
+
+
+def _v43b_launch_and_judges(tmp, verbose=True):
+    """The review of task 41, the launch and the fitted judgement: a launch
+    that took the car's DEFAULT keeps it over the map's memory on the first
+    pass (finding 5); a `--build` the library does not hold falls back to
+    the last garage car WITH the other-car guard (finding 10); a bred bot's
+    build is rebuilt on the car it was bred in, not the Corsa (finding 7);
+    and every page's judge -- `_prerace_books`' (the PICK page and the
+    class-less picker call `bodies.over_limits` the same way; the garage's
+    library page too) -- agrees with `challenges.build_stats` on a bus build
+    driven on a Corsa, while the pick page reads a library build as saved
+    and fits it for its best (finding 6, the root design)."""
+    import cars as _cars
+    from types import SimpleNamespace
+    from . import garage as grg
+    from . import race_grid
+    from .aero.library import Library
+    from .bodies import over_limits
+    from .challenges import build_stats
+    from .prerace import PreRace
+    from .records import RecordBook
+    from .vehicle import VehicleConfig
+    root = os.path.join(tmp, "launch43")
+    lib = Library(os.path.join(root, "library"), use_xfoil=False)
+    big = lib.wings["flank-e423"].copy(name="bus-fin", builtin=False)
+    big.span = 4.40
+    lib.save_wing(big)
+    b_a, b_b, c_x = grg.new_build("bus"), grg.new_build("bus"), grg.new_build("corsa")
+    b_a.name, b_a.left.wing = "bus A", "plate"
+    b_b.name, b_b.left.wing, b_b.left.inc_deg = "bus B", "plate", 3.0
+    c_x.name, c_x.left.wing = "corsa x", "fin"
+    for b_ in (b_a, b_b, c_x):
+        b_.sync_mirror("left")
+    lib.save_build(b_a.to_json())
+    l5 = _loop_run(os.path.join(root, "d"), lib, c_x.to_json(),
+                   dict(car="bus", track="arena", car_build={"bus": "bus A"}), [dict(stop="quit")],
+                   last={("arena", "bus"): b_b.to_json()})
+    l10 = _loop_run(os.path.join(root, "e"), lib, b_b.to_json(), dict(car="corsa", track="arena"),
+                    [dict(stop="quit")], argv=("--build", "rase"))
+    launch_ok = ([(e["design"] or {}).get("name") for e in l5 + l10] == ["bus A", "my corsa"]
+                 and l10[0]["design"]["car"] == "corsa")
+    #  a bot bred on the bus with an any-car build rides its top wing at the
+    #  bus's 3.30 m, not the Corsa's 1.85 m ceiling
+    bred = grg.new_build("bus")
+    bred.car, bred.top.wing = "", "rear-s1223"
+    st0 = SimpleNamespace(engine="", ballast=0.0, ballast_at="")
+    bot = race_grid.own_car(dict(bred=race_grid.bred_meta("bus", True, bred.to_json(), st0, 1.0)),
+                            VehicleConfig(), lib)
+    bot_ok = bot is not None and bot[2] == "bus" and bot[1].top.h_t == 3.30
+    #  the judges: a bus build (4.40 m flanks at h 2.50) on a Corsa
+    bj = grg.new_build("bus")
+    bj.name, bj.left.wing, bj.left.h = "bus big", "bus-fin", 2.50
+    bj.sync_mirror("left")
+    raw = bj.to_json()
+    fit_c = _fitted(bj, lib, "corsa").to_json()
+    sim_ = SimpleNamespace(recorder=SimpleNamespace(book=RecordBook(os.path.join(root, "rec"))),
+                           over_limits=[])
+    pb = _prerace_books(sim_, lib, "corsa")
+    judged = (pb["judge"](raw), bool(over_limits(raw, lib, "corsa")),
+              bool(over_limits(fit_c, lib, "corsa")),
+              build_stats(raw, lib, _cars.get("corsa"), 0.0)["unlimited"])
+    #  the pick page on the bus: an any-car library build, driven as its
+    #  fitted copy, still reads as the saved build; its best is looked up
+    #  under the fitted id
+    anyb = dict(c_x.to_json(), name="any", car="")
+    anyb["slots"] = dict(anyb["slots"], top=dict(anyb["slots"]["top"], wing="rear-s1223"))
+    f_bus = _fitted(grg.CarBuild.from_json(anyb), lib, "bus").to_json()
+    pr = PreRace(None, None, "any", f_bus, builds={"any": anyb}, design_json=anyb,
+                 fit=_fit_json(lib, "bus"))
+    pick_ok = pr.saved() and pr._fitted(anyb) == f_bus and f_bus != anyb
+    ok = launch_ok and bot_ok and judged == (True, True, True, True) and pick_ok
+    if verbose:
+        print(f"  V43b launch     : default kept over the map memory / a missing --build "
+              f"guarded -> {[(e['design'] or {}).get('name') for e in l5 + l10]}: {launch_ok}; "
+              f"bus-bred bot's top wing at h {bot[1].top.h_t if bot else None}: {bot_ok}; "
+              f"bus build on a Corsa judged (page, raw, fitted, build_stats) {judged}; "
+              f"pick page saved + fitted best {pick_ok}")
+    return ok, dict(launch=launch_ok, bot=bot_ok, judged=judged, pick=pick_ok)
+
+
 def self_check(verbose=True) -> bool:
     """python3 -m drive.drive  ->  the harness acceptance numbers."""
     tmp = _tmpdir()
@@ -7415,6 +7635,8 @@ def self_check(verbose=True) -> bool:
                      ("V26", lambda: _v26_settings_and_menu(tmp, verbose)),
                      ("V41", lambda: _v41_paint_on_the_road(tmp, verbose)),
                      ("V41b", lambda: _v41_builds(tmp, verbose)),
+                     ("V43", lambda: _v43_fitted_sessions(tmp, verbose)),
+                     ("V43b", lambda: _v43b_launch_and_judges(tmp, verbose)),
                      ("V27", lambda: _v27_gearbox_modes(verbose)),
                      ("V28", lambda: _v28_open_map(verbose)),
                      ("V29", lambda: _v29_engine_tc(verbose)),
@@ -7754,6 +7976,34 @@ def _apply_design(opts, design, lib=None) -> dict:
     return kw
 
 
+def _fitted(design, lib, car):
+    """A COPY of the working build `design` fitted to `car` (`CarBuild.clamp`
+    into that car's slot bands); `design` itself is never touched. A legacy
+    `WingDesign` (or None) comes back as it is."""
+    from . import garage as grg
+    if not isinstance(design, grg.CarBuild):
+        return design
+    return grg.CarBuild.from_json(design.to_json()).clamp(lib, car)
+
+
+def _drive_design(opts, design, lib, car) -> dict:
+    """The next session drives `design` on `car` (review of task 41, the root
+    design). The player's WORKING build -- the loop's `design`, the garage's
+    build -- is never moved by fitting it to a car it is merely driven on: a
+    pre-41 build taken Corsa -> Express -> Corsa, or a 540i build put in a
+    Corsa challenge, would otherwise come back with its stations moved for
+    good. Every session drives a fitted COPY instead, applied here right
+    before it starts: `opts.build_json` is that copy (what the physics runs,
+    what a lap is filed under, what `_session_over_limits` judges -- which
+    `bodies.over_limits` judges as fitted anyway), and `opts.design_json` the
+    working build as the player holds it (what the library holds, what the
+    per-map memory remembers)."""
+    kw = _apply_design(opts, _fitted(design, lib, car), lib)
+    from . import garage as grg
+    opts.design_json = design.to_json() if isinstance(design, grg.CarBuild) else None
+    return kw
+
+
 def run_garage_cli(opts) -> int:
     """Start in the garage. Kept for callers of the old name; the loop is
     run_interactive_cli's."""
@@ -7811,12 +8061,17 @@ def run_interactive_cli(opts) -> int:
     #  screen, drive/prerace.py): at launch -- unless --build / --wing named
     #  one -- and whenever the map changes; never over a car the garage has
     #  just built. The switch is in memory: runs/garage_design.json is the
-    #  garage's working car and only the garage writes it
-    seen_track = None
+    #  garage's working car and only the garage writes it. A launch that
+    #  opened with the car's DEFAULT (`_resolve_design`: the last garage car
+    #  was another car's) keeps it on the first pass too -- the car-change
+    #  rule, which the first screen has just announced (review finding 5)
+    seen_track = settings.track if getattr(opts, "build_from_car", False) else None
     #  task 41: the car the last session drove. When the Settings page's Car
     #  row changes it, the new car opens with ITS default build (Settings.
     #  car_build), and never with another car's build (`_car_build`); the
-    #  launch's own case is `_resolve_design`'s
+    #  launch's own case is `_resolve_design`'s. A challenge's car is not the
+    #  player's: seen_car stays the player's own while one runs, so handing
+    #  the car back at its end is no car change (review finding 3)
     seen_car = None
     explicit = bool(getattr(opts, "build", None)) or any(
         a.startswith("--wing") for a in sys.argv[1:])
@@ -7855,16 +8110,18 @@ def run_interactive_cli(opts) -> int:
                 #  on opts across the garage <-> drive round trips
                 g.progress = getattr(opts, "progress", None)
                 g.tutor = getattr(opts, "wing_tutor", None)
-                entered = g.build.to_json()    # as the garage fitted it to this car
+                #  the build as it came in (this car's own: fitted in place; any
+                #  other: untouched -- the garage edits a fitted copy of it and
+                #  hands the original back if the copy was only looked at)
+                entered = g.handed_back().to_json()
                 action = g.run()
-                design, pad = g.build, g.pad
+                design, pad = g.handed_back(), g.pad
                 _stamp_car(design, entered, settings.car)
                 t_ = g.tutor
                 opts.wing_tutor = t_ if (t_ is not None and t_.active) else None
                 _save_design(design, opts)     # quitting from the garage keeps the car too
                 if action != "drive":
                     break
-                _apply_design(opts, design, lib)
                 print(f"garage -> drive: {design.summary(lib)}")
                 mode = "drive"
                 from_garage = True
@@ -7888,17 +8145,20 @@ def run_interactive_cli(opts) -> int:
                 d2, note = _car_build(grg, lib, design, settings.car, settings,
                                       track=settings.track, opts=opts)
                 if d2 is not None:
+                    #  the build in hand is replaced: one that is in no library
+                    #  file is saved there first, as a PICK does (review
+                    #  finding 3) -- an empty car carries nothing to lose
+                    if design.has_any(lib):
+                        _autosave_build(design, lib)
                     design = d2
-                else:
-                    #  the build in hand stays (this car's, or any-car): fitted
-                    #  to the new car's slot bands before it is driven
-                    design.clamp(lib, settings.car)
-                _apply_design(opts, design, lib)
+                #  (else the build in hand stays -- this car's, or any-car --
+                #  and is driven as a copy fitted to the new car, below)
                 if note:
                     print(f"builds: {note}")
                     opts.screen_notes = list(getattr(opts, "screen_notes", None) or []) + [note]
                 seen_track = settings.track
-            seen_car = settings.car
+            if chal is None:
+                seen_car = settings.car
             if (grg is not None and design is not None and not from_garage
                     and chal is None
                     and settings.track != seen_track
@@ -7906,18 +8166,22 @@ def run_interactive_cli(opts) -> int:
                 d2 = _track_build(grg, lib, design, settings.track, opts, car=settings.car)
                 if d2 is not None:
                     design = d2
-                    _apply_design(opts, design, lib)
             seen_track = settings.track
             #  the tutorial's wing laps need a flank wing: a car without one
             #  drives them with the library's plate (in memory, never saved)
             tut_car = None
             if tut is not None and tut.wants_wing():
                 from .tutorial import wing_car
-                tut_car = wing_car(grg, design, lib)
+                tut_car = wing_car(grg, design, lib, car=settings.car)
             if tut_car is not None:
-                _apply_design(opts, tut_car, lib)
-            elif getattr(opts, "tutorial_car", False) and design is not None:
-                _apply_design(opts, design, lib)   # the player's own car back
+                _apply_design(opts, tut_car, lib)  # (made fitted to this car)
+                opts.design_json = None
+            elif grg is not None and design is not None:
+                #  EVERY session -- the first, after a challenge switched the
+                #  car, after a car change that kept the build, after a PICK,
+                #  back from the garage -- drives a copy fitted to the car it
+                #  is on; the working build is never moved (review, root design)
+                _drive_design(opts, design, lib, settings.car)
             opts.tutorial_car = tut_car is not None
             if grg is not None and design is not None and tut_car is None:
                 _track_build_used(settings.track, design, opts, car=settings.car)
@@ -7938,9 +8202,7 @@ def run_interactive_cli(opts) -> int:
                 #  a car being driven that is in no library file is saved as
                 #  one first, so a pick never loses it
                 _autosave_build(design, lib)
-                design = grg.CarBuild.from_json(pick[1])
-                design.clamp(lib, settings.car)
-                _apply_design(opts, design, lib)
+                design = grg.CarBuild.from_json(pick[1])   # fitted per session
                 print(f"pre-race: driving the build '{pick[0]}'")
             if getattr(sim, "wing_tutor_start", False) and grg is not None:
                 from .wing_tutorial import WingTutor, saved_state
@@ -8574,40 +8836,51 @@ def _resolve_design(opts, settings=None):
     player quit before the garage saw it, or `--car`) is not driven on this
     one: the car's own default build, else -- no default, or it is gone --
     the car's empty build (`_car_build`; the note goes on the first screen).
-    `--build` / `--wing` name the car explicitly and are never second-guessed."""
+    `--build` / `--wing` name the car explicitly and are never second-guessed
+    -- a `--build` the library does not hold names nothing, so the last
+    garage car it falls back to gets the same guard (review finding 10).
+    `opts.build_from_car` says the car's DEFAULT was taken, which the first
+    pass of the loop keeps over the map's memory (review finding 5).
+
+    The design is returned as the player holds it; what is applied to `opts`
+    is a copy fitted to the car (`_drive_design`, the review's root design)."""
     grg = None
     design = None
     lib = None
     opts.build_note = ""
+    opts.build_from_car = False
     try:
         from . import garage as grg
         lib = grg.library()
         explicit = any(a.startswith(("--wing", "--wing-x", "--wing-h", "--wing-inc"))
                        for a in sys.argv[1:])
         want = getattr(opts, "build", None)
+        found = False
         if want:
             if want in lib.builds:
                 design = grg.CarBuild.from_json(lib.builds[want])
+                found = True
             else:
                 print(f"build {want!r} is not in the library "
                       f"({', '.join(sorted(lib.builds)) or 'empty'}); using the last garage car")
         if design is None and not explicit:
             design = grg.CarBuild.load()      # the last car built is the car
-            if (design is not None and settings is not None and not want
+            if (design is not None and settings is not None and not found
                     and design.car not in ("", settings.car)):
                 d2, note = _car_build(grg, lib, design, settings.car, settings)
                 if d2 is not None:
                     design = d2
+                    opts.build_from_car = settings.build_of(settings.car) in lib.builds
                 if note:
                     print(f"builds: {note}")
                     opts.build_note = note
         if design is None:
             design = grg.CarBuild.from_json(dict(wing=opts.wing, x_w=opts.wing_x, h_w=opts.wing_h,
                                                  inc_deg=getattr(opts, "wing_inc", 0.0)))
-        #  fitted to the car it will be driven on (task 41); a standalone
-        #  swarm has no settings and uses the build's own tag / the Corsa
-        design.clamp(lib, getattr(settings, "car", None) or getattr(opts, "car", None))
-        _apply_design(opts, design, lib)
+        #  a copy fitted to the car it will be driven on (task 41); a
+        #  standalone swarm has no settings and uses the build's own tag / the Corsa
+        _drive_design(opts, design, lib,
+                      getattr(settings, "car", None) or getattr(opts, "car", None))
         opts.garage_lib = lib              # the pre-race page's PICK lists its builds
     except Exception as exc:
         print(f"garage unavailable ({exc})")
@@ -8616,11 +8889,22 @@ def _resolve_design(opts, settings=None):
     return grg, design, lib
 
 
+def _fit_json(lib, car):
+    """`fit(build_json) -> json` for the pick pages: a library build fitted to
+    `car` as a session would drive it (`_fitted`), so its best is read under
+    the id its laps were filed with."""
+    def fit(js):
+        from . import garage as grg
+        return _fitted(grg.CarBuild.from_json(js), lib, car).to_json()
+    return fit
+
+
 def _prerace_books(sim, lib, car) -> dict:
     """The pre-race page's task-41 arguments: this session's over-limit
     reasons, both books of the class (the session's own and the other --
     official and Unlimited share a root, `records.unlimited_book`), and the
-    judge that files a PICK row's best under its own build's book."""
+    judge that files a PICK row's best under its own build's book (the
+    build judged as fitted to `car`: `bodies.over_limits`' rule)."""
     from . import records as recm
     rb = sim.recorder.book
     root = rb.last_root or rb.root
@@ -8632,7 +8916,8 @@ def _prerace_books(sim, lib, car) -> dict:
             return False
         from .bodies import over_limits
         return bool(over_limits(js, lib, car))
-    return dict(over=list(sim.over_limits), books=books, judge=judge)
+    return dict(over=list(sim.over_limits), books=books, judge=judge,
+                fit=_fit_json(lib, car) if lib is not None else None)
 
 
 def _session_over_limits(opts, settings) -> list:
@@ -8680,13 +8965,19 @@ def _player_session(opts) -> bool:
 def _track_build_used(track, design, opts, car: str | None = None) -> None:
     """This session drives `design` on `track`: it is that map's build from
     now on (the plan's "the last build used on this track") -- for `car`, the
-    car driving it (task 41: the memory is per map AND car)."""
+    car driving it (task 41: the memory is per map AND car). The working
+    build as the player holds it, not the session's fitted copy. Never a
+    build made for another car (a 540i build in a Corsa challenge): `car`
+    could never read it back, so it would only wipe `car`'s own entry
+    (review finding 1; `RecordBook.set_last_build` refuses it too)."""
     if not _player_session(opts):
         return
     try:
-        from .records import RecordBook, last_key
-        book = RecordBook()
+        from .records import RecordBook, last_key, build_fits
         js = design.to_json()
+        if car and not build_fits(js, car):
+            return
+        book = RecordBook()
         cur = book.last_builds().get(last_key(track, car) if car else track)
         if not isinstance(cur, dict) or cur.get("build") != js:
             book.set_last_build(track, design.name, js, car=car)
@@ -8728,8 +9019,7 @@ def _track_build(grg, lib, design, track, opts, car: str | None = None):
         js = design.to_json()
         if not lb or (_same_build(lb["build"], js) and lb["build"].get("name") == js.get("name")):
             return None                    # the car in hand (its tag aside) already
-        d2 = grg.CarBuild.from_json(lb["build"])
-        d2.clamp(lib, car)
+        d2 = grg.CarBuild.from_json(lb["build"])     # (each session fits a copy)
         print(f"pre-race: {track} opens with the build last used there, '{lb.get('name', '')}'")
         return d2
     except Exception as exc:               # noqa: BLE001 -- a bad file: keep the car
@@ -8756,16 +9046,18 @@ def _car_build(grg, lib, design, car: str, settings, track: str | None = None, o
          on how to give the car a default.
 
     A default that is no longer in the library (deleted, renamed outside the
-    garage) falls through to 2 / 3 and says so; nothing here can raise."""
+    garage) falls through to 2 / 3 and says so; nothing here can raise. A
+    build is returned (or kept) as it is held -- never fitted in place: each
+    session drives a copy fitted to its car (`_drive_design`)."""
     from .prerace import car_label
     name = settings.build_of(car) if settings is not None else ""
     note = ""
     if name:
         js = lib.builds.get(name) if lib is not None else None
         if isinstance(js, dict):
-            d = grg.CarBuild.from_json(js)
-            d.clamp(lib, car)
-            return d, f"the {car_label(car)} opens with its default build '{name}'"
+            #  as the library holds it: each session drives a fitted copy
+            return (grg.CarBuild.from_json(js),
+                    f"the {car_label(car)} opens with its default build '{name}'")
         note = f"the {car_label(car)}'s default '{name}' is no longer in the library"
     if design is None or getattr(design, "car", "") in ("", car):
         return None, note
@@ -9023,6 +9315,7 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
                                               engine=engine_label(settings.engine, car),
                                               surface=SURFACE_LABELS[settings.wet]),
                                   can_edit=bool(garage),
+                                  design_json=getattr(opts, "design_json", None),
                                   **_prerace_books(sim, lib, settings.car))
             pr_key, pr_wanted = sim.recorder.key, wanted(opts, settings)
         except Exception as exc:           # noqa: BLE001
@@ -9065,7 +9358,8 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
             sim.build_pick = sim.prerace or PreRace(
                 None, None, getattr(opts, "build_name", "") or "",
                 getattr(opts, "build_json", None), builds=dict(lib.builds), can_edit=True,
-                over=list(sim.over_limits), judge=_judge)
+                over=list(sim.over_limits), judge=_judge,
+                design_json=getattr(opts, "design_json", None), fit=_fit_json(lib, settings.car))
         except Exception as exc:           # noqa: BLE001 -- never stops a drive
             print(f"build list unavailable ({type(exc).__name__}: {exc})")
     if sim.progress_file is not None and lib is not None:

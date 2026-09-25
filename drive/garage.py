@@ -4713,8 +4713,9 @@ class Garage:
         self.lib = lib or library()
         if isinstance(build, WingDesign):
             build = CarBuild.from_json(asdict(build))
-        self.build: CarBuild = (build or CarBuild.load()
-                                or CarBuild.for_car(self.car)).clamp(self.lib, self.car)
+        self._held = None                 # (the build handed in, its fitted JSON)
+        self.build: CarBuild = self._fit_in(build or CarBuild.load()
+                                            or CarBuild.for_car(self.car))
         self.view = GarageView(self.screen, self.car)
         self.cam = Orbit(*self.screen.get_size())
         self.cam.fit(self.view.geo)
@@ -5503,6 +5504,31 @@ class Garage:
     #  car_build). A pad has the same four in the pause menu (OPTIONS), whose
     #  buttons on the car page are all taken; the library page adds D (R1),
     #  R and DEL on the build under the cursor.
+    def _fit_in(self, src: CarBuild) -> CarBuild:
+        """The build the garage edits, from `src` (review of task 41, root
+        design). THIS car's own build is edited in place, clamped to this
+        car's bands. Any other -- an any-car build from before task 41,
+        another car's -- is only being LOOKED at on this car: the garage
+        edits a fitted COPY and keeps `src`, so merely opening it here (or
+        loading it from the library) and leaving moves nothing in it;
+        `handed_back` returns `src` untouched unless the copy was changed."""
+        if getattr(src, "car", "") == self.car:
+            self._held = None
+            return src.clamp(self.lib, self.car)
+        fitted = CarBuild.from_json(src.to_json()).clamp(self.lib, self.car)
+        self._held = (src, fitted.to_json())
+        return fitted
+
+    def handed_back(self) -> CarBuild:
+        """The build the garage gives the drive when it closes: `self.build`,
+        except an any-car / other-car build that was only looked at here --
+        then the build as it came in, not its copy fitted to this car (a
+        pre-41 build viewed on the bus keeps its Corsa-band stations; the
+        drive fits a copy to whatever car it is driven on)."""
+        if self._held is not None and self.build.to_json() == self._held[1]:
+            return self._held[0]
+        return self.build
+
     def default_name(self) -> str:
         """This car's default build (the drive's Settings.car_build), by
         library name; "" when none was chosen or the garage has no Settings."""
@@ -5580,8 +5606,9 @@ class Garage:
             self.hint = f"build '{name}' saved"
 
     def _load_build(self, name: str) -> None:
-        """The library build `name` becomes the car in hand."""
-        self.build = CarBuild.from_json(self.lib.builds[name]).clamp(self.lib, self.car)
+        """The library build `name` becomes the car in hand (fitted to this
+        car; another car's or an any-car one as a copy, `_fit_in`)."""
+        self.build = self._fit_in(CarBuild.from_json(self.lib.builds[name]))
         self.designer = None
         self.hint = f"loaded build '{self.build.name}'" + (
             "  (default)" if name == self.default_name() else "")
@@ -6534,6 +6561,29 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
         same_c and bad_b == 0 and abs(zs_b.max() - (bb_.height + 0.02)) < 1e-9
         and abs(xs_b.max() - bb_.x_front) < 1e-9 and abs(xs_b.min() - bb_.x_rear) < 1e-9,
         f"{len(bus_mesh)} polys, x {xs_b.min():.2f}..{xs_b.max():.2f}, z to {zs_b.max():.2f}")
+    #  the review of task 41's root design: an any-car (or another car's)
+    #  build only LOOKED at on another car is not moved -- the garage edits a
+    #  fitted copy and hands the original back; an edit hands the copy back;
+    #  this car's own build is edited in place
+    anyb = CarBuild(name="any old")
+    anyb.left.wing, anyb.top.wing, anyb.top.h = "flank-e423", "rear-s1223", 1.60
+    anyb.sync_mirror("left")
+    any_js = anyb.to_json()
+    gv = Garage((1280, 800), anyb, headless=True, lib=lib, car="bus")
+    looked = (gv.build is not anyb and gv.build.top.h > 3.0 and gv.handed_back() is anyb
+              and anyb.to_json() == any_js)
+    gv._move(dinc=1.0)
+    edited = gv.handed_back() is gv.build
+    lib.save_build(any_js)
+    gv._load_build("any old")
+    reloaded = gv.handed_back().to_json() == any_js and gv.build.top.h > 3.0
+    ownb = new_build("bus")
+    go = Garage((1280, 800), ownb, headless=True, lib=lib, car="bus")
+    rep("a build of another car / any car is viewed as a fitted copy and handed back unmoved; "
+        "an edit hands the copy back; this car's own build is edited in place",
+        looked and edited and reloaded and go.build is ownb and go.handed_back() is ownb,
+        f"any-car top h 1.60 shown at {gv.build.top.h:.2f} on the bus")
+    lib.delete("builds", "any old")
     real, unl = _NS(wing_limits="real"), _NS(wing_limits="unlimited")
     wide = lib.wings["flank-e423"].copy(name="tall-fin", builtin=False)
     wide.span = 1.60                        # past a Corsa flank's 1.50 m limit at h 0.90

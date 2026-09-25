@@ -227,6 +227,16 @@ class PreRace:
     route each PICK row's best to its own book. Without them every best is
     read from `book`, as before.
 
+    The review of task 41 (root design): a session drives a COPY of the
+    player's build fitted to its car. `build_json` is that copy (what the
+    laps are filed under); `design_json`, when given, is the build as the
+    player holds it -- what the library and the per-map memory know, so it
+    is what `saved()` looks up -- and `fit(build_json) -> json` fits a
+    library build to this car the same way, so a PICK row's best is read
+    under the id its laps were filed with. Without them: `build_json` for
+    both, and no fitting (the stock cars' bands fit every pre-41 build as it
+    is).
+
     `key` and `book` may be None -- the Settings page's Build row opens the
     PICK page on EVERY map, the dragstrip and a map with no records
     included, where there is no class and no time to show. `car` is the car
@@ -237,7 +247,7 @@ class PreRace:
     def __init__(self, key: str, book, build_name: str = "", build_json=None,
                  builds=None, titles=None, can_edit: bool = True,
                  over=None, books=None, judge=None,
-                 car: str = "", default: str = ""):
+                 car: str = "", default: str = "", design_json=None, fit=None):
         self.key = key
         self.can_edit = bool(can_edit)     # False: no garage this session (no EDIT row)
         self.book = book
@@ -248,6 +258,8 @@ class PreRace:
         self.default = str(default or "")
         self.build_name = str(build_name or "")
         self.build_json = build_json
+        self.design_json = design_json if isinstance(design_json, dict) else build_json
+        self.fit = fit
         self.builds = dict(builds or {})
         self.titles = dict(titles or {})
         self.ghost_label = None            # task 22: the ghost-2 row, when set
@@ -255,9 +267,19 @@ class PreRace:
 
     # -- what the build is ------------------------------------------------
     def saved(self) -> bool:
-        """Is the build being driven one of the library's (same content)?"""
+        """Is the build being driven one of the library's (same content)? The
+        build as the player holds it (`design_json`), not its fitted copy."""
         b = self.builds.get(self.build_name)
-        return b is not None and _same_build(b, self.build_json)
+        return b is not None and _same_build(b, self.design_json)
+
+    def _fitted(self, build_json):
+        """`build_json` fitted to this car (`fit`), itself without one."""
+        if self.fit is None or not isinstance(build_json, dict):
+            return build_json
+        try:
+            return self.fit(build_json)
+        except Exception:                  # noqa: BLE001 -- a bad build is not a crash
+            return build_json
 
     @property
     def unlimited(self) -> bool:
@@ -287,7 +309,7 @@ class PreRace:
         if self.books:
             want = "unlimited" if self.is_unlimited(build_json) else "official"
             book = self.books.get(want, self.book)
-        return book.build_best(self.key, name, build_json)
+        return book.build_best(self.key, name, self._fitted(build_json))
 
     # -- the main page ------------------------------------------------------
     def items(self) -> list:
