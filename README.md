@@ -501,7 +501,9 @@ are *any car*, and every car can still use them.
   back with the build you had.
 - **From the drive**, Settings > **Build** opens PICK A BUILD on every map, the
   dragstrip included, and Settings > **Default** makes the build you are
-  driving this car's default.
+  driving this car's default: a build the library already holds (under any
+  name) is that build; one it does not is saved once, under a free name, and
+  from then on the drive knows it by that name.
 - **Each map remembers the last build per car**, so driving the bus on the
   arena no longer replaces the Corsa's arena build -- and a build made for
   another car (a bus build driven in a Corsa challenge) is never remembered

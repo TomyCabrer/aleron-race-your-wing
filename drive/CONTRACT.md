@@ -1974,8 +1974,12 @@ legacy one-panel `WingDesign`) counts as official.
   class-less `sim.build_pick = PreRace(None, None, ...)` made whenever there
   is a garage and a library, so Settings' **Build** row works on every map.
   `prerace.pick_order(builds, car)` is the one order (this car's, any-car,
-  other cars' tagged); `Settings`' **Default** row saves under a free name
-  and never overwrites a library build.
+  other cars' tagged); `Settings`' **Default** row reuses a library build
+  with the same content (`prerace._same_build`, this car's first), else
+  saves the held build (`PreRace.design_json`, not the fitted copy) under a
+  free name, never over a library build; the name goes back to the loop
+  (`Sim.build_saved_as`), whose working build takes it, so the next session
+  reads as saved.
 
 **Two new cars** (`cars.CAR_ORDER = corsa, mx5, 540i, express, bus`): the
 Renault Express 1.4 (R5-based van, E7J, 1995) and a 12 m Mercedes-Benz Citaro

@@ -1628,6 +1628,9 @@ class Sim:
         # build (name, json) here and restarts the session on it
         self.prerace = None
         self.prerace_pick = None
+        #  (name, build json): Settings > Default saved -- or found in the
+        #  library -- the build being driven under `name` (task 41 review)
+        self.build_saved_as = None
         # the PB and ghost-2 ghosts, the live delta, the sector flash
         # (drive/ghosts.py, task 22): a ghosts.GhostSet in a session with records
         self.ghosts = None
@@ -3019,24 +3022,42 @@ class Sim:
         """Settings > Default (task 41): the build this session drives becomes
         the default of the car on the road. A build that is in no library file
         is saved there first, under a free name (never over another build: the
-        garage's F is the one that writes a car's own build in place)."""
+        garage's F is the one that writes a car's own build in place).
+
+        Review of task 41, finding 8: a library build with the same content
+        (`prerace._same_build`) IS this build, whatever its name -- it is
+        reused, never copied again -- and the name the build ends up under is
+        carried back (`self.build_saved_as`, read by the loop), so the next
+        session's build is that library build ("race", not "race (not
+        saved)" then "race-2", "race-3" ... on every press). What is saved is
+        the build as the player holds it (`design_json`), not the session's
+        copy fitted to this car."""
+        from .prerace import _same_build, pick_order
         pk = self._picker()
         run = self._pending.get("car", self.settings.car)
         name = pk.build_name if pk.saved() else ""
+        held = pk.design_json
+        lib = getattr(self, "garage_lib", None)
+        if not name and lib is not None and isinstance(held, dict):
+            name = next((n for n in pick_order(lib.builds, run)
+                         if _same_build(lib.builds[n], held)), "")
         if not name:
-            lib = getattr(self, "garage_lib", None)
-            if lib is None or not isinstance(pk.build_json, dict):
+            if lib is None or not isinstance(held, dict):
                 self._rec_note("save this build in the garage first (S there)", 3.0)
                 return
             name = lib.unique_name("builds", pk.build_name or f"my {run}")
-            js = dict(pk.build_json, name=name, builtin=False)
             try:
-                lib.save_build(js)
+                lib.save_build(dict(held, name=name, builtin=False))
             except (OSError, ValueError) as exc:
                 self._rec_note(f"build NOT saved ({type(exc).__name__}): no default set", 4.0)
                 return
-            pk.builds[name] = js
-            pk.build_name, pk.build_json = name, js
+        if name != pk.build_name or name not in pk.builds:
+            js = dict(held, name=name, builtin=False) if isinstance(held, dict) else held
+            pk.builds[name] = lib.builds.get(name, js) if lib is not None else js
+            pk.build_name, pk.design_json = name, js
+            if isinstance(pk.build_json, dict):
+                pk.build_json = dict(pk.build_json, name=name)
+            self.build_saved_as = (name, held)
         cb = dict(self.settings.car_build) if isinstance(self.settings.car_build, dict) else {}
         cb[run] = name
         self.settings.car_build = cb
@@ -7408,8 +7429,9 @@ def _loop_run(root, lib, design_json, st_kw, script, argv=(), last=None):
     garage car, last_builds.json, progress -- all land there; the player's
     runs/ is never touched) with `lib` as the garage library. A step may set
     `car` (the Settings page's Car row, during the session), `pick` (a
-    challenge id), `end` (the challenge's end), `prerace_pick` ((name, json))
-    and `stop` ('restart' by default; the script ends with 'quit'). `last`:
+    challenge id), `end` (the challenge's end), `prerace_pick` ((name, json)),
+    `saved_as` (Settings > Default's library name for the build driven) and
+    `stop` ('restart' by default; the script ends with 'quit'). `last`:
     {(track, car): build json} seeded into the per-map memory first.
     Returns one row per session: its car, the build it DROVE (opts.build_json),
     the working build (opts.design_json), its over-limit reasons, the challenge."""
@@ -7432,10 +7454,12 @@ def _loop_run(root, lib, design_json, st_kw, script, argv=(), last=None):
         if "car" in st:
             settings.car = st["car"]
             settings.save()
+        saved = (st["saved_as"], opts.design_json) if "saved_as" in st else None
         return NS(stop_reason=st.get("stop", "restart"), inp=NS(pad=None), race_opts={},
                   rivals=[], prerace_pick=st.get("prerace_pick"), wing_side_mode=0,
                   ghosts=None, challenge_pick=st.get("pick"), challenge_end=st.get("end", False),
-                  tutorial=None, wing_tutor_start=False, swarm_launch=None)
+                  tutorial=None, wing_tutor_start=False, swarm_launch=None,
+                  build_saved_as=saved)
     cwd, argv0, lib0 = os.getcwd(), list(sys.argv), grg._LIB
     real_is, quit0 = globals()["_interactive_session"], pygame.quit
     os.makedirs(os.path.join(root, "runs"), exist_ok=True)
@@ -7620,6 +7644,55 @@ def _v43b_launch_and_judges(tmp, verbose=True):
     return ok, dict(launch=launch_ok, bot=bot_ok, judged=judged, pick=pick_ok)
 
 
+def _v43c_default_build(tmp, verbose=True):
+    """Settings > Default (review of task 41, finding 8): an edited 'race' is
+    saved once, as 'race-2', and the name comes back to the loop -- the next
+    session drives 'race-2' as a saved build, and pressing Default again adds
+    nothing; a build whose content the library already holds under another
+    name reuses that name, no copy."""
+    import contextlib
+    import io
+    from types import SimpleNamespace
+    from . import garage as grg
+    from .aero.library import Library
+    from .prerace import PreRace
+    root = os.path.join(tmp, "default43")
+    lib = Library(os.path.join(root, "library"), use_xfoil=False)
+    race, twin = grg.new_build("corsa"), grg.new_build("corsa")
+    race.name, race.left.wing = "race", "fin"
+    twin.name, twin.left.wing = "twin", "plate"
+    for b_ in (race, twin):
+        b_.sync_mirror("left")
+        lib.save_build(b_.to_json())
+    edited = dict(race.to_json(), slots=dict(race.to_json()["slots"],
+                                             top=dict(race.to_json()["slots"]["top"], inc_deg=9.0)))
+    with contextlib.redirect_stdout(io.StringIO()):
+        sim = _build("dragstrip", driver=lambda t, v, T_: Controls())
+    sim.has_garage, sim.garage_lib = True, lib
+    sim.settings = Settings(path="", car="corsa")
+    got = []
+    for held in (edited, dict(twin.to_json(), name="mine")):
+        sim.build_saved_as = None
+        sim.build_pick = PreRace(None, None, held["name"], held, builds=dict(lib.builds),
+                                 design_json=held)
+        sim._make_build_default()
+        n1, pick_saved = len(lib.builds), sim.build_pick.saved()
+        sim._make_build_default()          # again: nothing new
+        got.append((sim.settings.build_of("corsa"), (sim.build_saved_as or ("",))[0],
+                    pick_saved, len(lib.builds) - n1))
+    lp = _loop_run(os.path.join(root, "loop"), lib, edited, dict(car="corsa", track="arena"),
+                   [dict(saved_as="race-2"), dict(stop="quit")])
+    ok = (got == [("race-2", "race-2", True, 0), ("twin", "twin", True, 0)]
+          and sorted(lib.builds) == ["race", "race-2", "twin"]
+          and [e["design"]["name"] for e in lp] == ["race", "race-2"])
+    if verbose:
+        print(f"  V43c default    : Settings > Default on an edited 'race', then on a copy of "
+              f"'twin' -> (default, name carried back, saved, new files on a 2nd press) {got}; "
+              f"library {sorted(lib.builds)}; the loop's next build "
+              f"{[e['design']['name'] for e in lp]}: {ok}")
+    return ok, dict(got=got, lib=sorted(lib.builds))
+
+
 def self_check(verbose=True) -> bool:
     """python3 -m drive.drive  ->  the harness acceptance numbers."""
     tmp = _tmpdir()
@@ -7637,6 +7710,7 @@ def self_check(verbose=True) -> bool:
                      ("V41b", lambda: _v41_builds(tmp, verbose)),
                      ("V43", lambda: _v43_fitted_sessions(tmp, verbose)),
                      ("V43b", lambda: _v43b_launch_and_judges(tmp, verbose)),
+                     ("V43c", lambda: _v43c_default_build(tmp, verbose)),
                      ("V27", lambda: _v27_gearbox_modes(verbose)),
                      ("V28", lambda: _v28_open_map(verbose)),
                      ("V29", lambda: _v29_engine_tc(verbose)),
@@ -8196,6 +8270,11 @@ def run_interactive_cli(opts) -> int:
             gs = getattr(sim, "ghosts", None)
             if gs is not None:             # the ghost slot and J survive a restart
                 opts.ghost_slot, opts.ghosts_on = gs.slot, gs.enabled
+            saved_as = getattr(sim, "build_saved_as", None)
+            if saved_as and grg is not None and design is not None:
+                from .prerace import _same_build
+                if _same_build(design.to_json(), saved_as[1]):
+                    design.name = saved_as[0]      # Settings > Default: its library name
             pick = getattr(sim, "prerace_pick", None)
             if pick and grg is not None:
                 #  the pre-race PICK: that saved build is the car from now on;
