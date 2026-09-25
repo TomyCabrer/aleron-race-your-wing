@@ -476,6 +476,21 @@ def max_ay_car(car, V, k=0.0, x_w=0.0, h_w=0.90, mu_scale=1.0) -> float:
     return 0.5 * (lo + hi)
 
 
+def rev_marks(car=None) -> tuple:
+    """(redline, shift point, amber span), rpm, of the HUD's rev bar and
+    shift lights for `car` (None: the fitted one): its cars.py n_cut, 300
+    rpm under it, and the SHIFT_SPAN the LEDs count down over. Task 41: the
+    300 and the SHIFT_SPAN are a petrol's; a 2500 rpm diesel takes them
+    scaled with its cut (else the bus's 1650 rpm cruise sat in the amber
+    with two LEDs lit): 2500 / 2375 / 417 on the bus. The scale is exactly
+    1.0 on every engine cut at 6000 or above -- the four petrols -- so
+    theirs are the numbers they always were."""
+    car = car if car is not None else _CAR
+    redline = float(getattr(car, 'n_cut', RPM_REDLINE) or RPM_REDLINE)
+    ro = min(1.0, redline / 6000.0)
+    return redline, redline - (RPM_REDLINE - RPM_SHIFT_LIGHT) * ro, SHIFT_SPAN * ro
+
+
 def gg_envelope(V, mu_scale=1.0, k_eff=0.0, x_w=X_W, h_w=H_W, n=91):
     """Equation 18 as an (M,2) CLOSED curve in (ay_g, ax_g).
 
@@ -5118,14 +5133,15 @@ class Renderer:
                              (rect[0], rect[1], max(int(rect[2] * f), 2), rect[3]),
                              border_radius=rad)
 
-    def _rev_bar(self, bar, rpm: float, redline: float, shift: float) -> None:
+    def _rev_bar(self, bar, rpm: float, redline: float, shift: float,
+                 span: float = SHIFT_SPAN) -> None:
         """The segmented rev bar: REV_SEGMENTS cells from 0 to the cut,
         coloured by band (working range, approach, shift point to cut),
         lit up to the engine speed. Both states are baked into two cached
         strips at first use, so a frame blits two clipped rectangles instead
         of drawing 28 cells."""
         x, y, w, h = (int(round(v)) for v in bar)
-        key = ('rev', w, h, round(redline), round(shift))
+        key = ('rev', w, h, round(redline), round(shift), round(span))
         pair = self._panels.get(key)
         if pair is None:
             lit = pygame.Surface((w, h), pygame.SRCALPHA)
@@ -5136,7 +5152,7 @@ class Renderer:
                 # amber over the same last SHIFT_SPAN the shift lights count
                 # down (4900 rpm on the Corsa, not 75 % = 4425, which lit
                 # amber cells at a 4800 rpm cruise)
-                col = (C_REV_LO if r_mid < shift - SHIFT_SPAN
+                col = (C_REV_LO if r_mid < shift - span
                        else C_REV_MID if r_mid < shift else C_REV_HI)
                 cell = (int(round(k * cw)) + 1, 0, max(int(round(cw)) - 2, 1), h)
                 pygame.draw.rect(lit, col, cell, border_radius=2)
@@ -5149,7 +5165,8 @@ class Renderer:
         if n_on > 0:
             self.screen.blit(lit, (x, y), (0, 0, int(round(n_on * w / REV_SEGMENTS)), h))
 
-    def _shift_lights(self, x0, y0, rpm: float, shift: float) -> None:
+    def _shift_lights(self, x0, y0, rpm: float, shift: float,
+                      span: float = SHIFT_SPAN) -> None:
         """SHIFT_LIGHTS LEDs lit one by one over the last SHIFT_SPAN rpm
         before the shift point, then all blinking together at it."""
         u = self.ui
@@ -5157,7 +5174,7 @@ class Renderer:
         at_shift = rpm >= shift
         blink_on = int(self._t_render * SHIFT_BLINK_HZ * 2.0) % 2 == 0
         for k in range(SHIFT_LIGHTS):
-            thr = shift - SHIFT_SPAN * (1.0 - (k + 1) / SHIFT_LIGHTS)
+            thr = shift - span * (1.0 - (k + 1) / SHIFT_LIGHTS)
             if at_shift:
                 col = C_SHIFT_FLASH if blink_on else C_REV_OFF
             elif rpm >= thr:
@@ -5193,15 +5210,14 @@ class Renderer:
         # the FITTED car's rev range (cars.py n_cut / n_peak_power; the
         # corsa_c dataclass has neither, and its constants are these same
         # numbers): an MX-5 revs to 7000, a 540i cuts at 6400
-        redline = float(getattr(_CAR, 'n_cut', RPM_REDLINE) or RPM_REDLINE)
-        shift = redline - (RPM_REDLINE - RPM_SHIFT_LIGHT)
+        redline, shift, span = rev_marks()
         pmax = float(getattr(_CAR, 'n_peak_power', RPM_PMAX) or RPM_PMAX)
         rpm_q = int(round(aux.rpm / 50.0) * 50)         # quantised: 50 rpm
         self._blit(f'{rpm_q:5d} rpm', r.x + 10 * u, r.y + 66 * u, self.f_val,
                    C_HUD_TEXT if rpm_q < shift else C_BAR_BRK)
-        self._shift_lights(r.x + 132 * u, r.y + 74 * u, aux.rpm, shift)
+        self._shift_lights(r.x + 132 * u, r.y + 74 * u, aux.rpm, shift, span)
         bar = (r.x + 10 * u, r.y + 92 * u, 280 * u, 12 * u)
-        self._rev_bar(bar, aux.rpm, redline, shift)
+        self._rev_bar(bar, aux.rpm, redline, shift, span)
         pygame.draw.line(self.screen, C_PURPLE,
                          (bar[0] + bar[2] * pmax / redline, bar[1] - 2),
                          (bar[0] + bar[2] * pmax / redline,
@@ -6023,6 +6039,18 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
         env[key_] = float(gg_envelope(20.0, mu_scale=mu_g)[:, 0].max())
     set_car(was_g)
     ay_q = qss.max_ay(20.0, k=0.0, x_w=X_W, h_w=H_W, mu_scale=1.0) / G
+    # task 41: the rev bar and shift lights on each car's own range; the
+    # stock three exactly n_cut / n_cut - 300 / 1000; the bus's 1650 rpm
+    # cruise green, no LED lit
+    marks = {k_: rev_marks(_cars_g.get(k_)) for k_ in _cars_g.CAR_ORDER}
+    stock_m = all(marks[k_] == (float(_cars_g.get(k_).n_cut),
+                                float(_cars_g.get(k_).n_cut) - (RPM_REDLINE - RPM_SHIFT_LIGHT),
+                                SHIFT_SPAN) for k_ in ('corsa', 'mx5', '540i', 'express'))
+    rb, sb, pb = marks['bus']
+    rep('HUD revs: each car\'s own cut, shift point and amber span',
+        stock_m and 1650.0 < sb - pb and sb < rb,
+        ', '.join(f'{k_} {v_[0]:.0f}/{v_[1]:.0f}/{v_[2]:.0f}' for k_, v_ in marks.items())
+        + f' rpm (cut / shift / span); the bus\'s 1650 cruise under its amber at {sb - pb:.0f}')
     rep('gg envelope: each new car draws its own limit, the stock cars the study\'s',
         d_corsa < 1e-12 and env['corsa'] == ay_q and env['mx5'] == ay_q
         and 0.60 < env['bus'] < 0.75 and 0.75 < env['express'] < 0.86,
