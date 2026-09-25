@@ -1853,23 +1853,38 @@ through `wing.span_fit`. `area_ceiling` grows the reference-area band in
 proportion when the span ceiling passes the packaging band's span.
 
 * `CarBuild.clamp(lib, car=None)` holds every slot inside the fitted car's
-  bands (`bodies.flank_x_band / flank_h_band / top_x_band`, the top wing's h
-  floor is that car's deck + 0.14 -- for the hatch the garage's own STATIONS
-  deck, so no Corsa build moves). `car=None` means the build's own `car` tag,
+  bands (`bodies.flank_x_band / flank_h_band / top_x_band / top_h_band`).
+  The three STOCK styles (`bodies.STOCK_STYLES`: hatch, roadster, saloon)
+  share the garage's pre-41 bands exactly -- flank x from the Corsa's
+  `CAR_X_REAR` / `CAR_X_FRONT` half a chord in, flank h 0.40-1.20, top x
+  (-1.9175, 0.55), top h from the garage's own STATIONS deck
+  (`bodies.LEGACY_DECK`, a copy garage's self-check proves) + 0.06 + 0.08 up
+  to 1.85 -- so no build saved before task 41 moves on the Corsa, the MX-5 or
+  the 540i (the MX-5's own tail and the E39's own deck would have moved one).
+  A new style (van, bus) reads its bands off its own shell: its bumpers, its
+  deck + 0.14, its roof. The span LIMITS stay per car on every style, and the
+  preview draws each car's real body. `car=None` means the build's own `car` tag,
   else the Corsa. The SPAN is never clamped by a build. `CarBuild.reset(car)`
   and `CarBuild.for_car(car)` use `bodies.slot_defaults`. Every caller that
   knows the car it will drive passes it (garage: `Garage.car`; drive:
   `settings.car`, or `--car` on a settings-less launch).
 * The three stock cars keep the garage's old slot bands and default slots to
-  the bit (`bodies.self_check`); the Corsa's clamp and preview mesh were
-  checked bit-identical on 3000 random builds.
+  the bit: `bodies.self_check` pins every band edge of all three against the
+  pre-41 formulas, and garage's self-check loads a pre-41 build at the old
+  extremes on each with its build_id unchanged; the Corsa's clamp and preview
+  mesh were checked bit-identical on 3000 random builds.
 * `garage_ui.Param` lo / hi may be callables (`Param.band()`): the span row's
   ceiling follows the slot height, the car and the Wing limits setting.
 
 **Unlimited runs.** A player session whose build has any entry in
 `bodies.over_limits(opts.build_json, opts.garage_lib, settings.car)` is an
 UNLIMITED session (`Sim.over_limits`, `Sim.unlimited`), whatever the setting
-says -- the setting gates the editors only. It is computed at every session
+says -- the setting gates the editors only. `over_limits` judges a build AS
+FITTED to the car (each flank at its h held in `flank_h_band(car)`, the
+mirror lock applied, a wrong-role wing skipped -- `CarBuild.clamp`'s rules;
+the top limit does not depend on h), so the raw library JSON a page tags
+UNLIMITED, the fitted copy a session drives and `challenges.build_stats`
+(which clamps first) always agree. It is computed at every session
 start, never stored on a build (a wing can be re-saved at another span, a
 build driven on another car). A build that cannot be judged (no library, a
 legacy one-panel `WingDesign`) counts as official.

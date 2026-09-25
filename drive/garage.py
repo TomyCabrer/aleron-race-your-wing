@@ -318,14 +318,15 @@ def deck_z(x: float) -> float:
 
 #  ---- the car a build is FITTED to (task 41) --------------------------------
 #  Until task 41 every slot band below was the Corsa's, whichever car was
-#  driven. They are per car now, read off the car's own body shell
-#  (`drive/bodies.py`), and the three stock cars' bands and default slots are
-#  the old constants exactly (bodies' self-check pins it) -- so no saved
-#  build moves. The one number the garage keeps for itself is the Corsa's
-#  DECK: its mesh below (STATIONS) is the shell the top wing's stowed-height
-#  rule was always read from, and the renderer's re-cut hatch tail (bodies'
-#  shell) sits up to 0.17 m lower aft of the roof, which would let a saved
-#  Corsa top wing come down. Every other car reads its own body's deck.
+#  driven. The three STOCK cars (Corsa, MX-5, 540i) still share exactly those
+#  bands -- flank x from the Corsa's bumpers, flank h 0.40-1.20, top x to
+#  0.55, top h from this garage's own Corsa deck (STATIONS below; the
+#  renderer's re-cut hatch tail sits up to 0.17 m lower) + 0.14 to 1.85 --
+#  so no build saved before task 41 moves on any of them (`bodies.
+#  STOCK_STYLES`; bodies carries a copy of this deck, `LEGACY_DECK`, and this
+#  module's self-check proves the copy). Only their span LIMITS are per car.
+#  A new car (the Express, the bus) reads its bands off its own body shell
+#  (`drive/bodies.py`).
 def _fit_car(build, car):
     """The car `build` is clamped to: `car` when given (a `cars.py` key or a
     CarSpec), else the car the build says it was made for (`build.car`,
@@ -338,11 +339,9 @@ def _fit_car(build, car):
 def top_h_band(car, x: float) -> tuple[float, float]:
     """The top wing's height band at station x on `car`: clear of THAT car's
     deck by the stowed gap + 0.08 m, up to 0.41 m over its roof
-    (`bodies.top_h_band`; a Citaro's top wing rides ~3.3 m up)."""
-    lo, hi = bodies.top_h_band(car, x)
-    if bodies.style_of(car) == "hatch":
-        lo = deck_z(x) + TOP_STOW_GAP + 0.08        # the garage's rule, unchanged
-    return lo, hi
+    (`bodies.top_h_band`; a Citaro's top wing rides ~3.3 m up). A stock car:
+    `deck_z(x) + TOP_STOW_GAP + 0.08` to 1.85, the garage's rule unchanged."""
+    return bodies.top_h_band(car, x)
 
 
 def flank_h_floor(car, span: float) -> float:
@@ -6465,9 +6464,10 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     rep("ENTER -> drive", key(pygame.K_RETURN) == "drive", "")
 
     # --- task 41: the car the garage is given -------------------------------
-    #  its slot bands: the MX-5's own body (longer, its deck lower) and a
-    #  synthetic 12 m bus (a CarSpec-like stand-in: bodies reads its axles
-    #  and its style from its name) keep slots a Corsa would clamp
+    #  its slot bands: the three stock cars share the garage's pre-41 bands
+    #  (review of task 41, finding 4: the MX-5 clamps exactly as the Corsa),
+    #  while a synthetic 12 m bus (a CarSpec-like stand-in: bodies reads its
+    #  axles and its style from its name) keeps slots a Corsa would clamp
     from types import SimpleNamespace as _NS
     tall = _NS(name="test bus", L=5.845, wdist_f=1.0 - 3.741 / 5.845, t_f=2.110, t_r=2.110)
 
@@ -6477,13 +6477,44 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
         cb.clamp(lib, car)
         return (round(cb.left.x, 4), round(cb.left.h, 4), round(cb.top.x, 4), round(cb.top.h, 4))
     f_c, f_m = fitted("corsa", 1.65, 0.90, -0.90, 1.10), fitted("mx5", 1.65, 0.90, -0.90, 1.10)
+    f_5 = fitted("540i", 1.65, 0.90, -0.90, 1.10)
     f_cb, f_b = fitted("corsa", 3.00, 1.60, -4.50, 3.30), fitted(tall, 3.00, 1.60, -4.50, 3.30)
-    rep("CarBuild.clamp fits the car it is given: the MX-5's longer nose and lower deck, a "
-        "bus's 1.60 m flank and 3.30 m top wing (a Corsa clamps all four)",
+    rep("CarBuild.clamp fits the car it is given: the MX-5 and the 540i clamp exactly as the "
+        "Corsa (the garage's pre-41 bands), a bus keeps its 1.60 m flank and 3.30 m top wing "
+        "(a Corsa clamps all four)",
         f_c == (round(CAR_X_FRONT - 0.5 * DEV_CHORD, 4), 0.9, -0.9, round(deck_z(-0.9) + 0.14, 4))
-        and f_m == (1.65, 0.9, -0.9, 1.1) and f_b == (3.0, 1.6, -4.5, 3.3)
+        and f_m == f_c and f_5 == f_c and f_b == (3.0, 1.6, -4.5, 3.3)
         and f_cb[1] == H_W_MAX and f_cb[3] == TOP_H_MAX,
-        f"corsa {f_c}  mx5 {f_m}  bus {f_b}")
+        f"corsa {f_c}  mx5 {f_m}  540i {f_5}  bus {f_b}")
+    #  bodies' copy of this garage's Corsa deck is these STATIONS' numbers
+    rep("bodies.LEGACY_DECK is this garage's STATIONS deck (x, z_top), and the band rule reads it",
+        bodies.LEGACY_DECK == tuple((st[0], st[3]) for st in STATIONS)
+        and all(bodies.legacy_deck_z(x_) == deck_z(x_) for x_ in np.linspace(-2.2, 1.9, 83))
+        and all(top_h_band(k_, x_)[0] == deck_z(x_) + TOP_STOW_GAP + 0.08
+                for k_ in ("corsa", "mx5", "540i") for x_ in (TOP_X_MIN, -1.62, -0.9, TOP_X_MAX)),
+        f"{len(STATIONS)} stations")
+    #  a build saved before task 41 at the old band's extremes -- both ends of
+    #  every band -- loads on the MX-5 and the 540i with nothing moved: the
+    #  same build_id, so its PBs stay attached (finding 4's scenario)
+    from .records import build_id as _bid
+    ext = []
+    for fx_end, fh, tx, th in ((0, H_W_MIN, TOP_X_MIN, None), (1, H_W_MAX, TOP_X_MAX, TOP_H_MAX)):
+        c_ = lib.wings["flank-e423"].chord
+        fx = (CAR_X_REAR + 0.5 * c_) if fx_end == 0 else (CAR_X_FRONT - 0.5 * c_)
+        th = deck_z(tx) + TOP_STOW_GAP + 0.08 if th is None else th
+        ext.append(dict(version=2, name=f"pre41 end {fx_end}", mirror=True, builtin=False,
+                        slots=dict(left=dict(wing="flank-e423", x=fx, h=fh, inc_deg=0.0,
+                                             mode="active"),
+                                   right=dict(wing="flank-e423", x=fx, h=fh, inc_deg=0.0,
+                                              mode="active"),
+                                   top=dict(wing="rear-s1223", x=tx, h=th, inc_deg=6.0,
+                                            mode="active"))))
+    moved = [(e["name"], k_) for e in ext for k_ in ("corsa", "mx5", "540i")
+             if _bid("", CarBuild.from_json(e).clamp(lib, k_).to_json()) != _bid("", e)]
+    rep("a pre-41 build at the old extremes loads on the Corsa, MX-5 and 540i unmoved",
+        not moved, f"top x {TOP_X_MIN:+.4f} h {ext[0]['slots']['top']['h']:.4f} / "
+        f"x {TOP_X_MAX} h {TOP_H_MAX}, flank x {ext[0]['slots']['left']['x']:+.4f} / "
+        f"{ext[1]['slots']['left']['x']:+.4f}: same build_id" if not moved else str(moved))
     rb = CarBuild.for_car(tall)
     rep("a fresh car and R's reset put the slots at the car's own defaults",
         (rb.left.x, rb.left.h, rb.top.x, rb.top.h) == (3.00, 1.60, -4.50, 3.30)

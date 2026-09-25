@@ -15,7 +15,9 @@ What lives here, and nowhere else:
     bridge -- can read a car's size;
   * `Body(car)`: a car's shell mapped onto ITS axles, with the numbers the
     limits need (`x_front`, `x_rear`, `width`, `height`, `ground`, `deck_z`);
-  * the SLOT bands a car's three wing slots may move in, and its default slots;
+  * the SLOT bands a car's three wing slots may move in, and its default slots
+    (the three stock cars share the garage's pre-task-41 bands exactly, so
+    no saved build moves; a new car's are read off its own shell);
   * the SPAN LIMITS:
 
         flank   span <= 2 (h - ground)   a vertical panel centred at mount
@@ -29,7 +31,8 @@ What lives here, and nowhere else:
     and the "Unlimited" ceiling: `UNLIMITED_FACTOR` times that, which the
     garage offers only when Settings' `wing_limits` is 'unlimited';
   * `over_limits(build, lib, car)`: which fitted wings are past their car's
-    physical limit. It is COMPUTED, never stored: a build names its wings, a
+    physical limit, the build judged AS FITTED to that car (each flank at its
+    height held in the car's band). It is COMPUTED, never stored: a build names its wings, a
     wing can be re-saved at another span, and a build can be driven on
     another car -- so legality belongs to (build, library, car) at the moment
     of the run. A run whose build has any entry here is an Unlimited run:
@@ -306,11 +309,34 @@ def body(car=None) -> Body:
 # --------------------------------------------------------------------------- #
 #  the slots: where each car's three wings may be bolted                       #
 # --------------------------------------------------------------------------- #
-#: The three stock cars keep EXACTLY the numbers the garage always used for
-#: every car (flank h 0.40-1.20, top x to 0.55 m, top h to 1.85 m, the
-#: default slots), so no saved build moves. A taller car raises the ceilings
-#: with its body: flank centre to 0.24 m under the roof (the Corsa's 1.20 is
-#: 0.24 under its 1.44), top wing to 0.41 m over it (the Corsa's 1.85).
+#: The three STOCK cars (the hatch, the roadster, the saloon) keep EXACTLY the
+#: slot bands the garage used for every car before task 41 -- the Corsa's,
+#: whichever of the three was driven: flank x from the Corsa's bumpers
+#: (`CAR_X_REAR` / `CAR_X_FRONT`, half a chord in), flank h 0.40-1.20, top x
+#: from 0.15 m inside the Corsa's tail to 0.55 m, top h from the garage's own
+#: Corsa deck (`LEGACY_DECK`) + 0.14 to 1.85 m, and the default slots. Every
+#: build saved before task 41 was clamped to those numbers, so reading them
+#: off each stock car's own body instead would MOVE a saved build (the MX-5's
+#: tail is 5.5 cm shorter, the E39's rear deck up to 7.5 cm higher) and
+#: split its PBs under a new build_id (review of task 41, finding 4). Only
+#: the span LIMITS are each stock car's own (`span_limit`); the preview still
+#: draws each car's real body. A NEW car (the van, the bus) takes its bands
+#: from its own shell: flank centre to 0.24 m under the roof (the Corsa's
+#: 1.20 is 0.24 under its 1.44), top wing to 0.41 m over it (the Corsa's
+#: 1.85), its own bumpers and deck.
+STOCK_STYLES = ("hatch", "roadster", "saloon")
+CAR_X_FRONT = 1.7515     # m  the Corsa's front bumper face (garage.CAR_X_FRONT)
+FLANK_H_MAX_STOCK = 1.20
+TOP_X_MAX_STOCK = 0.55
+TOP_H_MAX_STOCK = 1.85
+TOP_STOW_GAP = 0.06      # m  garage.TOP_STOW_GAP: the stowed wing over the deck
+#: the garage's own Corsa deck, (x, z_top) of its mesh STATIONS (garage.py,
+#: nose first) -- the surface the stock cars' top-wing floor was always read
+#: from. Copied, not imported: this module has no pygame. garage's
+#: self-check proves the two are the same numbers.
+LEGACY_DECK = ((CAR_X_FRONT, 0.66), (1.55, 0.76), (1.10, 0.83), (0.60, 0.90),
+               (-0.05, 1.38), (-0.80, CAR_H), (-1.45, 1.40), (-1.80, 1.16),
+               (CAR_X_REAR, 0.86))
 FLANK_H_MIN = 0.40
 FLANK_H_UNDER_ROOF = 0.24
 TOP_H_OVER_ROOF = 0.41
@@ -327,32 +353,60 @@ SLOT_TABLE = {
 }
 
 
+def is_stock(car=None) -> bool:
+    """Does `car` wear one of the three stock bodies, whose slot bands are
+    the garage's pre-task-41 constants (see `STOCK_STYLES`)?"""
+    return style_of(car) in STOCK_STYLES
+
+
+def legacy_deck_z(x: float) -> float:
+    """The garage's Corsa deck height at station x -- `garage.deck_z`, the
+    same interpolation over the same numbers, so the same float."""
+    xs = [p[0] for p in LEGACY_DECK][::-1]
+    zs = [p[1] for p in LEGACY_DECK][::-1]
+    return float(np.interp(x, xs, zs))
+
+
 def flank_x_band(car=None, chord: float = 0.45) -> tuple[float, float]:
-    """A flank panel's station band: the whole chord stays alongside the body."""
+    """A flank panel's station band: the whole chord stays alongside the body
+    (a stock car: the Corsa's bumpers, the garage's pre-41 band)."""
+    if is_stock(car):
+        return CAR_X_REAR + 0.5 * chord, CAR_X_FRONT - 0.5 * chord
     b = body(car)
     return b.x_rear + 0.5 * chord, b.x_front - 0.5 * chord
 
 
 def flank_h_band(car=None) -> tuple[float, float]:
     """A flank panel's mount-height band. The floor also keeps the smallest
-    panel the optimiser may propose (span lo + 0.05) off the ground."""
+    panel the optimiser may propose (span lo + 0.05) off the ground. A stock
+    car: the garage's 0.40-1.20."""
+    if is_stock(car):
+        return FLANK_H_MIN, FLANK_H_MAX_STOCK
     b = body(car)
     from .aero.wing import BOUNDS
     lo = max(FLANK_H_MIN, b.ground + 0.5 * (BOUNDS["flank"]["span"][0] + 0.05))
-    hi = max(1.20, b.height - FLANK_H_UNDER_ROOF)
+    hi = max(FLANK_H_MAX_STOCK, b.height - FLANK_H_UNDER_ROOF)
     return lo, hi
 
 
 def top_x_band(car=None) -> tuple[float, float]:
+    """The top wing's station band (a stock car: the garage's pre-41 one,
+    0.15 m inside the Corsa's tail to 0.55 m)."""
+    if is_stock(car):
+        return CAR_X_REAR + TOP_REAR_MARGIN, TOP_X_MAX_STOCK
     b = body(car)
     hi = min(SLOT_TABLE[b.style]["top_x_max"], b.x_front - TOP_REAR_MARGIN)
     return b.x_rear + TOP_REAR_MARGIN, hi
 
 
 def top_h_band(car=None, x: float = -0.90) -> tuple[float, float]:
-    """The top wing's height band at station x: clear of the deck below it."""
+    """The top wing's height band at station x: clear of the deck below it.
+    A stock car: the garage's own rule to the bit -- its Corsa deck + the
+    stowed gap + 0.08 m (written in that order: the same float), up to 1.85."""
+    if is_stock(car):
+        return legacy_deck_z(x) + TOP_STOW_GAP + 0.08, TOP_H_MAX_STOCK
     b = body(car)
-    return b.deck_z(x) + TOP_DECK_CLEAR, max(1.85, b.height + TOP_H_OVER_ROOF)
+    return b.deck_z(x) + TOP_DECK_CLEAR, max(TOP_H_MAX_STOCK, b.height + TOP_H_OVER_ROOF)
 
 
 def slot_defaults(car=None) -> dict:
@@ -413,21 +467,28 @@ def area_ceiling(role: str, car=None, h: float | None = None,
 
 
 def _slots_of(build) -> dict:
-    """{'left'|'right'|'top': (wing name, h)} from a CarBuild or its JSON."""
+    """{'left'|'right'|'top': (wing name, h)} from a CarBuild or its JSON --
+    with the mirror lock applied as `CarBuild.clamp` applies it (a mirrored
+    build's right slot IS its left)."""
     out = {}
     if isinstance(build, dict):
         sl = build.get("slots", {}) if isinstance(build.get("slots"), dict) else {}
         for k in ("left", "right", "top"):
             v = sl.get(k) if isinstance(sl.get(k), dict) else {}
-            try:
-                out[k] = (str(v.get("wing", "") or ""), float(v.get("h", 0.0)))
+            try:                           # a missing h: CarBuild.from_json's default
+                out[k] = (str(v.get("wing", "") or ""),
+                          float(v.get("h", 1.55 if k == "top" else 0.90)))
             except (TypeError, ValueError):
                 out[k] = ("", 0.0)
-        return out
-    for k in ("left", "right", "top"):
-        s = getattr(build, k, None)
-        out[k] = ((getattr(s, "wing", "") or "", float(getattr(s, "h", 0.0)))
-                  if s is not None else ("", 0.0))
+        mirror = bool(build.get("mirror", True))
+    else:
+        for k in ("left", "right", "top"):
+            s = getattr(build, k, None)
+            out[k] = ((getattr(s, "wing", "") or "", float(getattr(s, "h", 0.0)))
+                      if s is not None else ("", 0.0))
+        mirror = bool(getattr(build, "mirror", False))
+    if mirror:
+        out["right"] = out["left"]
     return out
 
 
@@ -435,8 +496,18 @@ def over_limits(build, lib, car=None) -> list[dict]:
     """The wings of `build` (a CarBuild or its JSON) that are past `car`'s
     physical limit, as [{'slot', 'wing', 'span', 'limit'}], slot order.
     Empty = an official build. `lib` is the wing library (`.wings` by name);
-    a wing it does not hold is skipped (nothing is fitted there)."""
+    a wing it does not hold is skipped (nothing is fitted there).
+
+    The build is judged AS FITTED TO `car` (review of task 41, findings 1 and
+    6): a build is always driven clamped into the car's slot bands
+    (`CarBuild.clamp`), so each flank is judged at its height held inside
+    `flank_h_band(car)`, the mirror lock is applied, and a wing in a slot of
+    the other role (which the clamp empties) is skipped. The top wing's
+    limit does not depend on its height. So the raw library JSON, the
+    fitted copy a session drives, `challenges.build_stats` (which clamps
+    first) and every page's UNLIMITED tag can never disagree."""
     wings = getattr(lib, "wings", None) or {}
+    h_lo, h_hi = flank_h_band(car)
     out = []
     for key, (name, h) in _slots_of(build).items():
         if not name:
@@ -445,6 +516,10 @@ def over_limits(build, lib, car=None) -> list[dict]:
         if spec is None:
             continue
         role = "top" if key == "top" else "flank"
+        if getattr(spec, "role", role) != role:
+            continue                       # the clamp takes it off: nothing fitted
+        if role == "flank":
+            h = min(max(h, h_lo), h_hi)    # CarBuild.clamp's rule, to the float
         lim = span_limit(role, car, h)
         span = float(getattr(spec, "span", 0.0))
         if span > lim + LIMIT_TOL:
@@ -491,6 +566,44 @@ def self_check(verbose: bool = True) -> bool:
                for k in ("corsa", "mx5", "540i"))
     rep("the three stock cars keep the garage's slot bands and defaults", same,
         "flank h 0.40-1.20, top x <= 0.55, top h <= 1.85, slots (0.97, 0.90) / (-0.90, 1.55, 6)")
+    #  every band EDGE of the three stock cars, to the bit, against the
+    #  garage's pre-task-41 formulas written out from its old constants
+    #  (review of task 41, finding 4: the MX-5's and the E39's own bodies
+    #  moved the flank / top x floors and the top-h floor, and a saved build
+    #  at those extremes moved with them)
+    old_rear, old_front = -2.0675, 1.7515
+    old_deck = ((1.7515, 0.66), (1.55, 0.76), (1.10, 0.83), (0.60, 0.90), (-0.05, 1.38),
+                (-0.80, 1.440), (-1.45, 1.40), (-1.80, 1.16), (-2.0675, 0.86))
+
+    def old_top_lo(x):
+        z = float(np.interp(x, [p[0] for p in old_deck][::-1], [p[1] for p in old_deck][::-1]))
+        return z + 0.06 + 0.08               # deck_z(t.x) + TOP_STOW_GAP + 0.08
+    xs_top = (old_rear + 0.15, -1.80, -1.60, -1.45, -0.90, -0.30, 0.0, 0.30, 0.55)
+    edges_bad = []
+    for k in ("corsa", "mx5", "540i"):
+        for c in (0.30, 0.45, 0.60):
+            if flank_x_band(k, c) != (old_rear + 0.5 * c, old_front - 0.5 * c):
+                edges_bad.append(f"{k} flank x c{c}")
+        if flank_h_band(k) != (0.40, 1.20):
+            edges_bad.append(f"{k} flank h")
+        if top_x_band(k) != (old_rear + 0.15, 0.55):
+            edges_bad.append(f"{k} top x")
+        for x in xs_top:
+            if top_h_band(k, x) != (old_top_lo(x), 1.85):
+                edges_bad.append(f"{k} top h @ {x:+.4f}")
+    rep("every stock-car band edge is the garage's pre-41 number, to the bit",
+        not edges_bad and LEGACY_DECK == old_deck,
+        (f"flank x ({old_rear + 0.225:+.4f}, {old_front - 0.225:+.4f}) at 0.45 m chord, "
+         f"top x ({old_rear + 0.15:+.4f}, 0.55), top h floor {old_top_lo(old_rear + 0.15):.4f} "
+         f"at the tail .. {old_top_lo(-0.90):.4f} at -0.90, ceiling 1.85; "
+         f"corsa / mx5 / 540i x {len(xs_top)} stations")
+        if not edges_bad else str(edges_bad))
+    #  ... while each stock car's span LIMIT is still its own body's
+    rep("the stock cars' span limits stay per car",
+        len({span_limit("top", k) for k in ("corsa", "mx5", "540i")}) == 3
+        and span_limit("flank", "mx5", 0.90) != span_limit("flank", "corsa", 0.90),
+        f"top {span_limit('top', 'corsa'):.3f} / {span_limit('top', 'mx5'):.3f} / "
+        f"{span_limit('top', '540i'):.3f} m")
 
     #  2. the owner's two rules, on every body
     rows = []
@@ -541,7 +654,8 @@ def self_check(verbose: bool = True) -> bool:
 
     class _L:
         wings = {"f": _W(span_limit("flank", "corsa", 0.90)), "t": _W(2.50), "x": _W(1.0)}
-    js = {"slots": {"left": {"wing": "f", "h": 0.90}, "right": {"wing": "f", "h": 0.90},
+    js = {"mirror": False,                 # (one flank moved alone below)
+          "slots": {"left": {"wing": "f", "h": 0.90}, "right": {"wing": "f", "h": 0.90},
                     "top": {"wing": "", "h": 1.55}}}
     rep("a flank at exactly its limit is official", over_limits(js, _L, "corsa") == [],
         f"span {span_limit('flank', 'corsa', 0.90):.3f} at h 0.90")
@@ -559,6 +673,34 @@ def self_check(verbose: bool = True) -> bool:
         o_c == ["top"] and o_b == ["left", "right"], f"corsa {o_c}, bus {o_b}")
     js["slots"]["top"]["wing"] = "gone"
     rep("a wing the library does not hold is skipped", over_limits(js, _L, "corsa") == [], "")
+    #  judged AS FITTED (review of task 41, findings 1 and 6): a bus build's
+    #  4.40 m flank at h 2.50 is driven on a Corsa at its h ceiling 1.20,
+    #  where the limit is 2.10 m -- raw, it would have read legal (2 x 2.35)
+    _L.wings["b"] = _W(4.40)
+    jb = {"mirror": True, "slots": {"left": {"wing": "b", "h": 2.50},
+                                    "right": {"wing": "b", "h": 2.50},
+                                    "top": {"wing": "", "h": 3.30}}}
+    ob = over_limits(jb, _L, "corsa")
+    rep("a flank is judged at its height fitted into the car's band",
+        [(d["slot"], round(d["limit"], 6)) for d in ob] == [("left", 2.1), ("right", 2.1)]
+        and over_limits(jb, _L, "bus") == [], limits_text(ob))
+    #  the mirror lock, as the clamp applies it: the right slot IS the left
+    jm = {"mirror": True, "slots": {"left": {"wing": "x", "h": 0.90},
+                                    "right": {"wing": "b", "h": 0.90}, "top": {}}}
+    jm_off = dict(jm, mirror=False)
+    rep("a mirrored build's right flank is its left one",
+        over_limits(jm, _L, "corsa") == []
+        and [d["slot"] for d in over_limits(jm_off, _L, "corsa")] == ["right"], "")
+
+    class _R:
+        def __init__(self, span, role):
+            self.span, self.role = span, role
+
+    class _LR:
+        wings = {"t": _R(9.0, "top")}
+    jr = {"mirror": True, "slots": {"left": {"wing": "t", "h": 0.90}, "top": {}}}
+    rep("a wing of the other role (the clamp empties the slot) is not judged",
+        over_limits(jr, _LR, "corsa") == [], "")
 
     #  5. the style lookup still reads names, and keys agree with names
     agree = all(style_of(k) == style_of(_cars.CARS[k]) for k in _cars.CARS)

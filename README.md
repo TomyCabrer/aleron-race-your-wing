@@ -434,7 +434,11 @@ starts there. A software-rendered model of the car you are driving (the
 Corsa, the MX-5, the 540i, the Express van or the Citaro bus, framed to its
 size) you can orbit, carrying up to **three wings**: a panel on each flank and a wing on top. Each is a slot
 holding a wing from the library at a station, a height and an incidence;
-left and right mirror each other until `M` unlocks them. The side panel shows
+left and right mirror each other until `M` unlocks them. On the Corsa, the
+MX-5 and the 540i the slots move in the same bands -- the garage's own from
+before the Express and the bus, so a saved build never moves between those
+three -- while the Express and the bus take theirs from their own bodies (the
+preview always draws the real body of the car you drive). The side panel shows
 what the physics will see for the selected slot: the lift law, the force and
 drag at the R = 100 m limit speed, `crossover.gain` at R = 50 / 100 / 130 m
 for a flank panel, the front / rear downforce split for the top wing, and the
