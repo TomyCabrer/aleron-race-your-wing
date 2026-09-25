@@ -629,6 +629,23 @@ def self_check(verbose: bool = True) -> bool:
                                                           builds=lib41, car="corsa").pick_items()]
         and "--" in rows_nk[0][0] and "no lap times" in nokey.pick_subtitle(),
         nokey.pick_subtitle())
+    #  review of task 41 (root design): a session drives a copy FITTED to
+    #  its car. The page reads the build the player holds as saved, and a
+    #  PICK row's best under the fitted id its laps were filed with
+    fit41 = lambda js_: dict(js_, slots=dict(js_.get("slots", {}),     # noqa: E731
+                                             left={"wing": "x", "h": 1.2}))
+    f_fast = fit41(b_fast)
+    rf = rec._fake_rec(61.5, [20.0, 20.5, 21.0])
+    rf.update(build=dict(name="fast", json=f_fast))
+    book.insert(stock, rf)
+    pf = PreRace(stock, book, "fast", f_fast, builds={"fast": b_fast}, design_json=b_fast,
+                 fit=fit41)
+    rows_f = {a: t for t, a in pf.pick_items()}
+    rep("on a fitted copy: the held build reads as saved, a row's best is its fitted id's",
+        pf.saved() and "1:01.500" in rows_f["pr_build:fast"]
+        and "<- driving" in rows_f["pr_build:fast"] and len(rows_f) == 2
+        and not PreRace(stock, book, "fast", f_fast, builds={"fast": b_fast}).saved(),
+        rows_f["pr_build:fast"].strip())
     book.set_last_build("linden", "big bus", b_bus, car="bus")
     rep("the default build of a map is per car",
         default_build(rec.RecordBook(root), "linden", "bus") == ("big bus", b_bus)
