@@ -43,6 +43,97 @@ def grid_slot(i: int) -> tuple:
     return (START_OFFSET_M if side == 0 else -START_OFFSET_M, -ROW_M * row if row else 0.0)
 
 
+# --------------------------------------------------------------------------- #
+#  task 41: a car too big for a grid box                                       #
+# --------------------------------------------------------------------------- #
+#: The painted boxes (drive/scenery.py, its GRID_* constants: rows ROW_M
+#: apart, +-START_OFFSET_M, each box +-GRID_BOX_HALF wide, a bar across the
+#: road just ahead of a Corsa's nose and ticks 1.40 m back from it) hold a
+#: car up to 2.0 m wide. Every stock car and the Express fit; the Citaro
+#: (2.55 m wide, 11.95 m long) does not: in its slot it would stand 0.35 m
+#: into its neighbour and across two rows of paint. So a grid with a car
+#: that does not fit is laid out by `grid_layout`:
+#:   * a bot that fits takes its slot's box, as before -- unless the USER's
+#:     body (plus CLEAR_M) reaches into that box or the space a fitting car
+#:     fills in it (its tail may reach ROW_M - bar - CLEAR_M = 4.85 m behind
+#:     the slot line), when the bots shift to the next clear boxes in order
+#:     (the user in the bus leaves the front row's side boxes and the second
+#:     row, s = -7, empty: bot 1 lines up at (2.2, -14));
+#:   * a bot that does not fit lines up BEHIND every box the scenery may
+#:     paint (GRID_ROWS rows) and every car already placed, on the
+#:     centreline, nose BIG_GAP_M behind; a second one behind the first;
+#:   * the user always starts at the line (s = 0, n = 0): the lap timer and
+#:     the race gap are built on that. A user's bus there covers its own box
+#:     and grazes the inner ticks of the front row's side boxes (7.5 cm),
+#:     which is why those stay empty.
+#: A grid of cars that all fit is `grid_slot(i)` exactly, so every stock
+#: race lines up where it always did.
+CLEAR_M = 0.10          # m  est  body-to-paint / body-to-body clearance
+BIG_GAP_M = 1.0         # m  est  a big car's nose behind the last box / tail
+
+
+def _box_geom():
+    """(half width, bar front past the slot line, tick start past it, rows)
+    of a painted box, read from drive/scenery.py so the two cannot differ.
+    scenery is numpy + track, no pygame."""
+    from . import scenery as _sc
+    bar0, bar1 = _sc.GRID_NOSE + 0.10, _sc.GRID_NOSE + 0.30
+    return _sc.GRID_BOX_HALF, bar1, bar0 - 1.40, _sc.GRID_ROWS
+
+
+def footprint(car) -> tuple:
+    """(x_front, x_rear, half_w) of a car's body in its CG frame (bodies.body:
+    the shell render draws and the wing limits read); a key or a CarSpec."""
+    from .bodies import body
+    b = body(car)
+    return float(b.x_front), float(b.x_rear), float(b.half_w)
+
+
+def fits_box(car) -> bool:
+    """True when `car` stands in a painted box: no wider than the box, and
+    its tail clears the next row's bar by CLEAR_M."""
+    half, bar1, _t0, _rows = _box_geom()
+    xf, xr, w = footprint(car)
+    return w <= half and -xr <= ROW_M - bar1 - CLEAR_M
+
+
+def _overlap(a, b) -> bool:
+    """Two (s0, s1, n0, n1) rectangles overlap (open intervals)."""
+    return a[0] < b[1] and b[0] < a[1] and a[2] < b[3] and b[2] < a[3]
+
+
+def grid_layout(user_car, bot_cars) -> dict:
+    """{page slot i: (n, s)} for the bots `bot_cars` = [(i, car)] (a car is a
+    key or a CarSpec) lining up with the user's `user_car` at the line. See
+    the block above; identical to `grid_slot(i)` when every car fits."""
+    half, bar1, tick0, rows = _box_geom()
+    fit_tail = ROW_M - bar1 - CLEAR_M
+    uf, ur, uw = footprint(user_car)
+    user = (ur - CLEAR_M, uf + CLEAR_M, -uw - CLEAR_M, uw + CLEAR_M)
+    n_boxes = 2 * rows                        # the user's centre box is not a bot's
+    free = []
+    for j in range(1, n_boxes + 1):
+        n_, s_ = grid_slot(j)
+        region = (s_ - fit_tail, s_ + bar1, n_ - half, n_ + half)
+        if not _overlap(user, region):
+            free.append(j)
+    out, big = {}, []
+    tails = [ur]
+    for i, car in bot_cars:
+        if fits_box(car):
+            j = free[i - 1] if i - 1 < len(free) else n_boxes + i
+            out[i] = grid_slot(j)
+            tails.append(out[i][1] + footprint(car)[1])
+        else:
+            big.append((i, car))
+    s_nose = min([-ROW_M * (rows - 1) + tick0] + tails) - BIG_GAP_M
+    for i, car in big:
+        xf, xr, _w = footprint(car)
+        out[i] = (0.0, s_nose - xf)
+        s_nose = out[i][1] + xr - BIG_GAP_M
+    return out
+
+
 def colour(i: int) -> tuple:
     return COLOURS[(max(1, int(i)) - 1) % len(COLOURS)]
 
@@ -131,6 +222,45 @@ def self_check(verbose: bool = True) -> bool:
     rep("a colour per slot, none a time-trial ghost's",
         len({colour(i) for i in range(1, GRID_MAX + 1)}) == GRID_MAX
         and not ghost_cols & set(COLOURS) and colour_name(4) == "rose")
+    # task 41: the grid with a car too big for a box. Every grid of cars that
+    # fit (the stock three and the Express, as user and as bots) is
+    # grid_slot(i) exactly; with the bus anywhere on it, no two bodies come
+    # within CLEAR_M and no bus bot touches a box the scenery may paint
+    import itertools
+    import math
+    import cars as _c
+    half, bar1, tick0, rows = _box_geom()
+    fitting = [k for k in _c.CAR_ORDER if fits_box(k)]
+    same = all(grid_layout(u, [(i, k) for i in range(1, GRID_MAX + 1)])
+               == {i: grid_slot(i) for i in range(1, GRID_MAX + 1)}
+               for u in fitting for k in fitting)
+    boxes = [(0.0, 0.0)] + [grid_slot(j) for j in range(1, 2 * rows + 1)]
+    boxes = [(s_ + tick0, s_ + bar1, n_ - half, n_ + half) for n_, s_ in boxes]
+
+    def rect(car, n_, s_, pad=0.0):
+        xf, xr, w = footprint(car)
+        return (s_ + xr - pad, s_ + xf + pad, n_ - w - pad, n_ + w + pad)
+    worst, n_grids, bad = -math.inf, 0, []
+    for user in ("corsa", "540i", "express", "bus"):
+        for n_bots in range(1, GRID_MAX + 1):
+            for combo in itertools.product(("corsa", "bus"), repeat=n_bots):
+                lay = grid_layout(user, list(enumerate(combo, 1)))
+                cars_ = [(user, 0.0, 0.0)] + [(k, *lay[i]) for i, k in enumerate(combo, 1)]
+                n_grids += 1
+                for (a, na, sa), (b, nb, sb) in itertools.combinations(cars_, 2):
+                    if _overlap(rect(a, na, sa, CLEAR_M), rect(b, nb, sb)):
+                        bad.append((user, combo, a, b))
+                for k, n_, s_ in cars_[1:]:
+                    if k == "bus" and any(_overlap(rect(k, n_, s_), bx) for bx in boxes):
+                        bad.append((user, combo, "bus on paint"))
+                    if k == "bus":
+                        worst = max(worst, s_)
+    rep("a car too big for a box: clear of every car and of the paint; a grid "
+        "that fits is grid_slot exactly", same and not bad,
+        f"{len(fitting)} x {len(fitting)} fitting grids identical; {n_grids} grids with "
+        f"the bus: {len(bad)} clashes, the nearest bus bot's CG at s {worst:.2f} m, "
+        f"user bus -> bot 1 at {grid_layout('bus', [(1, 'corsa')])[1]}" + (
+            f"; {bad[:2]}" if bad else ""))
     import cars
     from .vehicle import VehicleConfig
     base = VehicleConfig(abs_on=True, tc_on=False, power_scale=2.0)
