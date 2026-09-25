@@ -854,10 +854,12 @@ OFFER_NOTE = ("New here? The driving tutorial takes you through the pedals, the 
               "through designing your own wing.")
 
 
-def wing_car(grg, design, lib):
+def wing_car(grg, design, lib, car=None):
     """The car the wing steps are driven in when `design` has no flank wing:
     a copy with the library's published plate on both flanks (named so; in
-    memory, never saved). None when the car has one already, or the library
+    memory, never saved), fitted to `car` -- the car the session drives (a
+    `cars.py` key; None: the build's own tag, else the Corsa -- task 41's
+    per-car slot bands). None when the car has one already, or the library
     has no plate."""
     if design is None or grg is None or lib is None:
         return None
@@ -869,7 +871,7 @@ def wing_car(grg, design, lib):
     d.name = f"{design.name} + tutorial plate"
     d.left.wing = TUTORIAL_WING
     d.mirror = True
-    d.clamp(lib)
+    d.clamp(lib, car)
     return d
 
 
@@ -1222,6 +1224,15 @@ def self_check(verbose: bool = True) -> bool:
             wc is not None and wc.left.wing == "plate" and wc.right.wing == "plate"
             and bare.left.wing == "" and "tutorial" in wc.name and fitted is not None)
         rep("a car with a flank wing keeps its own", wing_car(g, wc, lib) is None)
+        #  fitted to the session's car (review of task 41, finding 7): on the
+        #  bus the plate stays at the bus's 1.60 m flank slot and the top at
+        #  3.30 m; without the car the Corsa's bands would pull them down
+        bus = CarBuild.for_car("bus")
+        wb, wn = wing_car(g, bus, lib, car="bus"), wing_car(g, bus, lib)
+        rep("the wing car is fitted to the session's car",
+            (wb.left.h, wb.top.h) == (1.60, 3.30) and wn.left.h == 1.20
+            and (bus.left.h, bus.left.wing) == (1.60, ""),
+            f"bus: flank h {wb.left.h:.2f}, top h {wb.top.h:.2f} (car-less: {wn.left.h:.2f})")
     except Exception as exc:               # noqa: BLE001
         rep("the wing car", False, f"{type(exc).__name__}: {exc}")
     if verbose:

@@ -82,7 +82,7 @@ def own_car(meta: dict, base_cfg, lib=None):
     if bred and isinstance(bred.get("build"), dict) and lib is not None:
         try:
             from .garage import CarBuild
-            b = CarBuild.from_json(bred["build"]).clamp(lib)
+            b = CarBuild.from_json(bred["build"]).clamp(lib, name)   # the car it was bred in
             #  a pure-legacy build's kwargs carry no devices: the session's
             #  designed wings must not ride along
             aero = {"dev_left": None, "dev_right": None, "top": None, **b.cfg_kwargs(lib)}
