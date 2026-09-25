@@ -936,10 +936,15 @@ car; the arena with no flags is built exactly as before; the test maps keep
 the 20 m/s `PathFollower`), and `--script lap --track <circuit>` laps it
 (any other map laps the arena, as before). The RACE page's Test shows
 `bot_test_T(track, T)` seconds and hands `bot_lap` the arena budget; the
-Deploy-swarm page's default Sim time is `swarm_T(track)` (70 s, pro rata
-on a longer circuit), as is `--swarm-T` when not given; what the page keeps
-of a Deploy (`_swarm_menu_kept`) drops a Sim time still at that map's
-default, so the next map's page shows its own, and keeps one the player set.
+Deploy-swarm page's default Sim time is `swarm_T(track, car=)` (70 s, pro
+rata on a longer circuit, and -- task 41 review -- in proportion for a car
+whose standing arena lap under the swarm's anchor is slower than the
+Corsa's 68.24 s: `SWARM_T_SLOW_LAPS`, the Express 71 s, the bus 82 s on the
+arena; a stock car or None changes nothing), as is `--swarm-T` when not
+given (the car the swarm breeds in); what the page keeps of a Deploy
+(`_swarm_menu_kept(launch, tr, car=)`) drops a Sim time still at that map's
+default, so the next map's page shows its own, and keeps one the player set;
+the page's Car row moves a Sim time still at the old car's default.
 
 **The open map** (`make_open`, name `'open'`): a closed perimeter loop
 (straights 420 / 260 m, corners R = 45 m, 12 m wide, length 1642.743 m, sector

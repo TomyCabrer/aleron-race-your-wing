@@ -114,32 +114,52 @@ SWARM_MENU_DEFAULTS = dict(pop=24, seed="none", gens=0, T=70.0, view="replay", s
 #: the default Sim time is one ARENA lap and a bit, this long: `swarm_T`
 #: scales it for a longer race circuit
 SWARM_T_LAP = 1249.2022
+#: ... and for a slower CAR (review of task 41, finding 11). The 70 s was set
+#: on the Corsa, whose standing arena lap under the swarm's own anchor driver
+#: (`drive.ml.env.rollout(Policy(), "arena")`, DT_TRAIN, plate or no wing
+#: alike) is 68.24 s. A car that laps slower gets the default in proportion,
+#: so a default swarm bred in it can finish a lap: the Express's 69.44 s ->
+#: 71 s, the Citaro's 79.78 s -> 82 s (at 70 s it never lapped, and the lap
+#: tie-break never engaged). The three stock cars lap faster (MX-5 65.25 s,
+#: 540i 64.43 s) and are not listed: they keep exactly the map's value.
+#: Measured 2026-09-25; drive's V40 re-drives the bus inside its window.
+SWARM_T_BASIS_LAP = 68.24
+SWARM_T_SLOW_LAPS = {"express": 69.44, "bus": 79.78}
 
 
-def swarm_T(tr, T=None) -> float:
+def swarm_T(tr, T=None, car=None) -> float:
     """The swarm's default Sim time on `tr`: `T` (default the page's 70 s,
     set on the arena, where a car laps once and a bit) pro rata on a longer
     race circuit, whole seconds in the page's range. The arena and the
     shorter Linden keep 70 s, Ashdown gets 78 and Kestrel's 1.91 km 107 --
-    at 70 s no car would finish a lap there. The test maps keep `T`: their
-    'lap' is not what the default was set on."""
+    at 70 s no car would finish a lap there. `car` (a `cars.py` key: the
+    car the swarm breeds in) stretches it for a car slower than the Corsa
+    (`SWARM_T_SLOW_LAPS`); None or a stock car: unchanged. The test maps
+    keep `T`: their 'lap' is not what the default was set on."""
     from .swarm_panel import clamp_T
     T = float(T or SWARM_MENU_DEFAULTS["T"])
     if getattr(tr, "name", None) not in trk.CIRCUITS:
         return T
-    return clamp_T(T * max(1.0, float(tr.length) / SWARM_T_LAP))
+    k_car = max(1.0, SWARM_T_SLOW_LAPS.get(str(car or ""), 0.0) / SWARM_T_BASIS_LAP)
+    return clamp_T(T * k_car * max(1.0, float(tr.length) / SWARM_T_LAP))
 
 
-def _swarm_menu_kept(launch: dict, tr) -> dict:
+def _swarm_menu_kept(launch: dict, tr, car=None) -> dict:
     """What the Deploy-swarm page keeps of a Deploy on `tr` for the sessions
     after it: every value, except a Sim time still at this map's default
-    (`swarm_T(tr)`) -- the next map's page starts at ITS default, so an arena
-    Deploy at 70 s does not put 70 s on Kestrel's page, where no car laps in
-    it. A Sim time the player set is theirs, on every map."""
+    (`swarm_T(tr, car=)`, `car` the session's) -- the next map's page starts
+    at ITS default, so an arena Deploy at 70 s does not put 70 s on Kestrel's
+    page, where no car laps in it. A Sim time the player set is theirs, on
+    every map."""
     kept = dict(launch)
-    if abs(float(kept.get("T", 0.0)) - swarm_T(tr)) < 0.5:
+    if abs(float(kept.get("T", 0.0)) - swarm_T(tr, car=_swarm_T_car(launch.get("car"), car))) < 0.5:
         kept.pop("T", None)
     return kept
+
+
+def _swarm_T_car(choice, session_car):
+    """The car key a swarm page's Car row breeds in: 'same' is the session's."""
+    return session_car if choice in (None, "", "same") else choice
 
 
 #: `pop` and `T` are FREE values (drive/swarm_panel.py, task 26): any
@@ -3409,6 +3429,14 @@ class Sim:
         cur = self.swarm_opts[key]
         i = ch.index(cur) if cur in ch else 0
         self.swarm_opts[key] = ch[(i + d) % len(ch)]
+        if key == "car":
+            #  a Sim time still at the old car's default follows the car (a
+            #  bus needs longer to lap, `swarm_T`); one the player set stays
+            own = getattr(getattr(self, "settings", None), "car", None)
+            was = swarm_T(self.track, car=_swarm_T_car(cur, own))
+            if abs(float(self.swarm_opts["T"]) - was) < 0.5:
+                self.swarm_opts["T"] = swarm_T(
+                    self.track, car=_swarm_T_car(self.swarm_opts["car"], own))
 
     def _menu_open(self) -> None:
         """ESC / OPTIONS. Pauses the accumulator and hands the inputs to the
@@ -7693,6 +7721,44 @@ def _v43c_default_build(tmp, verbose=True):
     return ok, dict(got=got, lib=sorted(lib.builds))
 
 
+def _v43d_swarm_T(tmp, verbose=True):
+    """The swarm's default Sim time per car (review of task 41, finding 11):
+    the three stock cars keep exactly each map's old value (arena / Linden
+    70 s, Ashdown 78, Kestrel 107); the bus gets 82 s on the arena and the
+    Express 71; on the Deploy page a Sim time left at its default follows
+    the Car row, a typed one stays; and the swarm's own anchor driver, in
+    the bus, does finish an arena lap inside the bus's window."""
+    import cars as _cars
+    from .ml.env import rollout
+    from .ml.policy import Policy
+    maps = {n: trk.make_track(n) for n in ("arena", "linden", "ashdown", "kestrel")}
+    old = {n: swarm_T(tr) for n, tr in maps.items()}
+    stock_ok = (old == {"arena": 70.0, "linden": 70.0, "ashdown": 78.0, "kestrel": 107.0}
+                and all(swarm_T(tr, car=k) == old[n] for n, tr in maps.items()
+                        for k in _cars.STOCK_CARS))
+    new_ok = (swarm_T(maps["arena"], car="bus"), swarm_T(maps["arena"], car="express")) == (82.0, 71.0)
+    sim = _build("arena", driver=lambda t, v, tr: Controls(brake=1.0))
+    sim.settings = Settings(path="", car="corsa")
+    o = sim.swarm_opts
+    sim._swarm_step("car", -1)                     # 'same' -> the bus (the row wraps)
+    t_bus = (o["car"], o["T"])
+    sim._swarm_step("car", +1)                     # back to 'same' (the Corsa)
+    t_same = o["T"]
+    o["T"] = 90.0                                  # the player's own number
+    sim._swarm_step("car", -1)
+    page_ok = t_bus == ("bus", 82.0) and t_same == 70.0 and o["T"] == 90.0
+    e = rollout(Policy(), "arena", T=swarm_T(maps["arena"], car="bus"), wing="plate",
+                car=_cars.get("bus"))
+    lap_ok = e.laps >= 1 and e.ended == "time"
+    ok = stock_ok and new_ok and page_ok and lap_ok
+    if verbose:
+        print(f"  V43d swarm T    : stock cars keep {old}: {stock_ok}; bus / Express on the arena "
+              f"82 / 71 s {new_ok}; the page's Car row moves a default T {t_bus}, back "
+              f"{t_same}, a typed 90 stays {page_ok}; the bus's anchor laps in "
+              f"{e.lap_times[0] if e.lap_times else None} s of its window: {lap_ok}")
+    return ok, dict(old=old, page=page_ok, lap=e.lap_times)
+
+
 def self_check(verbose=True) -> bool:
     """python3 -m drive.drive  ->  the harness acceptance numbers."""
     tmp = _tmpdir()
@@ -7711,6 +7777,7 @@ def self_check(verbose=True) -> bool:
                      ("V43", lambda: _v43_fitted_sessions(tmp, verbose)),
                      ("V43b", lambda: _v43b_launch_and_judges(tmp, verbose)),
                      ("V43c", lambda: _v43c_default_build(tmp, verbose)),
+                     ("V43d", lambda: _v43d_swarm_T(tmp, verbose)),
                      ("V27", lambda: _v27_gearbox_modes(verbose)),
                      ("V28", lambda: _v28_open_map(verbose)),
                      ("V29", lambda: _v29_engine_tc(verbose)),
@@ -8324,7 +8391,7 @@ def run_interactive_cli(opts) -> int:
                 opts.swarm_saved = None
                 #  the page remembers its values; a Sim time left at the
                 #  map's default follows the map (_swarm_menu_kept)
-                opts.swarm_menu = _swarm_menu_kept(launch, sim.track)
+                opts.swarm_menu = _swarm_menu_kept(launch, sim.track, car=settings.car)
                 opts.prerace_skip = True           # back from the swarm: drive, not a timed start
                 continue
             if sim.stop_reason == "restart":
@@ -8473,8 +8540,10 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
         _resolve_design(opts)
     w, h = (int(v) for v in opts.size.lower().split("x"))
     from . import swarm_panel as spn
-    if opts.swarm_T is None:        # no --swarm-T: the default for this map's lap
-        opts.swarm_T = swarm_T(trk.make_track(opts.track, opts.radius, opts.cw))
+    if opts.swarm_T is None:        # no --swarm-T: the default for this map's lap, this car
+        opts.swarm_T = swarm_T(trk.make_track(opts.track, opts.radius, opts.cw),
+                               car=_swarm_T_car(getattr(opts, "swarm_car", None),
+                                                getattr(settings, "car", None)))
     _pop, _T = spn.clamp_pop(opts.swarm), spn.clamp_T(opts.swarm_T)
     if (_pop, _T) != (opts.swarm, opts.swarm_T):
         print(f"swarm: {opts.swarm} cars / {opts.swarm_T} s -> {_pop} cars / {_T:.0f} s "
@@ -9475,6 +9544,9 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     if getattr(opts, "seed_lap", False):
         sim.seed_armed = True              # --seed-lap: K already pressed
         opts.seed_lap = False              # once; a restart is a fresh choice
+    #  the Deploy-swarm page's Sim time: this map's default for this car (a
+    #  bus needs longer to lap, `swarm_T`); a Deploy's kept values win
+    sim.swarm_opts["T"] = swarm_T(sim.track, car=settings.car)
     if getattr(opts, "swarm_menu", None):
         sim.swarm_opts.update(opts.swarm_menu)
     newest = race_newest_bot()

@@ -972,8 +972,11 @@ or type the number on the keyboard), *Seed*
 (none / your last seed lap / best saved swarm), *Generations*, *Sim time* (any
 whole second from 20 to 240: `←` `→` 20 30 45 60 70 90 120 150 180 240, or
 type it; it starts at 70 s, an arena lap and a bit, and pro rata on a longer
-circuit: 78 s on Ashdown, 107 s on Kestrel; after a Deploy that default
-still follows the map, while a time you set stays on every map),
+circuit: 78 s on Ashdown, 107 s on Kestrel; a car slower than the Corsa
+gets more in proportion to its lap -- 71 s for the Express, 82 s for the
+bus on the arena -- while the Corsa, the MX-5 and the 540i keep those
+numbers; after a Deploy that default still follows the map (and the *Car*
+row), while a time you set stays on every map),
 *Replay* (watch every generation, or off), *Save best* (what `ESC` does with
 the best car: ask, always, never), *Seed lap* and *Deploy*. *Seed lap* puts
 you on the start line, recording from
