@@ -1634,7 +1634,12 @@ def _band_paint3(kind, j, paint):
     band: on the cabin's bands the greenhouse is the side glass and the strip
     is the roof rail; on the windscreen and rear glass bands the centre is
     glass and the strips are the A- / D-pillars; on the roadster the centre
-    of the cockpit band is its open interior."""
+    of the cockpit band is its open interior. Task 41's two kinds are paint
+    all round on purpose: 'box' is the Express's blind load box (no side
+    glass), and on 'win', the Citaro's window band, the greenhouse is the
+    painted body the passenger panes, the doors and the engine tower's
+    intake are laid onto as decals (`car_mesh3`'s side_decal), so the
+    strip over the glass and the pillars between the panes stay paint."""
     pair = min(j, 13 - j)
     if pair == 1:
         return ((C_TRIM3, M_TRIM) if kind in ('nose', 'bumper')
