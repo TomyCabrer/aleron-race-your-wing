@@ -231,6 +231,10 @@ def _curve(x, y) -> _Curve:
 
 T_CLUTCH_CAP_STOCK = 200.0   # N.m  the stock clutch; PowertrainParams.from_car()
 #                              uprates it with the Engine setting's power_scale
+N_UP_SOFT_MARGIN = 0.25      # -    task 45: the automatic's upshift line is
+#                              capped this fraction of n_soft UNDER the start
+#                              of the soft limiter's fade (n_up_schedule): 30
+#                              rpm on a 120 rpm band, 12 on the bus's 48
 
 
 # ====================================================================== #
@@ -319,7 +323,8 @@ class PowertrainParams:
     t_engage: float = 0.30      # s  for a cable-shift road box driven briskly.
     t_shift_lockout: float = 0.8
     n_up_a: float = 2400.0      # auto upshift  N_UP = n_up_a + k*throttle
-    n_up_k12: float = 3750.0    # gears 1-2 (6150 at WOT): the ratio step is so big
+    n_up_k12: float = 3750.0    # gears 1-2 (6150 at WOT, CAPPED to 6050 since
+    #                             task 45 -- see n_up_schedule): the ratio step is so big
     n_up_k34: float = 3650.0    # gears 3-4 (6050): crossover falls at 6051/6031 rpm
     n_dn_a: float = 1500.0
     n_dn_k: float = 3100.0
@@ -1034,7 +1039,20 @@ def n_up_schedule(p: PowertrainParams, g: int, thr: float) -> float:
     if g < 1 or g >= len(p.gear):
         return math.inf
     k = p.n_up_k12 if g <= 2 else p.n_up_k34
-    return p.n_up_a + k * min(max(thr, 0.0), 1.0)
+    n_up = p.n_up_a + k * min(max(thr, 0.0), 1.0)
+    # Task 45: the line never sits inside the soft limiter. The fuel fades
+    # out over the n_soft below n_cut (step()), and the full-throttle line of
+    # gears 1-2 used to be 50 rpm under the cut on every car (Corsa 6150 of
+    # 6200, bus 2480 of 2500): at the line the engine had ~40% of its fuel,
+    # so any extra load -- a corner, TC trimming the load -- settled it
+    # BELOW the line and it sat on the limiter for good (the Corsa at 12 deg
+    # of steer never left 1st, the Express stayed in 2nd at 5951 rpm, 1 rpm
+    # short). Capped a quarter band under where the fade starts, the engine
+    # reaches the line on full fuel under any load it can climb against at
+    # all. The Corsa's 1-2 line lands on 6050, where its 3-4 line already
+    # was; the fraction holds for the bus's scaled band (48 rpm) as it does
+    # for a car's 120. Part-throttle lines are far below it and unchanged.
+    return min(n_up, p.n_cut - (1.0 + N_UP_SOFT_MARGIN) * p.n_soft)
 
 
 def _auto_target(p: PowertrainParams, s: PowertrainState, inp: PtInput,
@@ -1055,7 +1073,19 @@ def _auto_target(p: PowertrainParams, s: PowertrainState, inp: PtInput,
         instead of walking down at t_shift_lockout + 0.70 s a gear; the brake
         branch still steps down one at a time.
     """
-    if s.t_since_shift < p.t_shift_lockout or s.stalled:
+    if s.stalled:
+        return None
+    # Task 45: the lockout after a change never holds the engine on the
+    # limiter. With the upshift line under the soft band (n_up_schedule) the
+    # engine only gets INTO the band at full pedal when something stops the
+    # box changing up, and a kickdown in a slow corner is one: the MX-5 at
+    # 12 deg of steer dropped 2>1 at 45 km/h, reached the band 0.4 s later
+    # and sat there for the rest of the 0.8 s lockout. Inside the lockout an
+    # UPSHIFT is still allowed from the band, on the same road-speed
+    # agreement as any other; every other decision still waits it out.
+    lockout = s.t_since_shift < p.t_shift_lockout
+    if lockout and not (s.gear >= 1 and inp.throttle > 0.9
+                        and n_e > p.n_cut - p.n_soft):
         return None
     if s.gear <= 0:
         # An automatic sits in gear, not in neutral: 1st goes in as soon as the
@@ -1096,6 +1126,8 @@ def _auto_target(p: PowertrainParams, s: PowertrainState, inp: PtInput,
         # near binding), and under spin they do not.
         if n_e > n_up and abs(v_x) > speed_at_rpm(p, s.gear, n_up) - p.v_shift_hyst:
             return s.gear + 1
+    if lockout:
+        return None
 
     # --- down --------------------------------------------------------------
     if s.gear > 1:
@@ -1192,6 +1224,21 @@ def update_shift(p: PowertrainParams, s: PowertrainState, inp: PtInput,
                 s.shift_phase = "none"
                 s.clutch_auto = 0.0
                 s.t_since_shift = 0.0
+            elif inp.auto_gearbox and inp.auto_clutch and s.gear != 0:
+                # Task 45: on the AUTOMATIC the engage ramp never closes the
+                # clutch further than the anti-stall assist would. The ramp
+                # is a timer, blind to the engine: a brake downshift decided
+                # at walking pace engages 0.40 s later at a standstill, and
+                # the ramp then dragged the engine to 0 rpm -- every Corsa
+                # stop from 80 stalled in its 2>1 engage and restarted, and
+                # the bus stalled in its 4>3 engage at 1.2 m/s and again in
+                # each engage at a standstill after it, ending dead. On a
+                # normal shift the new gear's input speed is above the
+                # assist's target, the assist asks for a closed clutch and
+                # the ramp is unchanged. The manual boxes keep the plain
+                # ramp: there the driver picked the gear.
+                s.clutch_auto = max(s.clutch_auto,
+                                    _assist_pedal(p, inp, s.gear, v_x, n_e))
         # rev-match blip (auto clutch only): through the gate and the engage
         # phase, if the target gear's input speed is above the engine, fuel
         # the engine up to it. Proportional on the error; never past the cut.
@@ -1202,27 +1249,60 @@ def update_shift(p: PowertrainParams, s: PowertrainState, inp: PtInput,
             if err > p.n_blip_min:
                 blip = min(err / p.n_blip_band, 1.0)
     elif inp.auto_clutch and s.gear != 0:
-        # Launch / anti-stall assist: a proportional slip controller on ENGINE
-        # speed. Holding the target off the engine (not off road speed) means it
-        # both launches the car and catches a driver who lugs it to a stop.
-        n_tgt = p.n_idle + (p.n_launch - p.n_idle) * min(max(inp.throttle, 0.0), 1.0)
-        n_min = p.n_stall + 100.0
-        n_in = abs(rpm_at_speed(p, s.gear, v_x))
-        if n_in > n_tgt:
-            e_t = 1.0
-        else:
-            # proportional over [n_lo, n_tgt]: e = 1 at the target keeps the
-            # law continuous with the locked branch above; the band below it
-            # is n_launch_band (the anti-stall band n_min..n_idle is the
-            # zero-throttle case and is unchanged: n_tgt - band < n_min there)
-            n_lo = max(n_min, n_tgt - p.n_launch_band)
-            e_t = (n_e - n_lo) / max(n_tgt - n_lo, 1.0)
-            e_t = min(max(e_t, 0.0), 1.0)
-        s.clutch_auto = p.p_diseng - e_t * (p.p_diseng - p.p_bite)
+        s.clutch_auto = _assist_pedal(p, inp, s.gear, v_x, n_e)
     else:
         s.clutch_auto = 0.0
 
     return max(inp.clutch, s.clutch_auto), thr_scale, blip
+
+
+def _assist_pedal(p: PowertrainParams, inp: PtInput, g: int, v_x: float,
+                  n_e: float) -> float:
+    """The auto clutch's pedal in gear g off a shift: the launch / anti-stall
+    assist, plus (task 45, the automatic only) the brake hold.
+
+    Launch / anti-stall assist: a proportional slip controller on ENGINE
+    speed. Holding the target off the engine (not off road speed) means it
+    both launches the car and catches a driver who lugs it to a stop.
+    """
+    n_tgt = p.n_idle + (p.n_launch - p.n_idle) * min(max(inp.throttle, 0.0), 1.0)
+    n_min = p.n_stall + 100.0
+    n_in = abs(rpm_at_speed(p, g, v_x))
+    if (inp.auto_gearbox and inp.brake > 0.3 and inp.throttle <= 0.02
+            and n_in < p.n_idle):
+        # Brake hold (task 45): an automatic held on the brake at a road
+        # speed its gear cannot turn the engine at idle opens the clutch
+        # fully and lets the engine idle, the way an automated manual sits
+        # at a red light. The assist alone lugged the engine against the
+        # brakes (the Corsa at 586 of its 850 rpm, the bus at 457 of 600).
+        # The same 0.3 pedal as `braking` in _auto_target and the same 0.02
+        # throttle as its neutral rule, so a brake-and-throttle hill start
+        # still feeds the clutch in as before. Off the brake the assist
+        # below takes over at once: the car creeps or launches with no gear
+        # change to wait for.
+        return p.p_diseng
+    if n_in > n_tgt:
+        e_t = 1.0
+        if inp.auto_gearbox and n_e < p.n_idle:
+            # Locked wheels (task 45, the automatic only): the road says the
+            # gear turns the engine above its target, yet the engine is under
+            # idle -- the driven wheels have stopped under the car (a stop
+            # with ABS off) and the closed clutch is dragging the engine to
+            # a stall. The Corsa, the Express and the bus on the automatic
+            # stalled there at 13-18 m/s and sat dead until the road speed
+            # fell. Open the clutch as the engine falls through the
+            # anti-stall band. With the wheels turning, n_e follows n_in and
+            # this never acts.
+            e_t = min(max((n_e - n_min) / max(p.n_idle - n_min, 1.0), 0.0), 1.0)
+    else:
+        # proportional over [n_lo, n_tgt]: e = 1 at the target keeps the
+        # law continuous with the locked branch above; the band below it
+        # is n_launch_band (the anti-stall band n_min..n_idle is the
+        # zero-throttle case and is unchanged: n_tgt - band < n_min there)
+        n_lo = max(n_min, n_tgt - p.n_launch_band)
+        e_t = (n_e - n_lo) / max(n_tgt - n_lo, 1.0)
+        e_t = min(max(e_t, 0.0), 1.0)
+    return p.p_diseng - e_t * (p.p_diseng - p.p_bite)
 
 
 # ====================================================================== #
@@ -1489,8 +1569,9 @@ def accel_run(p: PowertrainParams, car: CorsaC, v_targets=(100 / 3.6,),
     #  6-speed car raised KeyError: 6 as soon as a target needed 6th
     #  (reproduced on the 540i: v_targets=(100/3.6,) fine, (260/3.6,) raised).
     #  Latent while only the Corsa called this; the car library made it real.
-    n_up = {g: p.n_up_a + (p.n_up_k12 if g <= 2 else p.n_up_k34)
-            for g in range(1, len(p.gear) + 1)}
+    #  Task 45: the box's own full-throttle line (n_up_schedule, with its cap
+    #  under the soft limiter), not a copy of the uncapped formula.
+    n_up = {g: n_up_schedule(p, g, 1.0) for g in range(1, len(p.gear) + 1)}
     v_launch = speed_at_rpm(p, 1, launch_rpm)
     T_launch = wot_torque(p, launch_rpm)
     omega_e = launch_rpm * RPS
@@ -2121,8 +2202,11 @@ def self_check(p: PowertrainParams | None = None, car: CorsaC | None = None,
         return _auto_target(p, st_u, PtInput(throttle=1.0, auto_gearbox=True),
                             v, n_ov)
     v_up1 = speed_at_rpm(p, 1, n_up_schedule(p, 1, 1.0))
+    #  (task 45: the line moved 6150 -> 6050 rpm with the cap under the soft
+    #  band, the line speed 13.05 -> 12.84 m/s and the bar 11.25 -> 11.04)
     note("auto_upshift_needs_the_road",
-         f"6150 rpm in 1st at 3.6 m/s (wheels spinning) -> {_up_at(3.6)}, at "
+         f"{n_up_schedule(p, 1, 1.0) + 1.0:.0f} rpm in 1st at 3.6 m/s (wheels "
+         f"spinning) -> {_up_at(3.6)}, at "
          f"{v_up1 - 0.1:.1f} m/s (locked) -> {_up_at(v_up1 - 0.1)}",
          f"None / 2  (the line is {v_up1:.2f} m/s, the bar "
          f"{v_up1 - p.v_shift_hyst:.2f})",
@@ -2209,9 +2293,18 @@ def self_check(p: PowertrainParams | None = None, car: CorsaC | None = None,
          "every gear in order, top at the governor",
          seen == list(range(1, len(pb.gear) + 1)) and t50 is not None
          and pb.v_gov - 1.5 < vmax <= pb.v_gov + 0.05)
-    stuck, _v, _t = _bus_run(_dc.replace(pb, n_soft=120.0), 25.0)
-    note("t41_why_n_soft_scales", f"the Corsa's 120 rpm band: gears {stuck}",
-         "stuck in 2nd (the probe's bug)", max(stuck) == 2, hard=False)
+    #  Task 45 moved this row: the upshift line is now capped under the soft
+    #  band (n_up_schedule), so a 120 rpm band no longer strands the bus in
+    #  2nd -- it only pulls the fade and the line 100 rpm lower than the
+    #  scaled 48 rpm band puts them. Before the cap this read "gears [1, 2]".
+    pb120 = _dc.replace(pb, n_soft=120.0)
+    stuck, _v, _t = _bus_run(pb120, 25.0)
+    note("t41_why_n_soft_scales",
+         f"the Corsa's 120 rpm band: gears {stuck}, fade from "
+         f"{pb120.n_cut - pb120.n_soft:.0f}, WOT line {n_up_schedule(pb120, 1, 1.0):.0f} "
+         f"(scaled: {pb.n_cut - pb.n_soft:.0f} / {n_up_schedule(pb, 1, 1.0):.0f}) rpm",
+         "every gear (stuck in 2nd before the task-45 cap)",
+         stuck == list(range(1, len(pb.gear) + 1)), hard=False)
 
     #  (3) brakes. The bus's air equivalent reaches the authority inside a
     #  real reservoir's 10 bar; hydraulic car formulas on 11.5 t are REFUSED
@@ -2238,6 +2331,37 @@ def self_check(p: PowertrainParams | None = None, car: CorsaC | None = None,
     vf, vr = lock_pressure(pv, van, "f", van.mu_scale), lock_pressure(pv, van, "r", van.mu_scale)
     note("t41_van_front_locks_first", f"front {vf / 1e5:.1f} bar, rear {vr / 1e5:.1f} bar",
          "front < rear", vf < vr)
+
+    # ---------------- task 45: the automatic and the limiter ----------------
+    #  (a) every car's full-throttle upshift line sits UNDER the soft
+    #  limiter's fade band, in every gear it changes up out of. It used to
+    #  be 50 rpm under the cut (Corsa 6150 of 6200), inside the band, and a
+    #  corner or TC settled the engine below it on ~40% of its fuel.
+    ups, band_ok = [], True
+    for k in _cars.CAR_ORDER:
+        pk = PowertrainParams.from_car(_cars.CARS[k])
+        top = max(n_up_schedule(pk, g, 1.0) for g in range(1, len(pk.gear)))
+        band_ok = band_ok and top < pk.n_cut - pk.n_soft
+        ups.append(f"{k} {top:.0f}<{pk.n_cut - pk.n_soft:.0f}")
+    note("t45_upshift_under_the_soft_band", ", ".join(ups),
+         "WOT line < n_cut - n_soft, every car, every gear", band_ok)
+
+    #  (b) the lockout after a change never holds the engine on the limiter:
+    #  1st, 0.3 s after a kickdown, full pedal, the road agreeing. In the
+    #  band it changes up; just under the band the lockout still holds; and
+    #  with the road NOT agreeing (a spinning wheel) it holds too.
+    def _locked_at(n, v, thr=1.0):
+        st_l = PowertrainState(omega_e=n * RPS, gear=1)
+        st_l.t_since_shift = 0.3
+        return _auto_target(p, st_l, PtInput(throttle=thr, auto_gearbox=True), v, n)
+    n_in_band = p.n_cut - 0.5 * p.n_soft
+    v_band = speed_at_rpm(p, 1, n_in_band)
+    got = (_locked_at(n_in_band, v_band), _locked_at(p.n_cut - p.n_soft - 1.0, v_band),
+           _locked_at(n_in_band, 3.6), _locked_at(n_in_band, v_band, 0.5))
+    note("t45_lockout_never_holds_the_limiter",
+         f"in the band -> {got[0]}, under it -> {got[1]}, wheels spinning -> "
+         f"{got[2]}, half pedal -> {got[3]}",
+         "2 / None / None / None", got == (2, None, None, None))
 
     if verbose:
         w = max(len(r[0]) for r in rows) + 2

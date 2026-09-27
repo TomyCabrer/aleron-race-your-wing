@@ -134,7 +134,9 @@ GROOVE_RGB = ((33, 34, 37), (39, 41, 45), (46, 48, 52))
 PATCH_RGB = ((47, 49, 54), (68, 70, 75))
 PATCH_SEAL = (37, 39, 43)
 CRACK_RGB = (44, 46, 51)
-PAINT_RGB = ((230, 231, 233), (196, 198, 201), (35, 36, 39))
+#: by scenery's keys: white, dim, rubber, and (task 45, round 3) the stop
+#: board's amber brake marker and its checker's black
+PAINT_RGB = ((230, 231, 233), (196, 198, 201), (35, 36, 39), (236, 168, 36), (26, 27, 30))
 SECTOR_RGB = (206, 209, 214)
 MUD_RGB = (90, 68, 42)            # a skid on grass: churned earth
 GRAVEL_SKID = (138, 124, 96)
@@ -1710,9 +1712,75 @@ class World:
             if m.any():
                 quads.append(lay.paint[m])
                 cols += [PAINT_RGB[int(c)] for c in lay.paint_col[m]]
-        if not quads:
-            return
-        self._paint_quads(rnd, np.concatenate(quads), cols)
+        #  task 45, round 3: a running stop challenge's brake marker and board
+        #  (render.draw_frame keeps HudData.stop_board as `_stop_board`)
+        sb = getattr(rnd, "_stop_board", None)
+        if sb is not None:
+            s0_, s1_, n0_, n1_, k_ = scn.stop_board_rects(tr, sb)
+            m = _in_windows(0.5 * (s0_ + s1_), windows, L, tr.closed, pad=2.0)
+            if m.any():
+                quads.append(scn.quads_at(tr, s0_[m], s1_[m], n0_[m], n1_[m], self._nrm))
+                cols += [PAINT_RGB[int(c)] for c in k_[m]]
+        if quads:
+            self._paint_quads(rnd, np.concatenate(quads), cols)
+        if sb is not None and rnd._cam3 is not None:
+            self._stop_uprights(rnd, sb)
+
+    def _stop_uprights(self, rnd, sb) -> None:
+        """Chase only (task 45, round 3): the stop board's uprights, so the
+        brake marker and the board read from the start, where their paint
+        is a pixel deep -- an amber cone either side of the race lane at the
+        marker, and a black-and-white checker board on a post either side at
+        the board's line, 0.9 m outside the race lane: well inside the strip,
+        so the walls (props, drawn after this layer) stand too far out to
+        cover them. Each face that looks at the eye, far to near, hazed by
+        depth, one projection."""
+        tr = self.track
+        eye = np.asarray(rnd._cam3.eye, dtype=np.float64)
+        xy, nv = scn.frame_at(tr, np.array([float(sb[0]), float(sb[1])]), self._nrm)
+        faces = []                             # (depth, (M,3) polygon, rgb)
+        amber, dark = PAINT_RGB[scn.PAINT_MARKER], PAINT_RGB[scn.PAINT_BOARD_DARK]
+        for sgn in (1.0, -1.0):
+            n_c = sgn * (scn.DRAG_LANE_HALF + 0.9)
+            # the cone: a square pyramid, 0.46 m base, 0.72 m tall
+            P, N = xy[0] + n_c * nv[0], nv[0]
+            T = np.array([N[1], -N[0]])
+            apex = np.array([P[0], P[1], 0.72])
+            b = [P + 0.23 * (T * u + N * v) for u, v in ((1, 1), (1, -1), (-1, -1), (-1, 1))]
+            for j in range(4):
+                a0, a1 = b[j], b[(j + 1) % 4]
+                tri = np.array([[a0[0], a0[1], 0.0], [a1[0], a1[1], 0.0], apex])
+                c = tri.mean(axis=0)
+                out = np.array([*(0.5 * (a0 + a1) - P), 0.0])
+                if float(out @ (eye - c)) <= 0.0:
+                    continue                   # a face turned away
+                lit = abs(float(out[:2] @ T)) > abs(float(out[:2] @ N))
+                faces.append((float(np.linalg.norm(c - eye)), tri,
+                              amber if lit else tuple(int(0.7 * v) for v in amber)))
+            # the board: a 1.2 x 1.2 m checker on a post, square to the strip
+            P, N = xy[1] + n_c * nv[1], nv[1]
+            for i, (z0, z1) in enumerate(((0.45, 1.05), (1.05, 1.65))):
+                for j, (w0, w1) in enumerate(((-0.6, 0.0), (0.0, 0.6))):
+                    A, B = P + w0 * N, P + w1 * N
+                    q = np.array([[A[0], A[1], z0], [B[0], B[1], z0],
+                                  [B[0], B[1], z1], [A[0], A[1], z1]])
+                    faces.append((float(np.linalg.norm(q.mean(axis=0) - eye)) + 0.01, q,
+                                  PAINT_RGB[0] if (i + j) % 2 else dark))
+            A, B = P - 0.05 * N, P + 0.05 * N
+            q = np.array([[A[0], A[1], 0.0], [B[0], B[1], 0.0], [B[0], B[1], 0.45],
+                          [A[0], A[1], 0.45]])
+            faces.append((float(np.linalg.norm(q.mean(axis=0) - eye)), q, dark))
+        faces.sort(key=lambda f: -f[0])        # far to near
+        drawn = project_polys(rnd, [f[1] for f in faces])
+        sc = rnd.screen
+        from .props import FORBIDDEN           # a colour a self-check counts: nudged, as props do
+        counted = {tuple(int(v) for v in c) for c in FORBIDDEN}
+        for k, pts in drawn:
+            if len(pts) >= 3:
+                c = hazed(faces[k][2], faces[k][0])
+                if c in counted:
+                    c = (c[0], c[1], c[2] + 1 if c[2] < 255 else 254)
+                pygame.draw.polygon(sc, c, pts)
 
     def _paint_quads(self, rnd, Q, cols) -> None:
         """Road-frame paint rectangles (k,4,2), ONE projection. A quad

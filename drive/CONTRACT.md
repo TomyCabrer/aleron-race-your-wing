@@ -39,7 +39,7 @@ from the repo root.
 | `drive/vehicle.py` | EOM, load transfer, roll, aero+wing, integrator | `tyre`, `powertrain`, `corsa_c`, `cars` |
 | `drive/track.py` | track geometry, projection, surfaces | numpy |
 | `drive/input.py` | keyboard/gamepad → `Controls` | pygame |
-| `drive/bodies.py` | task 41: the body SHELLS per style (hatch / roadster / saloon / van / bus; moved out of `render.py`), `style_of(car)`, `Body(car)` on the car's own axles (`x_front`, `x_rear`, `width`, `height`, `ground`, `deck_z`), each car's slot bands and default slots, and the owner's SPAN RULE: `span_limit` (flank `2 (h - ground)`, top `1.2 x width`), `span_ceiling` (x `UNLIMITED_FACTOR` 3 when Settings' Wing limits is Unlimited), `area_ceiling`, `over_limits(build, lib, car)` (computed per run, never stored) | numpy; `cars` and `aero.wing` lazily. Never pygame |
+| `drive/bodies.py` | task 41: the body SHELLS per style (hatch / roadster / saloon / van / bus; moved out of `render.py`), `style_of(car)`, `Body(car)` on the car's own axles (`x_front`, `x_rear`, `width`, `height`, `ground`, `deck_z`), each car's slot bands and default slots, and the owner's SPAN RULE: `span_limit` (flank `2 (h - ground)`, top `1.2 x width`), `span_ceiling` (x `UNLIMITED_FACTOR` 3 when Settings' Wing limits is Unlimited), `area_ceiling`, `over_limits(build, lib, car)` (computed per run, never stored). Read by `aero.wing`, `garage`, `records`, `challenges`, the drive, and `aerobo_bridge` (the AeroBO designer's per-car rows, task 43) | numpy; `cars` and `aero.wing` lazily. Never pygame |
 | `drive/render.py` | pygame drawing + HUD; the chase camera and the 3-D car (a body STYLE per fitted car: hatch / roadster / saloon / van / bus, generic shapes, the shells read from `bodies`); `look_config` / `Renderer.set_look` (the Graphics setting); `set_paint` / `Renderer.set_paint` / `factory_colour` (the Paint setting) | `track`, `qss`, pygame; `world`, `props`, `fx` inside `Renderer` (built when `ViewConfig.scenery` / `effects`) |
 | `drive/paint.py` | the player car's paint: `PAINT_ORDER`, `PAINT_LABELS`, `PAINTS` (name -> RGB; `factory` -> None, the car's own colour), `PAINT_DEFAULT`, `rgb(name)`. A fixed palette, every tone of it checked against the colours the self-checks count. Cosmetic: never in the class key, a ranking, a medal, a ghost, the CarSpec or the build JSON (a lap record's `settings` snapshot lists it, as it lists Graphics) | nothing (pure data); `race_grid`, `ghosts` in its self-check only. Never pygame |
 | `drive/scenery.py` | the ground beside the road, laid out from the track's own geometry (a generated track gets it too): verges, gravel traps (slow corners), painted run-off (fast ones), apex + exit kerbs, the racing line, paint (grid boxes at `race_grid`'s slots, sector bars, the dragstrip's lane / numerals), all within 24 m of the edge; `wheel_surfaces(track, pts, on_track4, mu4, scenery=)` -> per wheel `'tarmac' \| 'wet' \| 'kerb' \| 'grass' \| 'gravel'`, read off the SAME tables the drawing uses. Never read by the physics | `track`, numpy |
@@ -48,10 +48,20 @@ from the repo root.
 | `drive/fx.py` | the particles -- tyre smoke past the grip peak (a per-car onset), dust off the road, spray on wet -- in one fixed pool (`POOL_N`), and the chase view's surface-aware camera jolt; a consumer of `HudData` (`surf4`, `wheels_xy`, `car_key`), never an input | numpy, pygame, `world`; `render` only lazily |
 | `drive/telemetry.py` | CSV logging | csv |
 | `drive/plots.py` | matplotlib post-run plots (Agg) | matplotlib, numpy |
-| `drive/garage.py` | 3D garage: `CarBuild` (three wing slots) -> `VehicleConfig` kwargs and the fitted wings' mass; the MISSION page and the DESIGN navigator (`DESIGN_TREE`: airfoil / endplate / wing / results, four stages each -- the criterion WEIGHTS are asked on the screening step, and the design box is a BAND table). The navigator GATES: a step whose predecessor is unfinished cannot be selected at all, by key or by click, and the refusal quotes the reason. Every page takes the MOUSE as well as the keyboard. Plus the airfoil and library pages | `corsa_c`, `cars`, `crossover`, `input`, `menu`, `garage_ui`, `aero`, `track` (`make_track`, for the mission's circuit), `vehicle` (the two aero dataclasses only), pygame |
+| `drive/garage.py` | 3D garage: `CarBuild` (three wing slots) -> `VehicleConfig` kwargs and the fitted wings' mass; the MISSION page (`MissionPage`: circuit, surface, Search & budget, the slot's design speed) and the DESIGN page (`DesignPage`: `DESIGN_TREE` over one `aerobo_models.DesignSession` per slot, `sessions`; a mirrored right flank is the left one's) -- the page designs nothing itself (task 43's pivot): every stage is a view of the session's models, which call AeroBO's own engine. `_top_aero` / `_dev_aero` / `mission_aero` fly an AeroBO wing's STORED law (`WingSpec.aero`, re-derived when the slot has moved: `aerobo_models.law_stale` / `rederive`), never a re-analysis. Both pages are drawn and driven by `design_shell`. The navigator GATES by STAGE with AeroBO's rule (`DesignSession.state`): once the mission is stated 2 Airfoil, 2.8 Endplate and 3 Wing are open, 4 Results waits for a completed run, 2.8 is LOCKED on plain fences. Every page takes the MOUSE as well as the keyboard. Plus the airfoil and library pages | `corsa_c`, `cars`, `crossover`, `input`, `menu`, `garage_ui`, `bodies` (task 41), `cae` (`form`), `design_jobs`, `design_shell`, `aero`, `track` (`make_track`, for the mission's circuit), `vehicle` (the two aero dataclasses only), pygame; `aerobo_models` LAZILY (`_am()`, so importing the garage does not import AeroBO before it is needed). Never `aerobo` or `aerobo_bridge` directly |
 | `drive/garage_ui.py` | widget kit for the garage pages (params, lists, plots, prompt) | pygame, numpy |
-| `drive/aero/` | wing-design physics: sections, panel method, polars (XFOIL / estimate), vortex lattice, GP-BO, the library, and the three-step design procedure -- `mission.py` (the lap a wing is for), `screen.py` (the seven weighted criteria the library is ranked on), `section.py` (the aerofoil designed in 2-D against it), `wing.py` (the planform), `blend.py` (how the wing and its end plates meet) | numpy, scipy, the `xfoil` binary if present; `mission.py` alone also imports `corsa_c` and `qss` |
+| `drive/cae/` | the AeroBO-look widget kit (light CAE theme, D1/D2): `theme` (tokens, fonts, icons, text), `form` (`Form`, the ParamList-compatible object a shell view binds its controls to), `widgets` (`WorkUI`, the immediate-mode work area), `plot` (`Figure`), `chrome` (menu bar, tool bar, tree, properties, tabs, output log, status bar, toasts, dialogs). Pure UI: no physics, no file IO beyond its bundled fonts | pygame, numpy, `garage_ui` (`form` subclasses `ParamList`) |
+| `drive/design_jobs.py` | the live-run machinery (PLAN2 §6): `EngineJob` (one AeroBO call on ONE daemon worker thread, `runner(emit, stop)`; the frame drains its queue; `finish` and `on_finish` run on the main thread only), `ReplayRunner` (a captured run replayed through the same path, `pause_at` / `release`, the fixture's own stopped variant), the warnings router (an engine warning on the worker becomes an Output line), `RunManager` (one live run; `cancel` abandons a run and stays `busy` until its thread has ended), `Notices`, `JobInfo`, the chips (`RUNNING · k/N`, `terminal_tag`) and the log / status templates | the standard library only. Never pygame, numpy, `aero`, `aerobo` or `aerobo_bridge` |
+| `drive/design_shell.py` | the AeroBO shell framing the garage's MISSION and DESIGN pages: layout, tree (`CaeTree`, a `garage_ui.Nav`), the stage chips and Properties (read off the slot's `DesignSession`), stage states (`DesignSession.state` + the live `EngineJob`'s stage), tabs, Output, status bar, focus model, keyboard / pad / mouse routing, Run / Stop (routed to the models' job starters), the live-run lock (`LAUNCH_KEYS`, scoped forms) | pygame, `garage_ui`, `cae`, `design_jobs`, the `views_*` modules (by name, `VIEWS`); `garage`, `aerobo_models` and `aero.library` only in its self-check |
+| `drive/views_common.py`, `views_mission.py`, `views_section.py`, `views_wing.py`, `views_results.py` | the stage views drawn in the shell's work area, one module per stage group, and the builders they share (`views_common`: the designing row, the live evaluation graph `convergence_fig` / `convergence_card`, `run_banner`, `now_evaluating`, the section outline and polar figures, the terminal tags) | numpy, `cae`, `design_jobs`, `views_common`; `views_mission`, `views_section`, `views_wing`, `views_results` also `aerobo_models` (the models' API, and AeroBO's READ-ONLY helpers through `am.bridge`); `views_mission` also `aero.mission`, `track` (`make_track`); `views_results` also `views_wing`, pygame lazily. Never `garage` (garage constants arrive in `ViewCtx.consts`), never `aerobo` itself |
+| `drive/design_shots.py` | the design pages' screenshot harness (every view x pre / running / post / stopped / continued x 1280x800 / 1600x1000, as scroll series), every run REPLAYED from the captured fixtures (`aerobo_models.replaying`) and frozen "running" by the replay's `pause_at` | `garage` and `aerobo_models` lazily, `design_jobs`, `aero.library`, pygame |
+| `aerobo/` | AeroBO v1.0.0 (commit `3f1b07d`) VENDORED UNMODIFIED: `src/aerobo/` (68 files), `data/` (2260), `records/airfoil_screen_branch_v2.json`, `LICENSE` (MIT); `seed/airfoil_screen_checkpoint.json` (the warm library checkpoint, sha256 in `VENDORED.md`); `VENDORED.md`, `sync.sh` (the re-sync). `results/` is AeroBO's runtime cache (XFOIL polars, eval cache, screen checkpoints), gitignored | -- (a package of its own; its requirements are `requirements.txt`'s torch / botorch / gpytorch / pymoo) |
+| `drive/aerobo_bridge.py` | the ONLY importer of `aerobo`: `sys.path` / env set-up and the seed install; the carsim SLOT FAMILIES (AeroBO's car family re-instantiated as a subclass that moves only `RIDE_HEIGHT_BOUNDS_M`, the deck and carsim's air: top = ground effect on over the deck, flanks = the image plane 100 m off); the operating point (`OperatingPoint`, from the stated lap); V3's configuration builders (weights, gates, section conditions, shape kwargs, wing flags, searches from `api.recommended_search`); the job RUNNERS (`screen_runner`, `section_runner`, `wing_runner`, `score_runner`, `polar_runner`, `design_report_runner`, `law_runner`) and the resumes (`continue_section`, `continue_wing`); the law derived by sampling AeroBO's evaluator (`derive_law`) and the mapping onto carsim's `WingSpec` / `AirfoilSpec`; carsim's circuits as `cartrack.TrackSpec`; fixture capture (`--capture`); the engine smoke self-check. Task 41's per-car numbers, from `bodies` for the build's car and Settings' Wing limits: `car_deck`, `top_ride_band`, `flank_h`, `span_limit`, `size_rows` / `flank_size_rows(h, car, unlimited)`, `size_caps`, `over_limits`, `limit_words`; `OperatingPoint.car / unlimited / limit / size_caps` | `aerobo`, numpy, scipy (`qmc`, the self-check), `aero` (`xfoil`, `polar`, `wing`, `airfoil`, `mission`), `bodies`, `track`, `qss`; `vehicle` (`TopAero`) in its self-check. Never pygame, never `garage` |
+| `drive/aerobo_models.py` | the DESIGN page's models (PLAN2 §7): `DesignSession` (one per slot: `op`, `policy`, `af`, `ep`, `wing`, `results`, `state(stage)`; `car` / `unlimited` / `deck_z` read off the host -- the garage's `car` and `unlimited`, task 41 -- and `past_limit(span, keys)`), `SearchPolicy` (Mission > Search & budget: AeroBO's plan or own budgets), `SurfaceModel` (a section surface, main or the symmetric plate: screen, ranking, take, shape search, Keep going, polar), `WingModel` (Wing type, Design box, Solver, run, Keep going, verdict, law, fit, commit), `ResultsModel` (the design report, the summary, carsim's QSS lap as the cross-check); every engine call an `EngineJob` whose runner freezes its arguments at launch; `replaying()` / `use_fixtures()` switch every job to the captured fixtures (the checks) | `aerobo_bridge`, `design_jobs`, `garage_ui` (`Param`), `cae.form`, `aero.mission`, `track`, numpy; `garage` and `aero.library` only in its self-check. Never pygame |
+| `drive/data/aerobo_fixtures/` | twelve REAL engine runs captured by `python3 -m drive.aerobo_bridge --capture` (screens, section and wing searches with their stopped and continued variants, a lap-time wing run; 722 kB), replayed by the deterministic checks and the screenshot harness | -- |
+| `drive/aero/` | wing-design physics: sections, panel method, polars (XFOIL / estimate), vortex lattice, GP-BO, the library, and carsim's own three-step design procedure -- `mission.py` (the lap a wing is for), `screen.py` (the seven weighted criteria the library is ranked on), `section.py` (the aerofoil designed in 2-D against it), `wing.py` (the planform; `WingSpec.design` carries an AeroBO wing's provenance, and `clamp` leaves its rows alone), `blend.py` (how the wing and its end plates meet); the ask/tell steppers (`optimize.BOStepper`, `RandomStepper`). Since the pivot the DESIGN page calls none of `screen` / `section` / `optimize` (AeroBO's engine designs; PLAN2 §11 Q9 keeps them, self-checked, for a later clean-up); `library.analyse_wing` never re-analyses an AeroBO wing (its law is AeroBO's) | numpy, scipy, the `xfoil` binary if present; `mission.py` alone also imports `corsa_c` and `qss` |
 | `drive/menu.py` | pause / help menu overlay (ESC, OPTIONS); a row's colour swatch through `show(swatches={action: rgb})` (rows stay 2-tuples); pure UI | pygame only |
+| `drive/title.py` | task 44: the title screen an interactive launch opens on (`Title.run()` -> one of `ACTIONS`: drive / challenges / garage / tutorial / settings / quit); the menu column and the pause menu's command vocabulary from `input.BlendedInput` in menu mode; the live background -- `pick_scene` (a `track.CIRCUITS` map, 1..5 cars of distinct `cars.CAR_ORDER` types with a reference lap), `Scene` (the reference laps replayed as a train, re-spaced at each chase-camera cut every `CAM_SWITCH_S` s), `_SceneRenderer` (a `render.Renderer` whose car pass draws every scene car in its own body and paint, restoring `render`'s module car and paint); the panorama fallback (`world.build_panorama`). No physics, no player file | pygame, numpy, `render`, `menu`; `track`, `cars`, `bodies`, `records`, `medals`, `world`, `input` lazily. Never `drive.drive` |
 | `drive/audio.py` | procedural car sound: `Synth` (numpy) + `CarSound` (one pygame.mixer channel, stereo when the mixer grants it; task 27's chime on channel 1); an engine PROFILE per car (`HudData.car_key`); a render-loop consumer of `HudData`, never an input | numpy, pygame; `scipy.signal` optional, imported off-frame by `warm_up` (its fast path uses scipy's private `_sigtools._linear_filter`, checked for exact equality with `lfilter` at import, else the public one); its self-check imports `render.frame_budget_verdict` lazily (the `garage` exception) |
 | `drive/records.py` | lap records: the class key `track\|car\|engine\|surface`, `RecordBook` (top 5 per class, `runs/records/<class>.json`, best sectors, best medal, `last_builds.json`), `LapRecorder` (the `Sim` hooks: controls log, 50 Hz trace, the lap's exact start state), `resimulate` (a lap re-driven from its log, bit for bit) | numpy; `vehicle`, `powertrain`, `cars`, `corsa_c` (dataclass registry only); `drive.drive` / `track` lazily inside `resimulate` and the self-check. Never pygame, never `drive.ml` |
 | `drive/prerace.py` | the pre-race (TIME TRIAL) page's content: `PreRace` rows and help sections from a `RecordBook`, the medal table and the library's builds; `wanted(opts, settings)` (never a script, headless, `--ml-drive`, offscreen, the dragstrip); the PICK page rows. Pure UI logic: the `Sim` owns the menu and dispatches | `records`; `medals` lazily. Never pygame |
@@ -59,12 +69,12 @@ from the repo root.
 | `drive/ghosts.py` | the time trial's two ghosts (the class PB; the D2 slot: reference bot / none / your P2..P5), clocked from the line (`sim.t - LapTimer.t_lap_start`); the live delta `tau - t_pb(p)`, `p` the centreline progress counted from the crossing on the ribbon only (the race gap's trail approach); the sector flash (purple / green / red, none for a lap that cannot count) | numpy, `records`; `drive.drive._Replay` and `medals` lazily. Never pygame |
 | `drive/progress.py` | `runs/progress.json` (kind `carsim-progress-1`): one section per feature (`tutorial`, task 25's `challenges`); `save(section)` merges with the file; a corrupt / foreign file is ignored with a note and moved aside as `.bad-<stamp>`, an unreadable one never written over | `records._atomic_json` lazily. Never pygame |
 | `drive/tutorial.py` | the driving tutorial: 13 data-driven `Step`s (`id, map, kind, title, text, hint, check(frame, mem), status, reset, setup, wing, gearbox, group`; task 31's optional manual-gearbox pair), `frame_of(sim)` (what a predicate sees), the `Tutorial` state machine (`tick(sim)` -> 'restart' / 'page' / 'done'), the overlay payload, the page / menu rows, `wing_car` (the published plate for a car without a flank wing) | `corsa_c.G`; `records`, `medals` lazily. Never pygame, never `drive.drive` |
-| `drive/wing_tutorial.py` | the wing-design tutorial: 10 `WStep`s (`check(garage, mem, action)`, an `anchor` naming the garage widget the hint points at), `WingTutor` (`update` / `draw` / the garage menu's rows), `anchor_rect` (from the widgets' own `_rect` / `_hits`) | `garage_ui`, `prerace._same_build`, `progress` (via the object handed in); `garage` and pygame only lazily / in the self-check. Never `drive.drive` |
-| `drive/challenges.py` | challenges (`drive/data/challenges/*.json`, kind `carsim-challenge-1`): `validate`, `load_all`, the constraint checker (`build_stats`, `refusals`), `stars_for`, the per-step `Meter` (lap_time, stop_distance, skid_ay; drag_time and trap_speed stay measurable, no challenge uses them since task 36) and `ChallengeRun` (the Sim's hooks, best + stars into `runs/progress.json`; a stop challenge starts rolling at its goal's `start_kmh`, the pose `ChallengeRun.rolling` gives every `Sim.reset`, task 40), the reference runs (`measure`; `--measure` / `--write` derive every threshold as ref x 1.12 / 1.06 / 1.02), the page rows | `records`, `progress` (via the object handed in); `drive.drive`, `garage`, `track`, `vehicle`, `aero.library` lazily. Never pygame |
+| `drive/wing_tutorial.py` | the wing-design tutorial: 10 `WStep`s (`check(garage, mem, action)`, an `anchor` naming the garage widget the hint points at), `WingTutor` (`update` / `draw` / the garage menu's rows; the box at `BOX_CAR` on the dark pages, at the shell's `tutor_box` on the mission and design pages), `anchor_rect` (from the widgets' own `_rect` / `_hits`, the shell's tool buttons and tree fallbacks, and `Form.rect_of`) | `garage_ui`, `prerace._same_build`, `progress` (via the object handed in); `design_shell` (lazily, for the tutor box and the tool-button anchors); `garage` and pygame only lazily / in the self-check. Never `drive.drive` |
+| `drive/challenges.py` | challenges (`drive/data/challenges/*.json`, kind `carsim-challenge-1`; no numbers in them since task 44): `validate`, `load_all`, the combos (task 44: `CONFIGS`, `config_build` / `config_parts` -- a config applied to the fitted copy of a build --, `resolve` -- a challenge in a car + config, thresholds derived from `refs.json` (kind `carsim-challenge-refs-1`, `load_refs` / `validate_refs` / `write_refs`) --, `combos`, `not_for_car`, `g_modes`), the constraint checker (`build_stats`, `refusals`), `stars_for`, the per-step `Meter` (lap_time, stop_distance, skid_ay; drag_time and trap_speed stay measurable, no challenge uses them since task 36) and `ChallengeRun` (the Sim's hooks, best + stars into `runs/progress.json` under the combo's key; a stop challenge starts rolling at its goal's `start_kmh`, the pose `ChallengeRun.rolling` gives every `Sim.reset`, task 40; at v0 a `StopHold` keeps it there on rails, no physics, until the brake is in, task 42, its top wing as it rides at v0 -- a FIXED one out -- `Sim._hold_top`, task 44), the reference runs (`measure`, `measure_combo`; `--measure` / `--write [--only S] [--jobs N]` measure the 160 combos in a process pool into refs.json, every threshold ref x 1.12 / 1.06 / 1.02), the page rows (`pick_rows`, `wings_line`, `wings_section`, `list_items`, `detail`) | `records`, `progress` (via the object handed in); `drive.drive`, `garage`, `track`, `vehicle`, `aero.library` lazily. Never pygame |
 | `drive/race_grid.py` | the race grid (plan D3): `GRID_MAX` (5, measured), `grid_slot(i)` (rows of two, 7 m apart), the slot colours, `bred_meta` (what a swarm writes into a checkpoint about the car it bred in), `own_car(meta, cfg, lib)` (that car rebuilt: stock or yours with ballast and wing masses, the garage build's aero, the engine) | `cars`, `vehicle`; `garage` lazily. Never pygame, never `drive.ml` |
 | `drive/swarm_panel.py` | the swarm window's progress panel (`panel_lines`: the best lap per generation with a bar, the class's medal lines and the owner's PB with the swarm's gap to each) and the Deploy-swarm page's free values (`clamp_pop` 4-128, `clamp_T` 20-240 s; task 34: `POP_PRESETS` / `T_PRESETS`, `step_value` / `cycle_value` over them, `Typed` digits, `row_value`) | nothing (pure; the caller hands in the PB). Never pygame, never `drive.ml` |
 | `drive/controls_page.py` | the CONTROLS page (task 37): `CONTROLS` (each DualSense control, its anchor on the drawing, its label, what it does), `MENU_PAD`, `pad_rows`, `kb_rows` (input.MENU_HELP_KB), `draw_pad(screen, rect)` (the controller and leader-lined labels, fitted to the rect, the labels' font shrunk to their column) | `input` (the bindings), `render.FONT_NAMES`; pygame lazily |
-| `drive/airbrake.py` | the G key's wing mode (task 35): `AUTO / AIR / ALL / LEFT / RIGHT`, `CYCLE`, `LABELS`, `next_mode`, `pair(cfg)` (both flanks fitted), `AirBrake.command(mode, brake, V, cfg)` -> `Controls.wing_cmd` or None (AIR BRAKE: all three while the pedal is >= 0.30, in to 0.15, above 5 m/s; one flank is left out) | nothing (pure). Never pygame, never the physics |
+| `drive/airbrake.py` | the G key's wing mode (tasks 35, 44): `AUTO / AIR / TOP / TOP_FIXED / TOP_FIX_SIDE / LEFT / RIGHT` (0 / 3 / 4 / 5 / 6 / 1 / -1; 2 was ALL 3, removed, not reused), `CYCLE`, `LABELS`, `WHAT`, `TOP_MODES`, `STOWS_FLANKS`, `FLANK_LAW`, `usable(mode, cfg)` / `next_mode(mode, cfg=None)` (a TOP mode only with a top wing), `flanks_hidden(mode)`, `cruise_top(mode)` (the top wing a mode commands on a straight with no brake: True / False / None = the slot's mode; a stop held at v0), `pair(cfg)` (a matching pair), `top_fitted(cfg)`, `AirBrake.command(mode, ctl, V, veh, dt)` -> `Controls.wing_cmd` or None (AIR BRAKE: all three while the pedal is >= 0.30, in to 0.15, above 5 m/s, a flank that is not a matching pair left out; TOP `(False, False, active law)`; TOP FIXED `(False, False, True)`; TOP FIX+SIDE `(None, None, True)`), `AirBrake.g_changed(old, new, veh)` on every G press (the latches start afresh; `handing`: an active top wing leaving a TOP mode stays on the free path until its law triggers afresh) | `vehicle.TOP_HOLD / TOP_BRAKE_ON` lazily (TOP's law). Never pygame, never the physics |
 | `drive/results.py` | the lap's results card (task 27): `card(res, book)` from the recorder's lap result (time, delta to the PB it was driven against, the sectors coloured purple / green / red, place, medal, `new_pb`, the class `key`), `view(card, age)` (None after `SHOW_S`), `drop` / `pulse` (the animation); task 32: `summary(card)` (the Settings row / the page's list), `page_rows(log)`, `LOG_N` cards kept a session | `records` lazily. Never pygame |
 | `drive/drive.py` | main loop, CLI, scripted runs | everything |
 | `drive/validate.py` | the whole acceptance suite | everything |
@@ -75,6 +85,45 @@ against the machine's current speed rather than reimplementing the
 normaliser. No cycle (`render` never imports `garage`) and nothing on the
 interactive or acceptance path reaches it.
 
+**AeroBO's engine has ONE door** (task 43's pivot, PLAN2 §3). The vendored
+package `aerobo` is imported by `drive/aerobo_bridge.py` and by nothing else;
+the bridge never imports pygame or `garage`. `design_jobs` imports neither the
+bridge nor `aerobo` (it runs whatever `runner(emit, stop)` it is handed, and
+imports only the standard library). `aerobo_models` imports the bridge and
+`design_jobs` and never `garage`. The views reach the engine only through
+the models (`am.bridge` for read-only helpers: the symmetric names, the
+library point, the plans, the handoff split). `garage` reaches the models
+lazily. Nothing in carsim edits a file under `aerobo/`: every adaptation
+(slot families, carsim's air, the law) is a carsim-side subclass or a
+function of AeroBO's outputs, and `aerobo_bridge`'s B26 row proves the
+vendored tree unchanged by a whole check. The engine runs on a worker
+thread, one at a time (`RunManager`); nothing on the worker touches pygame,
+the models or the library -- it emits events, and the frame applies them.
+
+**The designer is held to the car's limits** (task 41 wired into task 43's
+designer). A slot's session reads the host's `car` (the garage's
+`Garage.car`) and `unlimited` (`Settings.wing_limits`), and every number that
+depends on the car comes from `bodies` through the bridge: the flank's span
+row opens at the car's physical limit at the slot's height (`bodies.
+span_ceiling`: the lower tip at its own ground clearance -- 1.50 m on the
+Corsa at h 0.90, where the sill / roof fit gave 0.88) with its area row under
+`area_ceiling`, both cut to AeroBO's AR >= 3; the top's span row is 1.2 x the
+body's width, its deck and ride band `bodies.top_h_band`'s (the three stock
+cars keep the garage's Corsa deck, as their slot bands do). Unlimited leaves
+those default rows where they are and lets the player open them to 3x
+(`OperatingPoint.size_caps`); a typed band past the ceiling is held at it and
+`WingModel.bounds_overrides` clips it again at every build (the slot may have
+moved). In Real mode `WingModel.commit` puts no wing past the limit on the
+car -- this slot, or any other slot of its role carrying a wing of that name
+unless the mirror overwrites it -- and says which slot and where Unlimited is;
+in Unlimited it is saved and logged as filed apart (`bodies.over_limits`).
+Its library writes carry task 39's save guard (a failed write is said, the
+garage stays up). A law re-derived after the car page moved a slot
+(`aerobo_models.rederive(spec, slot, car=)`) flies the car's own deck and band.
+The lap AeroBO's lap-time objective and the mission's design speed are timed
+on stays the Corsa's (`aero.mission` and `aerobo_bridge.car_spec`, as on
+main).
+
 **The END PLATE carries a section.** `vlm.Lattice` has always taken `plate_a`
 and `plate_L0` and `wing.build_lattice` hardcoded them to a flat plate;
 `WingSpec.plate_airfoil` (`""` = flat) now names a library section and
@@ -84,6 +133,14 @@ saved before the row decodes to `""`, so nothing published moves. Anything that
 solves the lattice for a DESIGNED wing must pass it: `library.analyse_wing`
 does, and the garage's wing optimiser does -- it did not, and the search flew
 flat plates while the page drew cambered ones.
+
+*The four paragraphs below describe `drive/aero/`'s own search and screen,
+which the DESIGN page no longer calls (the pivot): its budgets are AeroBO's
+`api.recommended_search` (sections 109 / 164 / 240, the wing 42 / 53 / 87),
+its weights and gates AeroBO's V3 ones (`aerobo_bridge.WING_WEIGHTS` /
+`PLATE_WEIGHTS` / `SCREEN_GATES`, the wing without `cdcr`, D9), and its gate
+AeroBO's (below). They stay true of the modules, which keep their
+self-checks.*
 
 The SEARCH DEFAULTS are AeroBO's measured ones, not hand-picked numbers.
 `drive/aero/optimize.py` carries its frozen `data/search_budget.json` payload:
@@ -123,14 +180,59 @@ finished; `locked` is *not here* and no upstream work opens it. A section
 group is finished by FITTING its section to the wing, never by optimising:
 AeroBO's stage 2 docstring says the search is optional, and the endplate
 group carries an explicit "fly FLAT plates" answer so that no gate makes a
-design decision compulsory.
+design decision compulsory. (Since the pivot the DESIGN page's gate is
+AeroBO's own, `DesignSession.state`: a section stage is finished by a
+DECISION -- a ranked section taken, the search's winner taken, or the
+family's own section kept (`SurfaceModel.decline`) -- and no section stage
+gates the wing, which flies the family's own sections until one is chosen.)
+
+On the MISSION and DESIGN pages the gate is AeroBO's, per STAGE
+(`design_shell`, task 43). The navigator is `design_shell.CaeTree`, still a
+`Nav` (every call above is kept, and the plain `select` still refuses a shut
+step with its reason). The tree shows five stages -- `1 Mission`,
+`2 Airfoil`, `2.8 Endplate`, `3 Wing`, `4 Results` -- each with a state glyph
+decided in this order: the base state (`check_circle` done, `radio_button_unchecked`
+ready, `lock` locked, `cancel` error when the mission's lap does not close),
+then `pending` (running) while a screen, search, law or report of that
+stage is live on AeroBO's worker (over done), then `play_circle` (active)
+on the selected unfinished stage. A locked stage refuses a click or a key
+with an info toast quoting its reason; INSIDE an unlocked stage every view
+is reachable (`nav.select(view, force=True)`, what the tree, tabs, crumbs,
+links and prev / next all go through) and a view with nothing to show draws
+its empty state. Each stage row carries a chip naming what it holds -- the
+circuit and surface, the wing's section and its t/c (also before the mission
+is stated, from the slot's library wing; after it, `NACA 2412 (the family's
+own)` until a section is taken), the plates' section (or `fences — no plate
+section`), the wing's searched dimension and objective (`14-D · efficiency`),
+the result's best score in AeroBO's units (`15.43 CZ/CD`, or `lap 50.289 s`)
+-- so the chosen airfoil is on screen in every view. The tree EXPANDS ON
+SELECT: a fresh garage shows `1 Mission` open and
+the rest collapsed; selecting a stage opens it for good, the twisty only
+toggles, and nothing collapses a stage by itself. A collapsed stage's steps
+are not drawn and not hit-recorded: `nav._hits` holds the step rows drawn
+this frame (so `_hits[2]` is `af.section` once `2 Airfoil` is open and
+revealed), and stage rows, twisties and the mission's rows are in
+`nav._node_hits`.
 
 `Nav`, `ParamList` and `ListBox` record the geometry they drew and hit-test
-it, so every page is driven by the mouse as well as the keyboard, and the
-mouse does the same things: a click on the left or right half of a `< value >`
-is a LEFT or a RIGHT, an action row selects on the first click and fires on
-the second, the wheel moves the selection, and the navigator's gate refuses a
-click exactly as it refuses an arrow key.
+it, so every page is driven by the mouse as well as the keyboard. On the car,
+airfoil and library pages the mouse does what it always did: a click on the
+left or right half of a `< value >` is a LEFT or a RIGHT, an action row
+selects on the first click and fires on the second, the wheel moves the
+selection, and the navigator's gate refuses a click exactly as it refuses an
+arrow key. On the MISSION and DESIGN pages every control is a `cae.form.Form`
+widget and behaves as AeroBO's: a BUTTON FIRES ON THE FIRST CLICK; a weight
+or a fraction is a SLIDER (a click sets the snapped value under it, a drag
+applies once a frame, and a `costly` row -- anything that re-flies the
+lattice -- only on release); a number field shows its step arrows on hover
+or keyboard focus and takes typed digits; a choice is a toggle group or a
+drop-down; a flag is a switch. Only button 1 clicks (2 and 3 do nothing;
+4 / 5 are the wheel's echo), the wheel (`MOUSEWHEEL` only) scrolls the pane
+under the cursor and never moves a selection, SHIFT+wheel scrolls a wide
+table sideways. The `Form` records every control of the view in draw order
+(`order`, the keyboard's path, off-screen ones included: focusing one
+scrolls it into view) and hit-records only the visible ones (`_hits`). A
+control the live run's lock covers draws disabled and says why on hover.
 
 `drive/aero/screen.py` is AeroBO's `airfoil_select.score_candidates` in
 carsim's units, and it owns the one thing the garage was asking in the wrong
@@ -460,6 +562,21 @@ def self_check() -> None
   (`load = throttle_map(pedal × thr_scale) × tc_scale`) so the scheduler's
   `N_UP = n_up_a + k·throttle` and the assist's `n_tgt` still see the pedal —
   a TC that cut the pedal made the auto box upshift at 3600 rpm and hunt.
+* **The automatic and the limiter / the stop (task 45, owner-approved physics
+  change).** `n_up_schedule` is capped at `n_cut - (1 + N_UP_SOFT_MARGIN) ·
+  n_soft` (`N_UP_SOFT_MARGIN = 0.25`; the Corsa's 1-2 WOT line 6150 -> 6050,
+  the bus's 2480 -> 2439.5), so the line never sits in the soft limiter's fade;
+  `accel_run` uses the same schedule. Inside the 0.8 s lockout an UPSHIFT is
+  still taken when the engine is in the fade band at throttle > 0.9 (road
+  speed agreeing as always). `_assist_pedal(p, inp, g, v_x, n_e)` is the
+  launch / anti-stall assist plus, on the automatic only, a **brake hold**
+  (brake > 0.3, throttle <= 0.02, the gear's input speed under idle: clutch
+  fully open, the engine idles in gear) and a **locked-wheel release** (road
+  speed above the target but the engine under idle: the clutch opens through
+  the anti-stall band). On the automatic the engage ramp never closes the
+  clutch further than `_assist_pedal` would. Manual and clutch modes are
+  unchanged. V20's trace does not reach an upshift line, the limiter or a
+  stop: its sha is unchanged (`ed41b7f781e959ea`).
 * **Rev-match blip** (`auto_clutch` only): through the gate and engage phases of
   a DOWNSHIFT the engine is fuelled to `min(n_input(target gear), n_cut − 150)`,
   proportional over `n_blip_band = 800 rpm`, dead inside `n_blip_min = 150`.
@@ -748,7 +865,8 @@ panels out sum (side forces cancel, drags add: the air brake). The roll and
 load-transfer terms read one `F_dev` at the force-weighted `h_w`. A `None`
 top entry leaves the top wing on its own law. `wing_cmd is None` is the
 published path bit-for-bit (the suite, 33/33, is unmoved). Users reach it
-with `G` (auto / left / right / both); `drive.ml`'s free-wings policy head
+with `G` (`drive/airbrake.py`'s modes: AIR BRAKE, TOP, TOP FIXED, TOP FIX+SIDE,
+LEFT, RIGHT; AUTO is `None`); `drive.ml`'s free-wings policy head
 (5 outputs: steer, pedal, wing_l, wing_r, wing_top; 373 parameters) emits
 it, and is what `--swarm` breeds by default. The anchor's wing rule enters
 that head as a ±`policy.WING_PRIOR` prior per wing, composed at
@@ -762,7 +880,7 @@ The TOP wing is new physics, all of it exactly 0.0 when `top is None`:
 
 ```
 top_cmd = wing_on                                          (mode 'fixed')
-        = wing_on and (brake > 0.05 or |delta| > DEV_DEADBAND), held TOP_HOLD = 0.8 s   ('active')
+        = wing_on and (brake > TOP_BRAKE_ON = 0.05 or |delta| > DEV_DEADBAND), held TOP_HOLD = 0.8 s   ('active')
 dep_top = smoothstep(top_raw), actuator t_ext / t_ret as the flank
 F_top   = dep_top * q * S * CZ                             # DOWN, positive
 D_top   = q * S * (dep_top * CD + (1 - dep_top) * CD_stowed)
@@ -1031,7 +1149,9 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
 * **Pause menu.** `ESC` / OPTIONS / START -> `'menu'`. `set_menu(True)` puts
   every input in menu mode: the keyboard emits only `MENU_KEYS`
   (`nav_up`/`nav_down`/`nav_left`/`nav_right`/`select`/`menu`/`reset`/
-  `full_reset`/`garage`) and reads all held keys as released; the pad emits
+  `full_reset`/`garage`/`ghosts`, the digits, and since task 45 `track_next`
+  on TAB -- read only by the pause page and the TIME TRIAL page) and reads
+  all held keys as released; the pad emits
   `MENU_PAD_NAMES` edges plus left-stick up/down (and left/right) through
   `menu.StickNav`. Entering menu mode SEEDS the
   pad's edge state from the live buttons (the OPTIONS press that opened the
@@ -1236,23 +1356,40 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
   closed-form kwargs (bit-identical to `WingDesign.cfg_kwargs`) whenever both
   flanks carry the same published panel and there is no top wing, else
   `dev_left / dev_right / top` built by `DevAero.from_aero` / `TopAero.from_aero`
-  (a top wing is re-analysed at its slot height first: ground effect).
+  (a library top wing is re-analysed at its slot height first: ground effect;
+  an AeroBO wing flies its stored law, derived from AeroBO's own evaluator
+  at the slot's height and incidence and re-derived if the slot moved).
   `hud_kwargs(lib)` -> the HudData fields above. Persisted to
   `runs/garage_design.json` as `{"version": 2, "slots": ...}`; a v1
   `WingDesign` file upgrades to the same panel on both flanks. Pages: CAR
   (the 3-D view, three slots, `1 2 3` / TAB select, arrows place, `W` cycles
   the slot's library wing, `M` mirror, `T` top mode, `SPACE` deploy preview,
-  `ENTER` drive), MISSION (`D` / `L3` / the pause menu, for the selected
-  slot: circuit and surface rows, the lap of the car as it stands against the
-  bare car, `ENTER` STATES it -- `Garage.open_section` refuses until it is
-  stated), DESIGN (`Nav` over `DESIGN_TREE`: AIRFOIL / ENDPLATE / WING /
-  RESULTS, four steps each; `TAB` steps / rows, `ENTER` does the step, `L`
-  screens, `O` optimises the selected group with a random-search twin at the
-  same budget, `K` continues, `F` fits the section to the wing and advances,
-  `S` saves to the library under a NEW name when the origin is built-in, `X`
-  queues XFOIL, `N` renames, `A` the airfoil page; `ESC` steps back to the
-  mission, then the car; live lattice, spanwise cl, polar, the
-  affine/quadratic laws), AIRFOIL (`A`: the section library ranked by the
+  `ENTER` drive), MISSION and DESIGN (task 43: both drawn and driven by
+  `design_shell`, AeroBO's light CAE shell -- menu bar, tool bar (Start the
+  design over, Save, **Run**, **Stop**, previous / next stage, the crumbs, the
+  slot / circuit / surface chips), the Simulation tree, Properties, the tab
+  strip, the work area, the Output log and the status bar. MISSION = stage
+  `1 Mission` (`D` / `L3` / the pause menu), three views -- Operating point,
+  Design point, Search & budget -- for the selected slot: circuit and
+  surface, the lap of the car as it stands against the bare car, where the
+  search settings come from (AeroBO's recommended plan: 164 / 164 / 53 at
+  balanced -- or own budgets), *stop when it stops improving*; `State the
+  mission` / `ENTER` / Run STATES it through `Garage.state_mission()`
+  (re-stating an unchanged mission keeps the design stages; a changed
+  circuit, surface or car clears the slot's session; `Garage.open_section`
+  refuses until it is stated). DESIGN = `CaeTree` over `DESIGN_TREE`:
+  `2 Airfoil` / `2.8 Endplate` / `3 Wing` / `4 Results`, four views each (the
+  16 step keys), every one a view of the slot's `aerobo_models.DesignSession`.
+  Every screen and search is AeroBO's engine on a worker thread
+  (`design_jobs.EngineJob`), drained by `Garage.frame` (`RUNNING · k/N`, the
+  status bar's `<evaluator> evaluation k/N · phase · elapsed · ≈ left` and
+  its bar); Stop is AeroBO's stop rule (the evaluation in flight finishes,
+  the best is kept: `STOPPED · k/N`); Keep going is AeroBO's resume (nothing
+  re-flies, the counter continues at k + 1). `S` puts the fitted wing on the
+  car (`WingModel.commit`: the wing and its sections saved to the library, the
+  slot's incidence -- and on the top its height -- written back, the right
+  flank mirrored); the keys are the table below),
+  AIRFOIL (`A`: the section library ranked by the
   AeroBO screen weights at the design cl / Re, section + polar plots, `X`
   queues XFOIL in a worker thread, `N` a NACA-4 code), LIBRARY (`L`: wings and
   builds; ENTER puts a wing in the selected slot if its role matches, or
@@ -1260,6 +1397,35 @@ def steer_limit_pair_deg(V, beta_deg, ...same kwargs...) -> tuple[float, float]
   chosen section (flank: vertical, suction side to the car; top: inverted,
   stowed on the deck, raised to its slot on deploy), painter's-sorted,
   backface-culled; the CAR page draws three wings in ~7 ms.
+
+  **The MISSION and DESIGN pages' keys** (`design_shell`, `DesignShell._keydown`
+  / `pad`). A KEYDOWN goes first to an open dialog, menu or drop-down, then to
+  a number field being typed into (every key), then to this table. The focus
+  is one of three REGIONS, `tree` -> `tabs` -> `work` (`shell.region`,
+  mirrored into the two-valued `dp.focus`: tree / tabs = `"nav"`, work =
+  `"rows"`); its ring shows only after a key or the pad, and a click moves the
+  region and hides the ring. The pad is the keys it stands for (PS names):
+  d-pad and left stick = arrows, CROSS = ENTER, CIRCLE = ESC, SQUARE = F5,
+  TRIANGLE = TAB, R1 = `]`, L1 held = fine; OPTIONS is the garage's pause menu.
+
+| input | tree | tabs | work |
+|---|---|---|---|
+| `↑` `↓` | walk the VISIBLE rows, selecting as it goes (a view row shows that view, a stage row its remembered view; a locked stage is stepped over); on the mission page a design stage's row leaves it | -- | `form.nav(∓1)` in draw order, off-screen controls included (focusing one scrolls it in); on a Ranking view the table cursor |
+| `←` `→` | `nav.nav_group(∓1)` (design page, pinned); fold / unfold the stage (mission page) | previous / next view of the stage | `form.adjust(∓1)`, SHIFT / L1 fine; a locked control toasts why |
+| `ENTER` | `dp.act()`, the step itself; mission page: `g.state_mission()` | as tree | the focused control (a button fires, a switch flips); on a Ranking view takes the row (`dp.act()`); mission page: a control that is not a button states the mission (pinned) |
+| digits `.` `-` | | | on a focused number field: start typing (`ENTER` commits, `ESC` cancels) |
+
+| input (any region) | does |
+|---|---|
+| `TAB` / `SHIFT+TAB` | next / previous region |
+| `[` / `]` | previous / next view of the current stage |
+| `PAGE UP` / `PAGE DOWN`, `HOME` / `END` | scroll the work area (a focused table pages first) |
+| `F5` | Run the current stage: state the mission; screen the library, or on Shape optimisation optimise the shape; launch the wing (then show Convergence); on Results fetch AeroBO's design report if there is none yet (else a toast). Busy: a toast |
+| `ESC` | a run in state `running`: Stop (AeroBO's stop rule: the evaluation in flight completes, nothing more flies, the best is kept); `stopping`: a toast, not Back; otherwise `g.close_page()` (design -> mission -> car, committing a dirty wing) |
+| `L` `O` `K` `F` `S` `X` `N` `A` | design page only (pinned): screen / optimise / keep going / take the section (a ranked one, the optimised one on Shape optimisation, the family's own plate on 2.8's Section before a screen) / put the wing on the car / a line saying the sections' polars are AeroBO's XFOIL sweeps / rename / the airfoil page; every one refused with a toast while a run is live |
+| `F1`, `?` | the *Keys and controller* dialog; `?` / `F1` on a focused control with help opens its help popup |
+| `H` | the wing tutor's box (the garage's, before the shell) |
+
 * `drive/aero/` (no pygame): `airfoil` (NACA-4, UIUC .dat, CST), `panel2d`
   (Hess-Smith, validated: NACA 0012 a = 6.91/rad, 4412 alpha_L0 = -4.26 deg),
   `polar` (`Polar` table; `estimate_polar` = panel slope + friction/form-
@@ -1677,8 +1843,10 @@ garage's hooks: `Garage.tutor` (a `WingTutor` or None) and
 `Garage.frame` calls `tutor.update(self, action)` after the events and
 `tutor.draw(self)` after the page (before the menu); `_menu_open` adds its
 rows (`wt_start` / `wt_resume`, or `wt_skip` / `wt_hide` / `wt_end` while it
-runs) and `_menu_action` runs them; `H` toggles the box; a mouse event on the
-box (`WingTutor.hit`) is the box's, not the page's under it. The garage menu
+runs) and `_menu_action` runs them; `H` toggles the box (not while a number
+field on the shell pages is being typed into: every key is the field's then);
+a click or a wheel notch on the box (`WingTutor.hit`) is the box's, not the
+page's under it -- checked before the shell sees the event. The garage menu
 takes the mouse through `input._menu_mouse`. A tutor inside the design chain
 whose state is gone (a new garage: no stated mission; a re-opened design
 page: its section gates re-locked) walks back to the first step that is
@@ -1689,14 +1857,71 @@ page's `wt_garage` row sets `Sim.wing_tutor_start` and goes to the garage,
 where it starts (or continues). The last step passes on the garage's
 `'drive'`.
 
+On the MISSION and DESIGN pages (task 43) the hooks are the same and the
+geometry is the shell's. The box has two places, picked by `g.page` in
+`WingTutor.layout` / `draw`: `BOX_CAR` (748, 468, 520, 212 at 1280x800, x the
+page's scale; `BOX` is its alias) on the car and library pages, dark as
+before; and `g.shell.geom(W, H).tutor_box` on the shell pages -- the work
+area's lower right, above the Output pane, light (the CAE theme's text) --
+each growing upward by at most `BOX_GROW` (312 px tall). `anchor_rect(g,
+anchor)` reads what the last draw recorded: `('bar',)` is the TOOL BAR on
+the shell pages (the key bar on the airfoil and library pages, nothing on
+the car); `('tool', id)` a tool button (`g.shell.tool_rect(id)`: the `fit`
+step points at `('tool', 'save')`); `('nav', key)` the tree's step row from
+`nav._hits`, else -- its stage folded or scrolled out -- the stage's row from
+`nav._node_hits`, else the Simulation pane's body, never None on the design
+page; `('row', key)` a control of the page's `Form` while it is visible
+(`Form.rect_of`); `('list', name)` a list of the library page. A control laid
+out below the fold is scrolled in ONCE, when its step first finds it laid out
+(`WingTutor._reveal` sets `form.reveal`), so the player can scroll away
+again. The prose names the shell's labels (*2 Airfoil ▸ Library screening*,
+the *'Fit it and choose the endplate's section'* button on *2 Airfoil ▸
+Section*, *3 Wing ▸ Design box*, *4 Results ▸ Summary*); the dark pages print
+`▸` as `>`. Screening is live, so the `screen` step passes on a frame after
+the screen finishes. The self-check replays AeroBO's captured runs
+(`aerobo_models.use_fixtures()`: the same job path, no engine, no XFOIL),
+pumps them to their end (`g.runs.run_all()`), and asserts that no resolved
+anchor lies under the
+box at its full height at 1280x800 and 1600x1000 (T4) and that every anchor
+resolves on the 1600x1000 shell (T5).
+
 **Challenges** (`drive/challenges.py`, task 25). A player session with a
-garage library has `Sim.challenge_build = (opts.build_json, lib)`, and with
-it the pause page's `challenges` row (pages `'challenges'` and `'challenge'`,
-`_challenge_event`). Start sets `Sim.challenge_pick` and restarts;
-`run_interactive_cli` (`_challenge_switch`) remembers the player's
-track / car / engine / surface (and radius / cw) in `opts.challenge_prev`,
-moves the settings to the challenge's class, and `_interactive_session`
-attaches a `ChallengeRun` when the build passes `refusals` (else a HUD note).
+garage library has `Sim.challenge_build = (opts.design_json -- the WORKING
+build, task 44 -- or opts.build_json, lib)`, and with it the pause page's
+`challenges` row (pages `'challenges'` and `'challenge'`,
+`_challenge_event`). Task 44: the detail page opens with the rows
+`set:ch_car` / `set:ch_cfg` (LEFT / RIGHT -> `prev:` / `next:`, ENTER or a
+click -> next; `Sim._ch_step`) -- task 45: no `ch_info` row any more, the
+whose-wings line (`challenges.wings_line`, the garage's player names) is
+the WINGS section's first row, and the page opens on Start; the pick is
+`Sim.ch_pick = (car, config)` (None: `_ch_combo`'s default, the car being
+driven with 'full'), kept on `opts.ch_pick` by `_challenge_switch` and
+restored at every session's start. The page and the list show
+`challenges.resolve(file, car, config)`; its stats are `build_stats` of
+`config_build(working build, lib, car, config)`. A combo that is not
+`available` has no Start, and `ch_go:` refuses it. Start sets
+`Sim.challenge_pick` (and `ch_pick`) and restarts;
+`run_interactive_cli` (`_challenge_switch`) resolves the combo (no pick:
+the file's car, 'full'; unavailable: nothing starts), remembers the
+player's track / car / engine / surface (and radius / cw) in
+`opts.challenge_prev`, moves the settings to the combo's class (the car
+swapped), and `_drive_design` drives `config_build(design, lib, car,
+config)` instead of the plain fitted copy while `opts.challenge` has a
+config (`opts.design_json` stays the working build). `_interactive_session`
+attaches a `ChallengeRun` when that copy (`opts.build_json`) passes
+`refusals` (else a HUD note), and `_challenge_wings(sim)` starts it armed
+in AUTO (AIR BRAKE kept on a config with side wings). In a run, G
+(`handle_event('wing_side')`) steps only `challenges.g_modes(config)`:
+AUTO / AIR BRAKE with side wings; a top-only config leaves the mode and
+notes "the challenge sets the wings". A stop held at v0 (`StopHold`, task
+42) is a reset's pose every held step, which starts every wing stowed;
+`Sim._hold_top(ctl)` then puts the top wing as it rides at v0 -- out
+(`state.top_raw = top_deploy = 1.0`) when armed and `airbrake.cruise_top
+(mode)` says so, or, where that is None (AUTO, AIR BRAKE), when the slot is
+'fixed'; else in -- on every held step and on the step it lets go (a
+reference's pedal is at full on the first step, so it is never held). Not
+the step's `wing_cmd`: a held step may carry a pedal on its way down, and
+AIR BRAKE's top wing comes out on the brake. The flanks stay stowed.
 Its hooks: `step_physics` calls `challenge.event(self, e)` per LapTimer
 event and `challenge.step(self)` after every step (after `n` / `t`);
 `reset` calls `challenge.reset()`; `hud_data` puts `challenge.overlay(self)`
@@ -1711,8 +1936,13 @@ counted). A class changed elsewhere (TAB, the settings page) ends it and
 them back. A challenge pick ends the driving tutorial and a tutorial
 started during a challenge ends the challenge. No per-map build switch
 while a challenge runs. The drag area counts EACH fitted flank panel's own
-D/q (G can put both out). V35 re-runs every
-reference (3 stars, the file's value exactly) and the page flow.
+D/q (G can put both out). V35 re-runs a subset of the references (every
+challenge on corsa / full, plus one other car + config each, rotating: 3
+stars, refs.json's value exactly) and the page flow; V44p drives the Car /
+Wings rows, the list, a combo not for its car, G in a run and the next
+sessions' cars and copies through `_loop_run` (a step's `combo`), and a
+held stop's top wing at the let-go (`Sim._hold_top`: ONLY TOP, FIXED's out,
+ONLY TOP's in, the reference's and a player's alike).
 
 **The race grid and the swarm panel** (task 26). `RACE_GRID_MAX =
 race_grid.GRID_MAX` (5) slots, `RACE_GRID` / `C_RIVALS` from `race_grid`;
@@ -1810,8 +2040,8 @@ circuit and `trk.on_tarmac` on a track with areas.
 
 Keys: `↑` throttle, `↓` brake, `←/→` steer, `LSHIFT` fine, `Z` clutch,
 `SPACE` handbrake, `S` starter, `E`/`Q` shift up/down, `F` flank wing, `G`
-wing side (auto / left / right / both), `R` reset, `SHIFT+R` full reset, `P` pause, `O` single step,
-`[`/`]` slow-mo, `C` camera, `-`/`=`/`0` zoom, `H` HUD, `V` vectors, `B` g-g,
+wing mode next (`SHIFT+G` back), `R` back to the last sector line, `SHIFT+R` restart the lap, `P` pause, `O` single step,
+`[`/`]` slow-mo, `C` camera, `-`/`=`/`0` zoom, `H` HUD, `V` force arrows (`Settings.vectors`), `B` g-g,
 `N`/`X` skid, `T` wet, `M` marker, `L` record, `K` arm a seed lap, `J`
 ghosts, `TAB` next map, `BACKSPACE` garage, `ESC` pause menu / settings. PS5
 pad map: section 6.
@@ -1826,11 +2056,12 @@ pad map: section 6.
 * `LapTimer.restart()` resets the running lap and keeps `best_lap`, `last_lap`, `sector_best`.
   `reset()` is still the full wipe. `Sim.reset(to_checkpoint=False)` uses `restart()`. A
   checkpoint reset with the clock running sets `lap._valid_run = False`.
-* `Sim.reset(..., standing=False)`: a full reset uses `Sim._rolling_pose()` -> `(s0, V0, gear)`
-  only on `trk.CIRCUITS` in a time-trial session (prerace page or recorder) with no rivals,
-  challenge or active tutorial. `s0 = L - min(150, 0.15 L)`,
-  `V0 = min(22, sqrt(0.8 G / max|kappa| on [s0, L]))`. Otherwise it is a standing start at
-  `s = 0`. The seed lap passes `standing=True`.
+* `Sim.reset(..., standing=False)`: a full reset uses `Sim._rolling_pose()` -> `(s0, V0, gear)`,
+  else a standing start at `s = 0`. The seed lap passes `standing=True`. *Superseded in
+  task 45* (where it rolls, and the pose: see that section's "Rolling starts"). The task-39
+  rule, for the record: only on `trk.CIRCUITS` in a time-trial session (prerace page or
+  recorder) with no rivals, challenge or active tutorial, `s0 = L - min(150, 0.15 L)`,
+  `V0 = min(22, sqrt(0.8 G / max|kappa| on [s0, L]))`.
 * `hud_data()`: `lap_valid` is now the RUNNING lap's (`True` on the out-lap). Plus
   `lap_void_why` (`''` when valid) and `out_lap_m` (metres to the line before the first
   crossing on a closed track, outside challenges; else `None`), set as attributes after
@@ -1904,7 +2135,8 @@ legacy one-panel `WingDesign`) counts as official.
   lap.
 * Challenges: `build_stats` returns `unlimited` and `over_limits`. An
   Unlimited run is judged by the challenge's own rules and counted in
-  `progress.json`'s section `challenges_unlimited` (`{cid: {best, stars}}`,
+  `progress.json`'s section `challenges_unlimited` (`{key: {best, stars}}`,
+  the key `'<id>|<car>|<config>'` since task 44, as in `challenges`;
   never nested in `challenges`); the box, the list and the detail show an
   Unlimited best / stars beside the official one; `total_stars` and
   `menu_row` are official only.
@@ -2042,6 +2274,199 @@ that declares none (section 4).
   `Sim.start_race` places rivals with it. Stock grids are unchanged.
 * `ml.evaluate.bot_test_scale`: own_aids cars get `max(1, sqrt(ay_Corsa /
   ay_car))` on the Test budget; the stock cars 1.0.
+
+### Task 44 part A (the wing modes) -- interface additions
+
+The owner (2026-09-25): "Mode wing always on (with and without side)", "No All 3",
+and "Top wing would represent the normal wing a car has. Just hide and no use for
+side wing." The G / TRIANGLE cycle is now
+
+| mode | int | label | flanks | top wing | `wing_cmd` |
+|---|---|---|---|---|---|
+| AUTO | 0 | `AUTO` | published law | its slot's mode | `None` |
+| AIR BRAKE | 3 | `AIR BRAKE` | law; both out braking | out braking | as task 35 |
+| TOP | 4 | `TOP` | stowed, hidden | ACTIVE law, whatever the slot says | `(False, False, law)` |
+| TOP FIXED | 5 | `TOP FIXED` | stowed, hidden | always out | `(False, False, True)` |
+| TOP FIX+SIDE | 6 | `TOP FIX+SIDE` | published law | always out | `(None, None, True)` |
+| LEFT / RIGHT | 1 / -1 | as before | one panel | its slot's mode | as before |
+
+* ALL 3 (2) is gone: `airbrake.ALL`, its cycle entry, `challenges.REF_WING_MODES["all"]`.
+  2 is not reused, so an old in-process `opts.wing_mode == 2` is not restored.
+  `REF_WING_MODES` gains `top` / `top_fixed` / `top_fixed_side` (V38 drives them).
+* TOP's law is the physics' active top wing on the free path, the same arithmetic
+  (`vehicle.TOP_BRAKE_ON`, new, the 0.05 that was a literal in `_aero`; `TOP_HOLD`;
+  `veh.dev_deadband`), its hold in `AirBrake.top_hold`, seeded from
+  `veh.state.top_hold` on entering the mode: on an 'active' slot it deploys the top
+  wing exactly as AUTO does (V38: to 0.0, the same stop to the bit).
+* `next_mode(m, cfg)` skips the TOP modes without a top wing (`usable`); the Sim's G
+  passes `self.veh.cfg`, and a session restores `opts.wing_mode` only when `usable` on
+  its car. The refusal on a car with no wing at all is unchanged.
+* `hud_data()`: in TOP / TOP FIXED (`flanks_hidden`), once the flanks are in
+  (`wing_deploy <= 0`), `dev_left = dev_right = False` and `wing_type = 'off'`: the
+  car is drawn without flank panels and the HUD's FLANK line shows none.
+* `hud_data()`: the aero panel's TOP line reads the MODE's top law in the TOP modes
+  (`top_mode = 'active'` in TOP, `'fixed'` in TOP FIXED / TOP FIX+SIDE), over the garage
+  slot's `hud_cfg['top_mode']` (the task 44 review).
+* G calls `AirBrake.g_changed(old, new, veh)` after the mode changes (the task 44
+  review). The next `command()` takes the car's side latch and top hold afresh and the
+  pedal state starts off: AUTO never calls `command()`, so a challenge run's AIR BRAKE ->
+  AUTO -> AIR BRAKE kept the first stint's latch. Leaving a TOP mode for one where the
+  physics' ACTIVE top law runs again, the car's `state.top_hold` is stale (frozen while
+  the top wing was commanded); it is NOT written on the key press (a recorded lap
+  re-simulates from its controls, and a G press is not a control), so `handing` keeps
+  the top wing on the free path, on the same law with `AirBrake.top_hold` (TOP's own; 0
+  after a FIXED mode), until a step where the law triggers afresh; from there the car's
+  hold is fresh and the command is the mode's own again. `Sim.step_physics` merges
+  `command()` in AUTO only while `handing` (never on a scripted path: V20); the Sim's
+  reset clears it. V38 pins both (and that such a run replays bit for bit).
+* The tutorial's wing ON lap accepts `airbrake.FLANK_LAW` (AUTO, AIR BRAKE, TOP
+  FIX+SIDE) and refuses LEFT / RIGHT / TOP / TOP FIXED ("G (TRIANGLE) steps it back
+  to AUTO").
+* Help texts: `input.MENU_HELP_KB` / `MENU_HELP_PAD` / `KEY_HELP`, `drive.KEYS_HELP`,
+  `controls_page.CONTROLS` ("wing mode (air brake, top)"). `render`'s self-check holds
+  the widest label (`TOP FIX+SIDE`) whole on the aero panel and the minimal chip at
+  eight UI scales.
+
+### Task 44 part C (the title screen) -- interface additions
+
+* `run_interactive_cli` shows the title (`_title_screen`, drive/title.py) once, after the
+  settings, the build and the progress are loaded and before the loop, when `_title_wanted(opts)`:
+  `_player_session(opts)` and none of `TITLE_SKIP` (`garage`, `race`, `challenge`, `tutorial`,
+  `ml_drive`, `swarm`, `swarm_resume`, `replay`, `script`, `seed_lap`, `headless`,
+  `pad_calib`, `self_check`; read with getattr) is set. Its pick: `quit` returns 0 (through the
+  loop's `finally`); `garage` sets `mode = "garage"` (with a garage); `challenges` /
+  `tutorial` / `settings` (`TITLE_PAGES` == `title.PAGES`) set `opts.open_page`; `drive`
+  changes nothing. The title never stops a launch: one that cannot open is `drive`. The pad
+  it ends with is the loop's `pad`.
+* `_interactive_session` reads `opts.open_page` once (and clears it): `Sim.open_page(page)`
+  opens the pause menu on the Settings / Challenges / Tutorial page (the pause page when the
+  session cannot list that page: no progress file, no garage library; False without a
+  renderer) in place of WELCOME and the pre-race page. WELCOME is then not marked offered.
+* `_title_bottom(...)` -> `[("CAR", ..), ("MAP", ..), ("BUILD", ..)]`: the build the loop's
+  first pass drives (the map's memory by the first pass's own test, `_track_build`, quietly).
+* `_loop_run(..., title="drive", titles=None)`: the title is stubbed to pick `title` (each
+  call's bottom line appended to `titles`), the garage (`_painted_garage`) to hand the build
+  back and drive (a `{'garage': True}` row); each session row carries `page`. V44.
+* `title._SceneRenderer` overrides `Renderer._draw_car3d` (the car pass) and reads / restores
+  `render._CAR`, `render._PAINT`, `_st`, `_ctl`, `_spin`, `_spin_t`, `_spin_w`: a change to
+  those in `render.py` must keep `title.self_check` row 7 passing.
+* The title quits at once only on `quit`: ESC (its own key map, `title._title_keys()`:
+  `input.MENU_KEYS` with ESC -> `quit` and no P) and the window's close. `menu` (a right
+  click, a pad's OPTIONS) and `back` (CIRCLE) move the cursor to Quit (the task 44 review:
+  a right click or P closed the game). `input.KeyboardInput.menu_keys` (default
+  `MENU_KEYS`) is the map read while `menu` is set; a screen with its own keys sets it.
+
+### Task 45 (player audit, rounds 2 and 3) -- interface additions
+
+Round 2 (31 fixes) and round 3 (the owner's four answers). `.handoff/45-player-audit.md`.
+
+* **Rolling starts.** `Sim._rolling_pose()` -> `(s0, V0, gear)` covers every closed map in
+  a time-trial session (circuits, the open map's perimeter, the skidpad), lap and circle
+  challenges (with a window), and the tutorial's `TUTORIAL_ROLLING` steps (with a window).
+  None -- a standing start -- on the dragstrip, in a race, a stop or strip challenge, the
+  tutorial's other steps and a scripted Sim (no recorder, no pre-race page). The pose is
+  on a straight (`|kappa| < ROLL_STRAIGHT_KAPPA`, 0.005 1/m), the first case that applies:
+  1. the straight INTO the line, where it is at least `ROLL_RUNIN_MIN_M` (45 m) long and
+     leaves `ROLL_CLEAR_S` (3 s) at V0 before the first corner past the line: at its
+     start, at most `ROLL_RUNIN_MAX_M` (250 m, and `ROLL_BACK_MAX_FRAC` 0.35 L) out; V0
+     22 m/s;
+  2. else the nearest straight back from the line that has `ROLL_CLEAR_S` at V0 before
+     its corner: the further out of `ROLL_BACK_M` (150 m, 0.15 L) and `ROLL_CLEAR_S` at
+     V0 before that corner, never before the straight's start; V0 the run-in's tightest
+     corner at 0.8 g, capped at 22 m/s;
+  3. else the nearest straight at least `ROLL_STRAIGHT_M` (15 m) long, at its start, V0
+     cut to its length / `ROLL_CLEAR_S`;
+  4. no straight (the skidpad): `L - min(150, 0.15 L)`, in the circle at `ROLL_CORNER_G`
+     0.5 g x the wet (the tutorial's circle at `ROLL_TUTORIAL_G` 0.3 g, round 3).
+
+  Cases 1-3 never start behind the last split line nor more than `ROLL_BACK_MAX_M`
+  (400 m, 0.35 L) out, so the pose is inside the last sector. `gear` is the first the
+  automatic holds at V0 on full throttle. `s0` per map (V45 pins them): arena 1106.2 m
+  (case 3: out of the R = 35 m T6 hairpin, 143 m to the line, 30 m of straight to T7
+  in 3 s at 10 m/s = 36 km/h), linden 1060.4, kestrel 1843.3, ashdown 1330.5 (case 1:
+  50 / 70 / 59.5 m out at 22 m/s), open 1492.7 (case 2: 150 m out, 18.8 m/s), skidpad
+  267.0 (case 4: 47 m back). The pose before this rule put the arena's car 16 m before
+  that hairpin: holding UP was the gravel in 2 s (the round-3 review).
+
+  `R` with no lap running or in the first sector is that rolling start with a fresh
+  clock; past a split it is the sector line and voids the lap. Round 3:
+  `Sim.roll_time_trial()` is called once in
+  `_interactive_session` after the race block, so a time trial opens rolling with or
+  without the pre-race page (not a challenge, the tutorial, rivals, or where
+  `_rolling_pose()` is None); it posts RACE's note unless one is already up.
+* **Timing (round 3).** `LapTimer.update(..., counts=True)`: `counts=False` (the recorder
+  is not recording and no tutorial practice lap) closes the lap as LAST but gives no BEST
+  and no sector best, and gives back the sector bests the lap set (`_sec_best0`, taken at
+  each lap start). `LapTimer.void_last()` puts back BEST and the sector bests from
+  `_undo` when `step_physics` sees `recorder.last['valid']` False for a lap closed this
+  step ('not a full lap'). `lap_valid` still means off track only. A run with no recorder:
+  an off-track lap no longer sets sector bests. Records re-simulation and V20 unchanged.
+* **HUD.** `hud_data()` adds `last_valid` (`lap.lap_valid` AND the recorder's verdict on
+  the last lap; a tutorial practice lap ignored), `global_wet` and (round 3) `stop_board`
+  (`ChallengeRun.marks(sim)`: (marker s, board s) or None). `render._delta_text(d)`: `|d| <
+  0.005` reads `'0.00'` in `C_HUD_TEXT`. The bottom bar carries only short flags; game
+  notes are a toast above it. A stall reads `render.STALL_AUTO` (`'engine stalled: S to
+  restart'`) on the automatic and as the short fallback, `STALL_MANUAL` on the manual boxes.
+* **Keys and settings.** `H` cycles minimal -> full -> off; `Settings.vectors` (default
+  False) is `V`, saved; Settings has a HUD row. `SHIFT+G` -> `'wing_side_prev'`. TAB is
+  `MENU_KEYS['track_next']` on the pause and TIME TRIAL pages. The pause page gains
+  `title` (Main menu) and a quit that asks twice; during a challenge it is a short page
+  (`ch_this`, `challenges`, `full_reset` as Retry, `reset` on laps). The pause footer reads
+  `R sector line   SHIFT+R restart lap` (round 3).
+* **Garage.** `Garage.run()` may return `'title'`. `R` / the menu's reset and the
+  library's `DEL` need a second press within `ARM_S` (2.5 s); `U` undoes a reset; BACKSPACE
+  never deletes. Round 3: `GARAGE_HELP_KB` / `GARAGE_HELP_PAD` are 17 + 8 rows of at most
+  `HELP_TEXT_MAX` (32) characters; build names in the menu rows are cut to `MENU_NAME_MAX`
+  (10, `_menu_name`); the wing tutorial's skip row has no step title. The default row
+  reads `Set as <car> default  (now: <name>)`, so the menu, wing tutorial on, fits
+  1280x720, 1280x800, 1440x900 and 1600x900 with no help line wrapped
+  (`_check_menu_fits`).
+  `Garage.try_ready_made()` selects the first empty slot (left, right, top) on the car page
+  and presses `W` once; background 'wing data' notes do not cover its hint.
+* **Pre-race (round 3).** `prerace.no_wings(build_json)`; `PreRace.offers_wings()` (a
+  garage and no wing in any slot) adds `TRY_WINGS` -> `'pr_wings'` under Edit and its help
+  line (`PreRace.help()`). `pr_wings` ends the session to the garage with
+  `Sim.garage_try_wing`, which `run_interactive_cli` carries on `opts.garage_try_wing`
+  into `Garage.try_ready_made()`. `PreRace.unsaved()` (a library to miss from, and not
+  saved) is the one '(not saved)' rule for the page, the pause subtitle and Settings.
+  `drive.NO_WINGS_NOTE` points at `W`.
+* **Challenges, round 2.** The box's `flash` is the result alone, `warn` what it lacks
+  (`result_warn`); `combo_best` reads a pre-task-44 per-challenge entry as the Corsa /
+  'full' combo's; the list has the Car / Wings rows.
+* **Challenges, the pause row (round 3).** `pick_stars(progress, car='corsa',
+  config='full', allc=None, refs=None)` -> (got, of): one pick's official stars, 3 per
+  challenge it can drive, as the list's rows count them. `menu_row(progress, run=None,
+  car='corsa', config='full')` says that pick's ('Challenges: 3 of 24 stars (this car +
+  wings)'; with a run, its title); the pause page passes `Sim._ch_combo()`, the list's
+  subtitle uses the same `pick_stars`, and `total_stars` is only its '(all: ...)'.
+* **Challenges, the stop board (round 3).** `MARKER_T = 3.0` s of v0, `BOARD_TOL = 1.0` m.
+  `board_marks(ch)` -> (marker s, board s) = (`START_S + MARKER_T·v0`, marker + the
+  3-star distance) on a measured stop, else None. `stars_for(ch, value, stats, miss=None)`:
+  on a stop with a board the 3rd star is `|miss| <= BOARD_TOL` (the nose past the board,
+  short < 0) plus the 3-star build rule, on top of the 2-star distance. `nose_x(car)` is
+  `bodies.body(car).x_front`. `ChallengeRun` gains `board`, `miss`, `board_line`,
+  `nose_s(sim)`, `marks(sim)`, `aim(sim)` (the overlay's new `aim` key, drawn amber /
+  green by `render._draw_tutorial`). `measure(..., brake_at=None)` holds the reference on
+  until its nose reaches `brake_at` (`_BrakeAt`; the references themselves brake at once,
+  refs.json unchanged by the board) and returns `miss`; `board_brake_s(ch)` is where the
+  reference brakes to stop on the board (V35). `scenery.stop_board_rects(tr, marks)`,
+  `PAINT_MARKER` / `PAINT_BOARD_DARK` (world.PAINT_RGB keys 3, 4); `World.marks` paints
+  them and `_stop_uprights` stands cones and checker boards in chase.
+* **Challenges, the player's setup (round 3).** A challenge keeps the player's ABS, TC,
+  gearbox, ballast and wings (unchanged); the page and the result say what differs.
+  `ref_setup(ch)` (ABS / TC from `ref`, `REF_GEARBOX = 'auto'`; `measure` reads it),
+  `player_setup(settings)`, `setup_diffs(ch, setup, parts, stats)` (TC not flagged on a
+  stop), `setup_note`, `setup_section` (YOUR SETUP, `menu.Warn` rows),
+  `result_warn(ch, value, n, stats, setup=None, parts=None)`, `detail(..., setup=None)`,
+  `ChallengeRun(..., parts=None)`. `wings_line` names built-in wings by
+  `garage.wing_shown`. `menu.Warn(str)` draws a help row amber (`C_WARN`);
+  `Menu.show(note_under=False)` puts the note under the items' key legend.
+* **Tutorial (round 3).** `frame_of` carries `push_g` (|`Vehicle.F_wing`| / m g) and
+  `mass`; the ON lap's result has `push_g` / `push` (N); the wing page's last row and the
+  done page show it (`PUSH_MIN_G` = 0.002: below it, "hardly out"). `TUTORIAL_WING` stays
+  `'plate'` (the bigger ready-made side wing). A drive step started in a new session or a
+  resumed tutorial starts from its own start (`Tutorial.tick`'s `fresh`); the circle's
+  roll-in before the first crossing is not judged.
 
 ## 9. Reconciliations (where the subsystem specs disagreed)
 

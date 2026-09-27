@@ -893,7 +893,9 @@ MODULES = ("tyre", "powertrain", "track", "telemetry", "vehicle", "input", "pain
            "aero.library", "aero.screen", "aero.section", "aero.mission",
            "records", "prerace", "medals", "ghosts", "progress", "tutorial",
            "wing_tutorial", "challenges", "race_grid", "swarm_panel", "results", "airbrake", "controls_page",
-           "scenery", "world", "props", "fx")
+           "scenery", "world", "props", "fx", "title",
+           "cae.theme", "cae.widgets", "cae.plot", "cae.chrome", "design_jobs", "design_shell",
+           "design_shots", "aerobo_bridge", "aerobo_models")
 
 
 def group_M():
@@ -932,7 +934,7 @@ def group_W(quick):
     # W1  the lattice port reproduces AeroBO's VLM (aerobo.vlm.VLM, N=40)
     w = AV.rect(8.0, 1.0, N=40)
     r = w.solve(5.0)
-    chk("W", "vortex lattice == AeroBO reference (AR 8 rectangle)",
+    chk("W", "vortex lattice == WingLab reference (AR 8 rectangle)",
         "CL_alpha 4.55942959749662, e 0.9742625474419787 to 1e-9",
         f"CL_alpha {w.CLa:.12f}, e {r.e:.12f}",
         near(w.CLa, 4.55942959749662, 1e-9) and near(r.e, 0.9742625474419787, 1e-9), hard=True)

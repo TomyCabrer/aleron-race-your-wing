@@ -341,9 +341,9 @@ def self_check(verbose: bool = True) -> bool:
     # the AeroBO lattice's own number for this wing (aerobo.vlm.VLM, N = 40):
     # 4.55942959749662 /rad, e 0.9742625474419787 -- reproduced here to
     # round-off, which is the port's correctness gate
-    rep("AR 8 rectangle: CL_alpha == AeroBO's lattice", abs(w.CLa - 4.55942959749662) < 1e-9,
+    rep("AR 8 rectangle: CL_alpha == WingLab's lattice", abs(w.CLa - 4.55942959749662) < 1e-9,
         f"{w.CLa:.12f} /rad (Helmbold's lifting-line estimate would be 5.03)")
-    rep("AR 8 rectangle: e == AeroBO's", abs(r.e - 0.9742625474419787) < 1e-9, f"e {r.e:.12f}")
+    rep("AR 8 rectangle: e == WingLab's", abs(r.e - 0.9742625474419787) < 1e-9, f"e {r.e:.12f}")
     rep("symmetric loading", np.allclose(r.Gamma, r.Gamma[::-1], atol=1e-10), "")
     r2 = w.solve(10.0)
     rep("CDi quadratic in alpha", abs(r2.CDi / r.CDi - 4.0) < 1e-6, f"ratio {r2.CDi / r.CDi:.6f}")

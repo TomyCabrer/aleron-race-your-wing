@@ -105,6 +105,32 @@ CAR = CorsaC()
 #: different question (`drive.drive --scripted accel`), not a wing mission.
 TRACKS = ("arena", "linden", "kestrel", "ashdown", "open", "skidpad")
 
+#: The top wing's one job that is not a circuit. The owner, 2026-09-25: "One
+#: more circuit should be added 'Stopping'. Left flank and right flank, should
+#: be side." A straight-line stop from `MissionSpec.v_stop_kmh`, as the Stop
+#: from 100 challenge (drive/data/challenges/01_brake_100.json) runs it, timed
+#: by `stop` below with the SAME braking model the lap's braking zones use.
+STOPPING = "stopping"
+#: What the TOP wing's mission select offers: the circuits, then the stop.
+JOBS = TRACKS + (STOPPING,)
+#: The side wings' jobs (`MissionSpec.side_track`): the circuits -- the
+#: owner, 2026-09-26, "why no longer circuits?": a side wing is bought for a
+#: circuit like the top wing, its side force pays in that circuit's corners --
+#: and the stop (the owner, 2026-09-26: "Side wing should also have
+#: 'stopping' mission"). A side wing's stop is the AIR BRAKE's
+#: (drive/airbrake.py): both flanks out while the car brakes, their side
+#: forces cancel and their drags add (`SIDE_STOP_FLANKS`).
+SIDE_JOBS = TRACKS + (STOPPING,)
+#: Flank panels out in a stop: the top wing's stop keeps the lap's braking
+#: zones' one (`_resistance`); a side wing's is the air brake's pair.
+SIDE_STOP_FLANKS = 2
+#: A job in words, where a sentence names it ("the stopping job's own").
+JOB_WORDS = {STOPPING: "stopping"}
+#: The stop's start speed, km/h: the Stop from 100 challenge's, and the band
+#: the page offers (the Air brake challenge starts at 150).
+V_STOP_KMH = 100.0
+V_STOP_BAND = (40.0, 250.0)
+
 #: Below this curvature a segment is a STRAIGHT for the mission's purposes.
 #: 1/1200 m^-1: at the arena's own speeds a 1200 m radius costs under 0.01
 #: m/s of corner speed, so calling it a straight changes no lap time this
@@ -396,12 +422,15 @@ def _mu(fz: float, mu_scale: float) -> float:
     return max(mu_scale * (qss.TYRE["mu_ref"] + qss.TYRE["s"] * (fz - qss.TYRE["Fz_ref"])), 0.0)
 
 
-def _resistance(V: float, aero: MissionAero, deployed: bool, car: CorsaC = CAR) -> float:
+def _resistance(V: float, aero: MissionAero, deployed: bool, car: CorsaC = CAR,
+                flanks: int = 1) -> float:
     """Everything resisting the car on a straight at speed V, N: the body's
-    drag, the wing's drag (stowed or deployed) and rolling resistance."""
+    drag, the wing's drag (stowed or deployed) and rolling resistance.
+    `flanks` panels are out when deployed: one (a corner's), or the air
+    brake's two (`SIDE_STOP_FLANKS`), whose side forces cancel."""
     cd_a = aero.cd_a if deployed else aero.cd_a_stowed
     d = 0.5 * RHO * (car.CdA + cd_a) * V * V + car.Crr * car.m * G
-    return d + (aero.d_dev(V) if deployed else 0.0)
+    return d + (flanks * aero.d_dev(V) if deployed else 0.0)
 
 
 def accel(V: float, aero: MissionAero, deployed: bool, mu_scale: float = 1.0,
@@ -427,7 +456,7 @@ def accel(V: float, aero: MissionAero, deployed: bool, mu_scale: float = 1.0,
 
 
 def brake(V: float, aero: MissionAero, deployed: bool, mu_scale: float = 1.0,
-          car: CorsaC = CAR) -> float:
+          car: CorsaC = CAR, flanks: int = 1) -> float:
     """Braking deceleration available at V, m/s^2, POSITIVE.
 
     All four tyres, at the loads of the moment including downforce. TYRE
@@ -441,7 +470,76 @@ def brake(V: float, aero: MissionAero, deployed: bool, mu_scale: float = 1.0,
     fz_f, fz_r = axle_static(aero, V, car)
     grip = (2.0 * _mu(0.5 * fz_f, mu_scale) * (0.5 * fz_f)
             + 2.0 * _mu(0.5 * fz_r, mu_scale) * (0.5 * fz_r))
-    return (grip + _resistance(V, aero, deployed, car)) / car.m
+    return (grip + _resistance(V, aero, deployed, car, flanks)) / car.m
+
+
+# --------------------------------------------------------------------------- #
+#  the stop                                                                    #
+# --------------------------------------------------------------------------- #
+#: Speed steps of the stop's quadrature. The integrand V / a(V) is smooth and
+#: a(V) >= mu*g never vanishes, so 400 trapezoids sit within a millimetre of
+#: 4000 (measured, `self_check`).
+N_STOP_STEPS = 400
+
+
+@dataclass
+class StopResult:
+    """A straight-line stop from `v0` to rest (`stop`)."""
+    distance: float = math.inf                       # m
+    time: float = math.inf                           # s
+    v0: float = 0.0                                  # m/s
+    ok: bool = False
+    notes: list = field(default_factory=list)
+    #: the stop as a curve, ~40 points from v0 to rest: distance travelled
+    #: since the brakes went on (m) and the speed there (m/s) -- the page's plot
+    d_curve: list = field(default_factory=list)
+    v_curve: list = field(default_factory=list)
+
+    @property
+    def decel_mean(self) -> float:
+        """v0 / time, m/s^2: the stop's mean deceleration."""
+        return self.v0 / self.time if self.ok and self.time > 0.0 else 0.0
+
+    def to_json(self) -> dict:
+        return asdict(self)
+
+
+def stop(v0: float, aero: MissionAero | None = None, mu_scale: float = 1.0,
+         car: CorsaC = CAR, n: int | None = None, flanks: int = 1) -> StopResult:
+    """A straight-line stop from `v0` (m/s) to rest: distance = the integral
+    of V / a(V) dV and time = the integral of dV / a(V), with a(V) the lap's
+    own braking deceleration (`brake`, the wings deployed -- an active top
+    wing is out under brake). Tyre-limited on all four wheels with the
+    downforce of the moment, plus every drag on the car and rolling
+    resistance: the same assumption the lap's braking zones make.
+
+    Why this is the stop's objective and AeroBO's "downforce + drag" ranks
+    it: the deceleration is mu*(m*g + downforce) + drag + the rest, and the
+    two wing terms both scale with V^2, so across wings the shortest stop is
+    the one with the most mu*downforce + drag at every speed. At mu = 1 that
+    is downforce + drag exactly; below it (damp, wet) drag is worth more
+    than that ranking says.
+
+    `flanks`: the flank panels out. A side wing's stop is the air brake's
+    (`SIDE_STOP_FLANKS`, `MissionSpec.stop_flanks`): both panels, their side
+    forces cancel, so a side wing stops the car with its drag alone."""
+    v0 = float(v0)
+    aero = aero if aero is not None else MissionAero()
+    if not (v0 > 0.0 and math.isfinite(v0)):
+        return StopResult(distance=0.0, time=0.0, v0=max(v0, 0.0), ok=v0 == 0.0,
+                          notes=[] if v0 == 0.0 else [f"no stop from {v0!r} m/s"])
+    N = int(n or N_STOP_STEPS)
+    vs = np.linspace(0.0, v0, N + 1)
+    a = np.array([brake(float(v), aero, True, mu_scale, car, flanks) for v in vs])
+    if not np.all(a > 0.0):
+        return StopResult(v0=v0, notes=["the car cannot decelerate at some speed"])
+    g = vs / a
+    upto = np.concatenate(([0.0], np.cumsum(0.5 * (g[1:] + g[:-1]) * np.diff(vs))))
+    dist = float(upto[-1])
+    k = max(1, N // 40)
+    return StopResult(distance=dist, time=float(np.trapezoid(1.0 / a, vs)), v0=v0, ok=True,
+                      d_curve=[float(dist - x) for x in upto[::-k]],
+                      v_curve=[float(v) for v in vs[::-k]])
 
 
 # --------------------------------------------------------------------------- #
@@ -595,6 +693,10 @@ def lap(profile: TrackProfile, aero: MissionAero | None = None,
 @dataclass
 class MissionSpec:
     """The mission the garage has STATED: which circuit, in what conditions.
+    Or STOPPING (`track == STOPPING`): a straight-line stop from
+    `v_stop_kmh`, in the same conditions. The side wings have a job of their
+    own, `side_track` (`SIDE_JOBS`: a circuit or the stop, from the same
+    `v_stop_kmh`), in the same conditions: `for_side()` is their mission.
 
     Held by the garage across the three design pages, which is the whole point
     of stating it first -- the section and the wing are both scored against
@@ -608,7 +710,12 @@ class MissionSpec:
     track: str = "arena"
     mu_scale: float = 1.0
     stated: bool = False
+    v_stop_kmh: float = V_STOP_KMH
+    side_track: str = "arena"
     _profile: TrackProfile | None = field(default=None, repr=False, compare=False)
+    _side: "MissionSpec | None" = field(default=None, repr=False, compare=False)
+    #: this is `for_side()`'s spec: a stop is flown on the air brake
+    _is_side: bool = field(default=False, repr=False, compare=False)
 
     #: Surface conditions offered, and the scale each puts on tyre grip. The
     #: wet number is PUBLISHED (`track.MU_WET_SCALE`, 0.55/0.87 from
@@ -618,10 +725,47 @@ class MissionSpec:
     def profile(self, make_track) -> TrackProfile:
         """The circuit, built once. `make_track` is `drive.track.make_track`,
         passed in rather than imported -- CONTRACT section 1 keeps
-        `drive/aero` free of the simulator."""
+        `drive/aero` free of the simulator. A stop has no circuit: ValueError."""
+        if self.is_stop:
+            raise ValueError(f"a stop has no circuit: it is a straight-line stop from "
+                             f"{self.v_stop_kmh:.0f} km/h")
         if self._profile is None or self._profile.name != self.track:
             self._profile = TrackProfile.from_track(make_track(self.track))
         return self._profile
+
+    def for_side(self) -> "MissionSpec":
+        """The side wings' mission: their own job (`side_track`: a circuit
+        or the stop) in the same conditions, stated when this one is. Kept
+        between calls, so the circuit is built once."""
+        t = self.side_track if self.side_track in SIDE_JOBS else "arena"
+        m = self._side
+        if m is None or m.track != t:
+            m = self._side = MissionSpec(track=t, _is_side=True)
+        m.mu_scale, m.stated, m.v_stop_kmh, m.side_track = (self.mu_scale, self.stated,
+                                                            self.v_stop_kmh, t)
+        return m
+
+    @property
+    def is_stop(self) -> bool:
+        return self.track == STOPPING
+
+    @property
+    def stop_flanks(self) -> int:
+        """Flank panels out in this mission's stop (`stop(flanks=)`): the air
+        brake's pair on a side wing's, the lap's one on the top wing's."""
+        return SIDE_STOP_FLANKS if self._is_side else 1
+
+    @property
+    def v_stop(self) -> float:
+        """The stop's start speed, m/s."""
+        return float(self.v_stop_kmh) / 3.6
+
+    @property
+    def job_key(self) -> str:
+        """The job as a session signature reads it: the circuit's name, or
+        the stop WITH its start speed (a different stop is a different
+        design point)."""
+        return f"{STOPPING} {self.v_stop_kmh:.0f} km/h" if self.is_stop else self.track
 
     @property
     def surface(self) -> str:
@@ -631,13 +775,18 @@ class MissionSpec:
         return f"mu x{self.mu_scale:.2f}"
 
     def to_json(self) -> dict:
-        return dict(track=self.track, mu_scale=self.mu_scale, stated=self.stated)
+        return dict(track=self.track, mu_scale=self.mu_scale, stated=self.stated,
+                    v_stop_kmh=self.v_stop_kmh, side_track=self.side_track)
 
     @classmethod
     def from_json(cls, d: dict) -> "MissionSpec":
+        lo, hi = V_STOP_BAND
         return cls(track=str(d.get("track", "arena")),
                    mu_scale=float(d.get("mu_scale", 1.0)),
-                   stated=bool(d.get("stated", False)))
+                   stated=bool(d.get("stated", False)),
+                   v_stop_kmh=min(max(float(d.get("v_stop_kmh", V_STOP_KMH)), lo), hi),
+                   side_track=(str(d.get("side_track")) if d.get("side_track") in SIDE_JOBS
+                               else "arena"))
 
 
 # --------------------------------------------------------------------------- #
@@ -776,6 +925,72 @@ def self_check(verbose: bool = True) -> bool:
         t_bad = lap(pf, MissionAero(k_dev=k, ld_dev=0.4, x_w=0.97, h_w=0.90)).time
         rep("a panel that drags more than it turns is not", t_bad > base,
             f"{t_bad:.4f} s ({t_bad - base:+.4f})")
+
+    #  7. the stop (the owner's 'Stopping' job)
+    v0 = V_STOP_KMH / 3.6
+    s0 = stop(v0)
+    s_fine = stop(v0, n=4000)
+    rep("the stop's quadrature has converged", s0.ok and abs(s0.distance - s_fine.distance) < 1e-3,
+        f"{s0.distance:.4f} m at {N_STOP_STEPS} steps vs {s_fine.distance:.4f} m at 4000")
+    #  with no speed-dependent force the stop is v0^2 / (2 a): no drag, no
+    #  rolling resistance and no downforce, so the tyre loads never change
+    import copy as _copy
+    flat = _copy.copy(CAR)
+    flat.CdA, flat.Crr = 0.0, 0.0
+    a_flat = brake(v0, MissionAero(), True, 1.0, flat)
+    s_flat = stop(v0, MissionAero(), 1.0, flat)
+    rep("no drag, no downforce: the stop is v0^2 / (2 a), by hand",
+        abs(s_flat.distance - v0 * v0 / (2.0 * a_flat)) < 1e-6 * s_flat.distance,
+        f"{s_flat.distance:.4f} m vs {v0 * v0 / (2.0 * a_flat):.4f} m")
+    s_df = stop(v0, MissionAero(cz_a=1.0, x_t=0.0))
+    s_dr = stop(v0, MissionAero(cd_a=0.5, cd_a_stowed=0.5))
+    rep("downforce and drag both shorten the stop", s_df.distance < s0.distance
+        and s_dr.distance < s0.distance,
+        f"bare {s0.distance:.2f} m, CZ*S 1 {s_df.distance:.2f} m, CD*S 0.5 {s_dr.distance:.2f} m")
+    s_wet = stop(v0, MissionAero(), 0.632183908)
+    rep("the wet stop is longer", s_wet.distance > s0.distance,
+        f"{s_wet.distance:.2f} m vs {s0.distance:.2f} m dry")
+    m = MissionSpec.from_json({"track": STOPPING, "v_stop_kmh": 150.0})
+    back = MissionSpec.from_json(m.to_json())
+    old = MissionSpec.from_json({"track": "arena", "mu_scale": 1.0, "stated": True})
+    try:
+        m.profile(lambda n: None)
+        refused = False
+    except ValueError:
+        refused = True
+    rep("a stopping mission round-trips, has no circuit, and an old save loads at 100 km/h",
+        back.is_stop and back.v_stop_kmh == 150.0 and refused and old.v_stop_kmh == V_STOP_KMH
+        and m.job_key != MissionSpec(track=STOPPING).job_key and STOPPING in JOBS
+        and STOPPING not in TRACKS,
+        f"{back.job_key}; old save {old.job_key} @ {old.v_stop_kmh:.0f} km/h")
+    #  8. the side wings' own job (the owner, "why no longer circuits?"; "Side
+    #     wing should also have 'stopping' mission")
+    sm = MissionSpec(track=STOPPING, mu_scale=0.8, stated=True, side_track="kestrel")
+    sv = sm.for_side()
+    back = MissionSpec.from_json(sm.to_json())
+    rep("the side wings fly their own circuit in the car's conditions; it round-trips, an "
+        "old save or an unknown job falls back to arena",
+        sv.track == "kestrel" and sv.mu_scale == 0.8 and sv.stated and not sv.is_stop
+        and sm.for_side() is sv and back.side_track == "kestrel" and old.side_track == "arena"
+        and MissionSpec.from_json({"side_track": "moon"}).side_track == "arena"
+        and sm.stop_flanks == 1,
+        f"top {sm.job_key}, side {sv.job_key} ({sv.surface}); old save side {old.side_track}")
+    #  9. ...and the side wings' stop: the air brake, both panels out
+    ss = MissionSpec(track="linden", v_stop_kmh=150.0, side_track=STOPPING)
+    sv = ss.for_side()
+    back = MissionSpec.from_json(ss.to_json())
+    fl = MissionAero(k_dev=1.2, ld_dev=3.0, x_w=0.0)
+    one, two = stop(ss.v_stop, fl), stop(ss.v_stop, fl, flanks=sv.stop_flanks)
+    v = 30.0
+    rep("a side wing's stop is the air brake's: offered, from the car's stop speed, round-trips; "
+        "both panels' drag, no side force",
+        STOPPING in SIDE_JOBS and sv.is_stop and sv.v_stop_kmh == 150.0 and sv.stop_flanks == 2
+        and back.side_track == STOPPING and not ss.is_stop
+        and two.distance < one.distance < stop(ss.v_stop).distance
+        and abs(_resistance(v, fl, True, flanks=2) - _resistance(v, fl, True)
+                - fl.d_dev(v)) < 1e-9,
+        f"side {sv.job_key}; from 150 km/h: bare {stop(ss.v_stop).distance:.2f} m, one panel "
+        f"{one.distance:.2f} m, the pair {two.distance:.2f} m")
 
     return ok
 

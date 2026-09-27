@@ -256,6 +256,12 @@ class AirfoilSpec:
     points: list = field(default_factory=list)
     notes: str = ""
     builtin: bool = False
+    #: WHERE A DESIGNED SECTION CAME FROM: the library section it was seeded
+    #: from, and what was done to it ("e423, optimised"). Empty for anything
+    #: the library shipped or a user typed in. A fitted CST refit used to carry
+    #: no provenance at all, so the library grew near-duplicates nobody could
+    #: trace back to the section they were made from.
+    origin: str = ""
 
     _cache: np.ndarray | None = field(default=None, repr=False, compare=False)
 
@@ -293,7 +299,7 @@ class AirfoilSpec:
                    code=str(d.get("code", "2412")), file=str(d.get("file", "")),
                    w_upper=list(d.get("w_upper", [])), w_lower=list(d.get("w_lower", [])),
                    points=list(d.get("points", [])), notes=str(d.get("notes", "")),
-                   builtin=bool(d.get("builtin", False)))
+                   builtin=bool(d.get("builtin", False)), origin=str(d.get("origin", "")))
 
     def fingerprint(self) -> str:
         """A short stable hash of the shape (the polar cache key)."""

@@ -8,28 +8,16 @@
     "max_ballast": 0
   },
   "goal": {
-    "metric": "lap_time",
-    "threshold": 81.68745454415672
+    "metric": "lap_time"
   },
   "stars": {
-    "2": {
-      "threshold": 77.3113409078626
-    },
     "3": {
-      "threshold": 74.39393181699987,
       "efficiency": {
-        "max_cda": 0.7
+        "max_wing_area": 0.4
       }
     }
   },
   "ref": {
-    "driver": "lapdriver:0.90",
-    "build": "none",
-    "value": 72.9352272715685,
-    "x": [
-      1.12,
-      1.06,
-      1.02
-    ]
+    "driver": "lapdriver:0.90"
   }
 }

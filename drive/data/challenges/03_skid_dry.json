@@ -2,37 +2,20 @@
   "kind": "carsim-challenge-1",
   "id": "skid_dry",
   "title": "Hold the circle",
-  "blurb": "One flying lap of the 50 m skidpad, line to line, as much lateral g as the car will hold. Flank wings only.",
+  "blurb": "One flying lap of the 50 m skidpad, line to line, as much lateral g as the car will hold. Anticlockwise: steer left and follow the road ring's centre line.",
   "class": "skidpad|corsa|sport|none",
-  "constraints": {
-    "slots": [
-      "left",
-      "right"
-    ]
-  },
+  "constraints": {},
   "goal": {
-    "metric": "skid_ay",
-    "threshold": 0.6547538364415798
+    "metric": "skid_ay"
   },
   "stars": {
-    "2": {
-      "threshold": 0.6918153743533674
-    },
     "3": {
-      "threshold": 0.7189453890338916,
       "efficiency": {
         "max_wing_area": 0.4
       }
     }
   },
   "ref": {
-    "driver": "lapdriver:0.85",
-    "build": "plate",
-    "value": 0.7333242968145695,
-    "x": [
-      1.12,
-      1.06,
-      1.02
-    ]
+    "driver": "lapdriver:0.85"
   }
 }

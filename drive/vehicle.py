@@ -124,6 +124,8 @@ DEV_HOLD = 0.30                     # s    sign must persist this long
 DEV_DEP_LOCKOUT = 0.05              # -    no side change while dep > this
 TOP_HOLD = 0.80                     # s    an 'active' top wing stays out this
                                     #      long after brake/steer trigger drops
+TOP_BRAKE_ON = 0.05                 # -    ... and comes out at a pedal past this
+                                    #      (drive/airbrake.py's TOP reads both)
 
 S_DEV = 0.35            # m^2  ONE panel (ledger.S_DEV).  Exactly one panel is
                         #      ever active: crossover/ledger/qss all build
@@ -1165,7 +1167,7 @@ class Vehicle:
             if m_top is not None:
                 cmd_t = 1.0 if (m_top and ctl.wing_on) else 0.0
             elif top.mode == "active":
-                want_t = bool(ctl.wing_on) and (ctl.brake > 0.05
+                want_t = bool(ctl.wing_on) and (ctl.brake > TOP_BRAKE_ON
                                                 or fabs(ctl.delta) > self.dev_deadband)
                 if want_t:
                     st.top_hold = TOP_HOLD
@@ -2252,6 +2254,60 @@ def brake_run(v0: float = 100 / 3.6, pedal: float = 0.45,
                 kappa_min=kmin, v_end=veh.u, abs_steps=abs_steps)
 
 
+#: the wet surface's grip, as drive.py's MU_WET_SCALE hands it to step()
+_MU_WET = 0.632183908
+
+
+def auto_corner(car, deg: float, T: float = 10.0, dt: float = DT_PHYS) -> dict:
+    """Task 45: full throttle from rest on the AUTOMATIC, TC and ABS on, a
+    constant road-wheel steer from 1 s. Returns the seconds spent on the
+    rev limiter in each gear and the gears in the order they went in."""
+    veh = Vehicle(car, VehicleConfig(mu_scale=car.mu_scale, tc_on=True, abs_on=True))
+    veh.reset(V=0.0, gear=1)
+    lim, seq, t = {}, [1], 0.0
+    while t < T:
+        ctl = Controls(throttle=1.0, delta=radians(deg) if t > 1.0 else 0.0)
+        veh.step(ctl, _MU1, _MU1, dt)
+        t += dt
+        if veh.on_limiter:
+            lim[veh.gear] = lim.get(veh.gear, 0.0) + dt
+        if veh.gear > 0 and veh.gear != seq[-1]:
+            seq.append(veh.gear)
+    return dict(limiter=lim, gears=seq, V=math.hypot(veh.u, veh.v))
+
+
+def auto_stop(car, v0: float = 80 / 3.6, mu: float = 1.0, hold: float = 3.0,
+              go: float = 3.0, dt: float = DT_PHYS, abs_on: bool = True) -> dict:
+    """Task 45: a full stop on the AUTOMATIC, TC on, from v0 in the gear the
+    box would be in there (challenges' rolling-start rule), the brake held
+    `hold` s past the stop, then pulled away on a 0.3 pedal for `go` s."""
+    veh = Vehicle(car, VehicleConfig(mu_scale=car.mu_scale, tc_on=True, abs_on=abs_on))
+    p = veh.pt_p
+    g0 = next((k for k in range(1, len(p.gear))
+               if ptm.rpm_at_speed(p, k, v0) < ptm.n_up_schedule(p, k, 1.0)), len(p.gear))
+    veh.reset(V=v0, gear=g0)
+    MU = (mu,) * 4
+    ever, t, t_stop, d = False, 0.0, None, 0.0
+    while t < 30.0:
+        veh.step(Controls(brake=1.0), MU, _MU1, dt)
+        t += dt
+        d += veh.u * dt
+        ever = ever or veh.stalled
+        if t_stop is None and math.hypot(veh.u, veh.v) < 0.05:
+            t_stop = t
+        if t_stop is not None and t >= t_stop + hold:
+            break
+    held = dict(gear=veh.gear, rpm=veh.rpm, stalled=veh.stalled,
+                clutch_open=ptm.clutch_engagement(p, veh.pt_s.clutch_auto) <= 0.0)
+    t_go = 0.0
+    while t_go < go:
+        veh.step(Controls(throttle=0.3), MU, _MU1, dt)
+        t_go += dt
+        ever = ever or veh.stalled
+    return dict(g0=g0, t_stop=t_stop, distance=d, held=held, ever=ever,
+                v_go=veh.u, p=p)
+
+
 def coast_down(v0: float = 30.0, dt: float = DT_PHYS, settle: float = 0.6,
                T: float = 30.0) -> dict:
     """Neutral coast.  Reports du/dt after the slip states settle, the force
@@ -2798,6 +2854,55 @@ def validate(verbose: bool = True) -> bool:
         and abs_lck["abs_steps"] > 0,
         "the aid is OFF in every other rig; a locked front axle cannot steer, "
         "which on a keyboard is every hard stop")
+
+    # ---------------- T45 task 45: the automatic box ------------------
+    #  (a) FULL THROTTLE IN A CORNER never parks the engine on the limiter.
+    #  The upshift line used to be 50 rpm under the cut, inside the soft
+    #  limiter's fade: the Corsa at 12 deg never left 1st (4.9 s of 10 on
+    #  the limiter), the Express at 4 deg stayed in 2nd at 5951 rpm, 1 rpm
+    #  short of its line (3.1 s); at 4 deg every car sat there 0.29-3.11 s
+    #  in some gear. The row drives every car at 4 deg and the Corsa at 12.
+    #  NOT covered, and reported: a FWD car in a tight corner spinning its
+    #  unloaded inside wheel (the Express at 8-12 deg, the wheel at twice
+    #  the road speed; 2.9 s at 8 deg before and after) -- the road does not
+    #  agree with the engine there, so the box holds the gear by design
+    #  (powertrain._auto_target).
+    runs = [(k, 4.0) for k in _cars.CAR_ORDER] + [("corsa", 12.0)]
+    worst, txt = 0.0, []
+    for k, deg in runs:
+        rc = auto_corner(_cars.CARS[k], deg)
+        w = max(rc["limiter"].values()) if rc["limiter"] else 0.0
+        worst = max(worst, w)
+        txt.append(f"{k}@{deg:.0f} {w:.2f} s {''.join(str(g) for g in rc['gears'])}")
+    chk("T45a full throttle in a corner, AUTO box",
+        "; ".join(txt), "< 0.20 s on the limiter in any gear", worst < 0.20)
+    #  (b) THE AUTOMATIC NEVER STALLS IN A STOP, sits with its clutch open at
+    #  idle while the brake is held, then pulls away on the throttle with no
+    #  gear change to wait for. Before: every Corsa and Express stop stalled
+    #  in the last downshift's engage and restarted, and the bus from 80 on
+    #  the wet stalled in each engage from 1.2 m/s down and ended dead ('2
+    #  AUTO 200 rpm STALL' on the player's screen); with ABS off the locked
+    #  driven wheels dragged the Corsa, the Express and the bus to a stall at
+    #  13-18 m/s. Dry and wet with ABS, dry without. (Off both pedals the
+    #  540i does not creep: its governed idle, 559 rpm, sits 9 rpm over the
+    #  anti-stall floor. That is as before task 45 and not tested here.)
+    txt, ok_stop = [], True
+    for k in _cars.CAR_ORDER:
+        for mu_w, abs_w, tag in ((1.0, True, "dry"), (_MU_WET, True, "wet"),
+                                 (1.0, False, "dry, ABS off")):
+            rs = auto_stop(_cars.CARS[k], mu=mu_w, abs_on=abs_w)
+            h = rs["held"]
+            good = (not rs["ever"] and rs["t_stop"] is not None and h["clutch_open"]
+                    and h["rpm"] > rs["p"].n_stall + 50.0 and rs["v_go"] > 1.0)
+            ok_stop = ok_stop and good
+            if tag == "dry" or not good:
+                txt.append(f"{k} {h['gear']}/{h['rpm']:.0f}"
+                           + ("" if good else f" [{tag}: stalled {rs['ever']}, "
+                                              f"open {h['clutch_open']}, "
+                                              f"v_go {rs['v_go']:.2f}]"))
+    chk("T45b automatic stop from 80: dry, wet, no ABS",
+        "held gear/rpm " + ", ".join(txt),
+        "never stalls, clutch open at idle, pulls away on 0.3 pedal", ok_stop)
 
     # determinism
     veh = Vehicle(car, VehicleConfig())

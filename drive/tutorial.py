@@ -9,7 +9,8 @@ Thirteen data-driven steps, `Step(id, map, kind, title, text, hint, check, ...)`
   5 assists     (page)   what ABS, TC, the steering aid and the gearbox do
   6 wing_off    skidpad  one circle with the flank wing OFF (F / CIRCLE)
   7 wing_on     skidpad  one circle with it ON
-  8 wing_result (page)   the two laps' mean lateral g, and the difference
+  8 wing_result (page)   the two laps' mean lateral g, the difference, and
+                         the wing's own push on lap 2 (always > 0)
   9 timing      (page)   sectors, the PB ghost, the delta, the medals
  10 lap         arena    one valid lap
  11 manual_intro (page)  OPTIONAL: the manual gearbox -- try it, or skip both
@@ -40,8 +41,18 @@ on its Tutorial page: skip the step, start over, end the tutorial.
 A step names its MAP; when the session is on another one the tutorial asks
 for a restart and `drive.run_interactive_cli` moves the map (the session is
 rebuilt there: TAB cannot leave a map the tutorial is on). The wing steps
-need a flank wing: a car without one gets the library's published plate for
+need a flank wing: a car without one gets the library's side plate for
 those laps (`wing_car`, in memory only, never saved).
+
+What the wing did (round 3 of task 45, the owner: "ON vs OFF differs
+visibly"). On the 50 m circle, at about 72 km/h, a flank panel is worth
+about 1 % of corner speed at the limit, so the two laps' mean g mostly
+shows how hard each was driven (a player measured 0.6727 g OFF, 0.6726 g
+ON). Lap 2 therefore also measures the wing's own PUSH: the panel's mean
+side force over the lap (`Vehicle.F_wing`), in N and in g of the car's
+weight -- the part of the corner the tyres did not have to find. It is
+never below zero, it is on the live line while lap 2 is driven, and it is
+the wing page's last row and the done page's.
 
 Progress lives in `runs/progress.json`, section `tutorial`
 (drive/progress.py): offered, the step reached, done, skipped steps and the
@@ -50,7 +61,11 @@ runs never read it. The tutorial is offered once, on the first launch, and
 is always in the pause menu.
 
 Nothing here touches the physics: the tutorial reads the sim, and the only
-thing it does to it is a reset to the line when a step starts from there.
+thing it does to it is a reset when a step starts from its start -- the
+line, or the rolling start of a timed lap (drive.Sim._rolling_pose). A step
+with `reset` does so whenever it starts; every step does so when it starts
+in a new session or a resumed tutorial (round 3 of task 45: step 7, which
+carries on from step 6's lap, stood on the line when continued there).
 """
 from __future__ import annotations
 
@@ -59,6 +74,8 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from corsa_c import G
+
+from .airbrake import FLANK_LAW as _FLANK_LAW
 
 SECTION = "tutorial"
 #: the fields each saved result must carry (the pages format them as numbers)
@@ -74,7 +91,20 @@ MAX_DS_M = 30.0             # a jump in s bigger than this between frames is a t
 LAP_MIN_FRACTION = 0.95     # a lap is a lap ROUND the circuit (records.py's rule)
 MANUAL_TOP = 3              # step 12: up to this gear by hand ...
 MANUAL_DOWN_KMH = 30.0      # ... then a downshift at this speed or more (under braking)
-TUTORIAL_WING = "plate"     # the library's published flank panel (wing_car)
+#: the side wing the tutorial lends (wing_car). Round 3 of task 45 asked for
+#: the BIGGER ready-made side wing and named flank-e423; measured, the plate
+#: is the bigger one. The car page's numbers (a 100 m corner, 0 deg): the
+#: plate +2.2 % corner speed, flank-e423 +0.9 % (+2.1 % only at 15 deg).
+#: On this skidpad, the fastest steady speed that holds the circle (a
+#: centreline follower, the Corsa): no wing 71.17 km/h, the plate 71.72,
+#: flank-e423 71.41. The plate's CL x S is 0.44 m^2 against flank-e423's 0.18:
+#: 2.4 times the push. And a plate set further forward or steeper passes the
+#: garage's understeer cap (GAIN_CAP_PCT) in a 100 m corner, so the stock
+#: plate is the biggest side wing that stays inside it.
+TUTORIAL_WING = "plate"
+#: a lap-2 push below this (in g) is shown as measured but called "hardly
+#: out" -- the panel opens in a corner, and a lap of the circle is one
+PUSH_MIN_G = 0.002
 MINUTES = 10                # what the offer says it takes
 
 KEYS = "ESC / OPTIONS: the tutorial menu (skip a step, start over, end)"
@@ -93,7 +123,8 @@ class Step:
     hint: str = ""
     check: object = None       # (frame, mem) -> bool, drive steps
     status: object = None      # (frame, mem) -> str, the live line
-    reset: bool = False        # the step starts on the line, standing
+    reset: bool = False        # the step starts at its start (the line, or a timed
+    #                             lap's rolling start) even in the same session
     setup: object = None       # (track, mem) -> None, once when the step starts
     wing: bool = False         # needs a car with a flank wing
     gearbox: str | None = None  # drives on this box ('manual'): an automatic is
@@ -201,16 +232,17 @@ def _chk_reset(f, m):
 
 # -- 6, 7 the wing on the skidpad ---------------------------------------------
 def _circle_restart(m, why=""):
-    m.update(dist=0.0, ay_dt=0.0, tt=0.0, clean=True)
+    m.update(dist=0.0, ay_dt=0.0, push_dt=0.0, tt=0.0, clean=True)
     m["why"] = why
 
 
 def _circle(f, m, want_on: bool) -> bool:
     """One flying LAP of the skidpad, line to line, on the road, with the
     wing in the wanted state throughout: its mean |lateral g| (time-weighted)
-    and its time go to m['result']. Line to line, so both wing laps are
-    flying laps: a lap from a standstill would hand the second one the
-    difference."""
+    and its time go to m['result'] -- and on the ON lap the wing's mean push
+    (|side force|, `push` N and `push_g` in g of the car's weight). Line to
+    line, so both wing laps are flying laps: a lap from a standstill would
+    hand the second one the difference."""
     if "dist" not in m:
         _circle_restart(m)
         m["counting"] = False
@@ -223,6 +255,10 @@ def _circle(f, m, want_on: bool) -> bool:
         if (e[0] == "lap" and m["counting"] and m["clean"] and m["tt"] > 0.0
                 and m["dist"] >= LAP_MIN_FRACTION * f.L):
             m["result"] = dict(ay=round(m["ay_dt"] / m["tt"], 4), t=round(float(e[3]), 3))
+            if want_on:
+                pg = m["push_dt"] / m["tt"]
+                m["result"].update(push_g=round(pg, 4),
+                                   push=round(pg * getattr(f, "mass", 0.0) * G, 1))
             return True
         _circle_restart(m, "" if f.wing_on == want_on else m.get("why", ""))
         m["counting"] = True                   # a lap starts at this crossing
@@ -235,13 +271,16 @@ def _circle(f, m, want_on: bool) -> bool:
         m["why"] = "the wing is " + ("OFF: F (CIRCLE) switches it on" if want_on
                                      else "ON: F (CIRCLE) switches it off")
         return False
-    if want_on and getattr(f, "wing_mode", 0) not in (0, 3):
-        #  LEFT / RIGHT / ALL 3 (drive/airbrake.py) are not the corner's law:
-        #  the ON lap measures AUTO (AIR BRAKE is AUTO off the brake)
+    if want_on and getattr(f, "wing_mode", 0) not in _FLANK_LAW:
+        #  LEFT / RIGHT / TOP / TOP FIXED (drive/airbrake.py) are not the
+        #  corner's law: the ON lap measures AUTO's flank (AIR BRAKE is AUTO
+        #  off the brake; TOP FIX+SIDE leaves the flanks on the law)
         m["clean"] = False
         m["why"] = "the wing mode is not AUTO: G (TRIANGLE) steps it back to AUTO"
         return False
-    if not f.on_track:
+    if not f.on_track and m["counting"]:
+        #  round 3: the roll up to the first crossing is not judged -- the
+        #  lap starts at the line -- so it never says 'off the circle'
         m["clean"] = False
         m["why"] = "off the circle: this lap does not count, the next starts at the line"
     if m["why"].startswith("the wing"):
@@ -250,6 +289,7 @@ def _circle(f, m, want_on: bool) -> bool:
         return False
     m["dist"] += ds
     m["ay_dt"] += abs(f.ay_g) * dt
+    m["push_dt"] += abs(getattr(f, "push_g", 0.0)) * dt
     m["tt"] += dt
     return False
 
@@ -262,15 +302,30 @@ def _chk_wing_on(f, m):
     return _circle(f, m, True)
 
 
+def _to_line(f):
+    """Whole metres ahead to the start line on a closed track, or None. A
+    car standing ON the line has the whole lap to go: a lap starts at a
+    crossing, and pulling away from the line is none."""
+    if not f.closed or f.L <= 0:
+        return None
+    return int(f.L - f.s % f.L)
+
+
 def _st_circle(f, m):
     if "dist" not in m or f.L <= 0:
         return ""
     wing = "" if f.has_flank else "   (this car has no flank wing)"
+    #  round 3: with the wing ON, its own push (the panel's side force in g)
+    #  is on the line as it is driven
+    push = (f"   wing push {abs(getattr(f, 'push_g', 0.0)):.3f} g"
+            if f.wing_on and f.has_flank else "")
     if not m.get("counting") or not m.get("clean"):
-        return f"to the line: the lap starts there   now {abs(f.ay_g):.2f} g{wing}"
+        d = _to_line(f)
+        where = "to the line" if d is None else f"{d} m to the line"
+        return f"{where}: the lap starts there   now {abs(f.ay_g):.2f} g{push}{wing}"
     ay = m["ay_dt"] / m["tt"] if m.get("tt", 0.0) > 0.0 else 0.0
     return (f"lap {100.0 * max(m['dist'], 0.0) / f.L:3.0f} %   mean {ay:.2f} g   "
-            f"now {abs(f.ay_g):.2f} g{wing}")
+            f"now {abs(f.ay_g):.2f} g{push}{wing}")
 
 
 # -- 10 one valid lap -----------------------------------------------------------
@@ -301,7 +356,8 @@ def _chk_lap(f, m):
 
 def _st_lap(f, m):
     if not m.get("counting"):
-        return "drive to the line: the clock starts there"
+        d = _to_line(f)
+        return "drive to the line" + ("" if d is None else f" ({d} m)") + ": the clock starts there"
     return f"lap {100.0 * max(m.get('dist', 0.0), 0.0) / max(f.L, 1.0):3.0f} %   {f.lap_time:6.1f} s"
 
 
@@ -372,8 +428,30 @@ def _fmt_g(r) -> str:
     return f"{r['ay']:.2f} g in {r['t']:.1f} s" if r else "not measured (skipped)"
 
 
+def _fmt_d(x: float, fmt: str = "+.2f") -> str:
+    """A difference, signed ('+0.07', '-0.12'); one that rounds to zero is
+    '0.00' -- never '-0.00' or '+0.00' (0.6727 g vs 0.6726 g printed a
+    negative zero)."""
+    s = format(x, fmt)
+    return format(0.0, fmt.replace("+", "")) if float(s) == 0.0 else s
+
+
 #: a difference in mean lateral g smaller than this is "about the same"
 WING_SAME_G = 0.02
+
+
+def _push(r):
+    """(push in g, push in N) of a wing lap's result, or None when it has
+    none (a lap saved before round 3, or a hand-edited file)."""
+    if r and _num(r.get("push_g")) and r["push_g"] >= 0.0:
+        return float(r["push_g"]), (float(r["push"]) if _num(r.get("push")) else None)
+    return None
+
+
+def _fmt_push(p) -> str:
+    """'+0.011 g (112 N)': the wing's push, never negative, never '-0.000'."""
+    g_, n_ = p
+    return f"{_fmt_d(g_, '+.3f')} g" + (f" ({n_:.0f} N)" if n_ is not None else "")
 
 
 def _pg_wing(ctx, tut):
@@ -382,28 +460,42 @@ def _pg_wing(ctx, tut):
     verdict = ""
     if off and on:
         d = on["ay"] - off["ay"]
-        rows.append(("difference", f"{d:+.2f} g   ({on['t'] - off['t']:+.2f} s a lap)"))
+        rows.append(("difference", f"{_fmt_d(d)} g   ({_fmt_d(on['t'] - off['t'])} s a lap)"))
         if d > WING_SAME_G:
-            verdict = "The wing lap held more lateral g: grip the panel added. "
+            verdict = "Your wing lap also held more lateral g: grip the panel added. "
         elif d < -WING_SAME_G:
-            verdict = ("The wing lap held less: you pushed less on it. Near the limit "
-                       "(the tyres squeal) the panel adds grip. ")
+            verdict = ("Your wing lap held less lateral g: it was driven less hard. "
+                       "Near the limit (the tyres squeal) the panel adds grip. ")
         else:
-            verdict = "About the same. "
-    note = (verdict + "A flank wing is a small wing on the side of the car. In a corner "
-            "the panel on the OUTSIDE opens and pushes the car toward the inside of the "
-            "turn: a sideways force the tyres do not have to find. It costs drag, so it "
-            "opens only in corners (G picks the side). The published plate is small -- "
-            "at the limit it is worth about +2 % of corner speed (README, The device) -- "
-            "so two laps by hand mostly show how hard each was driven. The garage "
-            "(BACKSPACE) designs bigger ones.")
+            verdict = "Your two laps held about the same g: that is how hard each was driven. "
+    p = _push(on)
+    lead = ""
+    if p is not None:
+        #  round 3: the payoff is the wing's OWN push on lap 2 -- positive
+        #  whatever the two laps by hand did
+        rows.append(("wing's push", _fmt_push(p) + "  toward the inside, lap 2"))
+        how = (f"{p[1]:.0f} N on average ({p[0]:.3f} g)" if p[1] is not None
+               else f"{p[0]:.3f} g on average")
+        lead = (f"On lap 2 the panel on the OUTSIDE of the turn pushed the car toward the "
+                f"inside with {how}: part of the corner the tyres did not have "
+                f"to find. " if p[0] >= PUSH_MIN_G else
+                "On lap 2 the panel was hardly out: it opens as you steer into the "
+                "corner. ")
+    note = (lead + verdict + "A flank wing is a small wing on the side of the car. In a "
+            "corner the panel on the OUTSIDE opens and pushes the car toward the inside of "
+            "the turn: a sideways force the tyres do not have to find. The push grows "
+            "with the square of the speed -- twice as fast, four times the push -- so on "
+            "this slow circle a side wing is worth about 1 % of corner speed at the "
+            "limit, and more in a fast corner. It costs drag, so it opens only in corners "
+            "(G changes the wing mode). In the garage (BACKSPACE), W puts a ready-made "
+            "wing on your car and D designs your own.")
     return note, [("YOUR TWO LAPS", rows)]
 
 
 def _pg_timing(ctx, tut):
     rows = [("sectors", "the lap is cut in 3; the timing panel shows each one"),
-            ("the flash", "at a sector line: purple = best ever in this class, "
-                          "green = better than your PB lap, red = slower"),
+            ("the flash", "at a sector line: purple = best in class, "
+                          "green = beats your PB, red = slower"),
             ("PB ghost", "your best lap in this class, a flat car on the road, from the line"),
             ("ghost 2", "the reference bot (the pre-race page changes it); J hides both"),
             ("delta", "under the timing panel: -0.23 in green = ahead of your PB here")]
@@ -451,14 +543,17 @@ def _pg_done(ctx, tut):
     lap = tut.results.get("lap")
     rows = [("your lap", fmt_time(lap["t"]) if lap else "skipped")]
     off, on = tut.results.get("wing_off"), tut.results.get("wing_on")
-    if off and on:
-        rows.append(("the wing", f"{on['ay'] - off['ay']:+.2f} g on the skidpad"))
+    p = _push(on)
+    if p is not None:                      # round 3: its own push, never negative
+        rows.append(("the wing", f"{_fmt_push(p)} of push on the skidpad"))
+    elif off and on:
+        rows.append(("the wing", f"{_fmt_d(on['ay'] - off['ay'])} g on the skidpad"))
     if tut.skipped:
         titles = {s.id: s.title for s in tut.steps}
         rows.append(("skipped", ", ".join(titles.get(k, k) for k in tut.skipped)))
     nxt = [("Time trial", "ESC > Time trial: your top 5, medals, another build")]
     if getattr(ctx, "garage", False):
-        nxt.append(("Wing design", "the row below: your first wing, step by step, in the garage"))
+        nxt.append(("Wing design", "your first wing, step by step (the row below)"))
     nxt += [("Gearbox", "ESC > Settings > Gearbox: Manual keeps it for good"),
             ("Tutorial", "ESC > Tutorial takes it again, any time")]
     return "That is the whole loop: tweak the car, drive it, beat the number.", \
@@ -487,14 +582,14 @@ STEPS = (
          hint="R, once.", check=_chk_reset),
     Step("assists", None, "page", "What the assists do", _pg_assists),
     Step("wing_off", "skidpad", "drive", "The wing, lap 1: OFF",
-         "Wing OFF (F / CIRCLE toggles it). Drive a flying lap of the circle, line "
-         "to line, as fast as the car will hold it.",
+         "The wing is OFF for this lap. Drive one flying lap of the circle, as fast "
+         "as it holds.",
          hint="Stay on the painted circle. Near the limit the tyres squeal: that "
               "is as fast as it goes.",
          check=_chk_wing_off, status=_st_circle, reset=True, wing=True),
     Step("wing_on", "skidpad", "drive", "The wing, lap 2: ON",
-         "Now switch the wing ON (F / CIRCLE) and drive another flying lap, "
-         "just as hard.",
+         "Now switch the wing ON (F / CIRCLE; skip it if the HUD already shows "
+         "it on) and drive another flying lap, just as hard.",
          hint="The panel on the outside of the turn opens by itself as you corner.",
          check=_chk_wing_on, status=_st_circle, wing=True),
     Step("wing_result", None, "page", "What the wing did", _pg_wing),
@@ -504,9 +599,9 @@ STEPS = (
          "wheels off the road and the lap does not count.",
          hint="Brake before the corners, not in them. Any valid lap will do.",
          check=_chk_lap, status=_st_lap, reset=True),
-    Step("manual_intro", None, "page", "The manual gearbox (optional)", _pg_manual,
+    Step("manual_intro", None, "page", "About the manual gearbox (optional)", _pg_manual,
          group="manual"),
-    Step("manual", "arena", "drive", "Manual gearbox (optional)",
+    Step("manual", "arena", "drive", "Drive the manual gearbox (optional)",
          "The box is on MANUAL. Pull away in 1st and shift UP with E (R1) each time "
          "the shift lights fill, up to 3rd. Then brake and shift DOWN with Q (L1), "
          "one gear, before a corner.",
@@ -540,6 +635,10 @@ def frame_of(sim, tut=None):
             and any(e[0] == "lap" for e in events)):
         rec_why = str(last.get("why") or "not recorded")   # the lap the records refused
     cfg = v.cfg
+    #  round 3: the flank panel's side force this frame (Vehicle.F_wing, N),
+    #  in g of the car's weight -- the wing's own push
+    mass = float(getattr(getattr(v, "car", None), "m", 0.0) or 0.0)
+    push_g = abs(float(getattr(v, "F_wing", 0.0) or 0.0)) / (mass * G) if mass > 0.0 else 0.0
     has_flank = (getattr(cfg, "wing", "off") != "off"
                  or getattr(cfg, "dev_left", None) is not None
                  or getattr(cfg, "dev_right", None) is not None)
@@ -548,7 +647,7 @@ def frame_of(sim, tut=None):
         yaw_deg=math.degrees(v.r), s=float(sim.s), L=float(sim.track.length),
         closed=bool(sim.track.closed), on_track=bool(sim.on_track),
         lap_valid=bool(sim.lap.lap_valid), lap_time=float(sim.lap.lap_time),
-        wing_on=bool(sim.wing_on), has_flank=bool(has_flank),
+        wing_on=bool(sim.wing_on), has_flank=bool(has_flank), push_g=push_g, mass=mass,
         gear=int(getattr(v, "gear", 0)), gearbox=str(getattr(sim, "gearbox", "auto")),
         wing_mode=int(getattr(sim, "wing_side_mode", 0) or 0),
         events=events, cmds=cmds, track=sim.track.name, rec_why=rec_why)
@@ -640,7 +739,8 @@ class Tutorial:
         it, paused), 'done' (a drive step just passed), or None."""
         if not self.active:
             return None
-        if sim is not self._sim:               # a new session: its sim.t starts at 0 again,
+        fresh = sim is not self._sim           # a new session, or this run's first tick
+        if fresh:                              # a new session: its sim.t starts at 0 again,
             d = float(sim.t) - self._t_now     # so the flash and the hint clock move with it
             self._flash_until += d
             if self._t0 is not None:
@@ -652,9 +752,18 @@ class Tutorial:
         if st.kind == "page":
             return "page"
         self._t_now = float(sim.t)
+        if fresh and not self._setup_due:
+            #  round 3: a session rebuilt in the middle of a drive step (a
+            #  setting changed) is a fresh start of the step, as a resumed
+            #  tutorial is: the new session put the car on the line
+            self._begin()
         if self._setup_due:
             self._setup_due = False
-            if st.reset:
+            if st.reset or fresh:
+                #  the step's start: the line, or the rolling start of a timed
+                #  lap (drive.Sim._rolling_pose). Round 3: a resumed tutorial
+                #  or a rebuilt session starts EVERY step so -- step 7 too,
+                #  which otherwise carries on from step 6's lap
                 sim.reset(to_checkpoint=False)
             if st.setup is not None:
                 st.setup(sim.track, self.mem)
@@ -680,6 +789,8 @@ class Tutorial:
             self.results[st.id] = dict(res)
             if "ay" in res:
                 extra = f": {res['ay']:.2f} g in {res['t']:.1f} s"
+                if _num(res.get("push_g")):
+                    extra += f", the wing's push {res['push_g']:.3f} g"
             elif "t" in res:
                 from .records import fmt_time
                 extra = f": {fmt_time(res['t'])}"
@@ -746,7 +857,9 @@ class Tutorial:
         st, f = self.step, self._last
         status = st.status(f, self.mem) if (st.status is not None and f is not None) else ""
         t_in = (f.t - self._t0) if (f is not None and self._t0 is not None) else 0.0
-        return dict(head=f"TUTORIAL {self.label()}   {st.title}", text=st.text,
+        #  two spaces, as the page's title: 'TUTORIAL 12/13  Drive the manual
+        #  gearbox (optional)' fits the box's text width (render.R_TUTOR)
+        return dict(head=f"TUTORIAL {self.label()}  {st.title}", text=st.text,
                     status=status, warn=str(self.mem.get("why", "") or ""),
                     hint=st.hint if t_in >= HINT_AFTER_S else "", flash=flash, foot=KEYS)
 
@@ -774,12 +887,32 @@ class Tutorial:
 #  THE PAUSE MENU'S PAGE AND THE FIRST-LAUNCH OFFER                    #
 # ==================================================================== #
 def step_list(tut=None, progress=None) -> list:
-    """The steps as help rows, the current one marked."""
+    """The steps as help rows: the current one marked '<- now', the ones
+    before it 'done' (or 'skipped'), drawn dim (menu.Dim). Where the player
+    is comes from the tutorial, else from the progress file (a run ended
+    part way continues there; a finished one is done throughout). Only the
+    steps to come name their map (where the session moves next): with it,
+    'Drive the manual gearbox (optional)  (arena)  <- now' wrapped its mark
+    onto a line of its own beside the pause page's long rows."""
+    from .menu import Dim
+    if tut is not None:
+        at = len(STEPS) if tut.done else tut.i
+        skipped = set(tut.skipped)
+    else:
+        sv = saved_state(progress)
+        at = sv["index"] if sv["index"] is not None else (len(STEPS) if sv["done"] else 0)
+        sk = progress.section(SECTION).get("skipped") if progress is not None else None
+        skipped = {str(x) for x in sk} if isinstance(sk, list) else set()
     cur = tut.step.id if (tut is not None and tut.active) else None
     rows = []
     for i, s in enumerate(STEPS):
-        mark = "  <- now" if s.id == cur else ""
-        rows.append((f"{i + 1:2d}", s.title + (f"  ({s.map})" if s.map else "") + mark))
+        if s.id == cur:
+            what = s.title + "  <- now"
+        elif i < at:
+            what = Dim(s.title + ("  skipped" if s.id in skipped else "  done"))
+        else:
+            what = s.title + (f"  ({s.map})" if s.map else "")
+        rows.append((f"{i + 1:2d}", what))
     return [("THE STEPS", rows)]
 
 
@@ -882,7 +1015,7 @@ def _frame(**kw):
     f = dict(t=0.0, V_kmh=0.0, ay_g=0.0, yaw_deg=0.0, s=0.0, L=1249.2, closed=True,
              on_track=True, lap_valid=True, lap_time=0.0, wing_on=False, has_flank=True,
              gear=1, gearbox="manual", wing_mode=0, events=[], cmds=[], track="arena",
-             rec_why="")
+             rec_why="", push_g=0.0, mass=1010.0)
     f.update(kw)
     return SimpleNamespace(**f)
 
@@ -890,6 +1023,7 @@ def _frame(**kw):
 def self_check(verbose: bool = True) -> bool:
     import os
     import tempfile
+    from . import airbrake as ab
     ok = True
 
     def rep(tag, passed, msg=""):
@@ -994,12 +1128,75 @@ def self_check(verbose: bool = True) -> bool:
                         events=[("start", 0, 0.0, float("nan"))]), m)
     _chk_wing_on(_frame(t=0.05, s=200.0, L=Ls, wing_on=True, track="skidpad"), m)
     rep("wing lap: a teleport adds nothing", m["dist"] == 0.0 and m["counting"])
+    #  round 3: the ON lap measures the wing's own push (the panel's side
+    #  force in g, and in N at the car's mass); the OFF lap has none; the
+    #  live line shows it with the wing ON only
+    m, got_on = {}, False
+    for k in range(700):
+        s_k = (k * 1.0) % Ls
+        ev_k = ([("start", 0, 0.05 * k, float("nan"))] if k == 1 else
+                [("lap", 1, 0.05 * k, 15.7)] if k == 1 + round(Ls) else [])
+        got_on = _chk_wing_on(_frame(t=0.05 * k, s=s_k, L=Ls, wing_on=True, ay_g=0.8,
+                                     push_g=(0.012 if k % 2 else 0.010), mass=1020.0,
+                                     events=ev_k, track="skidpad"), m)
+        if got_on:
+            break
+    r_on = m.get("result", {})
+    live_on = _st_circle(_frame(s=5.0, L=Ls, wing_on=True, push_g=0.0113, track="skidpad"),
+                         dict(m, counting=True, clean=True, dist=5.0))
+    live_off = _st_circle(_frame(s=5.0, L=Ls, wing_on=False, push_g=0.0, track="skidpad"),
+                          dict(m, counting=True, clean=True, dist=5.0))
+    rep("wing lap ON: the result carries the wing's mean push (g, and N at the car's "
+        "mass); the live line shows it with the wing ON only",
+        got_on and abs(r_on.get("push_g", 0) - 0.011) < 1e-4
+        and abs(r_on.get("push", 0) - 0.011 * 1020.0 * G) < 0.5
+        and "push_g" not in res and "wing push 0.011 g" in live_on
+        and "push" not in live_off, f"{r_on} / {live_on!r} / {live_off!r}")
+    m = {}
+    _chk_wing_off(_frame(t=0.0, s=Ls - 12.4, L=Ls, track="skidpad"), m)
+    before = _st_circle(_frame(s=Ls - 12.4, L=Ls, ay_g=0.4, track="skidpad"), m)
+    on_line = _st_circle(_frame(s=0.0, L=Ls, track="skidpad"), m)
+    lap_st = _st_lap(_frame(s=1249.2 - 30.0), {})                   # the arena: L = 1249.2 m
+    rep("before the line the status says how far it is (standing on it: a whole lap)",
+        before.startswith("12 m to the line: the lap starts there") and "0.40 g" in before
+        and on_line.startswith(f"{int(Ls)} m to the line")
+        and lap_st == "drive to the line (30 m): the clock starts there"
+        and _to_line(_frame(closed=False)) is None, f"{before!r} / {on_line[:22]!r} / {lap_st!r}")
+    #  round 3: the roll up to the first crossing (drive's rolling start,
+    #  47 m back) is not judged: off the circle there is no red warning and
+    #  the box still says how far the line is; after the line it spoils the lap
+    m = {}
+    _chk_wing_off(_frame(t=0.0, s=Ls - 47.0, L=Ls, track="skidpad"), m)
+    _chk_wing_off(_frame(t=0.5, s=Ls - 40.0, L=Ls, on_track=False, track="skidpad"), m)
+    roll = (m["why"], m["clean"],
+            _st_circle(_frame(s=Ls - 40.0, L=Ls, on_track=False, track="skidpad"), m))
+    _chk_wing_off(_frame(t=4.0, s=0.5, L=Ls, track="skidpad",
+                         events=[("start", 0, 4.0, float("nan"))]), m)
+    _chk_wing_off(_frame(t=4.1, s=1.5, L=Ls, on_track=False, track="skidpad"), m)
+    rep("wing lap: off the circle before the first crossing is not judged (no warning, "
+        "the box says how far the line is); after the line it spoils the lap",
+        roll[0] == "" and roll[1] and "m to the line: the lap starts there" in roll[2]
+        and m["counting"] and not m["clean"] and m["why"].startswith("off the circle"),
+        f"{roll!r} / {m['why']!r}")
     m = {}
     _chk_wing_on(_frame(t=0.0, s=0.0, L=Ls, wing_on=True, track="skidpad",
                         events=[("start", 0, 0.0, float("nan"))]), m)
-    _chk_wing_on(_frame(t=0.05, s=1.0, L=Ls, wing_on=True, wing_mode=2, track="skidpad"), m)
-    rep("wing lap ON: the ALL 3 / LEFT / RIGHT mode spoils it, with the key back to AUTO",
-        not m["clean"] and "G (TRIANGLE)" in m["why"], m["why"])
+    _chk_wing_on(_frame(t=0.05, s=1.0, L=Ls, wing_on=True, wing_mode=ab.TOP,
+                        track="skidpad"), m)
+    why_top = m["why"]
+    spoils = {}
+    for wm in ab.CYCLE:                    # every G mode on a counting lap
+        m = {}
+        _chk_wing_on(_frame(t=0.0, s=0.0, L=Ls, wing_on=True, track="skidpad",
+                            events=[("start", 0, 0.0, float("nan"))]), m)
+        _chk_wing_on(_frame(t=0.05, s=1.0, L=Ls, wing_on=True, wing_mode=wm,
+                            track="skidpad"), m)
+        spoils[ab.LABELS[wm]] = not m["clean"]
+    rep("wing lap ON: LEFT / RIGHT / TOP / TOP FIXED spoil it, with the key back to AUTO; "
+        "AUTO / AIR BRAKE / TOP FIX+SIDE (the flanks on the law) do not",
+        "G (TRIANGLE)" in why_top and spoils == {
+            "AUTO": False, "AIR BRAKE": False, "TOP": True, "TOP FIXED": True,
+            "TOP FIX+SIDE": False, "LEFT": True, "RIGHT": True}, f"{spoils} {why_top!r}")
     # --- 10 the lap
     L = 1249.2
     m = {}
@@ -1067,6 +1264,11 @@ def self_check(verbose: bool = True) -> bool:
             and [s.id for s in STEPS if s.gearbox] == ["manual"])
     rep("13 steps, every drive step has a predicate and a hint; the manual pair "
         "is an optional group", form, " ".join(ids))
+    #  the drive box's head is one line, never wrapped: 410 px of text at 14 px
+    #  Menlo, 8 px a character (render.R_TUTOR)
+    heads = [f"TUTORIAL {len(STEPS)}/{len(STEPS)}  {s.title}" for s in STEPS if s.kind == "drive"]
+    rep("every drive step's head fits the box: 51 characters or fewer",
+        max(map(len, heads)) <= 51, max(heads, key=len))
 
     # --- the state machine, on a fake sim, with a temporary progress file
     from .progress import Progress
@@ -1118,6 +1320,22 @@ def self_check(verbose: bool = True) -> bool:
     rep("skip moves on and is remembered; a page step asks for the page",
         tut.step.id == "assists" and tut.skipped == ["steer", "turn1", "reset"]
         and tut.tick(ar) == "page", f"{tut.step.id} {tut.skipped}")
+    from .menu import Dim
+    sl = [w for _, w in step_list(tut, prog)[0][1]]
+    rep("the step list: a finished step 'done', a skipped one 'skipped' (both dim), "
+        "the current one '<- now', the ones to come unmarked",
+        sl[0].endswith("  done") and all(w.endswith("  skipped") for w in sl[1:4])
+        and all(isinstance(w, Dim) for w in sl[:4]) and sl[4].endswith("<- now")
+        and not any(isinstance(w, Dim) or w.endswith(("done", "skipped", "now"))
+                    for w in sl[5:]), " | ".join(sl[:6]))
+    #  the pause page's list column is ~392 px beside its widest rows (8 px a
+    #  character): no row may wrap its mark onto a line of its own, at any step
+    n_ = len(STEPS)
+    worst = max((w for k in range(n_ + 1) for _, w in step_list(SimpleNamespace(
+        done=k == n_, active=k < n_, i=min(k, n_ - 1), step=STEPS[min(k, n_ - 1)],
+        skipped=[s_.id for s_ in STEPS]))[0][1]), key=len)
+    rep("every step-list row fits the pause page's list: 48 characters or fewer",
+        len(worst) <= 48, f"{len(worst)}: {worst!r}")
     title, sub, note, secs, items = tut.page(SimpleNamespace(settings=SimpleNamespace(
         abs=True, tc=False, steer_aid=True, gearbox="auto"), key=None))
     rep("the assists page: four assists, Continue / End",
@@ -1131,6 +1349,12 @@ def self_check(verbose: bool = True) -> bool:
     rep("End keeps the step for later", sv["step"] == "wing_off" and not sv["done"]
         and not tut.active and tut.tick(ar) is None, str(sv))
     rows = menu_items(None, Progress(prog.path))
+    sl = [w for _, w in step_list(None, Progress(prog.path))[0][1]]
+    rep("... and with no tutorial running, the list reads the progress file: "
+        "done / skipped up to where it continues",
+        [w.rsplit("  ", 1)[-1] for w in sl[:5]] == ["done", "skipped", "skipped", "skipped", "done"]
+        and not any(isinstance(w, Dim) for w in sl[5:])
+        and not any(isinstance(w, Dim) for _, w in step_list()[0][1]), " | ".join(sl[:6]))
     rep("the menu page offers to continue there",
         rows[0] == ("Continue at step 6: The wing, lap 1: OFF", "tut_resume")
         and "continue at step 6" in menu_row(Progress(prog.path)), str(rows[0]))
@@ -1148,7 +1372,52 @@ def self_check(verbose: bool = True) -> bool:
         secs[0][1][2][1])
     t2.results["wing_on"] = dict(ay=0.82, t=16.3)
     rep("... and says 'about the same' inside WING_SAME_G, not a gain",
-        "About the same" in _pg_wing(None, t2)[0])
+        "about the same" in _pg_wing(None, t2)[0])
+    #  round 3: the payoff is the wing's own push on lap 2 -- the page's last
+    #  row and the done page's, positive however the two laps by hand went
+    #  (the player's 0.6727 g OFF / 0.6726 g ON; V34's LapDriver 0.739 / 0.733)
+    t2.results.update(wing_off=dict(ay=0.6727, t=17.294),
+                      wing_on=dict(ay=0.6726, t=17.295, push_g=0.0106, push=105.1))
+    note_p, secs_p = _pg_wing(None, t2)
+    last = secs_p[0][1][-1]
+    done_p = [w for k, w in _pg_done(SimpleNamespace(garage=False), t2)[1][0][1]
+              if k == "the wing"]
+    t2.results["wing_on"] = dict(ay=0.6726, t=17.295, push_g=0.0004, push=4.0)
+    note_0 = _pg_wing(None, t2)[0]
+    rep("the wing page's last row is the wing's push, positive (+0.011 g, 105 N) though "
+        "the laps' mean g fell; the done page says the same; a push that is hardly there "
+        "is said so, never as a gain",
+        last == ("wing's push", "+0.011 g (105 N)  toward the inside, lap 2")
+        and "pushed the car toward the inside with 105 N on average (0.011 g)" in note_p
+        and "four times the push" in note_p and "W puts a ready-made wing" in note_p
+        and done_p == ["+0.011 g (105 N) of push on the skidpad"]
+        and "hardly out" in note_0 and "pushed the car" not in note_0
+        and not any("-0.0" in x for x in [note_p, *done_p, *[w for _, w in secs_p[0][1]]]),
+        f"{last} / {done_p}")
+    t2.results.update(wing_off=dict(ay=0.6727, t=17.294), wing_on=dict(ay=0.6726, t=17.295))
+    diff = _pg_wing(None, t2)[1][0][1][2][1]
+    wing_d = [w for k, w in _pg_done(SimpleNamespace(garage=False), t2)[1][0][1]
+              if k == "the wing"]
+    rep("a difference that rounds to zero is '0.00', never '-0.00' or '+0.00' "
+        "(0.6727 g vs 0.6726 g, 17.294 s vs 17.295 s)",
+        diff.startswith("0.00 g") and "(0.00 s" in diff and wing_d == ["0.00 g on the skidpad"]
+        and not any(z in diff + wing_d[0] for z in ("-0.00", "+0.00"))
+        and _fmt_d(0.07000000000000006) == "+0.07" and _fmt_d(-0.12) == "-0.12",
+        f"{diff!r} / {wing_d}")
+    # the copy: nothing a player cannot open (the README), no old key words
+    ctx_c = SimpleNamespace(settings=SimpleNamespace(abs=True, tc=False, steer_aid=True,
+                                                     gearbox="auto"), key=None, garage=True)
+    texts = [OFFER_NOTE]
+    for st_ in STEPS:
+        if callable(st_.text):
+            note_, secs_ = st_.text(ctx_c, t2)
+            texts += [note_] + [x for _, rows_ in secs_ for r_ in rows_ for x in r_]
+        else:
+            texts += [st_.text, st_.hint]
+    bad = [x for x in texts if "README" in x or "G picks" in x]
+    rep("no page or step text cites the README or 'G picks the side'; step 6 says "
+        "the wing is OFF for the lap", not bad
+        and STEPS[5].text.startswith("The wing is OFF for this lap"), str(bad)[:120])
     # the optional group: its page offers Skip, which skips both steps
     t2.i = [s.id for s in STEPS].index("manual_intro")
     t2._begin()
@@ -1177,7 +1446,7 @@ def self_check(verbose: bool = True) -> bool:
     rep("the done page: the wing-design tutorial is a row with a garage; skipped "
         "steps by title", [a for _, a in items_d] == ["tut_next", "tut_wing"]
         and [a for _, a in no_g] == ["tut_next"]
-        and "Manual gearbox (optional)" in secs_d[0][1][-1][1], str(secs_d[0][1][-1]))
+        and "Drive the manual gearbox (optional)" in secs_d[0][1][-1][1], str(secs_d[0][1][-1]))
     rep("the WELCOME offer: the wing-design tutorial with a garage",
         [a for _, a in offer_items(True)] == ["tut_start", "wt_garage", "tut_later"]
         and [a for _, a in OFFER_ITEMS] == ["tut_start", "tut_later"])
@@ -1212,6 +1481,39 @@ def self_check(verbose: bool = True) -> bool:
     t6.tick(s2)
     rep("after a restart the flash lasts its 3 s, not the old session's clock",
         on_now and not (t6.overlay() or {}).get("flash"), f"{t6._flash_until}")
+    #  round 3: a tutorial resumed at step 7 starts it afresh -- the reset that
+    #  is its rolling start in drive (Sim._rolling_pose), not the player's R;
+    #  from step 6 in the same session step 7 carries on (reset=False); a
+    #  session rebuilt in the middle of a step starts that step again
+
+    class _Pad(_Sim):
+        def __init__(self, owner):
+            super().__init__("skidpad", Ls)
+            self.owner = owner
+
+        def reset(self, to_checkpoint=False):
+            self.resets += 1
+            self.owner.command("reset")
+
+    t7 = Tutorial(None, start="wing_on")
+    p1 = _Pad(t7)
+    t7.tick(p1)
+    resumed = (p1.resets, t7._cmds, t7.step.id)
+    t8 = Tutorial(None, start="wing_off")
+    p2 = _Pad(t8)
+    t8.tick(p2)                            # step 6's own start
+    t8.advance()                           # its lap passed: step 7, the same session
+    t8.tick(p2)
+    carried = (p2.resets, t8.step.id)
+    t8.mem.update(counting=True, why="off the circle: this lap does not count")
+    p3 = _Pad(t8)                          # a setting changed: a new session, mid-lap
+    t8.tick(p3)
+    rebuilt = (p3.resets, t8.mem, t8._cmds)
+    rep("a tutorial resumed at step 7 starts it afresh (one reset: its rolling start, not "
+        "the player's R); from step 6 in the same session it carries on; a session "
+        "rebuilt mid-step starts the step again",
+        resumed == (1, [], "wing_on") and carried == (1, "wing_on") and rebuilt == (1, {}, []),
+        f"{resumed} {carried} {rebuilt}")
     # --- the wing car
     try:
         from .garage import CarBuild

@@ -67,6 +67,7 @@ from __future__ import annotations
 import gc
 import math
 import os
+import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -245,6 +246,11 @@ C_SHIFT_FLASH = (150, 204, 255)  # every shift light, blinking, at the shift poi
 SHIFT_LIGHTS = 5         # LEDs, lit from (shift - SHIFT_SPAN) to the shift point
 SHIFT_SPAN = 1000.0      # rpm est
 SHIFT_BLINK_HZ = 8.0     # Hz  est
+LIMIT_BAND = 250.0       # rpm LIMIT only this near the cut: the limiter's
+                         #    fade starts n_soft under it and its latch lets
+                         #    go 150 under it (every car), while the bus's
+                         #    road-speed governor, also 'on_limiter', holds
+                         #    it at 1650 of its 2500 (_rev_cue)
 FONT_NAMES = ('Menlo', 'Monaco', 'DejaVu Sans Mono', 'Courier New')
 
 # HUD rects at the 1280x800 base size; multiplied by ui_scale elsewhere.
@@ -259,6 +265,13 @@ R_PEDALS = (12, 668, 300, 120)
 R_MINIMAP = (860, 640, 180, 140)
 R_GG = (1068, 588, 200, 200)
 R_WARN = (440, 760, 400, 22)
+#: the message toast (aux.msg: the G, wet, start, race and record notes): the
+#: free strip right of R_PEDALS and left of R_MINIMAP, its bottom just above
+#: R_WARN; at most TOAST_LINES lines of f_lbl, wrapped to the strip less
+#: TOAST_PAD a side. Its panel follows the text: this is the most it takes
+R_TOAST = (320, 712, 532, 44)
+TOAST_LINES = 2
+TOAST_PAD = 8            # px at ui 1, left and right of the text
 #: the driving tutorial's box (drive/tutorial.py): left, between the state
 #: panel and the pedals, clear of the car; its height follows the text
 R_TUTOR = (12, 340, 430, 318)
@@ -266,6 +279,15 @@ R_TUTOR = (12, 340, 430, 318)
 #: wide as the timing panel above it; its height follows its rows (at most h)
 R_RESULTS = (460, 196, 360, 140)
 CARD_BAR = 4             # px at ui 1: the bar under each sector of the card
+#: P's pause screen (ESC's menu says PAUSED itself): the whole frame under a
+#: black veil of this alpha (~40 % darker), 'PAUSED' and PAUSE_HINT centred
+PAUSE_DIM = 102
+PAUSE_HINT = 'P resume  \u00b7  ESC menu'
+#: the flags bar on a stalled engine (Renderer._warn_text): the automatic
+#: says only S (it has no clutch pedal to talk about), the manual boxes the
+#: clutch too
+STALL_AUTO = 'engine stalled: S to restart'
+STALL_MANUAL = 'STALLED - clutch in (Z / SQUARE) or S'
 #: camera shake on the kerbs and off the road (task 27): the view moves by
 #: at most SHAKE_PX pixels, a deterministic mix of three frequencies
 SHAKE_PX = 2.5
@@ -300,6 +322,9 @@ C_FX = (111, 208, 140)
 C_WING_ON = (255, 140, 43)
 C_WING_DRAG = (186, 99, 30)    # the device's DRAG arrow: same hue, darker
 C_WING_OFF = (107, 111, 117)
+#: what carries a wing in the chase view -- struts, pylons, brackets, stays --
+#: darker than a stowed wing, whose plates share ITS colour (garage.C_STRUT)
+C_STRUT3 = (90, 94, 100)
 C_HUD_BG = (16, 17, 20)
 C_HUD_TEXT = (232, 234, 238)
 C_HUD_DIM = (139, 144, 153)
@@ -313,6 +338,11 @@ C_GG_DOT = (255, 255, 255)
 C_PURPLE = (176, 78, 224)
 C_GREEN = (78, 194, 106)
 C_YELLOW = (217, 206, 85)
+#: the speed panel's WET chip (T's whole-track wet): the wet patches' blue
+#: (C_TARMAC_WET's hue), lifted so it reads on a panel, and its text
+C_WET_CHIP = (46, 86, 128)
+C_WET_TEXT = (184, 218, 250)
+C_BOARD_AIM = (236, 168, 36)    # task 45, round 3: the stop board's row, the marker's amber
 #: the sector flash (drive/ghosts.py): best ever / better than the PB / worse
 C_FLASH = {'purple': C_PURPLE, 'green': C_GREEN, 'red': C_BAR_BRK}
 #: the medals (drive/medals.py), as the HUD and the results tag them
@@ -823,6 +853,26 @@ class HudData:
     dev_span: float = DEV_SPAN
     dev_plate: float = 0.0
     dev_mount: str = 'pylon'      # 'pylon' | 'endplate' | 'none' (aero.wing.MOUNTS)
+    # how the plates and struts are DRAWN (garage.hud_kwargs; the WingSpec's
+    # own defaults, so a HudData without them draws what it always drew):
+    # the taper a plate's chord law may continue, the struts' station over
+    # the semi-span, the plates' lean (deg from the wing plane), blend
+    # (fraction of their arc) and its turn law, chord ratio (0 = customary)
+    # and whether they continue the wing's chord law
+    dev_taper: float = 1.0
+    dev_pylon_frac: float = 0.56
+    dev_plate_cant: float = 90.0
+    dev_plate_blend: float = 0.0
+    dev_plate_shape: str = 'arc'
+    dev_plate_ratio: float = 0.0
+    dev_plate_follows: bool = False
+    # a CARRYING plate's own arc when AeroBO designed it (m): drawn to that
+    # length and bracketed to the body; 0 = carsim's, drawn to the body
+    dev_plate_own: float = 0.0
+    # a flank its WingLab endplates carry deploys to the standoff it was
+    # flown at (garage.flank_out, m; stowed it retracts against the side);
+    # 0 = the slide-out DEV_OUT0 + DEV_OUT1 * deploy
+    dev_standoff: float = 0.0
     wing_left_name: str = ''
     wing_right_name: str = ''
     # top wing
@@ -835,6 +885,14 @@ class HudData:
     top_chord: float = 0.30
     top_plate: float = 0.0
     top_mount: str = 'pylon'      # how the top wing is carried; drawn, and in the HUD
+    top_taper: float = 1.0        # ...and drawn as the dev_* rows above say
+    top_pylon_frac: float = 0.56
+    top_plate_cant: float = 90.0
+    top_plate_blend: float = 0.0
+    top_plate_shape: str = 'arc'
+    top_plate_ratio: float = 0.0
+    top_plate_follows: bool = False
+    top_plate_own: float = 0.0
     top_mode: str = 'fixed'
     wing_top_name: str = ''
     # --- the pause menu (drive/menu.py), drawn last when open; duck-typed ---
@@ -892,6 +950,12 @@ class HudData:
     # timed lap). The HUD reads both with getattr defaults as well.
     lap_void_why: str = ''
     out_lap_m: float | None = None
+    # --- whether LAST counted (False = a void lap: LAST is drawn red under
+    # 'LAST  void' until the next lap lands), and T's whole-track wet, the
+    # mu scale (below 1 = the speed panel's WET chip). drive.py sets both
+    # after construction; the HUD reads them with getattr defaults too.
+    last_valid: bool = True
+    global_wet: float = 1.0
 
 
 # ======================================================================= #
@@ -1702,21 +1766,6 @@ def _box3(x0, x1, y0, y1, z0, z1, col):
     return [(_orient3(v[list(f)], centre), col) for f in faces]
 
 
-def _deck_box3(x0, x1, y0, y1, z1, g, col):
-    """`_box3` standing ON the fitted car's deck: its bottom follows the
-    top surface's slope (deck_z at each end), so a pylon or an endplate on
-    the hatch's 47 deg rear glass is not a flat-bottomed block whose back
-    edge floats 4 cm clear of the glass while its front edge is buried
-    (measured off the body mesh by the self-check)."""
-    zb = {x0: g.deck_z(x0), x1: g.deck_z(x1)}
-    v = np.array([(x, y, zb[x] if z == 'b' else max(z1, zb[x] + 0.01))
-                  for x in (x0, x1) for y in (y0, y1) for z in ('b', 't')], dtype=np.float64)
-    centre = v.mean(axis=0)
-    faces = ((0, 1, 3, 2), (4, 5, 7, 6), (0, 1, 5, 4),
-             (2, 3, 7, 6), (0, 2, 6, 4), (1, 3, 7, 5))
-    return [(_orient3(v[list(f)], centre), col) for f in faces]
-
-
 def deck_z3(x: float, geom=None) -> float:
     """The FITTED car's top surface height at station x (its style's shell)."""
     return (geom or car_geom()).deck_z(x)
@@ -2219,6 +2268,24 @@ def _loft3(rings, col):
     return polys
 
 
+def _flank_out(aux, f: float) -> float:
+    """A flank panel's standoff from the car's side at smoothed deploy `f`:
+    the slide-out DEV_OUT0 + DEV_OUT1 * f. A wing its endplates carry
+    (`dev_mount` 'endplate') deploys to `aux.dev_standoff` when set -- the
+    standoff a WingLab wing was flown at -- and stowed retracts against the
+    side, its plates into the body (garage.flank_out, the same rule:
+    `blend.stowed_standoff` at the drawn chord and incidence)."""
+    f = float(f)
+    if str(getattr(aux, 'dev_mount', 'pylon') or 'pylon') != 'endplate':
+        return DEV_OUT0 + DEV_OUT1 * f
+    from .aero import blend as _bl
+    so = float(getattr(aux, 'dev_standoff', 0.0) or 0.0)
+    full = so if so > 0.0 else DEV_OUT0 + DEV_OUT1
+    stow = min(_bl.stowed_standoff(float(getattr(aux, 'dev_chord', DEV_CHORD) or DEV_CHORD),
+                                   float(getattr(aux, 'inc_deg', 0.0) or 0.0)), full)
+    return stow + (full - stow) * f
+
+
 def wing_mesh3(aux, geom=None):
     """The three wings at THIS deployment state, in body frame.
 
@@ -2235,7 +2302,20 @@ def wing_mesh3(aux, geom=None):
     flank panel stands DEV_OUT0 off THAT car's side at its station, and the
     top wing stows on THAT car's deck, so a wider saloon or a roadster's low
     boot lid carries them where their own bodywork is.
+
+    WHAT CARRIES THEM is the wing's mount (`dev_mount` / `top_mount`), drawn
+    as garage.wing_polys draws it and from the same helpers: 'pylon' two
+    struts to the car side (flank) or two swan necks from the deck over onto
+    the pressure surface (top), at +-`*_pylon_frac` of the semi-span;
+    'endplate' none -- the plates run to the car side / the deck along their
+    lean; 'none' neither. The plates lean (`*_plate_cant`), blend
+    (`*_plate_blend`, `*_plate_shape`) and carry their chord (`*_plate_ratio`,
+    `*_plate_follows` on the wing's `*_taper`) by `aero.blend.
+    plate_stations` -- the one drawing module this file reads from drive.aero
+    (lazily, numpy only: the plate's clothoid is not worth a second copy).
     """
+    from .aero import blend as _bl
+    from .aero.wing import pylon_rings, plate_chord_scale, lower_surface
     g = geom or car_geom()
     polys = []
     dep_l, dep_r = flank_deps(aux)
@@ -2247,6 +2327,25 @@ def wing_mesh3(aux, geom=None):
     h_w = float(getattr(aux, 'h_w', H_W) or H_W)
     inc = math.radians(float(getattr(aux, 'inc_deg', 0.0) or 0.0))
     loop = _section_loop3()
+
+    def _plate_law(pre, role, c_root, b):
+        """(cant, blend, shape, c_tip, scale, slope, taper) for `pre`'s plates."""
+        lam = float(getattr(aux, pre + '_taper', 1.0) or 1.0)
+        fol = bool(getattr(aux, pre + '_plate_follows', False))
+        return (float(getattr(aux, pre + '_plate_cant', 90.0) or 90.0),
+                float(getattr(aux, pre + '_plate_blend', 0.0) or 0.0),
+                str(getattr(aux, pre + '_plate_shape', 'arc') or 'arc'), c_root * lam,
+                plate_chord_scale(role, float(getattr(aux, pre + '_plate_ratio', 0.0) or 0.0), fol),
+                (-c_root * (1.0 - lam) / max(0.5 * b, 1e-6)) if fol else 0.0, lam)
+
+    def _own(pre):
+        """A CARRYING plate's own arc: AeroBO's (`*_plate_own`), bracketed to
+        the body where it stops short -- or, a carsim plate, its reach."""
+        v = float(getattr(aux, pre + '_plate_own', 0.0) or 0.0)
+        return v if v > 0.0 else PLATE_REACH_MAX
+
+    cant, blend, shape, c_tip, scale, slope, lam = _plate_law('dev', 'flank', chord, span)
+    pf = float(getattr(aux, 'dev_pylon_frac', 0.56) or 0.56)
     for side in (+1.0, -1.0):                  # +1 = the LEFT flank (y > 0)
         present = (aux.dev_left if side > 0 else aux.dev_right) or legacy
         if not present:
@@ -2257,7 +2356,7 @@ def wing_mesh3(aux, geom=None):
         dep = dep_l if side > 0 else dep_r       # THIS flank's own deploy
         f = dep * dep * (3.0 - 2.0 * dep)          # the 2-D view's smoothstep
         active = dep > 0.0
-        out = DEV_OUT0 + DEV_OUT1 * (f if active else 0.0)
+        out = _flank_out(aux, f if active else 0.0)
         hw = g.half_w_at(xw)
         yc = side * (hw + out)
         col = C_WING_ON if (active and dep > 0.05) else C_WING_OFF
@@ -2265,30 +2364,72 @@ def wing_mesh3(aux, geom=None):
         for i in range(5):                     # 5 stations, vertical span
             eta = -1.0 + 2.0 * i / 4.0         # -1 bottom .. +1 top
             z = h_w + eta * 0.5 * span
+            c = chord * (1.0 - (1.0 - lam) * abs(eta))
             th = side * inc
             ct, stt = math.cos(th), math.sin(th)
             pts = []
             for xa, ya in loop:
-                dx = (0.5 - xa) * chord
-                dy = -side * ya * chord       # suction side towards the car
+                dx = (0.5 - xa) * c
+                dy = -side * ya * c           # suction side towards the car
                 pts.append((xw + dx * ct - dy * stt, yc + dx * stt + dy * ct, z))
             rings.append(np.array(pts))
         polys += _loft3(rings, col)
         if mount == 'pylon':                   # two struts to the sill
-            for dz in (-0.28 * span, 0.28 * span):
+            for dz in (-pf * 0.5 * span, pf * 0.5 * span):
                 z = h_w + dz
                 polys += _box3(xw - 0.015, xw + 0.015,
                                min(side * hw, yc), max(side * hw, yc),
-                               z - 0.012, z + 0.012, C_WING_OFF)
-        if plate > 0.0:
+                               z - 0.012, z + 0.012, C_STRUT3)
+        if plate > 0.0 or mount == 'endplate':
             # an endplate MOUNT is what carries the panel, so its plates run
-            # all the way back to the body instead of standing at the tip
-            y0 = min(side * hw, yc) if mount == 'endplate' else yc - 0.5 * plate
-            y1 = max(side * hw, yc) if mount == 'endplate' else yc + 0.5 * plate
+            # all the way back to the body (along their lean) instead of
+            # standing at the tip; a sharp fence crosses the tip, half each
+            # side, and a blended one grows out of it towards the car
+            carried = mount == 'endplate'
+            br = None
+            if carried:
+                # AeroBO's plate, then a bracket to the side where it stops
+                st, br, reached = _bl.carried_stations(_own('dev'), lambda _dy: out, cant, blend,
+                                                       shape, c_tip, scale, slope, 0.0,
+                                                       PLATE_REACH_MAX)
+            else:
+                # WingLab's fence is flown whole towards the car: drawn so,
+                # with a stub past the tip (garage.wing_polys, the same rule)
+                own = float(getattr(aux, 'dev_plate_own', 0.0) or 0.0) > 0.0
+                h_d = plate
+                back = 0.0 if blend > 0.0 else (0.03 if own else 0.5 * h_d)
+                if own:
+                    h_d = plate + back
+                cap = h_d - back
+                if h_d - back > out:                 # a fence stops AT the car's side
+                    h_d = back + _bl.reach_arc(lambda _dy: out, cant, blend, shape, cap)
+                st = _bl.plate_stations(h_d - back, cant, blend, shape, c_tip, scale, slope, back)
+                reached = h_d - back < cap - 1e-9
+            # set down on the side only where it got there (a lean too
+            # shallow to reach is drawn falling short, not bent onto it)
+            wall = (1, lambda p_, s_=side: s_ * g.half_w_at(p_[0])) if reached else None
+            # a carrying plate whose foot is past the drawn side -- above its
+            # belt or below its bottom -- is stayed onto it (garage.wing_polys,
+            # the same rule: `_bl.side_stay`)
+            top_at = _deck_top3(g, xw)
+            z_bot = float(np.interp(xw, [s_[0] for s_ in g.stations][::-1],
+                                    [s_[1] for s_ in g.stations][::-1]))
             for sgn in (-1.0, 1.0):
-                z = h_w + sgn * 0.5 * span
-                polys += _box3(xw - 0.6 * chord, xw + 0.6 * chord, y0, y1,
-                               z - 0.006, z + 0.006, C_WING_ON)
+                root = (xw, yc, h_w + sgn * 0.5 * span)
+                polys += _loft3(_bl.plate_rings(root, (0.0, 0.0, sgn), (0.0, -side, 0.0), st, 0.012,
+                                                None if br is not None else wall), col)
+                if br is not None:
+                    polys += _loft3(_bl.plate_rings(root, (0.0, 0.0, sgn), (0.0, -side, 0.0), br,
+                                                    0.012, wall), C_STRUT3)
+                if carried:
+                    foot = _bl.plate_foot(root, (0.0, 0.0, sgn), (0.0, -side, 0.0),
+                                          br if br is not None else st)
+                    stay = _bl.side_stay(foot[2], top_at(foot[1]), z_bot)
+                    if stay is not None:
+                        cw = 0.5 * max(_bl.BRACKET_CHORD_FRAC * float(st["c"][-1]),
+                                       _bl.BRACKET_CHORD_MIN)
+                        polys += _box3(xw - cw, xw + cw, foot[1] - 0.006, foot[1] + 0.006,
+                                       stay[0], stay[1], C_STRUT3)
 
     if getattr(aux, 'top_on', False):
         xt = float(aux.top_x)
@@ -2299,36 +2440,83 @@ def wing_mesh3(aux, geom=None):
         zc = z_stow + TOP_RISE * dpt
         ang = inc * dpt if inc else math.radians(6.0) * dpt
         col = C_WING_ON if dpt > 0.05 else C_WING_OFF
+        cant, blend, shape, c_tip, scale, slope, lam = _plate_law('top', 'top', ct_, 2.0 * b2)
+        pf = float(getattr(aux, 'top_pylon_frac', 0.56) or 0.56)
+        ca, sa = math.cos(ang), math.sin(ang)
         rings = []
         for i in range(5):
             eta = -1.0 + 2.0 * i / 4.0
             yq = eta * b2
-            ca, sa = math.cos(ang), math.sin(ang)
-            pts = [(xt + (0.5 - xa) * ct_ * ca + (-ya * ct_) * sa, yq,
-                    zc - (0.5 - xa) * ct_ * sa + (-ya * ct_) * ca)
+            c = ct_ * (1.0 - (1.0 - lam) * abs(eta))
+            pts = [(xt + (0.5 - xa) * c * ca + (-ya * c) * sa, yq,
+                    zc - (0.5 - xa) * c * sa + (-ya * c) * ca)
                    for xa, ya in loop]            # inverted: suction side down
             rings.append(np.array(pts))
         polys += _loft3(rings, col)
         t_mount = str(getattr(aux, 'top_mount', 'pylon') or 'pylon')
-        if float(aux.top_plate) > 0.0:
+        if float(aux.top_plate) > 0.0 or t_mount == 'endplate':
+            # endplate mount: the plates ARE the structure, so they run from
+            # the wing down to the deck (along their lean, onto its slope)
+            # and are drawn as the mount; a fence hangs its own height
+            top_at = _deck_top3(g, xt)
+
+            def drop(dy):
+                return zc - top_at(b2 + 0.008 + dy)
+            back = 0.0 if blend > 0.0 else 0.03
+            br = None
+            if t_mount == 'endplate':
+                # ...AeroBO's plate, landing where its lean takes it (the
+                # roof, or down the shoulder a wide wing's tips stand over),
+                # bracketed to the body where it stops short of it
+                st, br, reached = _bl.carried_stations(_own('top'), drop, cant, blend, shape,
+                                                       c_tip, scale, slope, back, PLATE_REACH_MAX)
+            else:
+                h_d = cap = float(aux.top_plate) * dpt + 0.02
+                if h_d > drop(0.0):               # a fence stops ON the body
+                    h_d = _bl.reach_arc(drop, cant, blend, shape, cap)
+                st = _bl.plate_stations(h_d, cant, blend, shape, c_tip, scale, slope, back)
+                reached = h_d < cap - 1e-9
+            wall = (2, lambda p_: _deck_top3(g, p_[0])(p_[1])) if reached else None
             for sgn in (-1.0, 1.0):
-                yq = sgn * (b2 + 0.008)
-                # endplate mount: the plates ARE the structure, so they run
-                # from the wing down to the deck (its slope) and are drawn
-                # as the mount
-                if t_mount == 'endplate':
-                    polys += _deck_box3(xt - 0.65 * ct_, xt + 0.65 * ct_,
-                                        yq - 0.006, yq + 0.006, zc + 0.03, g, C_WING_ON)
-                else:
-                    polys += _box3(xt - 0.65 * ct_, xt + 0.65 * ct_, yq - 0.006, yq + 0.006,
-                                   zc - float(aux.top_plate) * dpt - 0.02, zc + 0.03,
-                                   C_WING_ON)
+                root = (xt, sgn * (b2 + 0.008), zc)
+                polys += _loft3(_bl.plate_rings(root, (0.0, sgn, 0.0), (0.0, 0.0, -1.0), st, 0.012,
+                                                None if br is not None else wall), col)
+                if br is not None:
+                    polys += _loft3(_bl.plate_rings(root, (0.0, sgn, 0.0), (0.0, 0.0, -1.0), br,
+                                                    0.012, wall), C_STRUT3)
         if t_mount == 'pylon':
-            for sgn in (-1.0, 1.0):               # pylons down to the deck
-                yq = sgn * 0.28 * 2.0 * b2
-                polys += _deck_box3(xt - 0.15 * ct_, xt - 0.15 * ct_ + 0.06,
-                                    yq - 0.012, yq + 0.012, zc - 0.02 * ct_, g, C_WING_OFF)
+            # swan necks from the deck, behind the trailing edge, over onto
+            # the PRESSURE surface (the world-up side of the inverted wing)
+            c_p = ct_ * (1.0 - (1.0 - lam) * pf)
+            up = lower_surface(loop)
+            dx, dz = (0.5 - up[:, 0]) * c_p, -up[:, 1] * c_p
+            px, pz = xt + dx * ca + dz * sa, zc - dx * sa + dz * ca
+            for sgn in (-1.0, 1.0):
+                polys += _loft3(pylon_rings(px, pz, sgn * pf * b2, g.deck_z), C_STRUT3)
     return polys
+
+
+#: a carrying plate's arc is capped here (garage.PLATE_REACH_MAX, the same
+#: number): a lean so shallow that reaching the body would take more is drawn
+#: falling short, a layout AeroBO's own reach floor refuses anyway
+PLATE_REACH_MAX = 2.0
+
+
+def _deck_top3(g, x: float):
+    """The drawn body's TOP across station x, as y -> z: where a carrying
+    top-wing plate lands. `_ring3`'s section -- the crown, the roof
+    shoulder, the roof edge, down the glass to the belt and out to the
+    shoulder crease, the widest line -- interpolated between `g`'s stations;
+    past the crease, the crease (the plate stands beside the car at its
+    waist). A callable: a reach solve reads one profile many times."""
+    st = np.array([s_[:6] for s_ in g.stations], float)[::-1]    # x ascending
+    _x, zb, zbelt, ztop, w, wr = (float(np.interp(x, st[:, 0], st[:, k])) for k in range(6))
+    c = 0.02 if (ztop - zbelt) > 0.2 else 0.0
+    z_sill = zb + SILL_H3
+    zcr = z_sill + CREASE3 * max(zbelt - z_sill, 0.0)
+    ys = (0.0, ROOF_SHOULDER3 * wr, wr, w - TUMBLE3, w)
+    zs = (ztop + c, ztop + 0.7 * c, ztop, zbelt, zcr)
+    return lambda y: float(np.interp(abs(y), ys, zs))
 
 
 class Mesh:
@@ -2542,7 +2730,7 @@ class Renderer:
 
         W, H = int(cfg.size[0]), int(cfg.size[1])
         self.screen = pygame.display.set_mode((W, H))
-        pygame.display.set_caption('carsim')
+        pygame.display.set_caption('Alerón: Race Your Wing')
         self.W, self.H = W, H
         self.ui = min(W / 1280.0, H / 800.0)
 
@@ -2585,6 +2773,11 @@ class Renderer:
         self._ghost_cut = None
         self._ghost_cut_t = 0.0
         self._ghost_labels = []
+        # the car being driven: its on-screen bounding box this frame (set
+        # by `_draw_car` / `_draw_car3d`; the ghost labels keep off it)
+        self._car_box = None
+        # the P pause screen's veil, one SRCALPHA surface (`_draw_pause`)
+        self._pause_veil = None
         self._plan_cache = None
         self._braking = False
         self._reversing = False
@@ -2592,6 +2785,9 @@ class Renderer:
         # more than the pose (the car's brake lights read ctl, its roll st)
         self._st = None
         self._ctl = None
+        # task 45, round 3: a running stop challenge's (brake marker s, board
+        # s), HudData.stop_board -- painted by `_draw_marks` / world.marks
+        self._stop_board = None
         self._car_depth = 0.0             # chase: the car CG's camera depth
         self._anchor0 = self._anchor.copy()
 
@@ -3034,6 +3230,7 @@ class Renderer:
             psi = pp + _wrap_pi(psi - pp) * alpha
 
         self._st, self._ctl = st, ctl
+        self._stop_board = getattr(aux, 'stop_board', None)
         world, props, fx = self._world, self._props, self._fx
         if self._cam3 is not None:
             self._car_depth = float(self._cam3.ground_depth(np.array([[x, y]]))[0])
@@ -3079,6 +3276,7 @@ class Renderer:
         if fx is not None:
             fx.draw(self, x, y, psi, far=True)
         self._ghost_tops = []
+        self._car_box = None
         if aux.ghosts:
             self._draw_ghosts(aux.ghosts)
         if self._cam3 is not None:
@@ -3107,6 +3305,9 @@ class Renderer:
                 self._draw_gg(aux)
             self._draw_minimap(x, y, aux)      # 'full' and 'minimal' alike
             self._draw_delta(aux)
+        # the message toast on every HUD setting, 'off' included: H's and C's
+        # own notes (and the G / T ones) are read with the HUD hidden too
+        self._draw_toast(aux)
         if aux.overlay:
             self._draw_overlay(aux.overlay)
         res = getattr(aux, 'results', None)
@@ -3115,6 +3316,8 @@ class Renderer:
         tut = getattr(aux, 'tutorial', None)
         if tut:
             self._draw_tutorial(tut)
+        # P: over everything but the menu, on every HUD setting
+        self._draw_pause(aux)
         menu = getattr(aux, 'menu', None)
         if menu is not None and getattr(menu, 'open', False):
             menu.draw(sc)                  # ESC / OPTIONS: controls + reset
@@ -3701,6 +3904,18 @@ class Renderer:
                     pts = self._gpoly(quad)
                     if len(pts) >= 3:
                         pygame.draw.polygon(self.screen, C_PURPLE, pts)
+        if self._stop_board is not None:
+            # task 45, round 3: a stop challenge's amber brake marker and its
+            # board's checker (world.marks paints them with the world on)
+            from . import scenery as _scn
+            from .world import PAINT_RGB
+            for a, b, n0, n1, k in zip(*_scn.stop_board_rects(tr, self._stop_board)):
+                if not any(self._overlaps(a, b, s0, s1) for s0, s1 in windows):
+                    continue
+                Q = _scn.quads_at(tr, a, b, n0, n1, self._nrm)[0]
+                pts = self._gpoly(Q)
+                if len(pts) >= 3:
+                    pygame.draw.polygon(self.screen, PAINT_RGB[int(k)], pts)
 
     def _draw_skid(self, skid: SkidBuffer):
         """<= 600 lines.  Culled in world coordinates, then strided, then
@@ -3845,7 +4060,11 @@ class Renderer:
         _key, shapes, block, cuts, cols = self._plan_car(g)
         sc = self.screen
         self._draw_car_shadow(x, y, psi, g)
-        P = self._px(self._body_to_world(x, y, psi, block))
+        S = self.world_to_screen(self._body_to_world(x, y, psi, block))
+        P = _pts2(S)
+        lo, hi = S.min(axis=0), S.max(axis=0)
+        self._car_box = pygame.Rect(int(lo[0]), int(lo[1]), int(hi[0] - lo[0]) + 1,
+                                    int(hi[1] - lo[1]) + 1)
         pts = {}
         for (name, _p), a_, b_ in zip(shapes, cuts[:-1], cuts[1:]):
             pts.setdefault(name, []).append(P[a_:b_])
@@ -3896,7 +4115,8 @@ class Renderer:
           OVER it (`_draw_ghost_tops`): the bodies of ghosts clearly between
           the eye and the hero, cross-fading in over GHOST_FRONT_BAND, then
           every ghost's outline and label, so a ghost the hero hides is
-          still seen where it is.
+          still seen where it is (a label that would land on the hero is
+          lifted just above it).
         """
         self._ghost_tops = []
         R2 = (self._view_radius() * 1.2) ** 2
@@ -4189,6 +4409,14 @@ class Renderer:
         every ghost's label -- and in the chase view its outline, at the
         ghost's own fade -- so a ghost the hero hides is still seen: the
         PB 2-3 m behind you in a time trial keeps its outline and its 'PB'.
+
+        No label is drawn on the car being driven or on another label: one
+        that would land on the car's screen box (`_car_box`) is lifted to
+        sit just above it, and one that would land on a label already drawn
+        is lifted to sit just above that one; a label that still lands on
+        either, or off the top of the screen, is not drawn. At the start of
+        a lap the REF and the PB sit on the car -- their labels stack above
+        it instead of printing over it and each other.
         The labels drawn are kept in `_ghost_labels` (text, rect) for the
         self-check."""
         tops = self._ghost_tops
@@ -4202,6 +4430,9 @@ class Renderer:
             for rec in tops:
                 self._blit_poly_alpha(rec['pts'], rec['col'], round(255 * rec['fade']), wpx)
         self._ghost_labels = []
+        car = self._car_box
+        gap = int(round(2 * self.ui))
+        kept = []
         for rec in tops:
             label, pts = rec['label'], rec['pts']
             if not label or not pts:
@@ -4212,14 +4443,59 @@ class Renderer:
             top = min(p[1] for p in pts)
             cx_s = sum(p[0] for p in pts) / len(pts)
             lbl = self._txt(label, self.f_lbl, rec['col'])
+            box = pygame.Rect((int(cx_s - lbl.get_width() / 2),
+                               int(top - lbl.get_height() - 2 * self.ui)), lbl.get_size())
+            if car is not None and box.colliderect(car):
+                box.bottom = car.top - gap          # off the car: just above it
+            hit = box.collidelist(kept)
+            if hit >= 0:
+                box.bottom = kept[hit].top          # off that label: just above it
+            if (box.top < 0 or box.collidelist(kept) >= 0
+                    or (car is not None and box.colliderect(car))):
+                continue
             if a < 255:
                 lbl = lbl.copy()
                 lbl.set_alpha(a)
-            pos = (int(cx_s - lbl.get_width() / 2),
-                   int(top - lbl.get_height() - 2 * self.ui))
-            self.screen.blit(lbl, pos)
-            self._ghost_labels.append((label, pygame.Rect(pos, lbl.get_size())))
+            self.screen.blit(lbl, box.topleft)
+            kept.append(box)
+            self._ghost_labels.append((label, box))
         self._ghost_tops = []
+
+    def _pause_lines(self, aux) -> tuple:
+        """The P pause screen's caption, ('PAUSED', PAUSE_HINT), while
+        aux.paused and no menu is open; () otherwise (ESC's menu, the
+        tutorial's pages and the pre-race page pause too, and say so)."""
+        if not getattr(aux, 'paused', False):
+            return ()
+        menu = getattr(aux, 'menu', None)
+        if menu is not None and getattr(menu, 'open', False):
+            return ()
+        return ('PAUSED', PAUSE_HINT)
+
+    def _draw_pause(self, aux) -> None:
+        """P's pause screen: a frozen frame must not read as a hang. The
+        frame dims under one cached veil (PAUSE_DIM), then 'PAUSED' and how
+        to go on sit centred on a HUD panel. Nothing when not paused."""
+        lines = self._pause_lines(aux)
+        if not lines:
+            return
+        veil = self._pause_veil
+        if veil is None or veil.get_size() != (self.W, self.H):
+            veil = self._pause_veil = pygame.Surface((self.W, self.H), pygame.SRCALPHA)
+            veil.fill((0, 0, 0, PAUSE_DIM))
+        self.screen.blit(veil, (0, 0))
+        head, hint = lines
+        (w1, h1), w2 = self.f_speed.size(head), self.f_lbl.size(hint)[0]
+        pad = int(round(16 * self.ui))
+        w, h = max(w1, w2) + 2 * pad, h1 + self.f_lbl.get_linesize() + 2 * pad
+        key = ('pause', w, h)
+        panel = self._panels.get(key)
+        if panel is None:
+            panel = self._panels[key] = _hud_panel_surface(w, h, self.ui)
+        x0, y0 = (self.W - w) // 2, (self.H - h) // 2
+        self.screen.blit(panel, (x0, y0))
+        self._blit(head, (self.W - w1) / 2, y0 + pad, self.f_speed)
+        self._blit(hint, (self.W - w2) / 2, y0 + pad + h1, self.f_lbl, C_HUD_DIM)
 
     def _draw_delta(self, aux) -> None:
         """The live delta to the class PB, large at the top centre under the
@@ -4233,8 +4509,7 @@ class Renderer:
         r = self._rect(R_TIMING)
         cx, y = r.centerx, r.bottom + 6 * self.ui
         if has_d:
-            s = f'{d:+.2f}'
-            col = C_GREEN if d < 0.0 else (C_BAR_BRK if d > 0.0 else C_HUD_TEXT)
+            s, col = _delta_text(d)
             self._blit(s, cx - self.f_speed.size(s)[0] / 2, y, self.f_speed, col)
             y += self.f_speed.get_linesize()
         if fl:
@@ -4354,10 +4629,13 @@ class Renderer:
             if nw <= xe - (x + self.f_lbl.size(head)[0] + 10 * u):
                 self._blit(nxt, xe - nw, y, self.f_lbl, C_HUD_DIM)
                 xn = xe - nw - 10 * u
-        if valid and d and not numeric:        # "first lap in this class": words, up
-            xw = x + self.f_lbl.size(head)[0] + 10 * u   # here, cut to what clears the tag
+        # "first lap in this class": the words up here, in full or as 'first
+        # in class', whichever clears the next medal and the tag; else none
+        # (cut to a bare 'first' they said nothing)
+        if valid and d and not numeric:
+            xw = x + self.f_lbl.size(head)[0] + 10 * u
             room = xn - xw
-            for s_ in (d, 'first in class', 'first'):
+            for s_ in (d, 'first in class'):
                 if self.f_lbl.size(s_)[0] <= room:
                     self._blit(s_, xw, y, self.f_lbl, C_HUD_DIM)
                     break
@@ -4434,8 +4712,9 @@ class Renderer:
         tw = w0 - 2 * pad
         lbl, val = self.f_lbl, self.f_val
         rows = []                              # (text, font, colour, drop order)
-        if tu.get('flash'):
-            rows.append((tu['flash'], lbl, C_GREEN, 0))
+        if tu.get('flash'):                    # wrapped like the rest: a long
+            rows += [(ln, lbl, C_GREEN, 1 if i else 0)   # "done:" ran out of the box
+                     for i, ln in enumerate(self._wrap_px(tu['flash'], lbl, tw))]
         if tu.get('text') or tu.get('status'):
             rows.append((tu.get('head', 'TUTORIAL'), lbl, C_YELLOW, 0))
             rows += [(ln, lbl, C_HUD_TEXT, 1 if i else 0)
@@ -4444,6 +4723,10 @@ class Renderer:
                 s_ = tu['status']              # wrapped only when too wide: the spaced
                 rows += [(ln, val, C_HUD_TEXT, 0)   # columns of a line that fits survive
                          for ln in ([s_] if val.size(s_)[0] <= tw else self._wrap_px(s_, val, tw))]
+            if tu.get('aim'):                  # task 45, round 3: a stop's board row, in the
+                a_ = tu['aim']                 # painted marker's amber (green on the 3rd star)
+                col = C_GREEN if '[***]' in a_ else C_BOARD_AIM
+                rows += [(ln, lbl, col, 0) for ln in self._wrap_px(a_, lbl, tw)]
             if tu.get('warn'):
                 rows += [(ln, lbl, C_BAR_BRK, 2 if i else 0)
                          for i, ln in enumerate(self._wrap_px(tu['warn'], lbl, tw))]
@@ -4561,11 +4844,16 @@ class Renderer:
         or none, each at its own station and chord.
         Top wing: a span-wide bar with end plates at its station; stowed =
         outline, deployed = filled, its drag drawn as the (backward) arrow.
+        Struts and pylons only where the MOUNT is pylons (`dev_mount` /
+        `top_mount`, at `*_pylon_frac`); a carrying plate spans to the body,
+        and a leaning one shows its outboard reach from above.
         """
+        from .aero import blend as _bl
         dep_l, dep_r = flank_deps(aux)
         legacy = bool(getattr(aux, 'wing_type', '')) and aux.wing_type != 'off'
         chord = float(getattr(aux, 'dev_chord', DEV_CHORD) or DEV_CHORD)
         plate = float(getattr(aux, 'dev_plate', 0.0) or 0.0)
+        mount = str(getattr(aux, 'dev_mount', 'pylon') or 'pylon')
         for side in (+1, -1):                       # +1 = the LEFT flank (y > 0)
             present = (aux.dev_left if side > 0 else aux.dev_right) or legacy
             if not present:
@@ -4578,7 +4866,7 @@ class Renderer:
             active = dep > 0.0
             fs = dep * dep * (3.0 - 2.0 * dep) if active else 0.0
             y_side = side * car_geom().half_w_at(xw)     # THIS car's side
-            out = side * (DEV_OUT0 + DEV_OUT1 * fs)
+            out = side * _flank_out(aux, fs)
             panel = np.array([
                 (xw + 0.5 * chord, y_side + out),
                 (xw - 0.5 * chord, y_side + out),
@@ -4587,16 +4875,18 @@ class Renderer:
             col = C_WING_ON if (active and dep > 0.05) else C_WING_OFF
             pts = self._px(self._body_to_world(x, y, psi, panel))
             pygame.draw.polygon(self.screen, col, pts)
-            if plate > 0.0:                         # end plates: two short bars
+            if plate > 0.0 or mount == 'endplate':  # end plates: two short bars
+                # (carrying the panel: from the car's side out to it)
+                y_in = (y_side if mount == 'endplate' else y_side + out - side * 0.02)
                 for dx in (-0.5 * chord, 0.5 * chord - 0.04):
-                    pl = np.array([(xw + dx, y_side + out - side * 0.02),
-                                   (xw + dx + 0.04, y_side + out - side * 0.02),
+                    pl = np.array([(xw + dx, y_in),
+                                   (xw + dx + 0.04, y_in),
                                    (xw + dx + 0.04, y_side + out + side * (DEV_THICK + 0.02)),
                                    (xw + dx, y_side + out + side * (DEV_THICK + 0.02))])
                     pygame.draw.polygon(self.screen, col,
                                         self._px(self._body_to_world(x, y, psi, pl)))
-            # struts from the sill to the panel
-            for dxs in (-0.3 * chord, 0.3 * chord):
+            # struts from the sill to the panel (a pylon mount only)
+            for dxs in ((-0.3 * chord, 0.3 * chord) if mount == 'pylon' else ()):
                 st = np.array([(xw + dxs, y_side), (xw + dxs, y_side + out)])
                 p = self._px(self._body_to_world(x, y, psi, st))
                 pygame.draw.line(self.screen, C_WING_OFF, p[0], p[1], 1)
@@ -4630,14 +4920,28 @@ class Renderer:
             if on:
                 pygame.draw.polygon(self.screen, col, pts)
             pygame.draw.polygon(self.screen, col, pts, max(1, int(round(0.04 * self.ppm))))
-            if float(aux.top_plate) > 0.0:
+            t_mount = str(getattr(aux, 'top_mount', 'pylon') or 'pylon')
+            if float(aux.top_plate) > 0.0 or t_mount == 'endplate':
+                # seen from above a plate is its outboard REACH: a lean or a
+                # blend throws it out, an upright sharp one is the old sliver
+                cant = float(getattr(aux, 'top_plate_cant', 90.0) or 90.0)
+                bf = float(getattr(aux, 'top_plate_blend', 0.0) or 0.0)
+                shp = str(getattr(aux, 'top_plate_shape', 'arc') or 'arc')
+                h_p = float(aux.top_plate)
+                if t_mount == 'endplate':           # reaching the deck (schematic:
+                    # straight down from the root; the chase view solves the shoulder)
+                    h_p = min((TOP_STOW_GAP + TOP_RISE * dpt)
+                              / max(_bl.height_fraction(cant, bf, shp), 1e-6), PLATE_REACH_MAX)
+                reach = max(0.03, _bl.projection(h_p, cant, bf, shp))
                 for sgn in (+1.0, -1.0):
                     pl = np.array([(xt + 0.6 * ct, sgn * b2), (xt - 0.6 * ct, sgn * b2),
-                                   (xt - 0.6 * ct, sgn * (b2 + 0.03)), (xt + 0.6 * ct, sgn * (b2 + 0.03))])
+                                   (xt - 0.6 * ct, sgn * (b2 + reach)), (xt + 0.6 * ct, sgn * (b2 + reach))])
                     pygame.draw.polygon(self.screen, col, self._px(self._body_to_world(x, y, psi, pl)))
-            # pylons
-            for yp in (-0.25 * b2 * 2 / 2, 0.25 * b2):
-                p = self._px(self._body_to_world(x, y, psi, np.array([(xt - 0.5 * ct, yp), (xt - 0.5 * ct - 0.10, yp)])))
+            # pylons: swan necks, from over the quarter chord back past the
+            # trailing edge to their feet (a pylon mount only)
+            pf = float(getattr(aux, 'top_pylon_frac', 0.56) or 0.56)
+            for yp in ((-pf * b2, pf * b2) if t_mount == 'pylon' else ()):
+                p = self._px(self._body_to_world(x, y, psi, np.array([(xt + 0.25 * ct, yp), (xt - 0.5 * ct - 0.10, yp)])))
                 pygame.draw.line(self.screen, C_WING_OFF, p[0], p[1], 1)
             if on and self.cfg.show_vectors and float(aux.D_top) > 0.0:
                 # Only the drag: the top wing's other component is VERTICAL and
@@ -4683,6 +4987,7 @@ class Renderer:
                round(float(getattr(aux, 'dev_chord', DEV_CHORD)), 3),
                round(float(getattr(aux, 'dev_span', DEV_SPAN)), 3),
                round(float(getattr(aux, 'dev_plate', 0.0)), 3),
+               round(float(getattr(aux, 'dev_standoff', 0.0) or 0.0), 3),
                round(float(getattr(aux, 'h_w', H_W)), 3),
                round(float(getattr(aux, 'inc_deg', 0.0)), 2),
                str(getattr(aux, 'wing_type', '')),
@@ -4692,7 +4997,19 @@ class Renderer:
                round(float(getattr(aux, 'top_x', 0.0)), 3),
                round(float(getattr(aux, 'top_span', 0.0)), 3),
                round(float(getattr(aux, 'top_chord', 0.0)), 3),
-               round(float(getattr(aux, 'top_plate', 0.0)), 3))
+               round(float(getattr(aux, 'top_plate', 0.0)), 3),
+               # ...and how each is carried and its plates drawn: a build
+               # swapped between runs must not keep the last one's pylons
+               tuple((str(getattr(aux, p_ + '_mount', 'pylon')),
+                      round(float(getattr(aux, p_ + '_taper', 1.0)), 3),
+                      round(float(getattr(aux, p_ + '_pylon_frac', 0.56)), 3),
+                      round(float(getattr(aux, p_ + '_plate_cant', 90.0)), 2),
+                      round(float(getattr(aux, p_ + '_plate_blend', 0.0)), 3),
+                      str(getattr(aux, p_ + '_plate_shape', 'arc')),
+                      round(float(getattr(aux, p_ + '_plate_ratio', 0.0)), 3),
+                      bool(getattr(aux, p_ + '_plate_follows', False)),
+                      round(float(getattr(aux, p_ + '_plate_own', 0.0)), 3))
+                     for p_ in ('dev', 'top')))
         if key != self._wing3_key:
             self._wing3_key = key
             polys = wing_mesh3(aux, geom)
@@ -4993,6 +5310,11 @@ class Renderer:
         eye = c3.eye
         facing = np.einsum('ij,ij->i', N, eye[None, :] - P0) > 0.0
         scr, depth = c3.project(V)
+        front = scr[depth > CHASE_Z_NEAR]
+        if len(front):
+            lo, hi = front.min(axis=0), front.max(axis=0)
+            self._car_box = pygame.Rect(int(lo[0]), int(lo[1]), int(hi[0] - lo[0]) + 1,
+                                        int(hi[1] - lo[1]) + 1)
         d_min = np.minimum.reduceat(depth, starts)
         d_mean = np.add.reduceat(depth, starts) / counts
         keyd = d_mean[m.parents].min(axis=1) - 1e-3 * m.level
@@ -5083,7 +5405,7 @@ class Renderer:
                       and aux.wing_type != 'off')
             if legacy and not (aux.dev_left or aux.dev_right):
                 xw = float(getattr(aux, 'x_w', X_W))
-            out = DEV_OUT0 + DEV_OUT1 * f
+            out = _flank_out(aux, f)
             base = self._body_pt3(x, y, psi, (xw, side * (g.half_w_at(xw) + out),
                                               float(getattr(aux, 'h_w', H_W))))
             for F, dv, col in (
@@ -5176,12 +5498,13 @@ class Renderer:
             self.screen.blit(lit, (x, y), (0, 0, int(round(n_on * w / REV_SEGMENTS)), h))
 
     def _shift_lights(self, x0, y0, rpm: float, shift: float,
-                      span: float = SHIFT_SPAN) -> None:
+                      span: float = SHIFT_SPAN, blink: bool = True) -> None:
         """SHIFT_LIGHTS LEDs lit one by one over the last SHIFT_SPAN rpm
-        before the shift point, then all blinking together at it."""
+        before the shift point, then all blinking together at it (`blink`
+        False: all five stay lit, steady, as the automatic box has them)."""
         u = self.ui
         wl, hl, gap = int(14 * u), max(int(7 * u), 3), int(4 * u)
-        at_shift = rpm >= shift
+        at_shift = blink and rpm >= shift
         blink_on = int(self._t_render * SHIFT_BLINK_HZ * 2.0) % 2 == 0
         for k in range(SHIFT_LIGHTS):
             thr = shift - span * (1.0 - (k + 1) / SHIFT_LIGHTS)
@@ -5195,6 +5518,22 @@ class Renderer:
                              (int(x0 + k * (wl + gap)), int(y0), wl, hl),
                              border_radius=max(hl // 2, 1))
 
+    def _speed_unit_xy(self, r, spd):
+        """Where 'km/h' goes in the speed panel `r`: 6 px (at ui 1) right
+        of the big number `spd` as drawn (f_speed is monospaced, so every
+        speed is '888' wide and the unit never moves), its ink centred on
+        the digits' ink (the digits have no descenders: the line's centre
+        would sit it low). The offset is cached per font."""
+        u = self.ui
+        key = ('km/h', id(self.f_speed), id(self.f_lbl))
+        dy = self._wraps.get(key)
+        if dy is None:
+            dig = self._txt('888', self.f_speed).get_bounding_rect()
+            unit = self._txt('km/h', self.f_lbl, C_HUD_DIM).get_bounding_rect()
+            dy = self._wraps[key] = (dig.y + dig.h / 2) - (unit.y + unit.h / 2)
+        return (r.x + 10 * u + self.f_speed.size(spd)[0] + 6 * u,
+                r.y + 6 * u + dy)
+
     def _draw_hud(self, aux, ctl):
         u = self.ui
         minimal = (self.cfg.hud == 'minimal')
@@ -5202,10 +5541,16 @@ class Renderer:
         # --- speed / gear / rpm ------------------------------------------
         r = self._panel(R_SPEED)
         kmh = int(round(aux.V_kmh))                     # quantised: 1 km/h
-        self._blit(f'{kmh:3d}', r.x + 10 * u, r.y + 6 * u, self.f_speed)
-        self._blit('km/h', r.x + 130 * u, r.y + 34 * u, self.f_lbl, C_HUD_DIM)
-        self._blit(f'{aux.V:5.1f} m/s', r.x + 130 * u, r.y + 12 * u,
-                   self.f_lbl, C_HUD_DIM)
+        spd = f'{kmh:3d}'
+        self._blit(spd, r.x + 10 * u, r.y + 6 * u, self.f_speed)
+        # the unit right beside the number, centred on its digits; the m/s
+        # is the engineer's, on the 'full' HUD only, a line under the unit
+        # (never above it, where it read as the number's own unit)
+        xk, yk = self._speed_unit_xy(r, spd)
+        self._blit('km/h', xk, yk, self.f_lbl, C_HUD_DIM)
+        if not minimal:
+            self._blit(f'{aux.V:.1f} m/s', xk, yk + self.f_lbl.get_linesize(),
+                       self.f_lbl, C_HUD_DIM)
         g = aux.gear
         gs = 'N' if g == 0 else ('R' if g < 0 else str(g))
         self._blit(gs, r.x + 250 * u, r.y + 8 * u, self.f_gear, C_YELLOW)
@@ -5223,9 +5568,13 @@ class Renderer:
         redline, shift, span = rev_marks()
         pmax = float(getattr(_CAR, 'n_peak_power', RPM_PMAX) or RPM_PMAX)
         rpm_q = int(round(aux.rpm / 50.0) * 50)         # quantised: 50 rpm
+        # the red rpm, the blinking LEDs and LIMIT are the shift cue: none
+        # in AUTO (the box changes up itself), LIMIT only at the cut
+        red, blink, limit = _rev_cue(gb, aux.rpm, shift, redline, aux.on_limiter)
         self._blit(f'{rpm_q:5d} rpm', r.x + 10 * u, r.y + 66 * u, self.f_val,
-                   C_HUD_TEXT if rpm_q < shift else C_BAR_BRK)
-        self._shift_lights(r.x + 132 * u, r.y + 74 * u, aux.rpm, shift, span)
+                   C_BAR_BRK if red else C_HUD_TEXT)
+        self._shift_lights(r.x + 132 * u, r.y + 74 * u, aux.rpm, shift, span,
+                           blink=blink)
         bar = (r.x + 10 * u, r.y + 92 * u, 280 * u, 12 * u)
         self._rev_bar(bar, aux.rpm, redline, shift, span)
         pygame.draw.line(self.screen, C_PURPLE,
@@ -5235,7 +5584,7 @@ class Renderer:
         flags = []
         if aux.stalled:
             flags.append('STALL')
-        if aux.on_limiter:
+        if limit:
             flags.append('LIMIT')
         if flags:
             self._blit(' '.join(flags), r.x + 10 * u, r.y + 112 * u,
@@ -5243,29 +5592,47 @@ class Renderer:
         aids = ' '.join(k for k, on in (('TC', getattr(aux, 'tc_active', False)),
                                         ('ABS', getattr(aux, 'abs_active', False)))
                         if on)
+        xr = r.x + 290 * u                     # the row's right end
         if aids:
-            self._blit(aids, r.x + 290 * u - self.f_lbl.size(aids)[0],
-                       r.y + 112 * u, self.f_lbl, C_YELLOW)
+            xr -= self.f_lbl.size(aids)[0]
+            self._blit(aids, xr, r.y + 112 * u, self.f_lbl, C_YELLOW)
+            xr -= 8 * u
+        # T's whole-track wet: a blue chip left of the aids, on both HUD
+        # levels, for as long as it is on (its toast note is gone in 3 s;
+        # the lost grip and the void laps are not)
+        wet = _wet_chip(aux)
+        if wet:
+            tw, th = self.f_lbl.size(wet)
+            pad = 5 * u
+            chip = pygame.Rect(int(xr - tw - 2 * pad), int(r.y + 111 * u),
+                               int(tw + 2 * pad), int(th + 2 * u))
+            pygame.draw.rect(self.screen, C_WET_CHIP, chip,
+                             border_radius=max(int(4 * u), 2))
+            self._blit(wet, chip.x + pad, r.y + 112 * u, self.f_lbl, C_WET_TEXT)
 
         # --- timing --------------------------------------------------------
         r = self._panel(R_TIMING)
         # the out lap (drive.py) is not timed: the metres to the start line
-        # stand where the lap time would, up to the LAST column
-        out_m = getattr(aux, 'out_lap_m', None)
-        out = isinstance(out_m, (int, float)) and math.isfinite(out_m)
-        self._blit('OUT LAP' if out else f'LAP {aux.lap}', r.x + 10 * u,
-                   r.y + 6 * u, self.f_lbl, C_HUD_DIM)
+        # stand where the lap time would, up to the LAST column. A timed lap
+        # is counted from 1 (_lap_label)
+        out = _out_lap(aux)
+        self._blit(_lap_label(aux), r.x + 10 * u, r.y + 6 * u, self.f_lbl,
+                   C_HUD_DIM)
         if out:
-            om = int(out_m)
+            om = int(aux.out_lap_m)
             self._blit_fit((f'{om} m to the line', f'{om} m to line', f'{om} m'),
                            r.x + 10 * u, r.y + 24 * u, self.f_val, C_HUD_DIM,
                            right=r.x + 124 * u)
         else:
             self._blit(_fmt_t(aux.lap_time), r.x + 10 * u, r.y + 24 * u,
                        self.f_val, C_HUD_TEXT if aux.lap_valid else C_BAR_BRK)
-        self._blit('LAST', r.x + 130 * u, r.y + 6 * u, self.f_lbl, C_HUD_DIM)
+        # a LAST that did not count (off track, a reset, not recorded) says
+        # so in red until the next lap lands: it is not the BEST or the PB
+        void = _last_void(aux)
+        self._blit('LAST  void' if void else 'LAST', r.x + 130 * u, r.y + 6 * u,
+                   self.f_lbl, C_BAR_BRK if void else C_HUD_DIM)
         self._blit(_fmt_t(aux.last_lap), r.x + 130 * u, r.y + 24 * u,
-                   self.f_val)
+                   self.f_val, C_BAR_BRK if void else C_HUD_TEXT)
         self._blit('BEST', r.x + 250 * u, r.y + 6 * u, self.f_lbl, C_HUD_DIM)
         self._blit(_fmt_t(aux.best_lap), r.x + 250 * u, r.y + 24 * u,
                    self.f_val, C_PURPLE)
@@ -5455,27 +5822,123 @@ class Renderer:
         self._blit('ARMED' if aux.wing_on else 'OFF', xa, r.y + 6 * u, self.f_lbl,
                    C_WING_ON if aux.wing_on else C_HUD_DIM)
 
-    def _draw_warn(self, aux):
-        msgs = []
+    def _warn_text(self, aux, short=False):
+        """The R_WARN bar's short flags, joined: PAUSED, OFF TRACK, the
+        slow-motion factor, the stall with how to restart (`short`: the one
+        wording every gearbox shares, the automatic's). The dropped frames and the real-time
+        factor are the engineer's, on the 'full' HUD only, and the RTF never
+        while paused (the clock is stopped, not slow). The short flags come
+        first, so a cut to the bar only ever eats the tail. aux.msg is not
+        here: it is the toast's (_draw_toast)."""
+        flags = []
         if aux.paused:
-            msgs.append('PAUSED')
-        if aux.stalled:
-            msgs.append('STALLED - clutch fully in (Z / SQUARE) or S to restart')
+            flags.append('PAUSED')
         if not aux.on_track:
-            msgs.append('OFF TRACK')
-        if aux.dropped_frames:
-            msgs.append(f'DROPPED {aux.dropped_frames}')
-        if aux.rtf and aux.rtf < 1.0:
-            msgs.append(f'RTF {aux.rtf:.2f}')
+            flags.append('OFF TRACK')
         if aux.time_scale != 1.0:
-            msgs.append(f'x{aux.time_scale:.2f}')
-        if aux.msg:
-            msgs.append(aux.msg)
-        if not msgs:
+            flags.append(f'x{aux.time_scale:.2f}')
+        if aux.stalled:
+            # the automatic box restarts on S alone, and has no clutch to
+            # tell its driver about (task 45); the manual ones take the
+            # clutch in, or S
+            auto = str(getattr(aux, 'gearbox', '') or '') == 'AUTO'
+            flags.append(STALL_AUTO if auto or short else STALL_MANUAL)
+        if self.cfg.hud == 'full':
+            if aux.dropped_frames:
+                flags.append(f'DROPPED {aux.dropped_frames}')
+            if aux.rtf and aux.rtf < 1.0 and not aux.paused:
+                flags.append(f'RTF {aux.rtf:.2f}')
+        return ' | '.join(flags)
+
+    def _draw_warn(self, aux):
+        """The flags bar (R_WARN), cut to it: the full wording, else the
+        short stall hint, else the tail cut with '..'."""
+        txt = self._warn_text(aux)
+        if not txt:
             return
+        u = self.ui
         r = self._panel(R_WARN)
-        self._blit(' | '.join(msgs), r.x + 8 * self.ui, r.y + 2 * self.ui,
-                   self.f_lbl, C_YELLOW)
+        self._blit_fit((txt, self._warn_text(aux, short=True)), r.x + 8 * u,
+                       r.y + 2 * u, self.f_lbl, C_YELLOW, right=r.right - 8 * u)
+
+    def _toast_lines(self, msg):
+        """aux.msg as the toast's lines, in f_lbl, each at most R_TOAST's
+        width less TOAST_PAD a side, and at most TOAST_LINES of them. The
+        break goes between the note's own fields first (' | ' and the race
+        line's double spaces, which stay as written), else between words;
+        what does not fit joins the last line, which is then cut with '..'
+        (a single word wider than the toast is cut the same way). Cached:
+        most notes are the same text for seconds."""
+        f = self.f_lbl
+        w = int((R_TOAST[2] - 2 * TOAST_PAD) * self.ui)
+        msg = str(msg)
+        key = ('toast', msg, id(f), w)
+        got = self._wraps.get(key)
+        if got is None:
+            # the fields, packed greedily: [field, separator, field, ...]
+            parts = re.split(r'( *\| *| {2,})', msg)
+            got, line = [], parts[0]
+            for sep, part in zip(parts[1::2], parts[2::2]):
+                if f.size(line + sep + part)[0] <= w:
+                    line += sep + part
+                else:
+                    got.append(line)
+                    line = part
+            got.append(line)
+            if len(got) > TOAST_LINES or any(f.size(ln)[0] > w for ln in got):
+                got = list(self._wrap_px(msg, f, w))
+            if len(got) > TOAST_LINES:
+                got[TOAST_LINES - 1:] = [' '.join(got[TOAST_LINES - 1:])]
+            for i, ln in enumerate(got):
+                if f.size(ln)[0] > w:
+                    while ln and f.size(ln + '..')[0] > w:
+                        ln = ln[:-1]
+                    got[i] = ln.rstrip() + '..'
+            if len(self._wraps) > 256:
+                self._wraps.clear()
+            self._wraps[key] = got
+        return got
+
+    def _toast_rect(self, lines):
+        """The toast's panel for these lines, in px: as wide as the text (in
+        32 px steps, so a handful of panels are built) and TOAST_PAD a side,
+        centred over R_WARN but kept inside R_TOAST's strip, clear of the
+        minimap; its bottom on R_TOAST's."""
+        u, f = self.ui, self.f_lbl
+        sx, sy, sw, sh = (v * u for v in R_TOAST)
+        tw = max((f.size(ln)[0] for ln in lines), default=0)
+        pw = min(-(-int(tw + 2 * TOAST_PAD * u) // 32) * 32, int(sw))
+        ph = int(round(len(lines) * f.get_linesize() + 10 * u))
+        cx = (R_WARN[0] + R_WARN[2] / 2) * u
+        px = min(max(cx - pw / 2, sx), sx + sw - pw)
+        return pygame.Rect(int(px), int(sy + sh) - ph, pw, ph)
+
+    def _draw_toast(self, aux):
+        """aux.msg in its own panel above the flags bar (R_TOAST): two
+        wrapped lines at most, never under the minimap or off the screen."""
+        msg = str(getattr(aux, 'msg', '') or '').strip()
+        if not msg:
+            return
+        lines = self._toast_lines(msg)
+        r = self._toast_rect(lines)
+        key = ('toast', r.w, r.h)
+        panel = self._panels.get(key)
+        if panel is None:
+            panel = self._panels[key] = _hud_panel_surface(r.w, r.h, self.ui)
+        self.screen.blit(panel, r.topleft)
+        f = self.f_lbl
+        lh = f.get_linesize()
+        tw = max(f.size(ln)[0] for ln in lines)
+        x = r.x + (r.w - tw) / 2               # the text block centred in it
+        y = r.y + (r.h - len(lines) * lh) / 2
+        # the last line (the one a long note is cut on) through _blit_fit,
+        # held inside the panel whatever the font does
+        for i, ln in enumerate(lines):
+            if i == len(lines) - 1:
+                self._blit_fit(ln, x, y + i * lh, f, C_YELLOW,
+                               right=r.right - TOAST_PAD * self.ui)
+            else:
+                self._blit(ln, x, y + i * lh, f, C_YELLOW)
 
     def _draw_gg(self, aux):
         u = self.ui
@@ -5521,7 +5984,7 @@ class Renderer:
         # the captions sit in the rows _prep_track keeps clear of the map,
         # each cut to the panel
         u, xr = self.ui, r.right - 6 * self.ui
-        name = getattr(self.track, 'title', '') or self.track.name
+        name = _map_title(self.track)
         self._blit_fit(name, r.x + 6 * u, r.y + 4 * u, self.f_lbl, C_HUD_DIM,
                        right=xr)
         # what you are driving, under the map: the car and the mass it is
@@ -5570,6 +6033,74 @@ def _fmt_t(t, short=False):
     if short or m == 0:
         return f'{s + 60 * m:02d}.{ms:03d}'
     return f'{m:d}:{s:02d}.{ms:03d}'
+
+
+def _map_title(track):
+    """The map's name for the minimap caption: its own title, else the menu
+    name (the arena, the skidpad and the dragstrip build with no title),
+    else the raw id -- the same fallback drive.py's pages use."""
+    return (getattr(track, 'title', '')
+            or trk.TRACK_TITLES.get(track.name, track.name))
+
+
+def _out_lap(aux):
+    """True on the out lap: drive.py sets aux.out_lap_m (the metres to the
+    start line) while the clock waits for the first crossing."""
+    m = getattr(aux, 'out_lap_m', None)
+    return isinstance(m, (int, float)) and math.isfinite(m)
+
+
+def _lap_label(aux):
+    """The timing panel's head over the running lap: OUT LAP before the
+    first crossing, else the lap in progress counted from 1. aux.lap is the
+    laps COMPLETED (drive.py LapTimer), so the first timed lap reads LAP 1,
+    the same lap the results card calls 'lap 1'."""
+    return 'OUT LAP' if _out_lap(aux) else f'LAP {int(aux.lap) + 1}'
+
+
+def _delta_text(d):
+    """The live delta's (text, colour): green ahead of the PB, red behind.
+    Level with it -- anything '+.2f' would print as 0.00, |d| < 0.005 s --
+    reads '0.00' in the HUD's text colour, never a green '-0.00' or a red
+    '+0.00' (task 45)."""
+    if abs(d) < 0.005:
+        return '0.00', C_HUD_TEXT
+    return f'{d:+.2f}', (C_GREEN if d < 0.0 else C_BAR_BRK)
+
+
+def _last_void(aux):
+    """True when LAST shows a lap that did not count: aux.last_valid False
+    and a lap time there to mark (a blank LAST has nothing to void)."""
+    t = getattr(aux, 'last_lap', 0.0)
+    return (not getattr(aux, 'last_valid', True) and isinstance(t, (int, float))
+            and math.isfinite(t) and t > 0.0)
+
+
+def _rev_cue(gearbox, rpm, shift, redline, on_limiter):
+    """The speed panel's rev warnings, (red_text, blink_leds, show_limit):
+    the rpm read out in red and the shift lights blinking from the shift
+    point, and LIMIT under them on the rev limiter. They tell the driver to
+    change up, so the automatic box ('AUTO'), which changes up itself (at
+    6050 on the Corsa at full throttle since task 45, under its soft
+    limiter, past its 5900 shift point), shows
+    none of them: its LEDs and rev bar still light, steady. A manual box
+    ('MAN', 'MAN+CL', or no label given) keeps them as they were, but LIMIT
+    only within LIMIT_BAND of the cut: powertrain.py's on_limiter is also
+    the bus's road-speed governor, at 1650 of its 2500 rpm."""
+    if str(gearbox or '') == 'AUTO':
+        return False, False, False
+    at_shift = rpm >= shift
+    return at_shift, at_shift, bool(on_limiter) and rpm >= redline - LIMIT_BAND
+
+
+def _wet_chip(aux):
+    """The speed panel's chip while T's whole-track wet is on: the grip
+    left everywhere as a percentage of the dry ('WET 63%' at
+    MU_WET_SCALE); '' when dry (aux.global_wet 1, or not given)."""
+    gw = getattr(aux, 'global_wet', 1.0)
+    if not (isinstance(gw, (int, float)) and math.isfinite(gw) and gw < 1.0):
+        return ''
+    return f'WET {round(100 * gw)}%'
 
 
 # ======================================================================= #
@@ -5868,7 +6399,18 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     long_ = _demo_hud()
     long_.lap_valid, long_.lap_void_why = False, 'all four wheels left the road at the hairpin'
     long_.dev_left = long_.dev_right = long_.top_on = True
-    long_.wing_mode, long_.air_brake, long_.top_deploy = 'AIR BRAKE', True, 1.0
+    #  the widest G mode's label (drive/airbrake.py; task 44's TOP FIX+SIDE)
+    #  must read in full on the aero panel and the minimal chip, never cut
+    from .airbrake import LABELS as _WM_LABELS
+    wm_long = max(_WM_LABELS.values(), key=lambda t_: rnd.f_lbl.size(t_)[0])
+    #  ... at every UI scale too: the chip's room (its _draw_wing_chip
+    #  geometry, the wider 'WINGS' head) for each label in f_lbl's size there
+    wm_cut = []
+    for u_ in (0.6, 0.8, 0.9, 1.0, 1.125, 1.25, 1.5, 2.0):
+        f_ = rnd._font(int(round(14 * u_)))
+        room = R_WING_CHIP[2] * u_ - 26 * u_ - f_.size('ARMED')[0]
+        wm_cut += [(u_, t_) for t_ in _WM_LABELS.values() if f_.size(f'WINGS  {t_}')[0] > room]
+    long_.wing_mode, long_.air_brake, long_.top_deploy = wm_long, True, 1.0
     long_.F_wing, long_.D_wing, long_.F_top, long_.D_top = -1234.5, 999.0, 1234.0, 456.0
     long_.wing_left_name, long_.wing_top_name = 'Gurney flap wide chord', 'Swan-neck top'
     long_.car_name, long_.mass_kg = 'Opel Corsa C 1.2', 1243.0
@@ -5891,12 +6433,17 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     eng = ('Fz  [N]', 'util_f', 'LIMITED BY', 'beta', 'FLANK', 'THR', 'steer', 'g-g')
     ok_h = (ViewConfig().hud == 'minimal'
             and not any(k in t_min for k in eng) and all(k in t_full for k in eng)
-            and 'WINGS  AIR BRAKE' in t_min and 'arena' in t_min and 'INVALID - ' in t_min
+            and f'WINGS  {wm_long}' in t_min.split(' | ')
+            and trk.TRACK_TITLES['arena'] in t_min.split(' | ')
+            and f'AERO  {wm_long}' in t_full.split(' | ') and 'INVALID - ' in t_min
+            and not wm_cut
             and 'WINGS' not in hud_txt[('minimal', False, False)]
             and 'LIMITED BY' not in hud_txt[('full', False, True)] and not outside)
     rep("HUD: 'minimal' is the race HUD, 'full' adds the engineering; text inside its panels",
         ok_h, f"default {ViewConfig().hud!r}; minimal draws {len(t_min.split(' | '))} strings, "
-              f"full {len(t_full.split(' | '))}; LIMITED BY at 3 m/s "
+              f"full {len(t_full.split(' | '))}; the widest wing mode {wm_long!r} in full "
+              f"{f'AERO  {wm_long}' in t_full.split(' | ')}, cut at a scale {wm_cut}; "
+              f"LIMITED BY at 3 m/s "
               f"{'LIMITED BY' in hud_txt[('full', False, True)]}; outside a panel {outside}")
     #  the tutorial's box (drive/tutorial.py): drawn in its place, inside
     #  R_TUTOR however long the text, nothing without it
@@ -5935,6 +6482,364 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
             and tut_counts['long'][1] == 0 and tut_counts['none'][0] < 10)
     rep('tutorial box drawn, fits R_TUTOR', ok_t,
         f"yellow px in / below the box: {tut_counts}")
+    #  the flags bar and the message toast: R_WARN holds the short flags
+    #  only (no RTF / DROPPED on the race HUD, no RTF while paused, the stall
+    #  hint per gearbox), cut to the bar; aux.msg is its own toast, at most
+    #  two lines inside R_TOAST's strip, clear of the minimap and the bar,
+    #  and drawn with the HUD off too; the race-vs-bot line fits it uncut,
+    #  broken between its fields (its double spaces kept), not mid-field;
+    #  a long tutorial "done:" flash wraps inside R_TUTOR
+    tw_ = (R_TOAST[2] - 2 * TOAST_PAD) * rnd.ui
+    msg200 = ' '.join(['wings AIR BRAKE: all three wings out while you brake'] * 4)[:200]
+    tl_words, tl_word = rnd._toast_lines(msg200), rnd._toast_lines('W' * 200)
+    bot_ = 'BOT swarm_bot_3wings  gap +1.17 s (+18 m)  bot lap 1 last 66.62 best --'
+    race_ = 'LAP 3 - this lap does not count | ' + bot_
+    tl_race, tl_bot = rnd._toast_lines(race_), rnd._toast_lines(bot_)
+    bot_want = ([bot_] if rnd.f_lbl.size(bot_)[0] <= tw_ else
+                ['BOT swarm_bot_3wings  gap +1.17 s (+18 m)', 'bot lap 1 last 66.62 best --'])
+    ok_tl = (len(msg200) == 200 and all(0 < len(l_) <= TOAST_LINES for l_ in (tl_words, tl_word))
+             and all(rnd.f_lbl.size(s_)[0] <= tw_ for s_ in tl_words + tl_word + tl_race)
+             and len(tl_race) <= 2 and ' '.join(tl_race).split() == race_.split()
+             and tl_bot == bot_want)
+    w_ = _demo_hud()
+    w_.rtf, w_.dropped_frames = 0.5, 3
+    cfg.hud = 'minimal'
+    w_min = rnd._warn_text(w_)
+    cfg.hud = 'full'
+    w_full = rnd._warn_text(w_)
+    w_.paused = True
+    w_pause = rnd._warn_text(w_)
+    w_.paused, w_.stalled, w_.gearbox = False, True, 'AUTO'
+    w_auto = rnd._warn_text(w_)
+    w_.gearbox = 'MAN+CL'
+    w_man = rnd._warn_text(w_)
+    ok_w = ('RTF' not in w_min and 'DROPPED' not in w_min
+            and 'RTF 0.50' in w_full and 'DROPPED 3' in w_full
+            and 'PAUSED' in w_pause and 'RTF' not in w_pause
+            and STALL_AUTO in w_auto and 'clutch' not in w_auto and 'clutch in' in w_man)
+    #  drawn: every string of the toast / the bar in its own rect
+    bar_ = rnd._rect(R_WARN)
+    strip_, mm_ = rnd._rect(R_TOAST), rnd._rect(R_MINIMAP)
+    busy = _demo_hud()
+    busy.msg, busy.rtf, busy.dropped_frames = race_, 0.62, 12
+    busy.paused, busy.stalled, busy.on_track, busy.time_scale = True, True, False, 0.5
+    busy.gearbox = 'MAN+CL'
+    drawn, bad_draw = {}, []
+    rnd._blit = _spy
+    try:
+        for mode_ in ('minimal', 'full', 'off'):
+            cfg.hud, seen[:] = mode_, []
+            rnd.draw_frame(st_n, None, 0.0, _demo_ctl(), busy, sk2)
+            box_ = rnd._toast_rect(rnd._toast_lines(busy.msg))
+            got_t = [s for s, bx in seen if box_.contains(bx)]
+            got_w = [s for s, bx in seen if bar_.contains(bx)]
+            drawn[mode_] = (len(got_t), len(got_w), len(seen))
+            if not (strip_.contains(box_) and not box_.colliderect(mm_)
+                    and not box_.colliderect(bar_) and len(got_t) == len(tl_race)):
+                bad_draw.append((mode_, 'toast', tuple(box_)))
+            # (busy is paused: the P pause caption is drawn on every HUD setting)
+            rest_ = [s for s, _ in seen if s not in rnd._pause_lines(busy)]
+            if mode_ == 'off' and len(rest_) != len(got_t):
+                bad_draw.append((mode_, 'more than the toast', rest_))
+            if mode_ != 'off' and not got_w:
+                bad_draw.append((mode_, 'the flags outside R_WARN',
+                                 [s for s, bx in seen if bx.bottom > bar_.top - 2]))
+        #  the tutorial's long "done:" flash, every line inside R_TUTOR
+        cfg.hud, seen[:] = 'minimal', []
+        tut_ = rnd._rect(R_TUTOR)
+        aux_d.tutorial = dict(head='TUTORIAL 4/11   Braking', text='Stop in the box.',
+                              status='to the box: 80 m', warn='', hint='',
+                              flash='done: ' + msg200, foot='ESC / OPTIONS: the tutorial menu')
+        rnd.draw_frame(st_n, None, 0.0, _demo_ctl(), aux_d, sk2)
+        fl_lines = rnd._wrap_px('done: ' + msg200, rnd.f_lbl, (R_TUTOR[2] - 20) * rnd.ui)
+        fl_in = [s for s, bx in seen if s in fl_lines and tut_.contains(bx)]
+        fl_out = [s for s, bx in seen if s.startswith('done:') and not tut_.contains(bx)]
+    finally:
+        rnd._blit, cfg.hud, aux_d.tutorial = o_blit, 'full', None
+    rep('toast + flags bar: wrapped, fitted, clear of the minimap', ok_tl and ok_w
+        and not bad_draw and not fl_out and len(fl_lines) >= 2
+        and len(fl_in) == len(fl_lines),
+        f"200-char note {len(tl_words)} / {len(tl_word)} lines <= {tw_:.0f} px; race line "
+        f"{len(tl_race)} lines uncut, the bot line as {tl_bot}; minimal bar {w_min!r}, "
+        f"full {w_full!r}, paused "
+        f"{w_pause!r}, stall AUTO {w_auto!r} / MAN+CL {w_man!r}; toast / bar / all strings "
+        f"drawn {drawn}, wrong {bad_draw}; flash lines in the box {len(fl_in)} of "
+        f"{len(fl_lines)}, out {fl_out}")
+    #  the timing panel and the WET chip: the running lap counted from 1
+    #  ('LAP 1' while aux.lap, the laps done, is 0; OUT LAP on the out lap);
+    #  a void LAST drawn red under 'LAST  void' (a blank one is not marked),
+    #  a counted one as before; T's whole-track wet a blue chip in the speed
+    #  panel's bottom row on both HUD levels, inside it and clear of STALL /
+    #  LIMIT and TC / ABS; no chip when dry
+    def _chip_px(r_):
+        # the chip's fill around the speed panel (40 px of margin, so a chip
+        # run out of it shows): (pixels, their bounding box on the screen)
+        a = pygame.surfarray.pixels3d(r_.screen)
+        rr = r_._rect(R_SPEED)
+        x0_, y0_ = max(rr.x - 40, 0), max(rr.y - 40, 0)
+        box = a[x0_:rr.right + 40, y0_:rr.bottom + 40]
+        m_ = ((box[..., 0] == C_WET_CHIP[0]) & (box[..., 1] == C_WET_CHIP[1])
+              & (box[..., 2] == C_WET_CHIP[2]))
+        del a, box
+        xs, ys = np.nonzero(m_)
+        if not len(xs):
+            return 0, None
+        return len(xs), pygame.Rect(x0_ + int(xs.min()), y0_ + int(ys.min()),
+                                    int(xs.max() - xs.min()) + 1, int(ys.max() - ys.min()) + 1)
+    tp_ = _demo_hud()
+    tp_.lap, tp_.global_wet, tp_.last_valid = 0, 0.632183908, False
+    tp_.stalled = tp_.on_limiter = tp_.tc_active = tp_.abs_active = True
+    tp_.rpm = rev_marks()[0]           # at the cut: LIMIT shows only there (_rev_cue)
+    out_, blank_ = _demo_hud(), _demo_hud()
+    out_.out_lap_m = 812.0
+    blank_.last_valid, blank_.last_lap = False, float('nan')
+    ok_lbl = (_lap_label(tp_) == 'LAP 1' and _lap_label(_demo_hud()) == 'LAP 3'
+              and _lap_label(out_) == 'OUT LAP'
+              and _wet_chip(HudData(global_wet=0.63)) == 'WET 63%'
+              and _wet_chip(tp_) == 'WET 63%' and _wet_chip(HudData()) == ''
+              and _last_void(tp_) and not _last_void(_demo_hud())
+              and not _last_void(blank_))
+    seen_c, tp_got, tp_bad = [], {}, []
+
+    def _spy_c(s, x, y, font=None, col=C_HUD_TEXT):
+        bb = rnd._txt(s, font, col).get_bounding_rect()
+        seen_c.append((s, pygame.Rect(int(x) + bb.x, int(y) + bb.y, bb.w, bb.h), col))
+        o_blit(s, x, y, font, col)
+    spd_, tim_ = rnd._rect(R_SPEED), rnd._rect(R_TIMING)
+    last_s = _fmt_t(tp_.last_lap)
+    rnd._blit = _spy_c
+    try:
+        for mode_, a_ in (('minimal', tp_), ('full', tp_), ('minimal', _demo_hud()),
+                          ('minimal', blank_)):
+            cfg.hud, seen_c[:] = mode_, []
+            rnd.draw_frame(st_n, None, 0.0, _demo_ctl(), a_, sk2)
+            n_px, chip_ = _chip_px(rnd)
+            tim_s = {(s, col) for s, bx, col in seen_c if tim_.contains(bx)}
+            spd_b = {s: bx for s, bx, col in seen_c if spd_.contains(bx)}
+            wets = [s for s, _, _ in seen_c if s.startswith('WET')]
+            tag_ = (mode_, 'wet' if a_ is tp_ else 'blank' if a_ is blank_ else 'dry')
+            tp_got[tag_] = (n_px, wets)
+            if a_ is tp_:
+                want = {('LAP 1', C_HUD_DIM), ('LAST  void', C_BAR_BRK), (last_s, C_BAR_BRK)}
+                if not (want <= tim_s and 'WET 63%' in spd_b and chip_ is not None
+                        and n_px > 150 and spd_.contains(chip_)
+                        and chip_.contains(spd_b['WET 63%'])
+                        and not any(chip_.colliderect(spd_b[k]) for k in ('TC ABS', 'STALL LIMIT'))):
+                    tp_bad.append((tag_, sorted(s for s, _ in tim_s), sorted(spd_b),
+                                   tuple(chip_) if chip_ else None))
+            else:
+                want = {('LAP 3', C_HUD_DIM), ('LAST', C_HUD_DIM),
+                        (_fmt_t(a_.last_lap), C_HUD_TEXT)}
+                if not (want <= tim_s and not wets and n_px < 10):
+                    tp_bad.append((tag_, sorted(s for s, _ in tim_s), n_px))
+    finally:
+        rnd._blit, cfg.hud = o_blit, 'full'
+    rep('timing: LAP from 1, void LAST, WET chip', ok_lbl and not tp_bad,
+        f"lap 0 reads {_lap_label(tp_)!r}, the out lap {_lap_label(out_)!r}; "
+        f"global_wet 0.63 -> {_wet_chip(HudData(global_wet=0.63))!r}; chip px / WET "
+        f"strings {tp_got}; wrong {tp_bad}")
+    #  the speed panel: 'km/h' right beside the big number, centred on its
+    #  digits, the m/s on the 'full' HUD only, a line under the unit; the
+    #  shift cue (the red rpm, the blinking LEDs, LIMIT) never in AUTO, and
+    #  LIMIT in a manual only at the cut, never at the bus's 80 km/h
+    #  governor (1650 of its 2500 rpm, on_limiter all the same): _rev_cue
+    import cars as _cars_s
+    cut_, shf_ = rev_marks()[:2]                 # the Corsa's 6200 / 5900
+    bcut_, bshf_ = rev_marks(_cars_s.get('bus'))[:2]
+    cue_auto = [_rev_cue('AUTO', n_, shf_, cut_, True) for n_ in (6150.0, 6200.0)]
+    cue_man = _rev_cue('MAN', 6180.0, shf_, cut_, True)
+    cue_cl = _rev_cue('MAN+CL', 5000.0, shf_, cut_, False)
+    cue_bus = _rev_cue('MAN', 1650.0, bshf_, bcut_, True)
+    ok_cue = (cue_auto == [(False, False, False)] * 2 and cue_man == (True, True, True)
+              and cue_cl == (False, False, False) and cue_bus == (False, False, False))
+    sp_got, sp_bad = {}, []
+    rnd._blit = _spy_c
+    try:
+        for mode_, gb_ in (('minimal', 'AUTO'), ('full', 'AUTO'), ('minimal', 'MAN'),
+                           ('full', 'MAN+CL')):
+            sp_ = _demo_hud()
+            sp_.rpm, sp_.on_limiter, sp_.gearbox = 6180.0, True, gb_
+            cfg.hud, seen_c[:] = mode_, []
+            rnd._t_render = 0.0                  # the LEDs' blink in its lit half
+            rnd.draw_frame(st_n, None, 0.0, _demo_ctl(), sp_, sk2)
+            a_ = pygame.surfarray.pixels3d(rnd.screen)
+            box_ = a_[spd_.x:spd_.right, spd_.y:spd_.bottom]
+            n_flash = int(((box_[..., 0] == C_SHIFT_FLASH[0]) & (box_[..., 1] == C_SHIFT_FLASH[1])
+                           & (box_[..., 2] == C_SHIFT_FLASH[2])).sum())
+            del a_, box_
+            got_ = {s: (bx, col) for s, bx, col in seen_c if spd_.contains(bx)}
+            num_, kmh_ = got_.get(f'{int(round(sp_.V_kmh)):3d}'), got_.get('km/h')
+            ms_ = [(s, bx) for s, (bx, col) in got_.items() if s.endswith(' m/s')]
+            rpm_ = [col for s, (bx, col) in got_.items() if s.endswith(' rpm')]
+            lim_ = any('LIMIT' in s for s in got_)
+            manual = gb_ != 'AUTO'
+            sp_got[(mode_, gb_)] = (kmh_[0].x - num_[0].right if num_ and kmh_ else None,
+                                    kmh_[0].centery - num_[0].centery if num_ and kmh_ else None,
+                                    [s for s, _ in ms_], lim_, n_flash)
+            ok_ = (num_ is not None and kmh_ is not None
+                   and 0 < kmh_[0].x - num_[0].right <= 12 * rnd.ui
+                   and abs(kmh_[0].centery - num_[0].centery) <= 2
+                   and rpm_ == [C_BAR_BRK if manual else C_HUD_TEXT]
+                   and lim_ == manual and (n_flash > 0) == manual)
+            if mode_ == 'minimal':
+                ok_ = ok_ and not ms_
+            else:
+                ok_ = (ok_ and len(ms_) == 1 and ms_[0][1].top >= kmh_[0].bottom
+                       and abs(ms_[0][1].x - kmh_[0].x) <= 3)
+            if not ok_:
+                sp_bad.append((mode_, gb_, sorted(got_)))
+    finally:
+        rnd._blit, cfg.hud = o_blit, 'full'
+    rep('speed: km/h beside it, no shift cue in AUTO', ok_cue and not sp_bad,
+        f"_rev_cue AUTO 6150 / 6200 on the limiter {cue_auto}, MAN 6180 {cue_man}, "
+        f"MAN+CL 5000 {cue_cl}, the bus at 1650 of {bcut_:.0f} {cue_bus}; "
+        f"(km/h gap px, centre dy, m/s, LIMIT, flash px) {sp_got}; wrong {sp_bad}")
+    #  P's pause screen: the frame ~40 % darker and 'PAUSED' with how to go
+    #  on, centred, on every HUD setting; not under an open menu (the menu
+    #  says PAUSED itself) and not when running
+    from types import SimpleNamespace
+    menu_ = SimpleNamespace(open=True, draw=lambda sc_: None)
+    pz_ = _demo_hud()
+    pz_.paused = True
+    pz_m = _demo_hud()
+    pz_m.paused, pz_m.menu = True, menu_
+    ok_pl = (rnd._pause_lines(pz_) == ('PAUSED', PAUSE_HINT)
+             and rnd._pause_lines(_demo_hud()) == () and rnd._pause_lines(pz_m) == ())
+    pz_got, pz_bad = {}, []
+    rnd._blit = _spy_c
+    try:
+        for mode_ in ('minimal', 'off'):
+            cfg.hud = mode_
+            lum_ = {}
+            for tag_, a_ in (('run', _demo_hud()), ('P', pz_), ('menu', pz_m)):
+                seen_c[:] = []
+                rnd.draw_frame(st_n, None, 0.0, _demo_ctl(), a_, sk2)
+                lum_[tag_] = float(pygame.surfarray.pixels3d(rnd.screen).mean())
+                cap_ = {s: bx for s, bx, _c in seen_c if s in ('PAUSED', PAUSE_HINT)
+                        and not bar_.contains(bx)}       # (the flags bar says PAUSED too)
+                pz_got[(mode_, tag_)] = sorted(cap_)
+                if (len(cap_) == 2) != (tag_ == 'P'):
+                    pz_bad.append((mode_, tag_, sorted(cap_)))
+                elif cap_ and not all(abs(bx.centerx - rnd.W / 2) <= 2
+                                      and abs(bx.centery - rnd.H / 2) <= 40 * rnd.ui
+                                      for bx in cap_.values()):
+                    pz_bad.append((mode_, tag_, 'not centred',
+                                   {s: tuple(bx) for s, bx in cap_.items()}))
+            dim_ = lum_['P'] / max(lum_['run'], 1e-6)
+            pz_got[(mode_, 'dim')] = round(dim_, 2)
+            if not (0.5 <= dim_ <= 0.7 and abs(lum_['menu'] - lum_['run']) < 0.02 * lum_['run']):
+                pz_bad.append((mode_, 'veil', round(dim_, 2),
+                               round(lum_['menu'] / max(lum_['run'], 1e-6), 2)))
+    finally:
+        rnd._blit, cfg.hud = o_blit, 'full'
+    rep('pause: P dims the frame, PAUSED + how to go on', ok_pl and not pz_bad,
+        f"caption {rnd._pause_lines(pz_)}; drawn / luminance paused / running "
+        f"{pz_got}; wrong {pz_bad}")
+    #  the live delta level with the PB (task 45): '0.00' in the HUD's text
+    #  colour, never a green '-0.00' (what '+.2f' made of -0.003) or a red
+    #  '+0.00'; a hundredth either way keeps its sign and colour
+    dl_want = {0.0: ('0.00', C_HUD_TEXT),
+               -0.003: ('0.00', C_HUD_TEXT), 0.0049: ('0.00', C_HUD_TEXT),
+               -0.006: ('-0.01', C_GREEN), 0.006: ('+0.01', C_BAR_BRK),
+               -0.23: ('-0.23', C_GREEN), 0.41: ('+0.41', C_BAR_BRK)}
+    dl_got = {d_: _delta_text(d_) for d_ in dl_want}
+    dl_drawn = {}
+    rnd._blit = _spy_c
+    try:
+        cfg.hud = 'minimal'
+        for d_ in (-0.003, 0.002, -0.23):
+            dl_ = _demo_hud()
+            dl_.delta_s, seen_c[:] = d_, []
+            rnd.draw_frame(st_n, None, 0.0, _demo_ctl(), dl_, sk2)
+            dl_drawn[d_] = [(s_, col) for s_, _bx, col in seen_c
+                            if s_ in ('0.00', '-0.00', '+0.00', '-0.23')]
+    finally:
+        rnd._blit, cfg.hud = o_blit, 'full'
+    rep("delta level with the PB: '0.00', neutral", dl_got == dl_want and dl_drawn == {
+        -0.003: [('0.00', C_HUD_TEXT)], 0.002: [('0.00', C_HUD_TEXT)],
+        -0.23: [('-0.23', C_GREEN)]},
+        f"_delta_text {dl_got}; drawn {dl_drawn}")
+    #  the stall on the automatic (task 45): 'engine stalled: S to restart',
+    #  no clutch in it (the box has no pedal to press); a manual box keeps
+    #  the clutch; the bar's short fallback is the automatic's wording, and
+    #  the automatic's is drawn whole inside R_WARN
+    sl_ = _demo_hud()
+    sl_.stalled = True
+    sl_got, sl_drawn = {}, {}
+    rnd._blit = _spy_c
+    try:
+        cfg.hud = 'minimal'
+        for gb_ in ('AUTO', 'MAN', 'MAN+CL'):
+            sl_.gearbox, seen_c[:] = gb_, []
+            sl_got[gb_] = (rnd._warn_text(sl_), rnd._warn_text(sl_, short=True))
+            rnd.draw_frame(st_n, None, 0.0, _demo_ctl(), sl_, sk2)
+            sl_drawn[gb_] = [s_ for s_, bx, _c in seen_c if bar_.contains(bx)]
+    finally:
+        rnd._blit, cfg.hud = o_blit, 'full'
+    ok_sl = (sl_got == {'AUTO': (STALL_AUTO, STALL_AUTO), 'MAN': (STALL_MANUAL, STALL_AUTO),
+                        'MAN+CL': (STALL_MANUAL, STALL_AUTO)}
+             and STALL_AUTO == 'engine stalled: S to restart'
+             and 'clutch' not in STALL_AUTO.lower() and 'clutch' in STALL_MANUAL
+             and sl_drawn == {'AUTO': [STALL_AUTO], 'MAN': [STALL_MANUAL],
+                              'MAN+CL': [STALL_MANUAL]})
+    rep('stall: the automatic says S only, no clutch', ok_sl,
+        f"(bar, short) {sl_got}; drawn in R_WARN {sl_drawn}")
+    #  the ghost labels (plan view; the chase view in _ghost_checks): none on
+    #  the car being driven, none on each other -- the REF and the PB on the
+    #  car at the start of a lap stack above it, two ghosts on one spot
+    #  ahead give two labels one above the other, the PB 2.5 m behind keeps
+    #  its label, lifted off the car
+    xg_, yg_, pg_ = _pose(st_n)
+    cg_, sg_ = math.cos(pg_), math.sin(pg_)
+    gl_got, gl_bad = {}, []
+    aux_g = _demo_hud()
+    for tag_, gh_ in (('lap start', ((0.0, 0.0, 'REF'), (0.3, 0.0, 'PB'))),
+                      ('one spot ahead', ((8.0, 0.0, 'REF'), (8.0, 0.0, 'PB'))),
+                      ('PB behind', ((-2.5, 0.0, 'PB'),))):
+        aux_g.ghosts = [(xg_ + dx * cg_ - dy * sg_, yg_ + dx * sg_ + dy * cg_, pg_,
+                         (120, 220, 160) if lb_ == 'PB' else (205, 205, 215), lb_)
+                        for dx, dy, lb_ in gh_]
+        rnd.draw_frame(st_n, None, 0.0, _demo_ctl(), aux_g, sk2)
+        lab_ = list(rnd._ghost_labels)
+        car_ = rnd._car_box
+        gl_got[tag_] = [(t_, tuple(r_)) for t_, r_ in lab_]
+        clash_ = [(a_[0], b_[0]) for i_, a_ in enumerate(lab_) for b_ in lab_[i_ + 1:]
+                  if a_[1].colliderect(b_[1])]
+        if (not lab_ or clash_ or car_ is None
+                or any(r_.colliderect(car_) for _t, r_ in lab_)
+                or (tag_ == 'PB behind' and [t_ for t_, _r in lab_] != ['PB'])):
+            gl_bad.append((tag_, tuple(car_) if car_ else None, clash_))
+    aux_g.ghosts = []
+    rep('ghost labels: never on the car or on each other', not gl_bad,
+        f"car {tuple(rnd._car_box) if rnd._car_box else None}; labels {gl_got}; "
+        f"wrong {gl_bad}")
+    #  the minimap's caption is the map's menu name, never its raw id: the
+    #  arena, the skidpad and the dragstrip build with no title, so a stub
+    #  'arena' with none (or an empty one) reads TRACK_TITLES['arena'], a
+    #  titled map keeps its own, an unknown id is shown as it is; and the
+    #  arena drawn here puts 'Arena circuit' in R_MINIMAP, 'arena' nowhere
+    from types import SimpleNamespace as _NS
+    mt_got = {k_: _map_title(t_) for k_, t_ in (
+        ('no title', _NS(name='arena')), ('empty', _NS(name='arena', title='')),
+        ('skidpad', _NS(name='skidpad', title='')),
+        ('dragstrip', _NS(name='dragstrip', title='')),
+        ('titled', _NS(name='linden', title='Linden park')),
+        ('unknown', _NS(name='testmap', title='')))}
+    mt_want = {'no title': trk.TRACK_TITLES['arena'], 'empty': trk.TRACK_TITLES['arena'],
+               'skidpad': trk.TRACK_TITLES['skidpad'],
+               'dragstrip': trk.TRACK_TITLES['dragstrip'],
+               'titled': 'Linden park', 'unknown': 'testmap'}
+    mm_r, seen[:] = rnd._rect(R_MINIMAP), []
+    rnd._blit = _spy
+    try:
+        rnd.draw_frame(st_n, None, 0.0, _demo_ctl(), _demo_hud(), sk2)
+    finally:
+        rnd._blit = o_blit
+    mt_in = [s for s, bx in seen if s == trk.TRACK_TITLES['arena'] and mm_r.contains(bx)]
+    mt_raw = [s for s, _b in seen if s == tr.name]
+    rep('minimap: the map\'s menu name, not its raw id', mt_got == mt_want
+        and not tr.title and len(mt_in) == 1 and not mt_raw,
+        f"titles {mt_got}; the arena (title {tr.title!r}) drawn as {mt_in}, raw id {mt_raw}")
     #  task 27: the tyre smoke is pooled and only where a tyre slides; the
     #  results card is drawn (and gone after its time); the shake is subtle
     from types import SimpleNamespace
@@ -6010,8 +6915,8 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     inside = True
     for rc2 in (rc_, void_, dict(rc_, delta='first lap in this class', medal='bronze', pos='P5'),
                 dict(void_, why='snapshot failed (AttributeError: ' + 'x' * 120 + ')'),
-                dict(rc_, next='AUTHOR -0.485'),          # results.py's next medal
-                dict(rc_, delta='first lap in this class', next='SILVER -1.250 ' * 4)):
+                dict(rc_, next='AUTHOR in 0.485 s'),      # results.py's next medal
+                dict(rc_, delta='first lap in this class', next='SILVER in 1.250 s ' * 4)):
         sf = pygame.Surface(rnd.screen.get_size())
         sf.fill((0, 0, 255))
         r2 = rnd.draw_card(rc2, 40, 40, surf=sf)
@@ -6027,6 +6932,28 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
         and rnd.card_size(void_)[1] < h_c,
         f'{w_c} x {h_c} px (void {rnd.card_size(void_)[1]}), corner {corner}, edge {edge}, '
         f'every kind inside its card {inside}')
+    #  a first lap's header words give way to the next medal's (one letter
+    #  longer each step, up to past what the header holds): in full, else
+    #  'first in class', else none -- never a bare 'first'; and none only
+    #  while the next medal's words are there
+    fl_, fl_got = dict(rc_, delta='first lap in this class', medal='bronze'), []
+    rnd._blit = _spy_c
+    try:
+        for k_ in range(1, 60):
+            seen_c[:] = []
+            nx_ = ('AUTHOR in 0.421 s' + ' 0.421 s' * 6)[:k_].rstrip()
+            rnd.draw_card(dict(fl_, next=nx_), 40, 40,
+                          surf=pygame.Surface(rnd.screen.get_size()))
+            got_ = [s for s, _bx, _col in seen_c if s.startswith('first')]
+            fl_got.append((got_[0] if got_ else '', any(s == nx_ for s, _bx, _col in seen_c)))
+    finally:
+        rnd._blit = o_blit
+    fl_w = [t_ for t_, _n in fl_got]
+    rep("results card: a first lap's words in full, 'first in class' or none, never 'first'",
+        set(fl_w) <= {fl_['delta'], 'first in class', ''} and 'first in class' in fl_w
+        and '' in fl_w and all(n_ for t_, n_ in fl_got if not t_),
+        ' / '.join(f'{t_ or "-"}{"+next" if n_ else ""}'
+                   for i_, (t_, n_) in enumerate(fl_got) if i_ == 0 or fl_got[i_ - 1] != (t_, n_)))
     offs = [shake_offset(k / 60.0, 1.0) for k in range(600)]
     mx = max(max(abs(a), abs(b)) for a, b in offs)
     rep('camera shake: subtle (<= SHAKE_PX), moving, none at strength 0',
@@ -6303,8 +7230,8 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     n_pb = int(((a3[..., 0] == 120) & (a3[..., 1] == 220) & (a3[..., 2] == 160)).sum())
     del a3
     #  in the chase view a ghost is a translucent 3-D car: its body is shaded
-    #  and see-through, so the pixels counted above are its outline and label,
-    #  drawn over the hero. And it must STAND UP: its outline is taller on
+    #  and see-through, so the pixels counted above are its outline, drawn
+    #  over the hero, and its label. And it must STAND UP: its outline is taller on
     #  screen than the flat ground silhouette of the same car at the same
     #  place, both through the same projection (projected, not drawn).
     g0 = aux_c.ghosts[0]
@@ -6347,12 +7274,44 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
         and n_ep['plate_z'] > n_py['plate_z'] * 1.5,
         f"pylon {n_py['strut']} strut polys, endplate 0 and its plates reach "
         f"{n_ep['plate_z']:.2f} m down the deck against {n_py['plate_z']:.2f} m")
-    aux_c.top_mount = 'endplate'
-    rndc.draw_frame(st_c2, None, 0.0, _demo_ctl(), aux_c, SkidBuffer())
-    shot7 = os.path.join(os.path.abspath(screenshot_dir), 'render_chase3d_endplate.png')
-    rndc.screenshot(shot7)
-    rep('chase: endplate-mount screenshot', os.path.exists(shot7), shot7)
-    aux_c.top_mount = 'pylon'
+    for tag_, ok_, msg_ in _mount_checks(aux_c):
+        rep(tag_, ok_, msg_)
+    #  the owner's three wings, in the chase view as the game draws them
+    shots_m = []
+    for tag_, kw_ in _MOUNT_SHOTS:
+        was_ = {k_: getattr(aux_c, k_) for k_ in kw_}
+        for k_, v_ in kw_.items():
+            setattr(aux_c, k_, v_)
+        rndc.draw_frame(st_c2, None, 0.0, _demo_ctl(), aux_c, SkidBuffer())
+        shots_m.append(os.path.join(os.path.abspath(screenshot_dir), f'render_chase3d_{tag_}.png'))
+        rndc.screenshot(shots_m[-1])
+        for k_, v_ in was_.items():
+            setattr(aux_c, k_, v_)
+    shot7 = shots_m[0]
+    rep('chase: endplate-mount screenshot (upright; lean 70 + blend 0.4 + ratio 1.8; '
+        'pylons + canted 70 following the chord)',
+        all(os.path.exists(p_) for p_ in shots_m), ', '.join(shots_m))
+    #  the heaviest wing soup (every plate blended and following, pylons) in
+    #  the frame budget the chase view is held to, deploying: the soup is
+    #  rebuilt on every step of the ramp, which is the worst case
+    was_ = {k_: getattr(aux_c, k_) for k_ in _MOUNT_SHOTS[2][1]}
+    was_.update(top_plate_blend=aux_c.top_plate_blend, dev_plate_blend=aux_c.dev_plate_blend,
+                top_deploy=aux_c.top_deploy, wing_deploy=aux_c.wing_deploy)
+    for k_, v_ in _MOUNT_SHOTS[2][1].items():
+        setattr(aux_c, k_, v_)
+    aux_c.top_plate_blend = aux_c.dev_plate_blend = 0.4
+    t_h = []
+    for i_ in range(40):
+        aux_c.top_deploy = aux_c.wing_deploy = min(1.0, i_ / 20.0)
+        t0_ = time.perf_counter()
+        rndc.draw_frame(st_c2, None, 0.0, _demo_ctl(), aux_c, SkidBuffer())
+        t_h.append((time.perf_counter() - t0_) * 1e3)
+    for k_, v_ in was_.items():
+        setattr(aux_c, k_, v_)
+    _okh, _whyh = frame_budget_verdict(float(np.mean(t_h)), float(np.percentile(t_h, 99)),
+                                       budget_mean=12.0, budget_p99=20.0)
+    rep('chase: frame budget with the heaviest wings, deploying (the soup rebuilt each step)',
+        _okh, _whyh)
 
     # ---- the look: the car and the chase camera, then the world round it
     for tag_, ok_, msg_ in _car_checks(screenshot_dir):
@@ -6374,28 +7333,238 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     return ok_all
 
 
-def _mount_polys3(aux, mount: str) -> dict:
-    """The top wing's mount, measured off the mesh: how many strut polygons it
-    puts in the flow and how far its tip plates reach below the wing.
+def _mount_polys3(aux, mount: str, geom=None) -> dict:
+    """The mounts, measured off the mesh: how many strut polygons the top wing
+    (`strut`) and the flank panels (`f_strut`) put in the flow and where
+    (`st_y`: each top pylon's mean |y|; `st_z`: each flank strut's height),
+    and the top wing's +y plate: how far it reaches below the wing
+    (`plate_z`), its root and far rings (the 4 corners nearest / farthest
+    from its junction: `root`, `far` centres, `c_root`, `c_far` chords) and
+    its foot's corners (`foot`).
 
     Read from `wing_mesh3`, not from the flag that built it, so the check is
     evidence rather than a restatement.
     """
-    was = getattr(aux, 'top_mount', 'pylon')
-    aux.top_mount = mount
-    b2 = 0.5 * float(aux.top_span)
-    strut, z_lo, z_hi = 0, math.inf, -math.inf
-    for verts, col in wing_mesh3(aux):
+    g = geom or car_geom()
+    was = (getattr(aux, 'top_mount', 'pylon'), getattr(aux, 'dev_mount', 'pylon'))
+    aux.top_mount = aux.dev_mount = mount
+    b2, xt = 0.5 * float(aux.top_span), float(aux.top_x)
+    zc = g.deck_z(xt) + TOP_STOW_GAP + TOP_RISE * float(aux.top_deploy)
+    top_col = C_WING_ON if float(aux.top_deploy) > 0.05 else C_WING_OFF
+    strut, f_strut, st_y, f_v, z_lo, z_hi, pl = 0, 0, {}, [], math.inf, -math.inf, []
+    for verts, col in wing_mesh3(aux, g):
         v = np.asarray(verts)
-        ym = float(np.mean(np.abs(v[:, 1])))
-        if tuple(col) == C_WING_OFF and ym < 0.9 * b2 and ym > 0.2 * b2:
-            strut += 1                      # a deck strut: inboard, unlit
-        # the TOP wing's plates stand at exactly b2 + 0.008; the flank panels
-        # also sit outboard of b2, so the window has to be tight
-        if tuple(col) == C_WING_ON and abs(ym - (b2 + 0.008)) < 0.03:
+        xm, ym = float(np.mean(v[:, 0])), float(np.mean(v[:, 1]))
+        near_top = abs(xm - xt) < 0.5
+        if tuple(col) == C_STRUT3 and near_top and abs(ym) < b2:
+            strut += 1                      # a deck pylon: inboard, unlit
+            st_y.setdefault(ym > 0, []).append(v)
+        if tuple(col) == C_STRUT3 and abs(xm - float(aux.x_w_left)) < 0.05 \
+                and np.ptp(v[:, 1]) > 0.1:
+            f_strut += 1                    # a flank strut, sill to panel
+            if ym > 0:
+                f_v.append(v)
+        # the TOP wing's plates: the wing's own colour (lit deployed), at its
+        # station, outboard of its tips (and of its own tip caps, which
+        # stand at exactly b2)
+        if tuple(col) == top_col and near_top and abs(ym) > b2 + 1e-3:
             z_lo, z_hi = min(z_lo, float(v[:, 2].min())), max(z_hi, float(v[:, 2].max()))
-    aux.top_mount = was
-    return dict(strut=strut, plate_z=(z_hi - z_lo) if z_hi > z_lo else 0.0)
+            if ym > 0:
+                pl.append(v)
+    aux.top_mount, aux.dev_mount = was
+    out = dict(strut=strut, f_strut=f_strut, plate_z=(z_hi - z_lo) if z_hi > z_lo else 0.0,
+               st_y=[float(np.mean(np.abs(np.vstack(p_)[:, 1]))) for p_ in st_y.values()],
+               st_z=[])
+    if f_v:                                 # the left panel's two struts: below / above
+        fz = np.vstack(f_v)[:, 2]
+        h_w = float(getattr(aux, 'h_w', H_W) or H_W)
+        out['st_z'] = [float(fz[fz < h_w].mean()), float(fz[fz > h_w].mean())]
+    if pl:
+        u = np.unique(np.round(np.vstack(pl), 9), axis=0)
+        o = np.argsort(np.hypot(u[:, 1] - (b2 + 0.008), u[:, 2] - zc))
+        near, far = u[o[:4]], u[o[-4:]]
+        out.update(root=near.mean(axis=0), far=far.mean(axis=0), foot=far,
+                   c_root=float(np.ptp(near[:, 0])), c_far=float(np.ptp(far[:, 0])))
+    return out
+
+
+#: the owner's three wings (2026-09-25), in HudData's rows: an upright plate
+#: carrying the wing; one leaning at 70 deg, blended over 0.4 of its arc and
+#: 1.8 x the tip chord; and a pylon wing whose canted tip device follows the
+#: chord of a 0.6-taper wing
+_MOUNT_SHOTS = (
+    ('endplate', dict(top_mount='endplate', dev_mount='endplate', dev_plate=0.12)),
+    ('endplate_lean70_blend', dict(top_mount='endplate', dev_mount='endplate', dev_plate=0.12,
+                                   top_plate_cant=70.0, dev_plate_cant=70.0,
+                                   top_plate_blend=0.4, dev_plate_blend=0.4,
+                                   top_plate_shape='spiral', dev_plate_shape='spiral',
+                                   top_plate_ratio=1.8, dev_plate_ratio=1.8)),
+    ('pylon_canted_follows', dict(top_mount='pylon', dev_mount='pylon', dev_plate=0.12,
+                                  top_pylon_frac=0.35, dev_pylon_frac=0.35,
+                                  top_taper=0.6, dev_taper=0.6,
+                                  top_plate_cant=70.0, dev_plate_cant=70.0,
+                                  top_plate_follows=True, dev_plate_follows=True)),
+)
+
+
+def _mount_checks(aux) -> list:
+    """The mount and the plates as the CHASE VIEW draws them (the owner,
+    2026-09-25: "Carried by endplate still produces inboard pylons"), off
+    `wing_mesh3`: [(tag, passed, message)]. `aux` is restored on return."""
+    out = []
+    keys = [f'{p_}_{k_}' for p_ in ('dev', 'top') for k_ in
+            ('mount', 'taper', 'pylon_frac', 'plate_cant', 'plate_blend', 'plate_shape',
+             'plate_ratio', 'plate_follows')] + ['top_plate', 'dev_plate', 'top_deploy']
+    was = {k_: getattr(aux, k_) for k_ in keys}
+
+    def put(**kw):
+        for k_, v_ in was.items():
+            setattr(aux, k_, v_)
+        aux.top_plate, aux.top_deploy = 0.12, 1.0
+        for k_, v_ in kw.items():
+            setattr(aux, k_, v_)
+
+    g = car_geom()
+    b2, xt, ct = 0.5 * float(aux.top_span), float(aux.top_x), float(aux.top_chord)
+    # -- struts only under pylons, at the station -------------------------
+    m = {}
+    for mount in ('pylon', 'endplate', 'none'):
+        put(top_pylon_frac=0.35, dev_pylon_frac=0.35, dev_plate=0.12)
+        m[mount] = _mount_polys3(aux, mount, g)
+    zf = float(getattr(aux, 'h_w', H_W)) + np.array([-1.0, 1.0]) * 0.35 * 0.5 * float(aux.dev_span)
+    out.append(('chase: struts and pylons ONLY under a pylon mount, at +-pylon_frac of the '
+                'semi-span; an endplate mount and none draw neither',
+                0 < m['pylon']['strut'] <= 60 and m['pylon']['f_strut'] == 16
+                and all(m[k_]['strut'] == 0 and m[k_]['f_strut'] == 0 for k_ in ('endplate', 'none'))
+                and len(m['pylon']['st_y']) == 2
+                and all(abs(y_ - 0.35 * b2) < 0.002 for y_ in m['pylon']['st_y'])
+                and np.allclose(m['pylon']['st_z'], zf, atol=1e-6),
+                f"top/flank strut polys: pylon {m['pylon']['strut']}/{m['pylon']['f_strut']}, "
+                f"endplate {m['endplate']['strut']}/{m['endplate']['f_strut']}, none "
+                f"{m['none']['strut']}/{m['none']['f_strut']}; pylons at |y| "
+                + '/'.join(f'{y_:.4f}' for y_ in m['pylon']['st_y'])
+                + f" (0.35 x {b2:.2f}), flank struts at z "
+                + '/'.join(f'{z_:.4f}' for z_ in m['pylon']['st_z'])))
+    # -- an endplate mount's plates reach the drawn body --------------------
+    mesh = Mesh(car_mesh3(g))
+    rows_r, ok_r = [], True
+    for tag_, kw_ in (('upright', {}), ('lean 70 + blend 0.4', dict(top_plate_cant=70.0,
+                                                                    top_plate_blend=0.4,
+                                                                    top_plate_shape='spiral'))):
+        for dep in (1.0, 0.0):
+            put(**kw_)
+            aux.top_deploy = dep
+            r_ = _mount_polys3(aux, 'endplate', g)
+            on, beside = [], []
+            for x_, y_, z_ in r_['foot']:
+                zt_ = _body_top_z3(mesh, g, x_, y_)
+                if zt_ > -math.inf:
+                    on.append(z_ - zt_)
+                else:
+                    beside.append(abs(y_) - g.half_w_at(x_))
+            # the body's quads are not planar: the ray reads each on its own
+            # plane, the plate is landed on the section, so they agree to ~1 cm
+            ok_r &= all(-0.03 <= d_ <= 0.02 for d_ in on) and all(d_ > 0.0 for d_ in beside)
+            rows_r.append(f'{tag_} dep {dep:.0f}: '
+                          + (f'feet on the body {min(on):+.3f}..{max(on):+.3f} m' if on else '')
+                          + (f' beside it {max(beside):.2f} m out' if beside else ''))
+    out.append(('chase: an endplate mount\'s plates run down to the DRAWN body (the roof, or '
+                'down its shoulder; beside it at its waist when a lean throws them past '
+                'its side), deployed and stowed', ok_r, '; '.join(rows_r)))
+    # -- the lean, the chord ratio, the chord law ---------------------------
+    put(top_mount='pylon')
+    r90 = _mount_polys3(aux, 'pylon', g)
+    put(top_plate_cant=70.0)
+    r70 = _mount_polys3(aux, 'pylon', g)
+    h_ = 0.12 + 0.02                              # a fence's drawn arc, deployed
+    dy90, dy70 = (float(r_['far'][1]) - (b2 + 0.008) for r_ in (r90, r70))   # from the junction
+    out.append(('chase: a plate leaning at 70 deg reaches OUTBOARD by h cos(cant); upright, '
+                'not at all',
+                abs(dy90) < 1e-9 and abs(dy70 - h_ * math.cos(math.radians(70.0))) < 1e-6,
+                f'far end {dy90:+.4f} / {dy70:+.4f} m out ({h_:.2f} cos 70 = '
+                f'{h_ * math.cos(math.radians(70.0)):.4f})'))
+    put(top_taper=0.6, top_plate_cant=70.0, top_plate_follows=True)
+    rf = _mount_polys3(aux, 'pylon', g)
+    put(top_taper=0.6, top_plate_ratio=1.8)
+    rr = _mount_polys3(aux, 'endplate', g)
+    c_tip = 0.6 * ct
+    c_law = c_tip - ct * 0.4 * h_ / b2
+    out.append(('chase: a tip device following the chord continues the wing\'s taper down '
+                'the plate; the designed plate carries its ratio x the tip chord',
+                abs(rf['c_root'] - c_tip) < 1e-9 and abs(rf['c_far'] - c_law) < 1e-9
+                and abs(rr['c_root'] - 1.8 * c_tip) < 1e-9,
+                f"follows {rf['c_root']:.4f} -> {rf['c_far']:.4f} m (law {c_law:.4f}); "
+                f"ratio 1.8: {rr['c_root']:.4f} (1.8 x {c_tip:.3f})"))
+    # -- a default HudData draws its plates and struts exactly as before ----
+    put()
+    aux.dev_plate = 0.10
+    zc = g.deck_z(xt) + TOP_STOW_GAP + TOP_RISE * 1.0
+    old = []
+    for sgn in (-1.0, 1.0):
+        yq = sgn * (b2 + 0.008)
+        old += _box3(xt - 0.65 * ct, xt + 0.65 * ct, yq - 0.006, yq + 0.006,
+                     zc - 0.12 - 0.02, zc + 0.03, C_WING_ON)
+    new = [p_ for p_ in wing_mesh3(aux, g) if tuple(p_[1]) == C_WING_ON
+           and abs(float(np.mean(np.asarray(p_[0])[:, 0])) - xt) < 0.5
+           and abs(float(np.mean(np.asarray(p_[0])[:, 1]))) > b2 + 1e-3]
+    same = ({tuple(np.round(q_, 9)) for v_, _c in new for q_ in v_}
+            == {tuple(np.round(q_, 9)) for v_, _c in old for q_ in v_})
+    out.append(('chase: a HudData without the new rows draws the top plates exactly as '
+                'before (and the flank struts at +-0.28 of the span)',
+                same and len(new) == 12
+                and np.allclose(_mount_polys3(aux, 'pylon', g)['st_z'],
+                                float(getattr(aux, 'h_w', H_W))
+                                + np.array([-0.28, 0.28]) * float(aux.dev_span), atol=1e-9),
+                f'{len(new)} plate polys, the old boxes {"to the bit" if same else "MOVED"}'))
+    # -- bounded ------------------------------------------------------------
+    put(**_MOUNT_SHOTS[2][1])
+    aux.top_plate_blend = aux.dev_plate_blend = 0.4
+    aux.dev_plate = 0.12
+    n_heavy = len(wing_mesh3(aux, g))
+    put(top_mount='pylon', dev_mount='pylon')
+    aux.dev_plate = 0.12
+    n_old = len(wing_mesh3(aux, g)) - 2 * 26 + 2 * 6       # its pylons as the old boxes
+    out.append(('chase: the wing soup stays bounded with every row on',
+                n_heavy <= 2.0 * n_old, f'{n_heavy} polys against {n_old} with the old '
+                f'boxes (bound 2 x); built once per deploy step, cached between -- the '
+                f'frame budget with it is the next row'))
+    # -- plates the wing's colour; a carried flank stowed retracts ----------
+    # (the owner, 2026-09-27: "The tip devices should have the same colour as
+    # the wing" -- and switched off, plates that carry the wing never went
+    # away): the left panel out, the right stowed against the side, each
+    # one's plates in its own colour, the structure in C_STRUT3
+    extra = ('dev_standoff', 'dev_plate_own', 'wing_deploy_l', 'wing_deploy_r')
+    was_x = {k_: getattr(aux, k_) for k_ in extra}
+    put(dev_mount='endplate', dev_plate=0.12)
+    aux.dev_standoff, aux.dev_plate_own = 0.25, 0.30
+    aux.wing_deploy_l, aux.wing_deploy_r = 1.0, 0.0
+    xw, hw = float(aux.x_w_left), g.half_w_at(float(aux.x_w_left))
+    stow = _flank_out(aux, 0.0)
+    cols, ys = {1: set(), -1: set()}, {1: [], -1: []}
+    for verts, col in wing_mesh3(aux, g):
+        v = np.asarray(verts)
+        if abs(float(v[:, 0].mean()) - xw) < 0.3 and abs(float(v[:, 1].mean())) > 0.5 * hw:
+            sd = 1 if v[:, 1].mean() > 0 else -1
+            cols[sd].add(tuple(col))
+            if tuple(col) != C_STRUT3:
+                ys[sd].append(np.abs(v[:, 1]))
+    y_out = {k_: (float(np.concatenate(v_).min()) - hw, float(np.concatenate(v_).max()) - hw)
+             for k_, v_ in ys.items() if v_}
+    for k_, v_ in was_x.items():
+        setattr(aux, k_, v_)
+    out.append(('chase: a flank\'s plates are the wing\'s colour (lit out, grey stowed); one its '
+                'endplates carry retracts against the side stowed, plates into the body',
+                cols[1] - {C_STRUT3} == {C_WING_ON} and cols[-1] - {C_STRUT3} == {C_WING_OFF}
+                and stow < 0.10 and len(y_out) == 2
+                and abs(y_out[1][0]) < 0.01 and y_out[1][1] > 0.25
+                and abs(y_out[-1][0]) < 0.01 and y_out[-1][1] < stow + 0.03,
+                f'out: {sorted(cols[1])}, stowed: {sorted(cols[-1])}; wing and plates '
+                + ', '.join(f'{"out" if k_ > 0 else "stowed"} {a_:+.3f}..{b_:.3f} m off the side'
+                            for k_, (a_, b_) in sorted(y_out.items(), reverse=True))
+                + f' (stowed standoff {stow:.3f} m)'))
+    for k_, v_ in was.items():
+        setattr(aux, k_, v_)
+    return out
 
 
 def _ribbon_px_width(rnd, tr, s: float) -> float:
@@ -6568,13 +7737,13 @@ def _car_checks(screenshot_dir: str = 'runs') -> list:
             y_in, py_ = [], []
             for verts, col in wing_mesh3(aux_w, g_):
                 v = np.asarray(verts)
-                if tuple(col) == C_WING_OFF and len(v) == 4 and np.ptp(v[:, 1]) > 0.1 \
+                if tuple(col) == C_STRUT3 and len(v) == 4 and np.ptp(v[:, 1]) > 0.1 \
                         and abs(v[:, 0].mean() - xw) < 0.05:
                     y_in.append(float(np.abs(v[:, 1]).min()))      # a flank strut
-                if tuple(col) == C_WING_OFF and len(v) == 4 and np.ptp(v[:, 2]) > 0.02 \
+                if tuple(col) == C_STRUT3 and len(v) == 4 and np.ptp(v[:, 2]) > 0.02 \
                         and abs(v[:, 0].mean() - float(aux_w.top_x)) < 0.3 \
                         and np.abs(v[:, 1]).max() < 0.5 * float(aux_w.top_span):
-                    py_.append(v)                                   # a deck pylon face
+                    py_.append(v)                   # a deck pylon (swan-neck) face
             # measured against the DRAWN body, not the half_w_at / deck_z the
             # wings are placed with (that comparison is 0 by construction):
             # the body mesh sliced at the strut's station, and the body's top
@@ -6586,10 +7755,17 @@ def _car_checks(screenshot_dir: str = 'runs') -> list:
             e_deck, z_top = 9.0, 0.0
             if py_:
                 e_deck = 0.0
-                feet = {}                     # each foot corner: its lowest z
+                feet = {}                     # each corner's lowest z...
                 for vv in np.vstack(py_):
                     k_ = (round(float(vv[0]), 4), round(float(vv[1]), 4))
                     feet[k_] = min(feet.get(k_, math.inf), float(vv[2]))
+                # ...and a pylon's FOOT is its 4 lowest corners, a side: a
+                # swan neck's other corners are its neck, over the wing
+                low = {}
+                for sg_ in (1.0, -1.0):
+                    low.update(sorted((kv for kv in feet.items() if kv[0][1] * sg_ > 0),
+                                      key=lambda kv: kv[1])[:4])
+                feet = low
                 for (xf_, yf_), zf_ in feet.items():
                     z_top = _body_top_z3(mesh, g_, xf_, yf_)
                     gap = zf_ - z_top
@@ -7085,6 +8261,24 @@ def _ghost_checks(screenshot_dir: str = 'runs') -> list:
     out.append(('ghosts: the PB 2-3 m behind keeps its outline and its label', ok_b,
                 '; '.join(rows)))
 
+    # ---- the labels: never on the car being driven, never on each other --
+    # (the plan view's twin is self_check's 'ghost labels' row)
+    rows, ok_l = [], True
+    for tag, gh in (('lap start', [(0.0, 0.0, 'REF'), (0.3, 0.0, 'PB')]),
+                    ('one spot ahead', [(8.0, 0.0, 'REF'), (8.0, 0.0, 'PB')]),
+                    ('beside', [(0.5, 0.0, 'REF'), (0.0, 1.8, 'PB')]),
+                    ('PB behind', [(-2.5, 0.0, 'PB')])):
+        frame(gh)
+        lab, car = list(rnd._ghost_labels), rnd._car_box
+        clash = [(a_[0], b_[0]) for i_, a_ in enumerate(lab) for b_ in lab[i_ + 1:]
+                 if a_[1].colliderect(b_[1])]
+        on_car = [t_ for t_, r_ in lab if car is not None and r_.colliderect(car)]
+        ok_l &= bool(lab) and car is not None and not clash and not on_car
+        rows.append(f"{tag}: {[(t_, tuple(r_.topleft)) for t_, r_ in lab]}"
+                    + (f' CLASH {clash}' if clash else '') + (f' ON CAR {on_car}' if on_car else ''))
+    out.append(('ghosts: labels never on the car or on each other', ok_l,
+                f"car {tuple(car) if car is not None else None}; " + '; '.join(rows)))
+
     # ---- far away: the 3-D ghost squashes into the flat one, no swap ------
     # Judged on the ghost's OWN footprint (px changed against the same frame
     # with no ghost; the pose is snapped, so that frame is one constant):
@@ -7280,7 +8474,55 @@ def _world_checks(screenshot_dir: str = 'runs') -> list:
         out.append((f'world: {mode} frame budget, world on', ok_,
                     f'80 frames through T2 (kerbs, gravel, wet, skids): {why_}; '
                     f'the world\'s own layers {np.mean(tw):.2f} ms of it'))
+    out.append(_stop_board_check(screenshot_dir))
     return out
+
+
+def _stop_board_check(screenshot_dir: str = 'runs') -> tuple:
+    """Task 45, round 3: a stop challenge's brake marker and board
+    (HudData.stop_board) are on the dragstrip in every view -- in the plan
+    view, world on and off, the marker's own amber and the checker's black
+    painted; in chase from the start, where that paint is a pixel deep, the
+    amber cones and the checker boards upright (the frame changes where
+    they stand, the amber with it); nothing without a stop_board."""
+    from . import world as _wm
+    from . import scenery as _scn
+    trd = trk.make_track('dragstrip', surfaces=False)
+    amber, black = _wm.PAINT_RGB[_scn.PAINT_MARKER], _wm.PAINT_RGB[_scn.PAINT_BOARD_DARK]
+
+    def frame(mode, scen, s_car, sb):
+        r_ = Renderer(ViewConfig(mode=mode, scenery=scen), trd, headless=True)
+        r_._props = r_._fx = None
+        r_.cfg.hud = 'off'
+        st = _demo_state(float(trd.xy[0][0]) + s_car, float(trd.xy[0][1]), 0.0, u=27.8)
+        for k in range(120 if mode == 'chase' else 3):     # the chase eye settled
+            r_.update_camera(st, 1.0 / 60.0 if k else 0.0)
+        aux = _demo_hud(V=27.8)
+        aux.stop_board = sb
+        r_.draw_frame(st, None, 0.0, _demo_ctl(), aux, SkidBuffer())
+        return r_, pygame.surfarray.array3d(r_.screen).astype(np.int16)
+
+    def exact(a, rgb):
+        return int((a == np.array(rgb, np.int16)).all(axis=-1).sum())
+
+    got, ok = [], True
+    for scen in (True, False):                  # plan: the car 3 m past the marker
+        _r, on = frame('car_up', scen, 100.0, (97.0, 125.0))
+        _r, off = frame('car_up', scen, 100.0, None)
+        n = (exact(on, amber), exact(on, black), exact(off, amber), exact(off, black))
+        ok = ok and n[0] > 50 and n[1] > 50 and n[2:] == (0, 0)
+        got.append(f"plan{'' if scen else ' classic'} amber / black {n[0]} / {n[1]} (off "
+                   f"{n[2]} / {n[3]})")
+    r_, on = frame('chase', True, 4.0, (80.0, 120.0))  # chase: at the start
+    r_.screenshot(os.path.join(os.path.abspath(screenshot_dir), 'render_stop_board_chase.png'))
+    _r, off = frame('chase', True, 4.0, None)
+    diff = int((np.abs(on - off).max(axis=-1) > 24).sum())
+    near = [int((np.abs(a - np.array(amber, np.int16)).max(axis=-1) <= 25).sum()) for a in (on, off)]
+    ok = ok and diff > 150 and near[0] > near[1] + 20
+    got.append(f"chase at the start: {diff} px changed, amber {near[0]} (off {near[1]})")
+    return ('stop board: the amber brake marker and the checker painted on the dragstrip '
+            '(plan, world on and off), cones and checker boards upright in chase from the start; '
+            'none without it', ok, '; '.join(got))
 
 
 DEVIATIONS[:] = [
@@ -7334,14 +8576,21 @@ DEVIATIONS[:] = [
     "In the chase view `HudData.ghosts` are translucent low-poly 3-D cars, "
     "not the flat ground silhouettes CONTRACT section 7 describes (past 78 m "
     "they squash into translucent silhouettes, flat by 90 m); the plan views "
-    "keep the opaque silhouettes, and the chase ghost's outline and label are "
-    "still drawn over the hero car. A chase ghost level with the hero is "
+    "keep the opaque silhouettes, and the chase ghost's outline is still "
+    "drawn over the hero car (its label just above the car, never on it). "
+    "A chase ghost level with the hero is "
     "drawn UNDER its paint, one clearly between the eye and it OVER it at "
     "GHOST_NEAR_FADE, cross-faded by depth.",
     "the chase view no longer looks exactly along `Renderer.psi_cam`: the "
     "camera leans into a corner by up to 3.2 deg, and `Chase3D.view_psi` is "
     "the heading it actually looks along (the basis). Its focal length is "
     "fixed (CHASE_FOV).",
+    "the wings' MOUNT is drawn from `drive.aero` (2026-09-25, the owner's "
+    "\"Carried by endplate still produces inboard pylons\"): `wing_mesh3` "
+    "imports `aero.blend` (the plate's lean, blended root and chord law) and "
+    "`aero.wing` (the swan-neck pylon) lazily -- numpy only, the same helpers "
+    "garage.wing_polys sweeps, so the chase view and the car page cannot draw "
+    "two different plates. CONTRACT section 1 lists neither for render.",
 ]
 
 

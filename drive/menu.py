@@ -27,10 +27,23 @@ Command vocabulary (the strings `Menu.handle` understands):
 
 A page with more rows than fit shows a scrolling window of them.
 
+A help row too long for its column wraps under its text column, and the
+panel grows by the extra lines; the note wraps the same way. A second help
+column narrower than HELP_MIN_W px folds into the first (the garage's long
+rows push its help far right), and a note with no such room right of the
+items goes under their key legend instead.
+
 A row can carry a colour SWATCH -- the Settings page's Paint row shows the
 paint it names -- through a side channel, `show(..., swatches={action: rgb})`:
 a small filled square drawn right after that row's label. The rows stay
 (label, action) 2-tuples, which is what every caller unpacks.
+
+A help row whose text is a `Dim` (a plain str to everything else) is drawn
+dim, its key too: the tutorial's finished steps under the ones to come. One
+whose text is a `Warn` is drawn amber, its key too: a challenge page's
+settings that rule out stars (task 45). A page whose help column is full
+(a challenge's) puts its note under the items' key legend itself:
+`show(note_under=True)`.
 
 Everything else is ignored so a caller can pass its whole command stream.
 """
@@ -53,9 +66,14 @@ C_SEL_BG = (40, 44, 52)
 C_KEY = (217, 206, 85)
 C_SECTION = (79, 163, 255)
 C_SWATCH_EDGE = (206, 210, 216)    # a swatch's 1 px outline: a dark paint still reads
+C_WARN = (255, 176, 46)            # a Warn help row: amber, apart from C_KEY's yellow
 
 #: frames after a show() before a mouse press arms a row (~0.25 s at 60 fps)
 CLICK_GUARD_DRAWS = 15
+
+#: the narrowest a help column or the note may be, px at 1280x800: under it
+#: the garage's note came out one word a line, over its key table
+HELP_MIN_W = 260
 
 NAV_HINT = [("UP / DOWN", "move"), ("LEFT / RIGHT", "change value"),
             ("ENTER", "select"), ("ESC", "back")]
@@ -70,6 +88,19 @@ def footer_says(footer: str, key: str) -> str | None:
     words up to the next run of 2+ spaces). None when the footer is silent."""
     m = re.search(rf"\b{key} / [A-Z]+ (.+?)(?: {{2,}}|$)", footer or "")
     return m.group(1).strip() if m else None
+
+
+class Dim(str):
+    """A help row's text drawn dim (C_DIM), its key too, not in C_TEXT /
+    C_KEY. A str everywhere else, so the rows stay (key, what) 2-tuples."""
+    __slots__ = ()
+
+
+class Warn(str):
+    """A help row's text drawn amber (C_WARN), its key too: what a page
+    warns about (a challenge's settings that rule out stars, task 45). A str
+    everywhere else, so the rows stay (key, what) 2-tuples."""
+    __slots__ = ()
 
 
 class StickNav:
@@ -127,15 +158,19 @@ class Menu:
         self._top = 0                     # first row of the scrolling window
         self._armed = None                # the row a mouse press armed
         self._draws = 0                   # frames drawn since the last show()
+        self._last_text_rects = []        # (text, Rect) of every text the last draw() blitted
+        self._last_panel = None           # the panel's Rect as last drawn
         self.art = None                   # a page's own drawing (show(art=))
         self.art_h = 0.0
         self.typed = frozenset()          # rows that take typed digits (show(typed=))
         self.help_for = None              # idx -> sections: help for the row (show(help_for=))
+        self.note_under = False           # the note under the items (show(note_under=))
 
     # -- state --------------------------------------------------------------
     def show(self, items=None, sections=None, subtitle=None, note=None,
              footer=None, title=None, idx=0, columns=None, art=None,
-             art_h: float = 0.0, typed=(), help_for=None, swatches=None) -> None:
+             art_h: float = 0.0, typed=(), help_for=None, swatches=None,
+             note_under: bool = False) -> None:
         """Open (or re-open) the menu. `idx` keeps the cursor where it was
         when a settings page re-shows itself after a value is cycled;
         `columns=1` stacks every help section (and the note) in one column
@@ -149,8 +184,11 @@ class Menu:
         after the label of the row with that action. The swatches belong to
         the rows: new `items` without `swatches` clear them (the pause page
         shown after the settings page has none), a re-show that keeps the
-        items keeps them."""
+        items keeps them. `note_under` puts the note under the items' key
+        legend, not under the help (a challenge's page: its help column is
+        full, the items' has room); set by every show() too."""
         self.art = art
+        self.note_under = bool(note_under)
         self.art_h = float(art_h) if art is not None else 0.0
         self.typed = frozenset(typed or ())
         #: `help_for(idx)` -> the help sections for the highlighted row (the
@@ -289,22 +327,58 @@ class Menu:
     def _blit(self, screen, s, x, y, font, col=C_TEXT) -> int:
         surf = self._txt(s, font, col)
         screen.blit(surf, (int(x), int(y)))
+        self._last_text_rects.append((s, surf.get_rect(topleft=(int(x), int(y)))))
         return surf.get_width()
 
     @staticmethod
     def _wrap(text: str, font, max_w: float) -> list[str]:
-        """Greedy word wrap by rendered width."""
+        """Greedy word wrap by rendered width; a single word wider than the
+        line (a file path) is cut where it fills one."""
         out, line = [], ""
         for word in text.split():
             cand = (line + " " + word).strip()
-            if line and font.size(cand)[0] > max_w:
-                out.append(line)
+            if not line or font.size(cand)[0] > max_w:
+                if line:
+                    out.append(line)
+                while len(word) > 1 and font.size(word)[0] > max_w:
+                    k = len(word) - 1
+                    while k > 1 and font.size(word[:k])[0] > max_w:
+                        k -= 1
+                    out.append(word[:k])
+                    word = word[k:]
                 line = word
             else:
                 line = cand
         if line:
             out.append(line)
         return out or [""]
+
+    def _lines(self, text: str, font, max_w: float) -> list[str]:
+        """A help row (or the note) as the lines it takes: itself when it
+        fits (its double spaces kept), else wrapped. Cached: the layout runs
+        every frame."""
+        key = ("wrap", text, id(font), int(max_w))
+        got = self._cache.get(key)
+        if got is None:
+            if len(self._cache) > 512:
+                self._cache.clear()
+            got = [text] if font.size(text)[0] <= max_w else self._wrap(text, font, max_w)
+            self._cache[key] = got
+        return got
+
+    @staticmethod
+    def _key_w(rows, font, u: float) -> float:
+        """A section's key column: its widest key + a gap, at least 118 px;
+        but step numbers (every key a number of 3 characters or fewer: the
+        tutorial's ' 1' .. '13') get just their width + 16 px, not a 110 px
+        gap before their text. A '--' placeholder keeps the 118 px, in line
+        with the sections around it."""
+        keys = [k for k, wh in rows if wh]
+        widest = max((font.size(k)[0] for k in keys), default=0)
+        nums = [k.strip() for k in keys if k.strip()]
+        if nums and all(len(k) <= 3 and k.isdigit() for k in nums):
+            return widest + 16 * u
+        return max(118 * u, widest + 12 * u)
 
     def draw(self, screen: pygame.Surface) -> None:
         """Dim the frame underneath and draw the panel. Nothing if closed."""
@@ -314,6 +388,7 @@ class Menu:
         u = min(W / 1280.0, H / 800.0)
         if self._ui != u:
             self._ui, self._fonts, self._cache, self._surfs = u, {}, {}, {}
+        self._last_text_rects = []
         f_title = self._font(int(round(30 * u)), bold=True)
         f_item = self._font(int(round(18 * u)))
         f_lbl = self._font(int(round(14 * u)))
@@ -340,8 +415,15 @@ class Menu:
         col_h = [0.0, 0.0]
         if self.art is not None:          # the page's drawing heads column 0
             col_h[0] = self.art_h + 14 * u
-        placed = []                       # (col, y_offset, title, rows)
+        placed = []                       # (col, y_offset, title, key_w, [(key, what, lines)])
         one = (self.columns == 1)
+        # a second column narrower than HELP_MIN_W is no column: the garage's
+        # long rows push its help far right, and its note came out one word
+        # a line over the key table. Everything stacks in the first.
+        if not one and w - col_px[1] - 24 * u < HELP_MIN_W * u:
+            one = True
+        # where a column's text stops: the next column, or the panel's edge
+        right = ((col_px[1] - 16 * u) if not one else (w - 24 * u), w - 24 * u)
         secs = self.sections
         if self.help_for is not None:
             try:
@@ -350,16 +432,30 @@ class Menu:
                 secs = self.sections
         for title, rows in secs:
             c = 0 if (one or col_h[0] <= col_h[1]) else 1
-            placed.append((c, col_h[c], title, rows))
-            col_h[c] += (len(rows) + 1) * row_h + 14 * u
+            key_w = self._key_w(rows, f_lbl, u)
+            # a row too long for its column wraps under its text column (a
+            # key-only row under itself); the column grows by its lines
+            laid = [(key, what, self._lines(what or key, f_lbl,
+                                            max(120 * u, right[c] - col_px[c]
+                                                - (key_w if what else 0))))
+                    for key, what in rows]
+            placed.append((c, col_h[c], title, key_w, laid))
+            col_h[c] += (sum(len(ls) for _, _, ls in laid) + 1) * row_h + 14 * u
+        note_lines = []                   # the note under the items' key legend
         if self.note:
             c = 0 if (one or col_h[0] <= col_h[1]) else 1
-            lines = self._wrap(self.note, f_lbl, w - col_px[c] - 24 * u)
-            placed.append((c, col_h[c], None, [(ln, "") for ln in lines]))
-            col_h[c] += (len(lines) + 1) * row_h
+            if right[c] - col_px[c] >= HELP_MIN_W * u and not self.note_under:
+                lines = self._lines(self.note, f_lbl, right[c] - col_px[c])
+                placed.append((c, col_h[c], None, 0, [("", "", lines)]))
+                col_h[c] += (len(lines) + 1) * row_h
+            else:                         # no room right of the items (or the page
+                #                               asked, `note_under`): under them
+                note_lines = self._lines(self.note, f_lbl, items_w - 12 * u)
         # a list longer than the window scrolls: only `vis` rows are drawn,
         # the window follows the cursor (the PICK page's library can grow)
         hint_h = (len(NAV_HINT) + 1) * row_h + 30 * u
+        if note_lines:
+            hint_h += len(note_lines) * row_h + 10 * u
         n = len(self.items)
         cap = max(3, int((H - 16 * u - 96 * u - hint_h - 44 * u) // (36 * u)))
         vis = min(n, cap)
@@ -389,6 +485,7 @@ class Menu:
             pygame.draw.rect(panel, C_ACCENT, (0, 0, pw, int(3 * u)))
             self._surfs[("panel", pw, ph)] = panel
         screen.blit(panel, (int(x0), int(y0)))
+        self._last_panel = pygame.Rect(int(x0), int(y0), pw, ph)
 
         # title + subtitle
         self._blit(screen, self.title, x0 + 28 * u, y0 + 18 * u, f_title, C_TEXT)
@@ -443,23 +540,33 @@ class Menu:
             self._blit(screen, key, x0 + 28 * u, y, f_lbl, C_DIM)
             self._blit(screen, what, x0 + 28 * u + hint_kw, y, f_lbl, C_DIM)
             y += row_h
+        if note_lines:                    # the note, when no column had room for it
+            y += 10 * u
+            for ln in note_lines:
+                self._blit(screen, ln, x0 + 28 * u, y, f_lbl, C_DIM)
+                y += row_h
 
-        # help columns; the key column widens to the section's longest key
-        for c, yoff, title, rows in placed:
+        # help columns; the key column widens to the section's longest key,
+        # a wrapped row's lines continue under its text
+        for c, yoff, title, key_w, laid in placed:
             x = x0 + col_px[c]
             yy = y0 + 96 * u + yoff
-            key_w = max(118 * u, max((f_lbl.size(k)[0] for k, wh in rows if wh),
-                                     default=0) + 12 * u)
             if title:
                 self._blit(screen, title, x, yy, f_sec, C_SECTION)
                 yy += row_h
-            for key, what in rows:
+            for key, what, lines in laid:
+                dim = isinstance(what, Dim)
+                warn = isinstance(what, Warn)
                 if what:
-                    self._blit(screen, key, x, yy, f_lbl, C_KEY)
-                    self._blit(screen, what, x + key_w, yy, f_lbl, C_TEXT)
-                else:
-                    self._blit(screen, key, x, yy, f_lbl, C_DIM)
-                yy += row_h
+                    self._blit(screen, key, x, yy, f_lbl,
+                               C_DIM if dim else C_WARN if warn else C_KEY)
+                for ln in lines:
+                    if what:
+                        self._blit(screen, ln, x + key_w, yy, f_lbl,
+                                   C_DIM if dim else C_WARN if warn else C_TEXT)
+                    else:
+                        self._blit(screen, ln, x, yy, f_lbl, C_DIM)
+                    yy += row_h
 
         if self.art is not None:
             try:
@@ -649,6 +756,126 @@ def self_check(verbose: bool = True) -> bool:
         and all(len(it) == 2 for it in sm.items) and sm.action() == "resume",
         f"{n_sw} px at x {xs.min() if n_sw else 0}-{xs.max() if n_sw else 0} (label ends "
         f"{rx + 12 + lw}, row {rx}-{rx + rw}), re-show {kept}, new items {gone}")
+    # long help rows wrap inside the panel (the tutorial's pages cut theirs at
+    # the edge): a 300-character row, a key-only one and a note, one column;
+    # every text ends 8 px inside the panel, above the footer
+    long = ("at a sector line: purple = best ever in this class, green = better "
+            "than your PB lap, red = slower. " * 4)[:300]
+    wm = Menu("TUTORIAL 9/13", [("Continue", "c"), ("End the tutorial", "e")],
+              [("TIMING", [("sectors", "the lap is cut in 3"), ("the flash", long)]),
+               ("NEXT", [(long, "")])], footer="ENTER continue", note=long)
+    wm.show(columns=1)
+    wm.draw(scr)
+
+    def _inside(mn):
+        pr = mn._last_panel
+        return pr is not None and all(r.right <= pr.right - 8 and r.left >= pr.left
+                                      for _, r in mn._last_text_rects)
+
+    def _overlaps(mn):
+        rs = [r for _, r in mn._last_text_rects]
+        return sum(rs[i].colliderect(rs[j]) for i in range(len(rs)) for j in range(i))
+    pieces = [r for s_, r in wm._last_text_rects if len(s_) > 20 and s_ in long]
+    foot = [r for s_, r in wm._last_text_rects if s_ == "ENTER continue"]
+    rep("a 300-character help row, a key-only row and the note wrap inside the panel "
+        "(8 px in), their lines above the footer; nothing overprints",
+        len(long) == 300 and _inside(wm) and len(pieces) >= 6 and bool(foot)
+        and max(r.bottom for r in pieces) <= foot[0].top and _overlaps(wm) == 0,
+        f"{len(pieces)} wrapped lines, rightmost {max(r.right for _, r in wm._last_text_rects)}"
+        f" / panel {wm._last_panel.right if wm._last_panel else None}, "
+        f"{_overlaps(wm)} overlaps")
+    # the garage's shape: long item rows push two help columns so far right
+    # that the second is ~100 px; it folds into the first, so the no-pad note
+    # sits under the key table at its full width, not one word a line over it.
+    # Two columns with room stay two, the first stopping short of the second.
+    gar = Menu("GARAGE", [("Resume", "resume"),
+                          ("Design the left wing  (mission -> section -> wing)", "design")]
+               + [(f"Load a build ...  (the library's builds) {k}", f"b{k}") for k in range(10)],
+               [("KEYBOARD", [("mouse drag / wheel", "orbit / zoom"),
+                              ("W / SHIFT+W", "next / previous library wing in the slot"),
+                              ("B / SHIFT+B", "next / previous saved build of this car")]
+                 + [(f"K{k}", "a garage key and what it does") for k in range(14)])],
+               note="no controller: pair the DualSense (CREATE+PS) - it hot-plugs")
+    gar.show()
+    gar.draw(scr)
+    at = {s_: r for s_, r in gar._last_text_rects}
+    kb, nt = at.get("KEYBOARD"), [r for s_, r in gar._last_text_rects if "controller" in s_]
+    folded = bool(kb and nt) and nt[0].left == kb.left and nt[0].top > kb.top
+    two = Menu("PAUSED", [("Resume", "resume"), ("Quit", "quit")],
+               [("KEYBOARD", [("F / G", long)]), ("PS5 DUALSENSE", [("L2 / R2", long)])])
+    two.show()
+    two.draw(scr)
+    cols = sorted({r.left for s_, r in two._last_text_rects
+                   if s_ in ("KEYBOARD", "PS5 DUALSENSE")})
+    rep("a second column under HELP_MIN_W folds into the first (the garage's note under "
+        "its key table); two columns with room stay two; no text overlaps or leaves the panel",
+        folded and _inside(gar) and _overlaps(gar) == 0 and len(nt) <= 2
+        and len(cols) == 2 and _inside(two) and _overlaps(two) == 0,
+        f"note at x {nt[0].left if nt else None} in {len(nt)} line(s), KEYBOARD at x "
+        f"{kb.left if kb else None}; two columns at {cols}; overlaps {_overlaps(gar)} / "
+        f"{_overlaps(two)}")
+    # step numbers (' 1' .. '13') get their own width + 16 px of key column,
+    # not the 118 px floor; a '--' placeholder keeps the floor
+    st = Menu("TUTORIAL", [("Start", "s"), ("Back", "b")],
+              [("THE STEPS", [(f"{k:2d}", f"step {k}") for k in range(1, 14)]),
+               ("TOP 5", [("--", "none yet")])])
+    st.show(columns=1)
+    st.draw(scr)
+    at = {s_: r for s_, r in st._last_text_rects}
+    gap = at["step 13"].left - at["13"].left
+    gap_dash = at["none yet"].left - at["--"].left
+    want = st._font(14).size("13")[0] + 16
+    rep("step numbers: a key column of the widest number + 16 px, not 118; '--' keeps 118",
+        abs(gap - want) <= 1 and gap_dash >= 118,
+        f"number -> text {gap} px (want {want}), '--' -> text {gap_dash} px")
+    # a Dim row (the tutorial's finished steps): its key and text in C_DIM,
+    # a plain row's in C_KEY / C_TEXT; a Dim is a str to everyone else
+    dm = Menu("TUTORIAL", [("Back", "b")],
+              [("THE STEPS", [(" 1", Dim("Throttle and brake  (arena)  done")),
+                              (" 2", "Steering  (arena)  <- now")])])
+    dm.show(columns=1)
+    dm.draw(scr)
+    drawn = {(k[0], k[2]) for k in dm._cache if len(k) == 3}
+    want = {(" 1", C_DIM), ("Throttle and brake  (arena)  done", C_DIM),
+            (" 2", C_KEY), ("Steering  (arena)  <- now", C_TEXT)}
+    rep("a Dim help row draws its key and text dim, a plain one bright; a Dim is a str",
+        want <= drawn and Dim("a") == "a" and isinstance(Dim("a"), str),
+        f"missing {sorted(want - drawn)}")
+    # a Warn row (a challenge's settings that rule out stars, task 45): its
+    # key and text amber, a wrapped one's every line; a Warn is a str too
+    wm = Menu("STOP FROM 100", [("Back", "b")],
+              [("YOUR SETUP", [("yours", "ABS off  TC on  automatic"),
+                               ("!", Warn("ABS off: expect longer stops " + "x" * 90))])])
+    wm.show(columns=1)
+    wm.draw(scr)
+    drawn = {(k[0], k[2]) for k in wm._cache if len(k) == 3}
+    amber = {t for t, c in drawn if c == C_WARN}
+    w_lines = [t for t, _ in wm._last_text_rects if t in amber and t != "!"]   # drawn order
+    rep("a Warn help row draws its key and text amber, every wrapped line; a plain one "
+        "stays C_KEY / C_TEXT; a Warn is a str",
+        {("!", C_WARN), ("yours", C_KEY), ("ABS off  TC on  automatic", C_TEXT)} <= drawn
+        and len(w_lines) >= 2 and "".join(w_lines).replace(" ", "")
+        == ("ABS off: expect longer stops " + "x" * 90).replace(" ", "")
+        and Warn("a") == "a" and isinstance(Warn("a"), str) and C_WARN not in (C_KEY, C_TEXT),
+        f"amber lines {len(w_lines)}")
+    # note_under (a challenge's page, task 45): the note under the items'
+    # key legend, wrapped to the items' width, inside the panel; the next
+    # show() without it puts the note back under the help
+    nu_note = "You start at 100 km/h, and the car holds it until you brake. " * 3
+    wm.show(items=[("Start", "go"), ("Back", "b")], note=nu_note, columns=1, note_under=True)
+    wm.draw(scr)
+    at = {t: r for t, r in wm._last_text_rects}
+    sec_x = at["YOUR SETUP"].left
+    n_rects = [r for t, r in wm._last_text_rects if t and t in nu_note and len(t) > 12]
+    under = (len(n_rects) >= 2 and all(r.right < sec_x and r.top > at["ESC"].bottom
+                                       and wm._last_panel.contains(r) for r in n_rects))
+    wm.show(note=nu_note, columns=1)
+    wm.draw(scr)
+    back = [r for t, r in wm._last_text_rects if t and t in nu_note and len(t) > 12]
+    rep("note_under: the note under the items' key legend, left of the help, in the panel; "
+        "the next show() without it puts it back under the help",
+        under and wm.note_under is False and back and all(r.left >= sec_x for r in back),
+        f"{len(n_rects)} lines under the legend, then {len(back)} right")
     m.hide()
     scr.fill((27, 29, 33))
     m.draw(scr)

@@ -44,7 +44,7 @@ ROOT_DEFAULT = os.path.join("runs", "library")
 
 BUILTIN_AIRFOILS = [
     ("naca0012", "naca", "0012", "symmetric 12 %: endplates, neutral fins"),
-    ("naca2412", "naca", "2412", "the AeroBO default section"),
+    ("naca2412", "naca", "2412", "the WingLab default section"),
     ("naca4412", "naca", "4412", "4 % camber, forgiving stall"),
     ("naca6412", "naca", "6412", "6 % camber, high lift"),
     ("naca0009", "naca", "0009", "thin symmetric plate-like"),
@@ -232,6 +232,10 @@ class Library:
         for name, src, code, note in BUILTIN_AIRFOILS:
             if name not in self.airfoils:
                 self.save_airfoil(AirfoilSpec(name, src, code=code, notes=note, builtin=True))
+            elif self.airfoils[name].builtin and self.airfoils[name].notes != note:
+                #  a built-in's note is the code's, not the save's: a library
+                #  saved before a rewording shows the new words (in memory)
+                self.airfoils[name].notes = note
         for f in bundled_dat_files():
             name = f[:-4].lower()
             if name in self.airfoils:
@@ -363,7 +367,17 @@ class Library:
                      standoff: float | None = None, wall_side: float = +1.0) -> dict:
         """Re-run the lattice on `w` with the best polar available and store
         the result on the spec. Legacy wings keep their closed form and get
-        a display-only aero."""
+        a display-only aero.
+
+        A wing AeroBO's engine designed (`w.engine == "aerobo"`) is NEVER
+        re-analysed here: its `aero` is the law sampled from AeroBO's own
+        evaluator at its winning vector (drive/aerobo_models), and carsim's
+        lattice on the same planform is a different model that would quietly
+        replace the forces the design page promised. It is returned as
+        stored; a slot moved since is re-derived by the garage through
+        AeroBO, not by this lattice."""
+        if w.engine == "aerobo":
+            return w.aero
         V = V_REF[w.role] if V is None else V
         pol = self.polar(w.airfoil, w.reynolds(V))
         #  the END PLATE's own section, if it has been given one. Read at the

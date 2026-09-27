@@ -3,3 +3,6 @@ __pycache__/
 .DS_Store
 runs/
 .venv/
+
+# AeroBO's runtime caches (XFOIL, evaluation cache, screen checkpoints) -- see aerobo/VENDORED.md
+aerobo/results/

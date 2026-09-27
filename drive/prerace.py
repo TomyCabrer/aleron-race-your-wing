@@ -9,6 +9,10 @@ top 5 and the medal targets, and one press to go.
            on RACE.
     EDIT   the garage, on this build; ENTER there drives it and comes back
            to this screen.
+    WINGS  (a build with no wings; round 3 of task 45) 'Try ready-made
+           wings': the garage with the garage's W already pressed on the
+           first empty slot -- a ready-made wing on the car in one key --
+           and, like EDIT, its ENTER drives it and comes back here.
     PICK   any build saved in the garage library, whichever track it was
            designed on, each row with that build's best time in THIS class.
 
@@ -52,7 +56,7 @@ the medals are headed as the Unlimited book's -- which `book` then is
 book its OWN build files into (`judge`), so an official build shows its
 official best in an Unlimited session and the other way round.
 
-Actions the rows return: 'pr_race', 'pr_edit', 'pr_pick', 'pr_back',
+Actions the rows return: 'pr_race', 'pr_edit', 'pr_wings', 'pr_pick', 'pr_back',
 'pr_build:<name>' (the PICK page), 'set:pr_ghost' (task 22's ghost slot) and
 'set:pr_ghosts' (both ghosts shown / hidden: J's toggle, for a pad; task 33).
 
@@ -67,6 +71,10 @@ from . import records as rec
 
 #: the pick page's row for the build being driven when it is not a saved one
 CURRENT = "__current__"
+#: a top-5 row's build name is cut to this many letters: with the assists in
+#: words ('ABS · TC · steer aid · manual + clutch') and the date, the longest
+#: row still fits one line of the TIME TRIAL page's help column
+TOP_NAME = 18
 
 PR_HELP = [("PRE-RACE", [
     ("RACE", "every car to the line; the clock starts at the next crossing"),
@@ -79,13 +87,34 @@ PR_HELP = [("PRE-RACE", [
 PICK_HELP = [("PICK A BUILD", [
     ("ENTER / CROSS", "drive that build (a new session on it)"),
     ("time", "its best lap in this class, if any"),
-    ("order", "this car's builds, then any-car ones, then"),
-    ("", "other cars' (tagged [car]: yours to try)"),
-    ("(default)", "the build this car opens with; Settings"),
-    ("", "> Default, or the garage's F, sets it"),
-    ("", "saved builds: the garage's S (pad: OPTIONS)"),
+    # whole sentences: the menu wraps a row to its column (a line broken by
+    # hand left 'then' and 'try)' alone on a line of their own)
+    ("order", "this car's builds, then any-car ones, then other cars' "
+              "(tagged [car]: yours to try)"),
+    ("(default)", "the build this car opens with; Settings > Default, or the "
+                  "garage's F, sets it"),
+    ("saving", "the garage's S (pad: OPTIONS)"),
     ("ESC", "back where you came from"),
 ])]
+
+#: round 3 of task 45 (the owner: wings sooner, no default wings): the row a
+#: build with NO wings gets, right under Edit, and its line in the help --
+#: the garage opened with its W pressed on the first empty slot
+TRY_WINGS = "Try ready-made wings"
+TRY_WINGS_HELP = ("Try wings", "the garage's W: a ready-made wing on your car in one key")
+
+
+def no_wings(build_json) -> bool:
+    """Is `build_json` (a CarBuild json) a car with no wing in any slot? The
+    published one-panel car (None) and anything unreadable are not: the row
+    that offers wings is only for a car that plainly has none."""
+    if not isinstance(build_json, dict):
+        return False
+    slots = build_json.get("slots")
+    if not isinstance(slots, dict):
+        return False
+    return not any(isinstance(v, dict) and v.get("wing") for v in slots.values())
+
 
 #: short names for a car's tag on a pick row / a library row. The titles
 #: live in `cars.CAR_TITLES`; these are the few letters a row has room for.
@@ -204,14 +233,19 @@ def next_medal(key: str, t, tg=None):
     return None
 
 
+#: the gearbox of a top-5 lap in words (the HUD keeps its short 'MAN+CL')
+GEARBOX_WORDS = {"auto": "auto", "manual": "manual", "clutch": "manual + clutch"}
+
+
 def assists_text(a: dict) -> str:
-    """The lap's assists as short tags: 'ABS TC AID AUTO'."""
+    """The lap's assists in words, as a top-5 row says them:
+    'ABS · TC · steer aid · manual + clutch'. "" for no record of them."""
     if not isinstance(a, dict):
         return ""
     tags = [t for t, on in (("ABS", a.get("abs")), ("TC", a.get("tc")),
-                            ("AID", a.get("steer_aid"))) if on]
-    gb = {"auto": "AUTO", "manual": "MAN", "clutch": "MAN+CL"}.get(a.get("gearbox"), "")
-    return " ".join(tags + ([gb] if gb else []))
+                            ("steer aid", a.get("steer_aid"))) if on]
+    gb = GEARBOX_WORDS.get(a.get("gearbox"), "")
+    return " · ".join(tags + ([gb] if gb else []))
 
 
 class PreRace:
@@ -272,6 +306,14 @@ class PreRace:
         b = self.builds.get(self.build_name)
         return b is not None and _same_build(b, self.design_json)
 
+    def unsaved(self) -> bool:
+        """Does the build being driven say '(not saved)'? Only when there is a
+        library for it to be missing from: with no saved builds at all, every
+        build would say it. The one rule for the TIME TRIAL page's Build row,
+        the pause pages' subtitle and the Settings page's Build row (task
+        45: the pause page said '(not saved)' where this page did not)."""
+        return bool(self.builds) and not self.saved()
+
     def _fitted(self, build_json):
         """`build_json` fitted to this car (`fit`), itself without one."""
         if self.fit is None or not isinstance(build_json, dict):
@@ -314,13 +356,15 @@ class PreRace:
     # -- the main page ------------------------------------------------------
     def items(self) -> list:
         name = self.build_name or "(unnamed)"
-        tag = "" if self.saved() or not self.builds else "  (not saved)"
+        tag = "  (not saved)" if self.unsaved() else ""
         if self.unlimited:
             tag += "  UNLIMITED"
         rows = [("RACE", "pr_race"),
                 (f"{'Build':<9s}{name}{tag}", "pr_pick")]
         if self.can_edit:
             rows.append(("Edit this build in the garage", "pr_edit"))
+        if self.offers_wings():
+            rows.append((TRY_WINGS, "pr_wings"))
         if self.ghosts_on is not None:
             rows.append((f"{'Ghosts':<9s}{'shown' if self.ghosts_on else 'hidden'}  (J)",
                          "set:pr_ghosts"))
@@ -328,12 +372,31 @@ class PreRace:
             rows.append((f"{'Ghost 2':<9s}{self.ghost_label}", "set:pr_ghost"))
         return rows
 
-    def subtitle(self) -> str:
-        ttl = self.titles                  # the proper names, when the session gave them
+    def offers_wings(self) -> bool:
+        """The 'Try ready-made wings' row (round 3): a garage this session,
+        and a build being driven with no wings at all."""
+        return self.can_edit and no_wings(self.build_json)
+
+    def help(self) -> list:
+        """The page's help column: PR_HELP, with the ready-made wings' line
+        under Edit when the row is there."""
+        if not self.offers_wings():
+            return PR_HELP
+        (title, rows), = PR_HELP
+        i = [k for k, _ in rows].index("Edit") + 1
+        return [(title, rows[:i] + [TRY_WINGS_HELP] + rows[i:])]
+
+    def class_text(self) -> str:
+        """The class in proper names -- map, car, engine, surface, as the
+        session gave them (`titles`) -- or the key's own words when one is
+        missing (`records.class_label`). Both page subtitles say it."""
+        ttl = self.titles
         parts = [ttl.get(k) for k in ("track", "car", "engine", "surface")]
-        cls = "  ·  ".join(map(str, parts)) if all(parts) else rec.class_label(self.key)
+        return "  ·  ".join(map(str, parts)) if all(parts) else rec.class_label(self.key)
+
+    def subtitle(self) -> str:
         unl = "   UNLIMITED: not official" if self.unlimited else ""
-        return f"{cls}   build: {self.build_name or '(unnamed)'}{unl}"
+        return f"{self.class_text()}   build: {self.build_name or '(unnamed)'}{unl}"
 
     def sections(self) -> list:
         t, c, e, s = rec.split_key(self.key)
@@ -355,14 +418,18 @@ class PreRace:
             secs.append(("UNLIMITED", rows_u))
         laps = self.book.laps(self.key)
         rows = []
-        for i, lp in enumerate(laps):
+        names = []
+        for lp in laps:
             # a lap from another version, or edited by hand, must not take the
             # page down: every field is read defensively
             b = lp.get("build")
-            name = str((b.get("name") if isinstance(b, dict) else "") or "-")
+            names.append(str((b.get("name") if isinstance(b, dict) else "") or "-")[:TOP_NAME])
+        # the names padded to the longest, so the assists and the dates line up
+        nw = max((len(n) for n in names), default=0)
+        for i, (lp, name) in enumerate(zip(laps, names)):
             rows.append((f"{i + 1}  {rec.fmt_time(lp.get('time'))}",
-                         f"{name[:18]}  {assists_text(lp.get('assists'))}  "
-                         f"{str(lp.get('date', '') or '')[:10]}"))
+                         "  ".join(p for p in (f"{name:<{nw}s}", assists_text(lp.get("assists")),
+                                               str(lp.get("date", "") or "")[:10]) if p)))
         if not rows:
             rows = [("--", "none yet: your first valid lap is the PB")]
         secs.append((f"{unl}TOP {rec.TOP_N}", rows))
@@ -388,7 +455,7 @@ class PreRace:
             secs.append((f"{unl}MEDALS", mrows))
         else:
             secs.append((f"{unl}MEDALS", [("--", "no reference lap for this class")]))
-        return secs + PR_HELP
+        return secs + self.help()
 
     # -- the pick page ----------------------------------------------------------
     def pick_items(self) -> list:
@@ -423,7 +490,7 @@ class PreRace:
         if not self.key:
             return (f"{car_label(self.car) or 'this car'}'s builds first   "
                     f"no lap times on this map")
-        return f"{rec.class_label(self.key)}   the time is each build's best in this class"
+        return f"{self.class_text()}   the time is each build's best in this class"
 
 
 def _same_build(a, b) -> bool:
@@ -490,7 +557,27 @@ def self_check(verbose: bool = True) -> bool:
     top = secs.get(f"TOP {rec.TOP_N}", [])
     rep("top 5 rows, fastest first, with build and assists",
         len(top) == 4 and top[0][0].startswith("1  1:00.900") and "fast" in top[0][1]
-        and "ABS AID MAN" in top[0][1], str(top[:2]))
+        and "ABS · steer aid · manual" in top[0][1], str(top[:2]))
+    rep("the assists in words, not the HUD's tags",
+        assists_text({"abs": True, "steer_aid": True, "gearbox": "manual"})
+        == "ABS · steer aid · manual"
+        and assists_text({"abs": True, "tc": True, "steer_aid": True, "gearbox": "clutch"})
+        == "ABS · TC · steer aid · manual + clutch"
+        and assists_text({"gearbox": "auto"}) == "auto" and assists_text("x") == "",
+        assists_text({"abs": True, "steer_aid": True, "gearbox": "manual"}))
+    rep("... the names padded, so the assists line up down the top 5",
+        len({r[1].index("ABS") for r in top}) == 1, str([r[1] for r in top]))
+    lb = rec.RecordBook(tempfile.mkdtemp(prefix="carsim_prerace_"))
+    r = rec._fake_rec(59.0, [])
+    r.update(build=dict(name="a very long build name indeed", json=b_fast),
+             assists=dict(abs=True, tc=True, steer_aid=True, gearbox="clutch"),
+             date="2026-09-26T10:00:00")
+    lb.insert(key, r)
+    long_row = dict(PreRace(key, lb, "x", None).sections())[f"TOP {rec.TOP_N}"][0][1]
+    #  the TIME TRIAL page's help column holds about 80 letters at any size
+    rep("the longest top-5 row (a cut name, every assist, a date) fits one line",
+        long_row.startswith("a very long build ") and len(long_row) <= 72
+        and long_row.endswith("manual + clutch  2026-09-26"), f"{len(long_row)}: {long_row}")
     rep("medal block present (targets or '--')", "MEDALS" in secs, str(secs.get("MEDALS"))[:80])
     med = secs.get("MEDALS") or [("--", "")]
     rep("... with the next medal and its gap (or all won)", med[0][0] == "--"
@@ -507,6 +594,11 @@ def self_check(verbose: bool = True) -> bool:
     rep("the subtitle: the proper names; the key's words without them",
         named.subtitle().startswith("Arena circuit  ·  Linden Corsa  ·  Sport")
         and pr.subtitle().startswith(rec.class_label(key)), named.subtitle())
+    rep("... and the PICK page's the same way",
+        named.pick_subtitle().startswith("Arena circuit  ·  Linden Corsa  ·  Sport  ·  "
+                                         "Dry, wet patches   ")
+        and pr.pick_subtitle().startswith(rec.class_label(key) + "   "),
+        named.pick_subtitle())
     pick = pr.pick_items()
     acts = [a for _, a in pick]
     rep("pick lists every saved build with its best in this class",
@@ -516,6 +608,12 @@ def self_check(verbose: bool = True) -> bool:
                   builds={"fast": b_fast})
     rep("an unsaved build is listed first and marked", pr2.pick_items()[0][1] == "pr_back"
         and "not saved" in pr2.pick_items()[0][0] and "(not saved)" in pr2.items()[1][0])
+    pr3 = PreRace(key, book, "my corsa", dict(b_fast, name="my corsa"), builds={})
+    rep("'(not saved)' only with a library to miss from: one rule (unsaved) for "
+        "this page and the pause pages (task 45)",
+        pr2.unsaved() and not pr3.unsaved() and not pr.unsaved() and not pr3.saved()
+        and "(not saved)" not in pr3.items()[1][0],
+        f"{pr2.unsaved()} / {pr3.unsaved()} / {pr.unsaved()}; {pr3.items()[1][0]!r}")
     rep("a build that equals a saved one under another name is not 'saved'",
         not PreRace(key, book, "fast", dict(b_wet, name="fast"), builds={"fast": b_fast}).saved())
     book.set_last_build("arena", "wet", b_wet)
@@ -543,6 +641,28 @@ def self_check(verbose: bool = True) -> bool:
     rep("no garage this session: no EDIT row",
         [a for _, a in PreRace(key, book, "fast", b_fast, can_edit=False).items()]
         == ["pr_race", "pr_pick"])
+    #  round 3 (the owner: wings sooner): a car with no wings gets 'Try
+    #  ready-made wings' under Edit, and its line in the help under Edit's
+    b_bare = dict(version=2, name="my corsa", mirror=True, builtin=False, car="corsa",
+                  slots={"left": {"wing": ""}, "right": {"wing": ""}, "top": {"wing": ""}})
+    p_bare = PreRace(key, book, "my corsa", b_bare, builds={"fast": b_fast})
+    help_b = [k for k, _ in dict(p_bare.sections())["PRE-RACE"]]
+    rep("a build with no wings: 'Try ready-made wings' under Edit, its help under Edit's",
+        p_bare.items()[:4] == [("RACE", "pr_race"), p_bare.items()[1],
+                               ("Edit this build in the garage", "pr_edit"),
+                               ("Try ready-made wings", "pr_wings")]
+        and help_b[help_b.index("Edit") + 1] == "Try wings"
+        and dict(p_bare.sections())["PRE-RACE"][help_b.index("Try wings")][1]
+        == "the garage's W: a ready-made wing on your car in one key", str(help_b))
+    rep("... never for a car with a wing, the published panel (None), or with no garage",
+        "pr_wings" not in [a for _, a in pr.items()]
+        and "Try wings" not in [k for k, _ in dict(pr.sections())["PRE-RACE"]]
+        and "pr_wings" not in [a for _, a in PreRace(key, book, "x", None).items()]
+        and "pr_wings" not in [a for _, a in PreRace(key, book, "my corsa", b_bare,
+                                                     can_edit=False).items()]
+        and not no_wings(dict(b_bare, slots=dict(b_bare["slots"], top={"wing": "rear-s1223"})))
+        and no_wings(dict(b_bare, slots={})) and not no_wings({"slots": 3})
+        and PR_HELP[0][1][2][0] == "Edit", str([a for _, a in pr.items()]))
     pr.ghost_label = "reference bot"
     rep("the ghost row appears when set", pr.items()[-1] == ("Ghost 2  reference bot", "set:pr_ghost"))
     pr.ghosts_on = False

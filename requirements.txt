@@ -1,0 +1,14 @@
+# carsim: python3 -m pip install -r requirements.txt
+numpy
+scipy
+pygame
+# AeroBO (vendored at aerobo/, see aerobo/VENDORED.md) -- the garage's wing design engine.
+# pymoo is AeroBO's own dependency (its genetic-algorithm optimisers).
+pymoo
+# torch, botorch and gpytorch are AeroBO's Bayesian-optimisation stack (its
+# pyproject extra "bo"). Optional: PyTorch has no wheel for Intel Macs or macOS 13
+# and older. Without them the DESIGN page shows AeroBO's own note and offers only
+# the optimisers that need no torch; the recommended budgets still apply.
+torch
+botorch
+gpytorch

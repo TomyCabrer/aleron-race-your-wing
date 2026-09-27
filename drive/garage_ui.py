@@ -248,6 +248,7 @@ class ParamList:
         self.scroll = 0
         self._rect = None
         self._hits: list = []          # (index, y, h), filled by draw()
+        self._vals: dict = {}          # index -> (x0, x1) of the value as drawn
         self._hover = -1
 
     def current(self) -> Param | None:
@@ -311,11 +312,16 @@ class ParamList:
             return "action"
         if moved:
             return "select"
-        #  already selected: the click is on one of the two arrows
+        #  already selected: the click is on one of the two arrows. The two
+        #  halves split at the middle of the value AS DRAWN, not of the fixed
+        #  VALUE_W zone: "< 0.35 >" is right-aligned and far narrower than
+        #  VALUE_W, so halving the zone put its '<' in the right half and a
+        #  click on it stepped UP
         x = pos[0]
         edge = self._rect.right - 12
-        if x >= edge - self.VALUE_W:
-            p.adjust(1 if x >= edge - self.VALUE_W // 2 else -1, fine)
+        x0, x1 = self._vals.get(i, (edge - self.VALUE_W, edge))
+        if x >= min(x0, edge - self.VALUE_W):
+            p.adjust(1 if x >= 0.5 * (x0 + x1) else -1, fine)
             return "adjust"
         return "select"
 
@@ -324,7 +330,7 @@ class ParamList:
 
     def draw(self, screen, text: Text, rect, row_h: int = 22, size: int = 14, focus: bool = True):
         r = pygame.Rect(rect)
-        self._rect, self._hits = r, []
+        self._rect, self._hits, self._vals = r, [], {}
         self._hover = self.hit(pygame.mouse.get_pos())
         y = r.y + 6
         if self.title:
@@ -358,7 +364,8 @@ class ParamList:
                 vt = p.value_text()
                 if sel and p.kind in ("float", "int", "choice", "bool"):
                     vt = "< " + vt + " >"
-                text.blit(screen, vt, val_x, y + 2, size, C_KEY if sel else col, right=True)
+                w = text.blit(screen, vt, val_x, y + 2, size, C_KEY if sel else col, right=True)
+                self._vals[i] = (val_x - w, val_x)
             y += row_h
         if self.params and self.scroll + n_vis < len(self.params):
             text.blit(screen, "...", r.right - 30, r.bottom - 16, size - 2, C_DIM)
@@ -567,7 +574,9 @@ class Nav:
 
 
 class ListBox:
-    """Rows of (label, sub, tag) with a cursor and scrolling."""
+    """Rows of (label, sub, tag) with a cursor and scrolling. A row may carry
+    a 4th field, the name DRAWN for it (task 45: a built-in wing's player
+    name); the label stays the row's key, what `current()` and `keep` go by."""
 
     def __init__(self, items=(), title: str = ""):
         self.items = list(items)
@@ -648,7 +657,7 @@ class ListBox:
             elif i == self._hover:
                 pygame.draw.rect(screen, C_GRID, (r.x + 4, y - 2, r.w - 8, row_h - 2))
             tag = it[2] if len(it) > 2 else ""
-            text.blit(screen, ("> " if sel else "  ") + str(it[0]), r.x + 12, y + 1, size,
+            text.blit(screen, ("> " if sel else "  ") + str(it[3] if len(it) > 3 else it[0]), r.x + 12, y + 1, size,
                       C_TEXT if sel else C_DIM)
             if tag:
                 text.blit(screen, tag, r.right - 12, y + 1, size - 2, C_KEY if sel else C_DIM, right=True)
@@ -759,14 +768,37 @@ class Plot:
         py = self.rect.bottom - (y - y0) / (y1 - y0) * self.rect.h
         return int(round(px)), int(round(py))
 
+    @staticmethod
+    def _finite_runs(xs, ys, closed: bool = False):
+        """The polyline split at every non-finite point (NaN, +-inf):
+        `(runs, whole)`, `runs` the (xs, ys) stretches of consecutive finite
+        points at least 2 long, `whole` True when no point was dropped. A
+        refused evaluation is scored -inf, so an optimiser trace can start
+        (or dip) there; a gap in the line is what that looks like, not a
+        crash. A closed outline with a gap is opened AT the gap (rotated to
+        start after it), so the segment across the seam survives."""
+        xs, ys = np.asarray(xs, float).ravel(), np.asarray(ys, float).ravel()
+        n = min(xs.size, ys.size)
+        xs, ys = xs[:n], ys[:n]
+        ok = np.isfinite(xs) & np.isfinite(ys)
+        if ok.all():
+            return ([(xs, ys)] if n >= 2 else []), True
+        if closed and ok.any():
+            k = int(np.flatnonzero(~ok)[0]) + 1
+            xs, ys, ok = np.roll(xs, -k), np.roll(ys, -k), np.roll(ok, -k)
+        edges = np.flatnonzero(np.diff(np.concatenate(([0], ok.astype(np.int8), [0]))))
+        runs = [(xs[a:b], ys[a:b]) for a, b in zip(edges[::2], edges[1::2]) if b - a >= 2]
+        return runs, False
+
     def line(self, xs, ys, col=C_ACCENT, width: int = 2, closed: bool = False):
-        xs, ys = np.asarray(xs, float), np.asarray(ys, float)
-        if xs.size < 2:
+        runs, whole = self._finite_runs(xs, ys, closed)
+        if not runs:
             return
-        pts = [self._px(x, y) for x, y in zip(xs, ys)]
         clip = self.screen.get_clip()
         self.screen.set_clip(self.rect)
-        pygame.draw.lines(self.screen, col, closed, pts, width)
+        for rx, ry in runs:
+            pts = [self._px(x, y) for x, y in zip(rx, ry)]
+            pygame.draw.lines(self.screen, col, closed and whole, pts, width)
         self.screen.set_clip(clip)
 
     def fill(self, xs, ys, col):
@@ -781,6 +813,8 @@ class Plot:
 
     def points(self, xs, ys, col=C_KEY, r: int = 3):
         for x, y in zip(xs, ys):
+            if not (math.isfinite(x) and math.isfinite(y)):
+                continue                # NaN / +-inf has no place on the plot (see _finite_runs)
             p = self._px(x, y)
             if self.rect.collidepoint(p):
                 pygame.draw.circle(self.screen, col, p, r)
@@ -803,13 +837,27 @@ class Plot:
 # --------------------------------------------------------------------------- #
 class TextPrompt:
     """A one-line modal text entry: `open(title, initial)`, feed KEYDOWN
-    events to `handle(ev)` -> 'ok' | 'cancel' | None, draw last."""
+    events to `handle(ev)` -> 'ok' | 'cancel' | None, draw last.
+
+    Task 45: the name it opens on (`initial`) is SELECTED, as a text box's
+    would be, and drawn highlighted: the first printable key replaces it and
+    the first BACKSPACE clears it (typing used to append to it: 'my corsa'
+    and 'Fast' read 'my corsaFast'); RIGHT / END keeps it to type on after
+    it; ENTER untouched takes it. CTRL+BACKSPACE (CMD on a Mac) clears the
+    line at any time."""
+
+    #: the longest name it takes
+    MAX_LEN = 32
+    #: what a key does to the selected name: on the key line while it is
+    SEL_NOTE = "typing replaces the name   RIGHT keeps it"
 
     def __init__(self):
         self.open_ = False
         self.title = ""
         self.value = ""
         self.hint = ""
+        self.selected = False             # the preset is selected: a key replaces it
+        self._preset = False              # it opened on a name (the box is sized for its note)
 
     @property
     def open(self) -> bool:
@@ -817,6 +865,7 @@ class TextPrompt:
 
     def show(self, title: str, initial: str = "", hint: str = "ENTER ok   ESC cancel") -> None:
         self.open_, self.title, self.value, self.hint = True, title, initial, hint
+        self.selected = self._preset = bool(initial)
 
     def handle(self, ev) -> str | None:
         if not self.open_ or ev.type != pygame.KEYDOWN:
@@ -828,23 +877,85 @@ class TextPrompt:
             self.open_ = False
             return "cancel"
         if ev.key == pygame.K_BACKSPACE:
-            self.value = self.value[:-1]
+            clear = self.selected or getattr(ev, "mod", 0) & (pygame.KMOD_CTRL | pygame.KMOD_META)
+            self.value = "" if clear else self.value[:-1]
+            self.selected = False
+            return None
+        if ev.key in (pygame.K_RIGHT, pygame.K_END):
+            self.selected = False             # keep the preset, type on after it
             return None
         ch = getattr(ev, "unicode", "")
-        if ch and ch.isprintable() and len(self.value) < 32:
-            self.value += ch
+        if ch and ch.isprintable():
+            if self.selected:
+                self.value, self.selected = "", False
+            if len(self.value) < self.MAX_LEN:
+                self.value += ch
         return None
+
+    def hint_text(self, selected: bool | None = None) -> str:
+        """The key line: the caller's hint and, while the preset is
+        selected (`selected`: as if it were, or not), what a key does to it."""
+        sel = self.selected if selected is None else selected
+        return f"{self.hint}   {self.SEL_NOTE}" if sel else self.hint
+
+    @staticmethod
+    def _wrap_keys(text: Text, s: str, px: int, size: int) -> list:
+        """`s` as the lines that fit `px`, broken between its '   '-spaced
+        key groups (so 'ENTER ok' stays whole), a group too long for a line
+        on its own between its words."""
+        out, line = [], ""
+        for grp in (g_.strip() for g_ in s.split("   ") if g_.strip()):
+            trial = f"{line}   {grp}" if line else grp
+            if text.width(trial, size) <= px:
+                line = trial
+                continue
+            if line:
+                out.append(line)
+            parts = _wrap_px(text, grp, px, size) or [""]
+            out += parts[:-1]
+            line = parts[-1]
+        if line:
+            out.append(line)
+        return out
+
+    def layout(self, screen, text: Text):
+        """(box, key lines): the box 520 px wide at ui 1, widened up to 720
+        for a key line or a title that does not fit -- never past the
+        screen's edge -- and the key line wrapped to the box when even that
+        is too narrow, so no line runs past it (task 45). Sized for the line
+        WITH the selected name's note when it opened on a name, so the box
+        stays put when the first key drops the note."""
+        W, H = screen.get_size()
+        u = text.fonts.ui
+        pad = int(16 * u)
+        widest = self.hint_text(self._preset)
+        need = max(text.width(widest, 12), text.width(self.title, 14, bold=True))
+        w = int(min(max(520 * u, need + 2 * pad), 720 * u, W - 16))
+        n = len(self._wrap_keys(text, widest, w - 2 * pad, 12))
+        lines = self._wrap_keys(text, self.hint_text(), w - 2 * pad, 12)
+        h = int(94 * u) + max(1, n, len(lines)) * int(16 * u)
+        return pygame.Rect(W // 2 - w // 2, H // 2 - h // 2, w, h), lines
 
     def draw(self, screen, text: Text) -> None:
         if not self.open_:
             return
-        W, H = screen.get_size()
-        w, h = 520, 110
-        r = panel(screen, (W // 2 - w // 2, H // 2 - h // 2, w, h), alpha=240, accent=True)
-        text.blit(screen, self.title, r.x + 16, r.y + 14, 14, C_SECTION, bold=True)
-        pygame.draw.rect(screen, C_SEL_BG, (r.x + 16, r.y + 40, w - 32, 30))
-        text.blit(screen, self.value + "_", r.x + 24, r.y + 46, 16, C_TEXT)
-        text.blit(screen, self.hint, r.x + 16, r.y + 82, 12, C_DIM)
+        u = text.fonts.ui
+        box, lines = self.layout(screen, text)
+        r = panel(screen, box, alpha=240, accent=True)
+        pad = int(16 * u)
+        text.blit(screen, self.title, r.x + pad, r.y + int(14 * u), 14, C_SECTION, bold=True)
+        pygame.draw.rect(screen, C_SEL_BG, (r.x + pad, r.y + int(40 * u), r.w - 2 * pad, int(30 * u)))
+        tx, ty = r.x + int(24 * u), r.y + int(46 * u)
+        if self.selected:
+            #  the preset, selected: dark on a highlight, and no cursor
+            pygame.draw.rect(screen, C_SECTION, (tx - int(4 * u), r.y + int(43 * u),
+                                                 text.width(self.value, 16) + int(8 * u),
+                                                 int(24 * u)))
+            text.blit(screen, self.value, tx, ty, 16, C_PANEL)
+        else:
+            text.blit(screen, self.value + "_", tx, ty, 16, C_TEXT)
+        for i, s in enumerate(lines):
+            text.blit(screen, s, r.x + pad, r.y + int(84 * u) + i * int(16 * u), 12, C_DIM)
 
 
 def key_hint_bar(screen, text: Text, rect, hints, pad_hints=None, title: str = ""):
@@ -855,7 +966,7 @@ def key_hint_bar(screen, text: Text, rect, hints, pad_hints=None, title: str = "
         #  clipped to the width actually available: the caller also writes a
         #  right-aligned status on this line, and a long title ran underneath
         #  it. 240 px is that reservation -- the longest status the garage
-        #  writes is "XFOIL not found: estimate polars", ~210 px at size 12.
+        #  writes is "computing wing data... (12 left)", ~224 px at size 12.
         room = max(r.width - 20 - 240, 60)
         while title and text.width(title, 14) > room:
             title = title[:-2]

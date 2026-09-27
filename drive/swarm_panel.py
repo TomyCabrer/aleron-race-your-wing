@@ -12,9 +12,12 @@ panel, drawn in the swarm window's top-left text panel, shows:
   swarm's best lap's gap to it (- = the swarm is faster).
 
 The class is the map, the car the swarm breeds in, the session's engine and
-surface (plan D1). The swarm's lap times are at its TRAINING step (2 ms), the
-medals and the PB at 1 ms, so the panel says so; the saved bot's lap is
-re-measured at 1 ms when it is saved (K / ESC), as before.
+surface (plan D1), shown in player words (`class_title`: 'Arena circuit ·
+Opel Corsa C 1.2 · Stock · wet patches', never the 'arena|corsa|stock|patch'
+key). The swarm's lap times are at its TRAINING step (2 ms), the medals and
+the PB at 1 ms, so the panel says so -- as a coarser clock, not a step in
+ms; the saved bot's lap is re-measured at 1 ms when it is saved (K / ESC),
+as before.
 
 Free values (the Deploy-swarm page): the population is any integer in
 [POP_MIN, POP_MAX] and the sim time any whole second in [T_MIN, T_MAX]
@@ -28,7 +31,8 @@ the number -- the next digit starts a new one).
 
 Pure functions of numbers and dicts: no pygame, no drive.ml, no file I/O
 (the PB is handed in by the caller, which is the one that may read a player
-file -- a windowed player session only).
+file -- a windowed player session only). The map and car titles come from
+drive.track and cars, imported when a title is asked for.
 """
 from __future__ import annotations
 
@@ -43,6 +47,12 @@ TYPE_DIGITS = 3              # a typed number has at most this many digits
 ROWS = 8                     # generations the panel lists
 BAR = 18                     # characters of the widest bar
 MEDALS = ("author", "gold", "silver", "bronze")
+#: the class's engine and surface in plain words (drive.drive's ENGINE_LABELS
+#: and SURFACE_LABELS say more than one line of a class needs)
+ENGINE_WORDS = {"stock": "Stock", "tuned": "Tuned", "sport": "Sport"}
+SURFACE_WORDS = {"patch": "wet patches", "none": "dry", "all": "wet everywhere"}
+#: the panel's note when the swarm's clock is not the 1 ms one of the medals
+COARSE_NOTE = "training laps run on a coarser clock: times differ a little from your laps"
 
 
 def clamp_pop(v) -> int:
@@ -124,6 +134,28 @@ def row_value(key: str, value, typed: str) -> str:
     return f"{typed}_" if int(typed) == float(value) else f"{typed}_ = {txt}"
 
 
+def class_title(key: str) -> str:
+    """The class in player words: 'Arena circuit · Opel Corsa C 1.2 · Stock ·
+    wet patches' -- the map and car by their titles (drive.track.TRACK_TITLES,
+    cars.car_name), the engine and surface in plain words. A part with no
+    title keeps its own word; what is not a class key is shown as it is."""
+    parts = str(key).split("|")
+    if len(parts) != 4:
+        return str(key)
+    t, c, e, s = parts
+    try:
+        from .track import TRACK_TITLES
+        t = TRACK_TITLES.get(t, t)
+    except Exception:                      # noqa: BLE001 -- the key's word will do
+        pass
+    try:
+        import cars
+        c = cars.car_name(c) if c in cars.CAR_TITLES else c   # car_name: unknown = Corsa
+    except Exception:                      # noqa: BLE001
+        pass
+    return " · ".join((t, c, ENGINE_WORDS.get(e, e), SURFACE_WORDS.get(s, s)))
+
+
 def _t(v) -> str:
     if v is None or not isinstance(v, (int, float)) or not math.isfinite(v):
         return "--"
@@ -186,8 +218,9 @@ def panel_lines(history, pop: int, key: str, targets=None, pb=None, best=None,
     """The panel's lines (the swarm window's text panel; '!' = highlighted).
     `why_none`: why there are no medals / PB to compare with (a skidpad of
     another radius ...)."""
-    lines = [f"PROGRESS  {key}   laps at the {dt_train * 1e3:.0f} ms training step; "
-             f"medals and your PB at 1 ms"]
+    lines = [f"PROGRESS  {class_title(key)}"]
+    if abs(float(dt_train) - 0.001) > 1e-9:     # the medals' and the PB's 1 ms clock
+        lines.append(f"  {COARSE_NOTE}")
     lines += lap_rows(history, pop)
     b = best_lap(history, best)
     fly = _flying(history, best)
@@ -275,7 +308,18 @@ def self_check(verbose: bool = True) -> bool:
     none = panel_lines([], 24, "dragstrip|corsa|sport|none", None, None)
     rep("no medals, no PB, no generation yet: said, not invented",
         "no medals for this class" in "\n".join(none) and "none in this class yet" in none[-1]
-        and "being scored" in none[1])
+        and any("being scored" in ln for ln in none))
+    head = panel_lines(hist, 24, "arena|corsa|stock|patch", tg, pb=60.5)[:2]
+    rep("the progress line in player words: the class by its titles, the clock as a note",
+        head[0] == "PROGRESS  Arena circuit · Opel Corsa C 1.2 · Stock · wet patches"
+        and head[1].strip() == COARSE_NOTE
+        and not any("|" in ln or "ms" in ln for ln in head), "\n".join(head))
+    rep("a part with no title keeps its word; a 1 ms swarm needs no clock note",
+        class_title("moon|kart|sport|all") == "moon · kart · Sport · wet everywhere"
+        and class_title("odd") == "odd"
+        and panel_lines([], 24, "linden|mx5|tuned|none", dt_train=0.001)[:2]
+        == ["PROGRESS  Linden park · Mazda MX-5 1.8 · Tuned · dry",
+            "  (the first generation is being scored)"])
     rep("the best individual's lap counts even past the listed generations",
         best_lap(hist[-2:], dict(lap_best=57.5)) == 57.5)
     roll = [dict(h, lap_flying=False) for h in hist]

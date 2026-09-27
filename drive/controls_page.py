@@ -42,12 +42,12 @@ CONTROLS = (
     ("up", (CX - 104, CY - 40), "L", "d-pad UP", "HUD cycle"),
     ("left", (CX - 120, CY - 24), "L", "d-pad LEFT", "slow motion"),
     ("right", (CX - 88, CY - 24), "L", "d-pad RIGHT", "normal speed"),
-    ("down", (CX - 104, CY - 8), "L", "d-pad DOWN", "force vectors"),
+    ("down", (CX - 104, CY - 8), "L", "d-pad DOWN", "force arrows"),
     ("lstick", (CX - 56, CY + 28), "L", "left stick", "steer; press: auto zoom"),
     ("R2", (CX + 118, CY - 104), "R", "R2", "throttle"),
     ("R1", (CX + 118, CY - 86), "R", "R1", "shift up"),
     ("options", (CX + 76, CY - 58), "R", "OPTIONS", "pause menu"),
-    ("tri", (CX + 104, CY - 48), "R", "TRIANGLE", "wing mode (air brake)"),
+    ("tri", (CX + 104, CY - 48), "R", "TRIANGLE", "wing mode (air brake, top)"),
     ("cir", (CX + 128, CY - 24), "R", "CIRCLE", "wings armed on / off"),
     ("sqr", (CX + 80, CY - 24), "R", "SQUARE", "clutch (hold)"),
     ("crs", (CX + 104, CY + 0), "R", "CROSS", "handbrake (hold)"),
@@ -211,7 +211,7 @@ def draw_pad(screen, rect) -> None:
 CMD_WORDS = {"handbrake": "handbrake", "wing": "wings armed", "clutch": "clutch",
              "wing_side": "wing mode", "reset": "reset", "menu": "menu",
              "zoom_auto": "auto zoom", "camera": "camera", "shift_down": "shift down",
-             "shift_up": "shift up", "hud": "HUD", "vectors": "vectors", "slowmo": "slow",
+             "shift_up": "shift up", "hud": "HUD", "vectors": "force arrows", "slowmo": "slow",
              "normal_speed": "normal speed", "garage": "garage"}
 #: drive/input.py's PS button names -> the control on the drawing
 BUTTON_CONTROL = {"cross": "crs", "circle": "cir", "square": "sqr", "triangle": "tri",

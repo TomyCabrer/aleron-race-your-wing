@@ -311,7 +311,7 @@ EDGE_KEYS = {
     pygame.K_e: "shift_up",
     pygame.K_q: "shift_down",
     pygame.K_f: "wing",
-    pygame.K_g: "wing_side",
+    pygame.K_g: "wing_side",          # + SHIFT -> 'wing_side_prev' (task 45)
     pygame.K_r: "reset",              # + SHIFT -> 'full_reset'
     pygame.K_p: "pause",
     pygame.K_o: "step",
@@ -351,6 +351,10 @@ MENU_KEYS = {
     pygame.K_r: "reset",              # + SHIFT -> 'full_reset'
     pygame.K_BACKSPACE: "garage",
     pygame.K_j: "ghosts",             # the TIME TRIAL page's Ghosts row (task 33)
+    #  the next map from the pause page and the TIME TRIAL page, as their
+    #  footers say (task 45); every other page ignores it. The pad has no
+    #  next-map button while driving, so MENU_PAD_NAMES has none either
+    pygame.K_TAB: "track_next",
 }
 #: the digits, typed into a page's number rows (the Deploy-swarm page's Cars
 #: and Sim time, task 34; drive/menu.Menu.show(typed=))
@@ -391,19 +395,20 @@ MENU_HELP_KB = [
     ("Z / SPACE", "clutch / handbrake (hold)"),
     ("S", "starter"),
     ("E / Q", "shift up / down"),
-    ("F / G", "wings armed / wing mode (air brake, all 3)"),
-    ("R / SHIFT+R", "reset to sector / full reset"),
+    ("F", "wings armed on / off"),
+    ("G / SHIFT+G", "wing mode: next / back"),
+    ("R / SHIFT+R", "sector line / restart lap"),     # the pause footer's words
     ("P / O", "pause / single step"),
     ("[ / ]", "slow-mo 0.25x / 1x"),
     ("C", "camera"),
     ("- / = / 0", "zoom out / in / auto"),
-    ("H / V / B", "HUD / vectors / g-g"),
+    ("H / V / B", "HUD / force arrows / g-g"),
     ("N / X", "skid marks / clear"),
     ("T", "wet toggle"),
     ("M / L", "telemetry marker / record"),
     ("TAB", "next map"),
     ("J", "ghosts (PB / ghost 2) on / off"),
-    ("BACKSPACE", "garage (3D panel editor)"),
+    ("BACKSPACE", "garage: wings and builds"),
     ("ESC", "this menu / settings"),
     ("mouse", "click a row, wheel, right-click back"),
 ]
@@ -414,12 +419,12 @@ MENU_HELP_PAD = {
         ("R1 / L1", "shift up / down"),
         ("CROSS / SQUARE", "handbrake / clutch (hold)"),
         ("CIRCLE", "wings armed on / off"),
-        ("TRIANGLE", "wing mode: auto, air brake, all 3"),
-        ("CREATE", "reset to sector"),
-        ("d-pad UP/DOWN", "HUD / vectors"),
+        ("TRIANGLE", "wing mode: auto, air brake, top"),
+        ("CREATE", "back to the sector line"),
+        ("d-pad UP/DOWN", "HUD / force arrows"),
         ("d-pad L/R", "slow-mo / normal"),
         ("R3 / L3", "camera / auto zoom"),
-        ("touchpad", "garage (3D panel editor)"),
+        ("touchpad", "garage: wings and builds"),
         ("OPTIONS", "this menu / settings"),
     ],
     # what DEFAULT_PAD_BUTTONS does, named by GENERIC_BUTTON_NAMES (SDL's
@@ -431,12 +436,12 @@ MENU_HELP_PAD = {
         ("GUIDE / BACK", "shift up / down"),
         ("A / X", "handbrake / clutch (hold)"),
         ("B", "wings armed on / off"),
-        ("Y", "reset to sector"),
-        ("L3", "full reset"),
+        ("Y", "back to the sector line"),
+        ("L3", "restart the lap"),
         ("START", "this menu / settings"),
     ],
 }
-MENU_NO_PAD = "no controller: pair the DualSense (CREATE+PS) - it hot-plugs"
+MENU_NO_PAD = "no gamepad connected - plug one in any time"
 
 
 def menu_help(layout: str | None) -> list:
@@ -450,14 +455,14 @@ def menu_help(layout: str | None) -> list:
 KEY_HELP = """\
 ARROW UP throttle | ARROW DOWN brake | ARROW LEFT/RIGHT steer | LSHIFT fine (half rates, 50% pedal)
 Z clutch | SPACE handbrake | S starter | E shift up | Q shift down
-F wings armed on / off | G wing mode: auto / air brake / all 3 / left / right
-R reset to last sector line | SHIFT+R full reset (clears skid marks and timing)
+F wings armed on / off | G / SHIFT+G wing mode: next / back (auto, air brake, top ..., left, right)
+R back to the last sector line | SHIFT+R restart the lap (clears the skid marks)
 P pause | O single physics step while paused | [ ] slow-mo 0.25x / 1.0x
-C camera cycle | - / = zoom | 0 auto zoom | H HUD cycle | V force vectors | B g-g | N skid | X clear skid
+C camera cycle | - / = zoom | 0 auto zoom | H HUD: race / full / off | V force arrows | B g-g | N skid | X clear skid
 T toggle wet (global mu_scale 1.0 <-> 0.632) | M telemetry marker | L toggle recording
-TAB next track | J ghosts on / off | BACKSPACE garage (3D panel editor) | ESC menu (controls, reset, quit)
+TAB next track | J ghosts on / off | BACKSPACE garage: wings and builds | ESC menu (controls, reset, quit)
 PS5 pad: R2 throttle | L2 brake | L-stick steer | R1/L1 shift | CROSS handbrake | SQUARE clutch
-         CIRCLE wings armed | TRIANGLE wing mode | OPTIONS menu | CREATE reset | TOUCHPAD garage
+         CIRCLE wings armed | TRIANGLE wing mode | OPTIONS menu | CREATE sector line | TOUCHPAD garage
          d-pad: up HUD, down vectors, left slow-mo, right normal | R3 camera | L3 auto zoom"""
 
 
@@ -684,6 +689,10 @@ class KeyboardInput:
         self.wing_side_mode = "auto"          # unused: G's mode is drive.Sim's (task 35)
         self.paused = False
         self.menu = False                     # pause menu open: nav keys only
+        #: the keys while `menu` is set: MENU_KEYS; a screen with its own
+        #: meaning for a key hands its own map (the title: P is nothing --
+        #: drive/title.py _title_keys, task 44 review; ESC only moves to Quit)
+        self.menu_keys = MENU_KEYS
         #: a modal text entry (the seed lap's name prompt) takes every
         #: KEYDOWN while set: `key_sink(ev)`; nothing is mapped or applied
         self.key_sink = None
@@ -780,11 +789,13 @@ class KeyboardInput:
                 self.key_sink(ev)
                 continue
             self.n_events += 1
-            cmd = (MENU_KEYS if self.menu else EDGE_KEYS).get(ev.key)
+            cmd = (self.menu_keys if self.menu else EDGE_KEYS).get(ev.key)
             if cmd is None:
                 continue
             if cmd == "reset" and (ev.mod & pygame.KMOD_SHIFT):
                 cmd = "full_reset"
+            elif cmd == "wing_side" and (ev.mod & pygame.KMOD_SHIFT):
+                cmd = "wing_side_prev"         # the wing mode, one back (task 45)
             cmds.append(cmd)
             if not self.menu:
                 self._apply_command(cmd)
@@ -812,7 +823,7 @@ class KeyboardInput:
             self._pending_gear = -1     # does not stack into a double shift
         elif cmd == "wing":
             self.wing_on = not self.wing_on
-        elif cmd == "wing_side":
+        elif cmd in ("wing_side", "wing_side_prev"):
             pass                        # the wing MODE is the Sim's (drive/airbrake.py)
         elif cmd == "pause":
             self.paused = not self.paused
@@ -1778,9 +1789,19 @@ def self_check(verbose: bool = True) -> bool:
     pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_g, mod=0))
     check_eq("G is handed on as 'wing_side' (the Sim cycles the wing mode)",
              kb.poll_events(), ["wing_side"])
+    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_g,
+                                         mod=pygame.KMOD_LSHIFT))
+    check_eq("SHIFT+G -> 'wing_side_prev' (the wing mode, one back; task 45)",
+             kb.poll_events(), ["wing_side_prev"])
+    check_eq("the key help names SHIFT+G", ("G / SHIFT+G", "wing mode: next / back")
+             in MENU_HELP_KB and "SHIFT+G" in KEY_HELP, True)
     pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_r,
                                          mod=pygame.KMOD_LSHIFT))
     check_eq("SHIFT+R -> 'full_reset'", kb.poll_events(), ["full_reset"])
+    check_eq("the key help says R / SHIFT+R in the pause footer's words (task 45)",
+             ("R / SHIFT+R", "sector line / restart lap") in MENU_HELP_KB
+             and "R back to the last sector line | SHIFT+R restart the lap" in KEY_HELP
+             and "full reset" not in KEY_HELP, True)
     pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_r, mod=0))
     check_eq("R -> 'reset'", kb.poll_events(), ["reset"])
     pygame.event.post(pygame.event.Event(pygame.QUIT))
@@ -1796,9 +1817,12 @@ def self_check(verbose: bool = True) -> bool:
                       (pygame.K_LEFT, "nav_left"), (pygame.K_RIGHT, "nav_right"),
                       (pygame.K_RETURN, "select"), (pygame.K_SPACE, "select"),
                       (pygame.K_r, "reset"), (pygame.K_BACKSPACE, "garage"),
+                      (pygame.K_TAB, "track_next"),
                       (pygame.K_p, "menu"), (pygame.K_ESCAPE, "menu")):
         pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=key, mod=0))
         check_eq(f"menu: {pygame.key.name(key)} -> {want!r}", kb.poll_events(), [want])
+    check_eq("MENU_KEYS: TAB is the next map on the pause / TIME TRIAL pages (task 45)",
+             MENU_KEYS.get(pygame.K_TAB), "track_next")
     pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_r,
                                          mod=pygame.KMOD_LSHIFT))
     check_eq("menu: SHIFT+R -> 'full_reset'", kb.poll_events(), ["full_reset"])
@@ -2109,13 +2133,13 @@ def self_check(verbose: bool = True) -> bool:
         "shift up / down": ("shift_up", "shift_down"),
         "handbrake / clutch (hold)": ("handbrake", "clutch"),
         "wings armed on / off": ("wing",),
-        "wing mode: auto, air brake, all 3": ("wing_side",),
-        "reset to sector": ("reset",),
-        "full reset": ("full_reset",),
-        "HUD / vectors": ("hud", "vectors"),
+        "wing mode: auto, air brake, top": ("wing_side",),
+        "back to the sector line": ("reset",),
+        "restart the lap": ("full_reset",),
+        "HUD / force arrows": ("hud", "vectors"),
         "slow-mo / normal": ("slowmo", "normal_speed"),
         "camera / auto zoom": ("camera", "zoom_auto"),
-        "garage (3D panel editor)": ("garage",),
+        "garage: wings and builds": ("garage",),
         "this menu / settings": ("menu",),
     }
 

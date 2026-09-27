@@ -12,6 +12,24 @@ drive it.
 
 ---
 
+## Install
+
+```
+python3 -m pip install -r requirements.txt       # numpy, scipy, pygame + AeroBO's
+```
+
+The simulator needs numpy, scipy and pygame. The garage's wing designer is
+**AeroBO** (`aerobo/`, vendored: nothing to install beyond its
+requirements): pymoo, and for its Bayesian optimisers torch, botorch and
+gpytorch -- optional (PyTorch has no wheel for Intel Macs or macOS 13 and
+older; without it the designer says so and offers AeroBO's optimisers that
+need none). XFOIL (optional, for AeroBO's section polars) is found as
+`CARSIM_XFOIL`, then on the `PATH`, then at `/opt/homebrew/bin`,
+`/usr/local/bin` or `/usr/bin`, and handed to AeroBO (`AEROBO_XFOIL_BIN`,
+unless you set it yourself); without it the section library is screened at
+AeroBO's cached library point and the section's shape search is refused.
+AeroBO's runtime cache is `aerobo/results/` (gitignored).
+
 ## Drive it
 
 ```
@@ -33,16 +51,32 @@ python3 -m drive.drive --swarm 32 --swarm-seed latest   # a learning swarm, bred
 python3 -m drive.drive --swarm 32 --swarm-car mx5 --swarm-fast --swarm-save never   # in a stock MX-5, unwatched, unsaved
 ```
 
+**The title screen.** A launch opens on it: **ALERÓN** — *Race Your Wing* — over a live scene —
+a random circuit with one to five cars, never two of one kind, lapping on
+their reference laps (the author laps the medals come from), each in its own
+body and paint, and a chase camera that cuts from car to car every 10 s.
+*Drive* is your car on your map, exactly as before (the first launch still
+offers the tutorial, a timed map still opens on TIME TRIAL); *Challenges*,
+*Tutorial* and *Settings* start a session opened on that page (`ESC` there is
+the pause menu); *Garage* opens the garage; *Quit* quits. `↑` `↓` / d-pad and
+`ENTER` / `✕`, or the mouse; `ESC` quits and `BACKSPACE` is the garage, as
+everywhere. A right click, `○` or `OPTIONS` only moves to *Quit* (then `ENTER`
+/ `✕` quits): a stray click never closes the game. The bottom line says which car, map and build *Drive* starts
+with. A launch that says what it is for — `--garage`, `--race`, `--seed-lap`,
+`--ml-drive`, a swarm, a script, `--render offscreen`, `--headless` — skips
+it. With no reference lap to replay, or on a machine too slow for the scene,
+the background is a slowly panned panorama.
+
 | key | | key | |
 |---|---|---|---|
 | `↑` `↓` | throttle / brake | `F` | wings armed on / off |
-| `←` `→` | steer | `G` | wing mode: auto / air brake / all 3 / left / right |
+| `←` `→` | steer | `G` / `SHIFT+G` | wing mode, next / back: auto / air brake / top / top fixed / top fix+side / left / right |
 | `LSHIFT` | fine (half rates, 50% pedal) | `T` | wet toggle |
-| `Z` | clutch | `R` / `SHIFT+R` | reset / full reset |
+| `Z` | clutch | `R` / `SHIFT+R` | back to the last sector line / restart the lap |
 | `SPACE` | handbrake | `P` / `O` | pause / single step |
 | `E` `Q` | shift up / down | `[` `]` | slow-mo 0.25x / 1x |
 | `S` | starter | `C` | camera |
-| `H` `V` `B` `N` `X` | HUD / vectors / g-g / skid / clear | `-` `=` `0` | zoom |
+| `H` `V` `B` `N` `X` | HUD / force arrows / g-g / skid / clear | `-` `=` `0` | zoom |
 | `M` `L` | telemetry marker / record | `TAB` | next map |
 | `K` | arm a seed lap for the swarm (named and saved at the line) | `J` | ghosts on / off (time trial; a pad: the TIME TRIAL page's *Ghosts* row) |
 | `BACKSPACE` | garage (3D panel editor) | `ESC` | pause menu / settings |
@@ -51,8 +85,11 @@ python3 -m drive.drive --swarm 32 --swarm-car mx5 --swarm-fast --swarm-save neve
 the device you are using on screen, plus *Resume*, *Settings*, **Controls**
 (the DualSense drawn with what every button does, and every key), *Time trial*
 (on a map with
-a lap), *Reset to last sector line*, *Full reset*, *Garage*, *Deploy swarm*,
-*Race vs bot*, *Tutorial*, *Challenges* and *Quit*. `↑` `↓` / d-pad move, `←` `→` / d-pad
+a lap), *Back to the last sector line (R)*, *Restart the lap (SHIFT+R)*, *Garage*,
+*Deploy swarm*, *Race vs bot*, *Tutorial*, *Challenges*, *Main menu* (back to
+the title) and *Quit to desktop*, which asks for a second `ENTER` (task 45).
+During a challenge the page is shorter: *Resume*, *Retry*, *This challenge*,
+*Challenges*, *Settings*, *Controls*, *Main menu*, *Quit to desktop*. `↑` `↓` / d-pad move, `←` `→` / d-pad
 change a value on the settings page, `ENTER` / `✕`
 select, `ESC` / `○` / `OPTIONS` resume; `R`, `SHIFT+R` and `BACKSPACE` work as
 hotkeys inside it. Every menu page also takes the **mouse**: point at a row,
@@ -60,13 +97,33 @@ click it to run it, the wheel moves the cursor, a right click goes back. The car
 is up. `P` is still the plain pause for `O` single-stepping.
 
 `H` cycles the HUD: **minimal** (the default race HUD: speed, gear, timing,
-minimap, a wing chip when wings are fitted), **full** (the engineering panels:
-loads, state, aero, pedals, g-g) and off. The HUD level and the camera (`C`)
-are remembered. In a time trial on a circuit, *RACE* and `SHIFT+R` put the car
-**rolling, 150 m before the line** (the HUD counts the out-lap down), keep BEST
-and the sector bests, and the running lap turns **INVALID** with its reason the
-moment it stops counting. Losing the window's focus or unplugging the pad
-opens the pause menu.
+minimap, a wing chip when wings are fitted), then **full** (the engineering
+panels: loads, state, aero, pedals, g-g), then off, and back; Settings > HUD
+has the same three. `V` shows the green and blue **force arrows**, off by
+default (`runs/settings.json` `vectors`). The HUD level, the arrows and the
+camera (`C`) are remembered, and each key says what it did in a short note
+(a toast above the bottom bar, which itself carries only PAUSED, OFF TRACK,
+slow motion and a stall). Every **timed lap starts rolling** (task 45): a
+time trial on any closed map opens with the car on a straight in the last
+sector with at least 3 s of road at its speed before the next corner, whether
+or not the TIME TRIAL page opens, and so do *RACE*, `SHIFT+R` and `R` on the
+out-lap or in the first sector. Where the map has a straight of 45 m or more
+into the line, the car starts where that straight begins (at most 250 m
+out) at 22 m/s (79 km/h): Linden park 50 m out, Ashdown circuit 60 m, Kestrel
+ring 70 m. Otherwise it starts on the nearest straight back from the line
+with that 3 s (the Open proving ground: 150 m out, at the 68 km/h its run-in's
+corners allow). The Arena circuit has no such straight, so it sets off out of
+the T6 hairpin at 36 km/h (the 30 m to T7 in 3 s; T7 is taken flat out),
+143 m from the line. The skidpad has no straight: 47 m back, in the circle at
+0.5 g of the grip. The HUD counts the out-lap down and a note says the clock
+starts at the line. `R` past a split goes back
+to that sector line and voids the lap. BEST and the sector bests are kept
+across restarts and **never take a lap that did not count** (off the road,
+`R`, or one the recorder dropped: `T`, a setting change, slow motion, not a
+full lap); such a lap shows as `LAST void`. The running lap turns
+**INVALID** with its reason the moment it stops counting, and the live delta
+reads a plain `0.00` when you are level with your PB. Losing the window's
+focus or unplugging the pad opens the pause menu.
 
 ## Settings
 
@@ -146,7 +203,13 @@ pops, and the rev bar and shift lights use each car's own range), and
 a machine without an audio device just drives silently. `python3 -m
 drive.audio` checks the synthesis and writes `runs/selfcheck/audio_demo.wav`.
 
-**Gearbox.** *Automatic* shifts itself and works the clutch. *Manual* is a
+**Gearbox.** *Automatic* shifts itself and works the clutch. At full
+throttle it changes up **below the soft rev limiter** (task 45: the line is
+capped a quarter of the soft band under where the fuel starts to fade, 6050
+rpm on the Corsa), so it no longer sits on the limiter in a tight corner; and
+it **never stalls** at the end of a stop -- held on the brake it opens the
+clutch and idles in gear, and it pulls away the moment the brake comes off.
+A stall on the automatic says `engine stalled: S to restart`. *Manual* is a
 paddle box: `E` / `Q` or `R1` / `L1` shift, the box does the launch, the
 rev-matched downshift blip and the restart, and it cannot stall. *Manual +
 clutch pedal* is the H-pattern: `Z` / `□` is the only clutch, so you launch on
@@ -198,7 +261,10 @@ menu's *Tutorial* has it any time after that, and continues it where you
 left off. Thirteen steps, about ten minutes: throttle and brake, steering,
 turn 1 of the arena from the line, the reset (`R`), what the assists do, then
 the **flank wing on the skidpad** — a flying lap with it off, one with it
-on (`F` / `○`), and the two laps' mean lateral g side by side — then the
+on (`F` / `○`), the two laps' mean lateral g side by side and, since two
+laps by hand at ~72 km/h mostly show how hard each was driven, the wing's own
+**push** on lap 2 (the panel's mean side force, ~95 N or 0.010 g with the
+plate, on the live line while you drive it) — then the
 timing, the ghosts and the medals, one valid lap of the arena and --
 **optional**, its page has *Skip it* -- the **manual gearbox**: the keys
 (`E` / `Q`, `R1` / `L1`), the shift lights, when to change down, the clutch
@@ -210,7 +276,10 @@ the left says what to do, how far you are, why an attempt did not count and,
 after 20 s, a hint; the explanations are pages that wait for `ENTER`. The
 tutorial moves you to the map each step is on (while it runs, `TAB` cannot
 leave it). A car with no flank wing drives the two wing laps with the
-published plate fitted (only for those laps; nothing is saved). `ESC` >
+side plate fitted, the biggest ready-made side wing (only for those laps;
+nothing is saved). The circle's roll-in is gentler than a time trial's (0.3 g,
+44 km/h dry) and is not judged before the line, and a step continued in a new
+session starts again from its own start. `ESC` >
 *Tutorial* skips a step, starts over or ends it. Progress is kept in
 `runs/progress.json`; a script or a headless run never reads it.
 
@@ -218,16 +287,26 @@ published plate fitted (only for those laps; nothing is saved). `ESC` >
 
 `G` (`△` on the pad) cycles the **wing mode**, shown on the aero panel
 (`AERO  AIR BRAKE`):
-* **AUTO**: the outer flank panel in a corner, the top wing by its own mode;
+* **AUTO**: the outer side wing (flank panel) in a corner, the top wing by
+  its own mode;
 * **AIR BRAKE**: AUTO, plus **all three wings out while you brake**;
-* **ALL 3**: all three out, all the time;
-* **LEFT / RIGHT**: one panel.
+* **TOP**: the top wing only, the way a normal car's wing works: **out when
+  you brake or turn**, in on the straights (whatever its garage slot says);
+  the side wings are stowed and hidden;
+* **TOP FIXED**: the top wing only, **always out**; the side wings stowed and
+  hidden;
+* **TOP FIX+SIDE**: the top wing always out, **and** the outer side wing in
+  corners;
+* **LEFT / RIGHT**: one side panel.
 
-`F` / `○` arms them, as before, and the mode is kept across a restart. With
-both flanks out their side forces cancel and their drags add, and the top
-wing adds downforce. A car whose two flanks are not a matching pair (one
-flank, or different panels without the mirror) keeps its flanks out of it,
-so it cannot pull sideways; its top wing still comes out.
+The three TOP modes need a top wing: on a car without one `G` skips them.
+`F` / `○` arms the wings, as before, and the mode is kept across a restart.
+With both flanks out their side forces cancel and their drags add, and the
+top wing adds downforce. A car whose two flanks are not a matching pair (one
+flank, or different panels without the mirror) keeps its flanks out of the
+air brake, so it cannot pull sideways; its top wing still comes out. (The
+old ALL 3, all three out all the time, is gone: all three out is the air
+brake, only while you brake.)
 
 **It is a small effect with these wings.** Measured on the Corsa with the
 plate on both flanks and the rear-s1223 top wing, against no wing at all:
@@ -243,29 +322,82 @@ all of the stopping.
 ESC > *Challenges*: eight set pieces, each with **three stars**, about what
 the wings are for -- stopping and grip:
 * **the stops:** **Stop from 100**, **Wet stop from 80**, and **Air brake
-  from 150** (the wing mode's AIR BRAKE puts all three wings out as you
-  brake). Each starts **rolling**, 20 % over its speed (120, 96 and 180
-  km/h): brake, and the distance counts from that speed to a standstill.
-  The box keeps your **LAST STOP** until the next one counts;
-* **the skidpad:** **Hold the circle** (mean lateral g over a flying lap,
-  flank wings only) and **Wet circle**;
+  from 150** (on a config with side wings, the wing mode's AIR BRAKE puts
+  all three wings out as you brake). Each starts **at its speed** (100, 80
+  and 150 km/h), and the car holds it until you brake: the distance counts
+  from the brake to a standstill. A **fixed** top wing is already out while
+  it holds, as it would be on a car driving at that speed; a moving one
+  comes out as you brake. After a stop the box's green line is the result
+  (`Stop from 100: 39.43 m [**-]  NEW BEST`) and its warn row what it lacks
+  (`1 star needs 44.17 m (5.78 m short)`), kept until the next stop brakes.
+  **The precision stop board** (task 45): an amber **brake marker** is
+  painted across the strip 3 s of the speed past the start, and a black and
+  white **checker board** the 3-star distance past the marker (amber cones
+  and checker boards on posts show both in chase). One and two stars are the
+  distance lines; the **third is your nose stopped within 1 m of the
+  board**, short or past, with the build's 3-star rule -- you judge the
+  brake point. The box's amber row counts the metres to the board as you
+  brake and then says how far off you were (`board: 0.3 m short [***]`);
+* **the skidpad:** **Hold the circle** (mean lateral g over a flying lap)
+  and **Wet circle**;
 * **the laps:** **Proving-ground lap**, **Arena, sport engine** and **Wet
   arena**.
 
-Each runs in its own map, car,
-engine and surface (yours come back when you end it); its page shows the
-goal, the three thresholds, the RULES the build must meet (the wing area a
-slot, the wings' weight, the ballast, the slots allowed, the drag area with
-every wing out) checked against the car you have now -- a build that breaks
-one is refused with what to change -- and your best. One star passes, two
-is a tighter number, three is tighter still **and** an efficiency rule (no
-wings, no ballast, less drag...). A box on the road says what to do and how
-the attempt is going; R starts it again. Every threshold is derived from a
-measured headless run (a scripted driver on a reference build in that
-class) with the medals' multipliers: 1.12 / 1.06 / 1.02 of it, so the
-reference earns three stars by 2 %. `python3 -m drive.challenges --measure`
-runs them, `--write` puts the numbers in `drive/data/challenges/*.json`. Your
-stars are kept in `runs/progress.json`.
+**You pick the car and the wings** at the top of a challenge's page (task
+44): `Car < Opel Corsa C 1.2 >` (any of the five) and `Wings < FULL WING:
+top + side >`, `←` `→` / d-pad or a click to change them. The four wing
+configs:
+
+| Wings | top wing | side wings |
+|---|---|---|
+| **FULL WING: top + side** | moves: out when you brake or turn | the outer one out in corners |
+| **ONLY TOP** | moves: out when you brake or turn | hidden, unused |
+| **ONLY TOP, FIXED** | always out | hidden, unused |
+| **TOP FIXED + SIDE** | always out | the outer one out in corners |
+
+The top wing is the normal wing a car has: your own if your build has one,
+else the stock Rear wing (`rear-s1223`); the side wings are yours if you
+have flanks, else the stock Side plate pair. The WINGS section's first row
+says which is which, in the garage's names (`top: Rear wing (stock) - side
+wings hidden`). Your build itself never
+changes. The wings are armed when the run starts; the config **is** the
+wing mode, so `G` only switches AUTO / AIR BRAKE, and only with side wings
+(on a top-only config it says the challenge sets the wings). The page
+starts on the car you are driving with FULL WING and remembers your pick;
+the CHALLENGES list has the same Car and Wings rows at its top.
+
+**Your setup is kept** (task 45, the owner's call): a challenge drives with
+your own ABS, TC and gearbox (and ballast), where the stars were set with ABS
+on, TC on, the automatic, no ballast and the stock wings. The page's **YOUR
+SETUP** section shows both and marks every difference in amber with what it
+costs (`ABS off: expect longer stops`, `manual box: the stars assume the
+automatic`, `your wings rule out the 3rd star: at most 15.0 kg of wing`),
+and a result short of a star names them too (`... - ABS off, manual box: the
+stars were set with ABS on and the automatic`).
+
+Each car and config has **its own stars and best** -- 5 cars x 4 configs =
+20 per challenge -- and the list shows those of the pick. A few cannot be
+driven: the Citaro is governed to 80 km/h, so the stops from 100 and 150
+say *not for this car* and have no Start.
+
+Each runs in its own map, engine and surface, in the car you picked (yours
+come back when you end it); its page shows the goal, the three
+thresholds, the RULES the build must meet (the wing area a slot, the wings'
+weight, the ballast, the drag area with every wing out) checked against the
+car the config makes of your build -- a build that breaks one is refused
+with what to change -- and your best. One star passes, two is a tighter
+number, three is tighter still **and** an efficiency rule (less wing, no
+ballast...). A box on the road says what to do and how the attempt is
+going; R starts it again. Every threshold is derived from a measured
+headless run (a scripted driver on the config's stock wings, in that car
+and class) with the medals' multipliers: 1.12 / 1.06 / 1.02 of it, so the
+reference earns three stars by 2 %. The 160 measured values are in
+`drive/data/challenges/refs.json`: `python3 -m drive.challenges --measure`
+runs them all (a process pool, ~2 min), `--write` writes the file
+(`--only lap_open` just those); they were re-measured for task 45's
+gearbox. Your stars are kept in `runs/progress.json`; stars saved before
+task 44, one per challenge, count as the Corsa's FULL WING ones (task 45).
+Three stars saved on a stop before the board stay three.
 
 ## Time trial: the pre-race screen and your records
 
@@ -280,7 +412,12 @@ its best lap in this class (the car's own laps: an edited car that kept a
 saved build's name is a different car); `ENTER` restarts the session in it,
 and a car you were driving that is in no library file is saved there first
 as `<name> (autosave)`. **Edit** opens the garage on this build, and its
-`ENTER` comes back here. **Ghosts** shows or hides both ghosts (what `J`
+`ENTER` comes back here. A car with no wings at all also gets **Try
+ready-made wings** under it (task 45): the garage opens on the car with its
+`W` already pressed on the first empty slot, so a ready-made wing is on, and
+`ENTER` drives it back here (on the road, `F` on a car with no wings says
+`no wings fitted - BACKSPACE, then W: try a ready-made wing`). **Ghosts**
+shows or hides both ghosts (what `J`
 does, for a pad) and **Ghost 2** picks the second one. `ESC` is the pause
 menu; *Resume* drives on from where you are, and those laps count too. The
 pause menu's *Time trial* brings the page back any time.
@@ -449,7 +586,11 @@ for a flank panel, the front / rear downforce split for the top wing, and the
 stall margin. `SPACE` previews the deploy: the flank panels slide out, the top
 wing rises off the deck onto its pylons and takes its incidence. `ENTER`
 drives that car on the current map; `BACKSPACE` in the drive comes back with
-the car still yours. The build is saved to `runs/garage_design.json` and is
+the car still yours. The garage's menu has **Change car** (right under *Resume*):
+pick another car and the garage opens on it the way the Settings page's *Car*
+row does -- with that car's default build (`F`), else the build in hand when it
+was made for any car -- and a build it replaces that is in no library file is
+saved there first as `… (autosave)`. The build is saved to `runs/garage_design.json` and is
 the car every later launch drives, until `--wing …` or `--build` says
 otherwise -- or until you open a map you last drove in another build, which
 then comes back for that map (the TIME TRIAL section below).
@@ -461,7 +602,7 @@ then comes back for that map (the TIME TRIAL section below).
 | `[` `]` | incidence ±1° | `W` / `SHIFT+W` | next / previous library wing in the slot |
 | `M` | mirror left ↔ right | `T` | top wing: fixed / active (brake + steer) |
 | `SPACE` | deploy preview (0.45 s actuator) | `D` `A` `L` | design a wing (mission first) / airfoils / library |
-| `R` / `C` | car defaults / reset camera | `ENTER` | drive it |
+| `R` `R` / `U` | all wings off (`R` twice) / put them back | `C` / `ENTER` | reset camera / drive it |
 | `S` / `SHIFT+S` | save the build (in place, or asks a name) / save as a new name | `B` / `SHIFT+B` | next / previous of this car's saved builds |
 | `F` | make this build the car's **default** | | |
 | `ESC` | menu (the mouse works in it) | `H` | the wing tutorial's box: hide / show |
@@ -479,13 +620,14 @@ are *any car*, and every car can still use them.
   way `W` steps a slot's wings (the first press on an unsaved car only warns
   you). `F` makes the build in hand this car's **default**, saving it first if
   needed. On a pad the four are rows in the OPTIONS menu -- *Save build*,
-  *Save build as a new name*, *Load a build*, *Make it the <car> default* --
+  *Save build as a new name*, *Load a build*, *Set as <car> default* --
   and `✕` accepts the name a prompt offers.
 - **The library page** (`L`) lists this car's builds first, then the any-car
   ones, then other cars' builds, dimmed and tagged with their car (they still
   load). `D` (pad `R1`) makes the build under the cursor this car's default,
   `R` renames it (a default pointing at it, and every map that remembers
-  it, follow), `DEL` deletes it (and clears a default that pointed at it).
+  it, follow), `DEL` twice deletes it (and clears a default that pointed at
+  it; `BACKSPACE` never deletes).
   The pad's `□` saves over the car's own
   build instead of adding '-2' copies. A build whose wings are past this car's
   span limit is marked UNLIMITED.
@@ -546,13 +688,16 @@ zero) is what keeps a legal panel off the road when the car rolls onto it.
 *Settings > Wing limits* decides what the garage lets you do:
 
 - **Real** (the default) holds every edit to the limit. The designer's span
-  row and its optimiser stop there, its span comes down with the slot when
+  row (the *Design box*'s `b_m`) opens at the limit and AeroBO's search stops
+  there, a band typed past it is held at it and comes down with the slot when
   the slot is lowered, and its save (`S`) refuses a wing that would be past
   the limit in any slot carrying it (with mirror off, the lower flank
   decides); `W` and the library page skip a wing that is past the selected
   slot's limit, and the hint says why; `↓` stops a flank slot where the
   panel's lower tip reaches the ground clearance.
 - **Unlimited** lets spans go to **3x the limit** -- impossible wings, for fun.
+  The designer still opens its span row at the real limit; you may open it
+  to 3x.
 
 The car page's SPAN LIMITS panel lists each fitted wing as *span / max* on this
 car, with **PAST THE LIMIT** in red.
@@ -573,119 +718,273 @@ has the **wing-design tutorial**, and so does the drive's *Tutorial* page:
 a guided first wing through the garage's own steps below, in plain words --
 what downforce and drag are, why a flank wing, what each number on the pages
 means -- with a box that says what to press next and an outline round the
-step or row it means (`H`, or the menu, hides it). Ten steps: open the designer, the mission, screening the
-section library, taking and fitting a section, the end plates, the
-planform, the results, fitting the wing to the car (`S`), saving the car as
-a build (`L`, `S`) and driving it (`ENTER`: the TIME TRIAL page opens on it,
-and *Build* lists it on every map). Every step is passed by your own press
-through the garage's own gates; the menu skips a step or ends it, and the
-next time it continues where it stopped (`runs/progress.json`).
+tree row, button or tool it means (`H`, or the menu, hides it). Ten steps:
+open the designer, the mission, screening the section library, taking a
+section, the end plates, the planform, the run and its results, putting the
+wing on the car (`S`), saving the car as a build (`L`, `S`) and driving it
+(`ENTER`: the TIME TRIAL page opens on it, and *Build* lists it on every
+map). Every step is passed by your own press; the menu skips a step or ends
+it, and the next time it continues where it stopped (`runs/progress.json`).
 
-The designer (`D`, `L3` on the pad, or *Design the … wing* on the garage's
-pause menu) is a port of the car-wing procedure of the AeroBO design tool
-(`~/dev/urop-bo-aero`) into the game, numpy only, running live, in AeroBO's
-order: **state the mission, then design the section, then the wing**. The
-order is enforced, not suggested. `ESC` steps back up the chain rather than
-dropping to the car.
+**The designer is AeroBO** -- the car half of the AeroBO design tool
+(v1.0.0, commit `3f1b07d`), vendored **unmodified** at `aerobo/` and run
+inside the game. Every screen, section search, wing search, force and
+budget on these pages is AeroBO's own engine, called with the arguments
+AeroBO's own V3 window sends: its XFOIL library screens, its CST section
+search, its car rear wing (a vortex lattice with endplates and a free chord
+law), its optimisers (Bayesian optimisation, handed to SLSQP on the wing)
+and its measured budgets. What is carsim's is **the mission** -- a lap of
+one of carsim's circuits, which sets AeroBO's operating point -- **the
+look**, and what the car does with the winner. It runs on a worker thread,
+so the page keeps drawing while it flies.
 
-**Step 1, MISSION** (`drive/aero/mission.py`). What the wing is for is a
-**lap** of one of carsim's own circuits — the arena, Linden, Kestrel,
-Ashdown, open or skidpad, on a dry, damp or wet surface — integrated
-quasi-steadily over the arcs and straights `drive/track.py` defines the track
-with. The page shows the lap of the car as it stands, its delta against the
-car with no wings, the mean and fastest speed and how much of the lap is
-corners against straights: the exchange rate
-between downforce and drag nobody has to state. `ENTER` (*state this mission*)
-is what opens step 2; a mission nobody confirmed is a default. At zero
-downforce the lap's cornering model is `qss.py` bit for bit.
+Open it with `D` (`L3` on the pad, or *Design the … wing* on the garage's
+pause menu), for the selected slot. The pages are AeroBO's light
+engineering window, drawn in pygame (SF Pro / SF Mono on macOS, Segoe UI /
+Consolas on Windows, DejaVu on Linux; the Material icons are bundled):
 
-**Step 2, DESIGN**, a navigator of four groups of four steps in the left
-column, `TAB` between the steps and the selected step's own rows:
+* the **menu bar** -- *File* (Start the design over, Save the wing `S`,
+  Rename the wing `N`, Airfoil library `A`, Back `ESC`), *Edit* (Reset the
+  design box, Keep the family's own plate, Use the recommended weights),
+  *Solution* (Run current stage `F5`, Stop `ESC`, Continue / keep going
+  `K`), *Tools* (Copy the run configuration to the output -- AeroBO's
+  `RunConfig`, as code --, Clear output log), *Help* (Keys and controller
+  `F1`, About this pipeline);
+* the **tool bar** -- Start the design over, Save (design pages only),
+  **Run** (the current stage), **Stop**, previous / next stage, the crumbs
+  `Mission ▸ Airfoil ▸ Endplate ▸ Wing ▸ Results`, and the chips: the slot
+  (`LEFT FLANK`), the circuit, the surface, `GROUND EFFECT` (top) or
+  `NO GROUND EFFECT` (flanks), `CONSTRAINED`;
+* on the left, the **Simulation** tree over **Properties**; on the right, the
+  selected stage's **tabs** over the **work area**, and the **Output** log
+  under it: every run's start (what it flies, its budget, AeroBO's
+  optimiser), its stop and finish, every choice and setting change, and
+  AeroBO's own warnings, one line each;
+* the **status bar**: what is running -- `section (XFOIL) evaluation 15/18 ·
+  BO · 0:41 · ≈ 0:16 left` -- with a progress bar, then AeroBO's problem, its
+  dimension, its budget, and `F1 keys`. Refusals and confirmations are
+  toasts at the bottom centre.
 
-| group | steps |
+**The tree.** Five stages -- `1 Mission`, `2 Airfoil` (the wing's section),
+`2.8 Endplate` (the endplates' section), `3 Wing`, `4 Results` -- each with
+its views. The gate is **AeroBO's**: once the mission is stated, 2 Airfoil,
+2.8 Endplate and 3 Wing are all open -- the wing flies AeroBO's own family
+section (NACA 24tt, plates NACA 00tt) until you choose one -- and 4 Results
+waits for a completed wing run. 2.8 is locked while Wing type says *plain
+fences* (a fence carries no section of its own). A stage's glyph:
+
+| glyph | the stage is |
 |---|---|
-| AIRFOIL (the wing's own section) | library screening · ranking · section · shape optimisation |
-| ENDPLATE (the tip panels' section) | library screening · ranking · section · shape optimisation |
-| WING | wing type · design box · solver · convergence |
-| RESULTS | summary · geometry · loading · evaluations |
+| green tick | done: the mission stated, a section chosen (or the family's own kept), a wing run on record |
+| empty circle | ready |
+| blue play circle | the one you are on, not finished yet |
+| blue dots | running: AeroBO is working for this stage right now |
+| padlock | locked -- hover it (or click it: a toast) for the reason |
+| red cross | the mission's lap does not close |
 
-The mark in the margin is the gate: `+` done, `>` ready, `-` **blocked** (not
-yet: finish the step before it), `x` **locked** (not here: the end plates at
-zero height have no surface to give a section to, and nothing upstream opens
-it). A blocked step cannot be selected at all, by key or by click, and the
-refusal says why under `NOT YET`. The two section groups are a procedure
-(screen → take a winner from the ranking → section → optimise, the search
-optional); the WING's and RESULTS' four steps are views of one problem and
-open together. A section group is **finished by fitting** its section to the
-wing (`F`), never by optimising; the ENDPLATE group also takes *fly FLAT
-plates* as an explicit answer, so no gate makes a design decision
-compulsory. Group to group: AIRFOIL → ENDPLATE on a fit, ENDPLATE → WING on a
-fit or on *flat*, WING → RESULTS once the lattice has solved this wing.
+The chip at the right of each stage row says what it **holds**: `arena ·
+dry`; the section the wing flies and its t/c (`hg40 · t/c 0.150`, or `NACA
+2412 (the family's own)`, or `14 ranked · flies NACA 2412` after a screen);
+the plates' (`mi-vawt1 · t/c 0.210`, `NACA 00tt (the family's own, kept)`,
+`fences — no plate section`); the wing's searched dimension and objective
+(`13-D · efficiency`); the result's best in AeroBO's units (`15.43 CZ/CD`,
+`lap 50.289 s`). The tree expands on select, as AeroBO's.
 
-* **section** (`drive/aero/section.py`, `screen.py`) — the aerofoil is
-  **designed**, not picked: ten rows, `x = [w_upper(4), w_lower(4), t/c,
-  alpha]` (nine for a plate, which has no incidence of its own), inside a box
-  padded 15 % around the library's own hull, so every shipped section is
-  reproducible and a corner no section occupies is refused. The library
-  screen ranks the 39 shipped sections (NACA 4-digit and UIUC .dat files in
-  `drive/aero/data/airfoils`, plus any NACA code typed with `N` on the
-  AIRFOIL page) on the same objective the optimiser will use — the lap, or a
-  weighted composite of seven criteria whose weights are the screen's rows —
-  and seeds the section from the winner. Every candidate is scored on the
-  labelled **estimate** polar (Hess-Smith slope, friction + form factor +
-  camber/thickness correlation, 3 ms); the wing then flies **XFOIL** wherever
-  the binary is on the machine (`/opt/homebrew/bin/xfoil`, ~1.6 s in a worker
-  thread, cached under `runs/library/polars`; `X` queues it). Every read-out
-  says which one it is looking at.
-* **end plate** — the tip panels carry a section of their own, chosen by the
-  same four steps, and the wing and plate **meet** (`drive/aero/blend.py`,
-  AeroBO's geometry to the bit): *plate blend* spends a fraction of the
-  plate's arc turning out of the wing plane on an `arc`, `smooth` or
-  `spiral` law, the plate's section and toe ramp on the turn, and the reach
-  is paid for out of the span row. *Junction interference* (Hoerner) is an
-  add-on, off by default. Blend 0 is the published right-angle corner.
-* **wing** — the design box is a table of **bands**: span, taper, tip
-  twist, plate height, incidence and ride height, with the chord derived
-  from area, span and taper. A horseshoe vortex lattice (cosine edges,
-  interlaced stations, tip plates, and for the top wing the track's
-  rigid-wall image: ground effect) flies the section at each strip's
-  effective angle, reads the polar for profile drag, and finds the stall by
-  the critical-section rule; it reproduces the AeroBO lattice to 1e-12. What
-  the 1 kHz physics gets is small: `CL = CL0 + CLα·α` clamped at the two
-  stalls, `CD = cd0 + cd1·CL + cd2·CL²`, `S`.
-* **mount** — `pylon` or `endplate`, and it is a real aerodynamic choice
-  rather than a label. A *pylon* mount stands the wing off on two struts and
-  pays for their wetted area plus a 1.3 form factor for the junction
-  interference (Hoerner ch. 8). An *endplate* mount carries the wing on its
-  tip plates instead: no strut in the flow, but the plates are forced to a
-  structural minimum (0.12 m on the top wing) and the reduced tip loss then
-  falls straight out of the lattice, not out of a correlation. Measured on
-  the 1.40 × 0.30 m S1223 top wing at h = 0.45 m: the endplate mount is
-  **lower drag and higher lift and lighter** than two pylons (CLα 4.131 →
-  4.595, e 1.199 → 1.505, cd0 363 → 340 counts, 4.96 → 3.52 kg).
-* **optimiser** — `O` runs a Gaussian-process Bayesian optimiser (Matérn
-  5/2, expected improvement, Sobol start; `K` continues the last run) on the
-  selected group, against the lap or, for a section, one of three composite
-  objectives. The budget is AeroBO's measured law, `evals = 9.61 + 3.08 d` at
-  the *balanced* effort (quick / balanced / thorough), with a Sobol seed of
-  `0.5 d` clamped to [4, 16]; both are rows. The convergence step shows the
-  best-so-far trace against a random search of the same budget so you can
-  see what BO bought.
-* **library** — `S` saves a wing; the LIBRARY page (`L` from the car) puts
-  any saved wing in a slot of the matching role and saves or loads whole
-  builds, so a wing designed for one car goes on the next.
+| stage | tabs (views) |
+|---|---|
+| 1 Mission | Operating point · Design point · Search & budget |
+| 2 Airfoil | Library screening · Ranking · Section · Shape optimisation |
+| 2.8 Endplate | Library screening · Ranking · Section · Shape optimisation |
+| 3 Wing | Wing type · Design box · Solver · Convergence |
+| 4 Results | Summary · Geometry · Loading · Evaluations |
 
-The mouse does on every page what the keyboard does: a click on a navigator
-step selects it (and is refused by the same gate), a click on the left or
-right half of a `< value >` is a `←` or a `→`, an action row selects on the
-first click and fires on the second, the wheel moves the selection and hover
-lights the row.
+**Properties**, under the tree, is read-only and follows the stage:
+*Mission* (circuit, surface, slot, the lap as it stands and against no
+wings, the design speed, stated or not), *Section* and *Endplate* (the
+section the wing flies, where it came from, its t/c, the point it was
+screened or designed at, the screen's and the search's state, the flag the
+wing run is sent), *Wing* (AeroBO's family, dimension, objective,
+optimiser, budget) and *Result*.
+
+**Stage 1, MISSION** -- carsim's own. What the wing is for is a **lap** of
+one of carsim's circuits -- the arena, Linden, Kestrel, Ashdown, open or
+skidpad -- on a dry, damp or wet surface, integrated
+quasi-steadily over the arcs and straights `drive/track.py` defines the
+track with (at zero downforce, `qss.py` bit for bit). *Operating point*
+picks the slot, the circuit and the surface and shows the car as it stands.
+*Design point* is what that hands AeroBO: the **design speed** (the lap's
+mean speed; a speed you type instead -- a flank works in the corners: the
+R 100 m limit speed is 29 m/s), the reference CZ, **carsim's air** (ρ 1.2,
+ν 1.5e-5: the forces AeroBO computes are the forces the game computes), and
+where the wing sits: the TOP wing flies AeroBO's car rear wing **with
+ground effect** over the car's deck, its ride height searched in the band
+the slot can reach -- the car's own (`drive/bodies.py`): 1.57-1.85 m at the
+Corsa's default top station, over its 1.43 m deck; 3.08-3.53 m over a
+Citaro's 2.94 m roof -- and its span row is 1.2 x the car's width; a FLANK
+wing flies the same design **without** ground effect (AeroBO's image plane
+pushed 100 m away: the ground term is under 5e-6 of CZ there), its "ride
+height" row being the plate's reach to the car's side (0.25-0.70 m) and its
+span row the car's limit at the slot's height (the panel's lower tip at the
+car's ground clearance: 1.50 m on the Corsa at h 0.90; *Wing limits*,
+above); the right flank is the left one mirrored. The Reynolds numbers both sections
+are screened and designed at come from the same arithmetic as AeroBO's.
+*Search & budget* says where the budgets come from: **AeroBO's measured
+plan** (`api.recommended_search` over its 1260-run budget study,
+2026-08-05) -- a section **164** evaluations at *balanced* (109 quick, 240
+thorough), the wing **53** (42 / 87) -- or **your own** three budgets;
+and *stop when it stops improving* (AeroBO's convergence rule, the wing
+only: patience 40, 0.2 %). **State the mission** (the button, `ENTER`, or
+Run) opens the design stages. Stating it again when nothing changed keeps
+them; a changed circuit, surface or car clears the slot's design.
+
+**Stages 2 and 2.8, the SECTIONS**, AeroBO's four views each, on AeroBO's
+library of 2174 sections:
+
+* *Library screening* -- the surface's design point (its own Reynolds
+  number, or AeroBO's cached library point), the criterion **weights**
+  (AeroBO's recommended set per surface), the hard gates (t/c, |cm|) and
+  the floors, then **Screen the library**: a pass over the whole library
+  at the cached point, then a live XFOIL sweep of a 24-section shortlist at
+  the surface's own Re (about 20 s the first time at a new Re, instant
+  after: the vendored warm checkpoint saves AeroBO's "over an hour per
+  Reynolds number" cold). It sweeps live, each section as it lands.
+* *Ranking* -- AeroBO's top 14: its composite J, each criterion's value and
+  the points it scored. Click a row (or `ENTER` / `F`) to **take it**: the
+  wing flies it from then on.
+* *Section* -- the section on the page: its outline, its polar at the
+  surface's point (from AeroBO's XFOIL cache; one that is not cached yet is
+  a button that sweeps it as a job), its numbers, and what the wing flies.
+* *Shape optimisation* -- AeroBO's CST section search (`optimize_airfoil`:
+  eight shape weights, a live XFOIL polar per candidate, Bayesian
+  optimisation after a Sobol start of 4), **164 evaluations at balanced**
+  -- about 13 minutes (4.8 s an evaluation, measured); Stop keeps the best,
+  Keep going resumes. Then **Use this section** takes the optimised one, or
+  the library pick stays.
+
+Two rules of the owner's run through both. **The wing has no "cd at the
+design cl"**: at one stated lift it is "L/D at the design cl" again, so it
+is neither weighted nor a ranking column (the endplate keeps it: at cl 0
+its drag is what is left). **The endplates are symmetric**: 2.8 screens only
+AeroBO's symmetric sections (229 of the 2174, camber ≤ 0.5 % c), its shape
+search is AeroBO's symmetric CST (`w_lower = −w_upper`) at cl 0, and
+AeroBO's engine itself refuses a cambered plate. *Keep the family's own
+plate* (NACA 00tt at the searched t/c) is an answer too. A plate section
+taken in 2.8 fixes the wing's plate-thickness row to its t/c (a visible
+*fixed from 2.8* row on the Design box, which you can release).
+
+**Stage 3, WING** -- AeroBO's car rear wing: `car rear wing + endplates +
+free chord law`, 14 design variables (taper, root and tip twist,
+incidence, plate height, ride height, plate chord ratio, plate t/c, plate
+toe, area, span, three chord-law weights), AeroBO's V3 flags.
+
+* *Wing type* -- designed endplates or plain fences, a free chord law or a
+  straight taper, and the **objective** (AeroBO's car menu): **efficiency**
+  CZ/CD (the default: well-posed with the area free), **downforce** (on a
+  flank: side force), **drag**, **downforce + drag**, and **lap time** (the
+  top wing with plain fences only: AeroBO's point-mass lap on carsim's
+  circuit, with the Corsa's mass, power and CdA). A **drag ceiling** and a
+  **downforce floor**, in newtons, close the objectives that need one.
+* *Design box* -- one row per design variable: its band, and AeroBO's
+  **constrain** and **fix** switches (a fixed row is held; the search is
+  one dimension smaller). Rows outside AeroBO's validated band say so (the
+  top wing's ride height is, by construction: the lattice and its image are
+  still valid there).
+* *Solver* -- AeroBO's optimiser (`bo_slsqp`: a Sobol start, Bayesian
+  optimisation, then SLSQP from the best), the budget and seed, the
+  stop-rule's reach, the study stamp, and the `RunConfig` the Run sends.
+  **Run** launches it and shows *Convergence*.
+* *Convergence* -- the live graph (below), *what the search found* (the
+  best, its force and drag in newtons, CZ, CD, feasibility, how it ended),
+  *Did it converge?* (AeroBO's verdict) with **Keep going**, the constraint
+  margins, and *Onto the car*: the law the car will fly, the game's force
+  against AeroBO's, and **Put it on the car**.
+
+**Stage 4, RESULTS** -- the run that landed: *Summary* (the numbers, the
+sections flown, the law, the game's force at the design speed next to
+AeroBO's -- they are equal -- and carsim's own two-track lap with and
+without the wing, labelled as the second model it is), *Geometry*
+(planform and front view of the mapped wing, lofted as the car page draws
+it: a straight-taper equivalent of the free chord law, stated), *Loading*
+(AeroBO's spanwise breakdown) and *Evaluations* (every evaluation, paged).
+
+**Onto the car.** AeroBO's winner is flown by the game through a law
+**sampled from AeroBO's own evaluator** at the winning design: CZ is
+exactly affine in incidence over the feasible range (residual 0), the law
+passes through AeroBO's design point exactly, the stall clamps are
+AeroBO's own refusal edges, and the drag is a quadratic fit (exact at the
+design point, within 2 % off it). **Put it on the car** (`S`, the Save tool)
+saves the sections (with their AeroBO origin) and the wing into the
+library, puts it in the slot at AeroBO's incidence -- on the top wing, at
+its ride height too -- and mirrors it to the right flank. A slot moved
+later re-derives the law at the new height.
+
+**Running or finished -- never ambiguous.** Every run is one of two looks:
+
+* **live**: a spinner, `RUNNING · k/N` in blue beside the action (which
+  turns into **Stop**), a determinate bar, the stage's running glyph, the
+  status bar's `k/N · phase · elapsed · ≈ left`, a *now evaluating* block
+  (the evaluation, its phase -- Sobol, BO, SLSQP --, the last candidate and
+  its score, the best so far and the design), and the graph growing, the
+  newest point ringed;
+* **finished**: the tag the run ended with -- `DONE · 12/12` or
+  `CONVERGED · 71/164` (green), `STOPPED · 8/20` (amber, *best kept*),
+  `FAILED` (red, with AeroBO's sentence) -- and its wall time, a toast and
+  an Output line.
+
+**The live graph** (Shape optimisation, Convergence, Evaluations): one
+point per evaluation AeroBO flew -- feasible dots, infeasible rings,
+refused crosses on the floor --, the best-so-far step line, the x axis from
+1 to the budget, the Sobol | BO split and the BO → SLSQP handoff marked,
+and after a Keep going the inherited evaluations shaded.
+
+**Stop and Keep going** are AeroBO's: Stop (the tool bar, the view's Stop,
+`ESC`, `○`) lets the evaluation in flight finish, flies nothing more, and
+keeps the best (`STOPPED · k/N`); Keep going resumes the run -- the
+evaluations already paid for are its training set, nothing re-flies, and
+the counter continues at k + 1. While a run is live, the controls that
+would change it are locked (drawn faded; hover one for why), and a second
+run, stating the mission, the letter keys and the pause menu's actions are
+refused with a toast. Everything else stays live -- the run flies a frozen
+copy of its settings. Driving off or quitting abandons the run.
+
+**Without XFOIL** (or with `CARSIM_NO_XFOIL=1`) screening runs at the
+cached library point only, and shape optimisation is refused with the
+reason. **Without torch** (Intel Macs, macOS 13 and older) the pages show
+AeroBO's own note and offer AeroBO's optimisers that need none; the budgets
+still apply.
+
+**Keys, pad and mouse.** The mouse is primary: click anything (a button
+fires on the first click), drag a slider, hover a control for its help; the
+wheel scrolls the pane under the pointer and `SHIFT` + wheel a wide table
+sideways. The keyboard and the pad reach every control, the ones below the
+fold too. `F1` -- or the status bar's `F1 keys` -- lists them:
+
+| key | pad | does |
+|---|---|---|
+| `TAB` / `SHIFT+TAB` | `△` | focus: tree → tabs → work area |
+| `↑` `↓` | d-pad, left stick | move in the focused region (the tree selects as it goes) |
+| `←` `→` | d-pad, left stick | tree: previous / next stage · tabs: previous / next view · work area: change the value (`SHIFT` / `L1` fine) |
+| `ENTER` | `✕` | do it: the step, the button, the row |
+| `[` `]` | `R1` (next) | previous / next tab |
+| `F5` | `□` | Run the current stage |
+| `ESC` | `○` | stop a run; otherwise back (design → mission → car) |
+| `PAGE UP` `PAGE DOWN` `HOME` `END` | | scroll the work area |
+| `L` / `O` / `K` / `F` | | screen the library / optimise / keep going / take the section on screen |
+| `S` / `A` / `N` | | put the wing on the car / the airfoil library / rename |
+| `H` | | hide the tutorial box |
+| `F1`, `?` | | this list (`?` on a focused control: its help) |
+| | `OPTIONS` | the garage's menu |
+
+`python3 -m drive.design_shots --out DIR` renders every view of the two
+pages -- before, during (frozen at a fixed evaluation) and after its run,
+stopped and kept going -- at 1280x800 and 1600x1000, every run replayed
+from AeroBO runs captured once (`drive/data/aerobo_fixtures/`).
 
 Physics of the top wing, measured on this front-limited car: a rear wing
 mounted behind the rear axle *unloads* the front and costs corner speed
-(peak a_y 0.855 → 0.849 g); on the roof it helps (→ 0.880 g). The designer
-prints the front / rear split so you can see why. In *active* mode it stays
-stowed on the straights and comes out under braking or steering.
+(peak a_y 0.855 → 0.849 g); on the roof it helps (→ 0.880 g). In *active*
+mode it stays stowed on the straights and comes out under braking or
+steering.
 
 ## Drive it with a PS5 controller
 
@@ -698,8 +997,8 @@ uses the same map.
 |---|---|---|---|
 | `R2` / `L2` | throttle / brake | left stick | steer (expo 1.5, speed-limited) |
 | `R1` / `L1` | shift up / down | `✕` / `□` | handbrake / clutch (hold) |
-| `○` / `△` | wings armed / wing mode | `OPTIONS` / `CREATE` | pause menu / reset |
-| d-pad `↑` `↓` | HUD / vectors | d-pad `←` `→` | slow-mo / normal |
+| `○` / `△` | wings armed / wing mode | `OPTIONS` / `CREATE` | pause menu / back to the sector line |
+| d-pad `↑` `↓` | HUD / force arrows | d-pad `←` `→` | slow-mo / normal |
 | `R3` / `L3` | camera / auto zoom | touchpad | garage |
 
 In the garage: left stick moves the panel, right stick orbits, `L1`/`R1`
@@ -745,7 +1044,8 @@ cannot stall; and that assist now actually holds its 2400 rpm launch target —
 its proportional band used to run all the way down from 550 rpm, and the
 clutch's own torque balance then parked the engine at ~1700 rpm transmitting
 85 N·m instead of 100, so every launch bogged (0-50 km/h 5.64 s against the
-rig's 5.12; now 5.46, 0-100 on the interactive path 14.93 s).
+rig's 5.12; now 5.46, 0-100 on the interactive path 14.93 s -- 14.44 s since
+task 45's automatic changes up under the soft limiter).
 
 Physics runs at a fixed 1 kHz behind a 60 fps renderer. Real-time factor headless
 is about 12x, so it will not miss frames.
@@ -852,10 +1152,13 @@ only floorpan ballast lowers it. 200 kg on the Corsa:
 
 | ballast | % front | h_cg | Izz | peak a_y | roll | 0–100 |
 |---|---|---|---|---|---|---|
-| none | 61.0 | 0.550 | 1200 | **0.8550 g** | 4.55° | 14.80 s |
-| nose | 69.4 | 0.512 | 1470 | 0.8389 g | 5.20° | 17.18 s |
-| floor | 50.9 | 0.509 | 1585 | 0.8468 g | 4.61° | 17.38 s |
-| boot | 49.3 | 0.567 | 1723 | 0.8353 g | 5.31° | 17.42 s |
+| none | 61.0 | 0.550 | 1200 | **0.8550 g** | 4.55° | 14.31 s |
+| nose | 69.4 | 0.512 | 1470 | 0.8389 g | 5.20° | 16.69 s |
+| floor | 50.9 | 0.509 | 1585 | 0.8468 g | 4.61° | 16.77 s |
+| boot | 49.3 | 0.567 | 1723 | 0.8353 g | 5.31° | 16.79 s |
+
+(0–100 re-measured for task 45's gearbox: 14.80 / 17.18 / 17.38 / 17.42 s
+before, when the automatic crawled through the soft limiter in 1st and 2nd.)
 
 Every ballast loses grip (load sensitivity). *Floor* is least bad because 41 mm
 of CG drop buys most of it back; *boot* is worst outright but moves the balance
@@ -1101,7 +1404,7 @@ python3 -m drive.validate --modules    # + each module's own self-check
 python3 -m drive.validate --quick --only D
 ```
 
-100/100 pass with `--modules`, 0 hard failures. HARD means a sign, an identity, a conservation law
+133/133 pass with `--modules`, 0 hard failures. HARD means a sign, an identity, a conservation law
 or a brake lock order — a HARD failure means a number this sim produces is not to
 be believed, and the process exits 1. SOFT means a calibration figure inside a
 band, because `corsa_c.brakes` and `corsa_c.dampers` are both literally the
@@ -1116,7 +1419,30 @@ own check. Group W covers the
 three wings: the lattice against the AeroBO reference numbers, the designed
 panel against the published one (1.4e-14), the top wing's station trade and
 deploy logic, the build's two physics paths and the renderer's three-wing
-frame; `--modules` also runs the eight `drive/aero` self-checks.
+frame; `--modules` also runs the eight `drive/aero` self-checks, and the
+design pages' nine: `cae.theme`, `cae.widgets`, `cae.plot`, `cae.chrome`,
+`design_jobs` (the worker-thread job, its replay, its chips and lines),
+`design_shell` (the shell on a headless garage: layout, tree, chips, focus,
+keyboard reach, the live-run lock, every view in every state),
+`design_shots` (every view rendered, before / during / after its run, at
+two sizes), `aerobo_bridge` (AeroBO's engine itself: the vendored tree
+intact and unchanged by the check, the slot families bit for bit at
+AeroBO's own band, the budgets, a real wing run, Stop and Keep going,
+the screens, the symmetric plate, the lap objective, the law = AeroBO's
+force; its four XFOIL rows skip without XFOIL) and `aerobo_models` (the
+design page's models, every run a captured AeroBO run replayed).
+
+The design page's own checks, faster (from the repo root, headless):
+
+```
+python3 -m drive.aerobo_bridge    # 26 rows, ~12 s (~50 s with a cold XFOIL cache)
+python3 -m drive.aerobo_models    # 32 rows
+python3 -m drive.design_jobs      # 20 rows
+python3 -m drive.design_shell     # 63 rows
+python3 -m drive.design_shots     #  7 rows, every view at two sizes
+python3 -m drive.garage           # 88 rows
+python3 -m drive.aerobo_bridge --capture   # re-record the fixtures (XFOIL, a few minutes)
+```
 
 ## What it is held to
 
@@ -1241,8 +1567,18 @@ drive/
   fx.py         tyre smoke, dust, spray and the chase camera's jolt
   audio.py      procedural engine / tyre / road / wind sound per car, streamed
                 via pygame.mixer
-  garage.py     software-3D editor: place the flank panel, closed-form readout
+  garage.py     software-3D editor: place the wings, the mission and design pages
+  aerobo_bridge.py  the one door to AeroBO's engine: slot families, the operating
+                point, the runners, the law the car flies
+  aerobo_models.py  the design page's models on AeroBO (session, sections, wing, results)
+  data/aerobo_fixtures/  real AeroBO runs, captured once, that the checks replay
+  cae/          the AeroBO-look widget kit the garage's design pages are drawn with
+  design_jobs.py  AeroBO's runs on a worker thread, drained by the garage frame
+  design_shell.py the AeroBO shell around the mission and design pages
+  views_*.py    the stage views: mission, airfoil + endplate, wing, results (views_common: shared builders)
+  design_shots.py screenshots of every design view (python3 -m drive.design_shots --out DIR)
   menu.py       pause / help / settings menu (ESC, OPTIONS) shared by the drive and the garage
+  title.py      the title screen: the menu over a live scene of reference laps
   paint.py      the car paint palette (Settings > Paint): per car, cosmetic only
   records.py    lap records: top 5 per class, the lap's trace, its controls log and
                 start state (re-simulated bit for bit), runs/records/
@@ -1266,7 +1602,11 @@ drive/
   ml/           optional: an evolution-strategy driving agent (numpy only).
                 Nothing in drive/ imports it; --ml-drive is its only hook.
   validate.py   the acceptance suite
-runs/           telemetry, plots, settings.json, garage_design.json, records/
+aerobo/         AeroBO v1.0.0, vendored unmodified (VENDORED.md, sync.sh); results/
+                is its runtime cache
+requirements.txt
+runs/           telemetry, plots, settings.json, garage_design.json, records/,
+                aerobo/ (the design page's run records)
 ```
 
 Read `drive/CONTRACT.md` before changing anything in `drive/`. It records the

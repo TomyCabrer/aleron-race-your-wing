@@ -47,6 +47,7 @@ six-line fallback for the same reason; see DEVIATIONS.
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import math
 import os
@@ -84,9 +85,47 @@ TELEM_HZ = 100               # Hz  derived: >30 samples across a 0.36 s shift
 SURFACE_LOOKUP_HZ = 200      # Hz  derived: 0.17 m of travel per update at 33 m/s
 SKID_HZ = 100                # Hz  spec eq.16
 SLOWMO_SCALE = 0.25          # -   the '[' key; multiplies dt_wall, NEVER DT_PHYS
+RTF_WINDOW_S = 2.0           # s   the HUD's RTF: sim s per wall s over this much of
+RTF_MIN_S = 0.5              #     RUNNING time (task 45); 1.0 until it holds RTF_MIN_S
 
 LAP_WRAP_WINDOW = 20.0       # m   the wrap case of eq.17
 LAP_LOCKOUT_S = 3.0          # s   minimum lap; kills the double-fire
+#: The rolling start (`Sim._rolling_pose`, task 45) puts the car on a
+#: straight (|kappa| under ROLL_STRAIGHT_KAPPA) with a clear run ahead of it,
+#: inside the last sector (the out-lap crosses no split line):
+#:  1. the straight INTO the line, where it is at least ROLL_RUNIN_MIN_M long
+#:     (the pit straights of linden 50 m, ashdown 60 m, kestrel 70 m): at its
+#:     start, at most ROLL_RUNIN_MAX_M (ROLL_BACK_MAX_FRAC of the lap) out;
+#:  2. else the nearest straight back from the line that leaves ROLL_CLEAR_S of
+#:     travel at V0 before its corner: the car no further than ROLL_BACK_M
+#:     (ROLL_BACK_FRAC) from the line where that room allows, and never more
+#:     than ROLL_BACK_MAX_M (ROLL_BACK_MAX_FRAC) back;
+#:  3. none with that room (the arena: 40 m and 30 m between T5, T6 and T7):
+#:     the nearest straight at least ROLL_STRAIGHT_M long, at its start, V0
+#:     cut to ROLL_CLEAR_S of it -- holding UP is never an instant crash;
+#:  4. no straight at all (the skidpad's circle): in the corner at
+#:     ROLL_CORNER_G of its grip, ROLL_BACK_M (ROLL_BACK_FRAC) back.
+ROLL_BACK_M, ROLL_BACK_FRAC = 150.0, 0.15
+ROLL_BACK_MAX_M, ROLL_BACK_MAX_FRAC = 400.0, 0.35
+ROLL_RUNIN_MIN_M = 45.0      # m   2 s at 22 m/s before the clock starts
+ROLL_RUNIN_MAX_M = 250.0     # m
+ROLL_CLEAR_S = 3.0           # s   of the straight ahead, at V0
+ROLL_STRAIGHT_M = 15.0
+ROLL_STRAIGHT_KAPPA = 0.005  # 1/m  R = 200 m
+ROLL_CORNER_G = 0.5          # g   under every car's circle limit (the bus's: ~0.56 g); x the wet
+#: the tutorial's circle (its wing laps, round 3 of task 45): a new player's
+#: first sight of the skidpad, so the roll-in is gentle -- 44 km/h on the
+#: R = 50 m circle, dry, which a first-timer holds; a time trial keeps
+#: ROLL_CORNER_G. The wing laps are line to line, so neither number is in them
+ROLL_TUTORIAL_G = 0.3        # g   x the wet, as ROLL_CORNER_G
+#: the tutorial's steps that time a lap (drive/tutorial.py): they start
+#: rolling, as a time trial does; its other steps start on the line
+TUTORIAL_ROLLING = ("wing_off", "wing_on", "lap")
+#: the tutorial's steps whose laps are the player's own (task 45): carded and
+#: filed, as a time trial's are. Every other step's laps are practice: no
+#: results card, no rank or medal tag, no sector flash, no delta, never filed
+#: (`Sim._tutorial_quiet`) -- the tutorial's box says what counts there
+TUTORIAL_RECORDED = ("lap",)
 #: The seed lap (K): the schema drive.ml.clone reads. `SEED_LAP_COLS` must
 #: match `drive/ml/clone.py`'s SEED_COLS by name; the self-check asserts it.
 SEED_LAP_KIND = "carsim-seed-lap-1"
@@ -216,6 +255,9 @@ RACE_MENU_DEFAULTS = dict(bot="anchor", car="own",
                           bot4="none", car4="own",
                           bot5="none", car5="own")
 RACE_BOT_ANCHOR = "anchor"
+#: the built-in driver's name over its ghost and on the race HUD (task 45:
+#: 'anchor' is the ML code's word, not the player's)
+RACE_ANCHOR_TAG = "built-in"
 RACE_CHECKPOINT_DIR = os.path.join("drive", "ml", "checkpoints")
 #: What a bot drives: 'own' = the car it was BRED in, from its checkpoint's
 #: metadata (drive/race_grid.py `own_car`; plan D3: a slot is a name, a
@@ -260,17 +302,16 @@ RACE_HELP = [("RACE VS BOT", [
     ("R", "any reset restarts the race from the line"),
 ])]
 RACE_NOTE = ("A bot is a second car with the ML driver at the wheel -- your car, or "
-             "any car in the library, so one checkpoint can be tried in three "
-             "machines. Bots are ghosts -- you drive through them -- so the race is "
+             "any car in the library, so one bot can be tried in every car. Bots "
+             "are ghosts -- you drive through them -- so the race is "
              "against their laps, not their bumpers. A bot that leaves the road or "
              "spins rejoins, rolling, at the last sector line it passed after a "
              "couple of seconds.")
-SWARM_NOTE = ("The swarm is a genetic algorithm over the ML driver: every generation "
-              "the best cars are kept and the rest are bred from them, in your car "
-              "or a stock one (Car). The window "
+SWARM_NOTE = ("Learning cars: each generation keeps the best drivers and breeds the "
+              "next from them, in your car or a stock one (Car). The window "
               "replays each generation as ghost cars while the next is computed -- "
               "or, with Replay off, breeds flat out and shows the table. "
-              "K in the swarm window saves the best as a checkpoint you can race "
+              "K in the swarm window saves the best driver as a bot you can race "
               "against or breed from again.")
 
 DELTA_LOCK_DEG = 32.625      # deg road wheel = 522 deg at the wheel / 16.0
@@ -348,6 +389,13 @@ SURFACE_LABELS = {"none": "Dry everywhere", "patch": "Dry, wet patches",
                   "all": "Wet everywhere"}
 CAMERA_MODES = ("car_up", "chase", "world_up")
 CAMERA_LABELS = {"car_up": "Car up", "chase": "Chase", "world_up": "World up"}
+#: the HUD levels, in H's order (task 45): the race HUD first, so the first H
+#: shows MORE (the full one) and only the second hides it all
+HUD_ORDER = ("minimal", "full", "off")
+HUD_LABELS = {"minimal": "Minimal (race HUD)", "full": "Full", "off": "Off"}
+#: what H's note says, landing on each level: the level, and the next press
+HUD_NOTES = {"full": "HUD: full (H again: off)", "off": "HUD: off (H again: race HUD)",
+             "minimal": "HUD: race HUD"}
 # The Engine setting: VehicleConfig.power_scale (WOT torque x, clutch uprated
 # with it; powertrain.from_car). 'stock' is the car every script measures.
 ENGINE_MODES = ("stock", "tuned", "sport")
@@ -451,7 +499,8 @@ class Settings:
     steer_aid: bool = True        # input.KeyboardInput.steer_limit
     wet: str = "patch"            # SURFACE_MODES
     camera: str = "car_up"        # CAMERA_MODES (C cycles it; kept like the page's row)
-    hud: str = "minimal"          # 'full' | 'minimal' | 'off': H cycles it, kept for next launch
+    hud: str = "minimal"          # HUD_ORDER: H cycles it, kept for next launch
+    vectors: bool = False         # the force arrows (V), off until asked for (task 45)
     sound: str = SOUND_DEFAULT    # SOUND_MODES -> audio.CarSound volume
     shake: bool = True            # the kerb / off-road camera shake (task 27)
     graphics: str = GRAPHICS_DEFAULT   # GRAPHICS_MODES -> render.look_config
@@ -467,8 +516,8 @@ class Settings:
     path: str = field(default=SETTINGS_PATH, repr=False, compare=False)
 
     KEYS = ("track", "car", "ballast", "ballast_at", "engine", "gearbox",
-            "abs", "tc", "steer_aid", "wet", "camera", "hud", "sound", "shake", "graphics",
-            "paint", "wing_limits", "car_build")
+            "abs", "tc", "steer_aid", "wet", "camera", "hud", "vectors", "sound", "shake",
+            "graphics", "paint", "wing_limits", "car_build")
     #  not fields (never saved): what went wrong with the file, for the screen
     load_note = ""
     save_note = ""
@@ -497,8 +546,9 @@ class Settings:
             self.wet = "patch"
         if not ok(self.camera, CAMERA_MODES):
             self.camera = "car_up"
-        if not ok(self.hud, ("full", "minimal", "off")):
+        if not ok(self.hud, HUD_ORDER):
             self.hud = "minimal"
+        self.vectors = bool(self.vectors)
         if not ok(self.sound, SOUND_MODES):
             self.sound = SOUND_DEFAULT
         self.abs = bool(self.abs)
@@ -710,6 +760,8 @@ class Settings:
             self.wet = step(SURFACE_MODES, self.wet)
         elif key == "camera":
             self.camera = step(CAMERA_MODES, self.camera)
+        elif key == "hud":
+            self.hud = step(HUD_ORDER, self.hud)
         elif key == "shake":
             self.shake = not self.shake
         elif key == "graphics":
@@ -745,7 +797,7 @@ SETTINGS_HELP = [
         ("", "only preview here - ENTER / CROSS applies them"),
         ("ENTER / CROSS", "cycle the value (apply a previewed one)"),
         ("ESC / CIRCLE", "back to the pause menu (drops a preview)"),
-        ("TAB", "next map (while driving)"),
+        ("TAB", "next map (driving; pause, TIME TRIAL pages)"),
         ("BACKSPACE", "garage (while driving; touchpad on the pad)"),
     ]),
     ("CAR", [
@@ -753,6 +805,8 @@ SETTINGS_HELP = [
         ("", "front-wheel drive"),
         ("MX-5 1.8 / 540i", "lighter and neutral / heavy and powerful;"),
         ("", "both rear-wheel drive"),
+        ("Express 1.4", "light van: tall sides, big side wings fit"),
+        ("Citaro bus", "12 m bus, governed to 80 km/h, huge wings"),
         ("", "each car has its own records and medals"),
         ("Paint", "per car, looks only: no class, ranking or medal"),
         ("Wing limits", "Real: every span within the car's own limit;"),
@@ -811,7 +865,7 @@ SETTINGS_ROW_HELP = {
         ("", "slalom, a drag lane, a wet square, a road"),
         ("Skidpad", "constant radius, guide circles"),
         ("Dragstrip", "1500 m straight: 1/8 mile, 1/4 mile, km"),
-        ("TAB", "the next map, while driving")])],
+        ("TAB", "next map: driving, pause, TIME TRIAL")])],
     "set:car": [("CAR", [
         ("Corsa C 1.2", "the reference car, the most closely"),
         ("", "measured; front-wheel drive"),
@@ -873,6 +927,14 @@ SETTINGS_ROW_HELP = {
         ("Chase", "3D, behind the car"), ("World up", "from above, north up"),
         ("C", "the next camera, while driving  (R3)"),
         ("- / = / 0", "zoom out / in / auto  (L3: auto)")])],
+    "set:hud": [("HUD", [
+        ("Minimal", "the race HUD: speed, times, the map,"),
+        ("", "the wing chip and the warnings"),
+        ("Full", "adds tyre loads and grip, the wings'"),
+        ("", "panel, the pedals and the steer"),
+        ("Off", "the car and the road; notes still show"),
+        ("H", "the next HUD, while driving  (d-pad UP)"),
+        ("V", "force arrows on / off, kept  (d-pad DOWN)")])],
     "set:sound": [("SOUND", [("Off .. High", "the engine, the tyres, the road, the wing")])],
     "set:shake": [("SHAKE", [("On / Off", "the camera shakes a little on the kerbs,"),
                              ("", "more off the road; never costs a lap")])],
@@ -880,9 +942,9 @@ SETTINGS_ROW_HELP = {
                                    ("Low", "less detail, for a slower PC"),
                                    ("Classic", "the plain look, no scenery")])],
     "lap_results": [("LAST LAP", [("ENTER", "its results card, this session's laps")])],
-    "controls": [("CONTROLS", [("ENTER", "the DualSense drawn with what every"),
-                               ("", "button does, and every key")])],
-    "garage": [("GARAGE", [("ENTER", "the 3D wing designer"),
+    "controls": [("CONTROLS", [("ENTER", "every key, and the gamepad drawn with"),
+                               ("", "what every button does")])],
+    "garage": [("GARAGE", [("ENTER", "wings and builds: the 3D wing designer"),
                            ("BACKSPACE", "the garage while driving (touchpad)")])],
 }
 SETTINGS_ROW_HELP["set:ballast_at"] = SETTINGS_ROW_HELP["set:ballast"]
@@ -903,6 +965,20 @@ SETTINGS_ROW_HELP.update({
         ("", "another car's build; an any-car one stays"),
         ("Garage", "F there too; R renames, the default follows")])],
 })
+
+
+def _class_title(key: str) -> str:
+    """A class key in the TIME TRIAL page's words (task 45): 'Arena circuit
+    ·  Opel Corsa C 1.2  ·  Sport (~150 hp)  ·  Dry, wet patches'; a key
+    that is not a class, or names something unknown, falls back to
+    `records.class_label`."""
+    from .records import class_label, split_key
+    try:
+        t, c, e, w = split_key(key)
+        return "  ·  ".join((trk.TRACK_TITLES[t], cars.car_name(c),
+                             engine_label(e, cars.get(c)), SURFACE_LABELS[w]))
+    except Exception:                      # noqa: BLE001 -- a label is not a crash
+        return class_label(key)
 
 
 def engine_help(key: str, car=None) -> list:
@@ -1025,15 +1101,24 @@ def _ml_input(path: str, tr, opts):
     return ScriptedInput(fn, vehicle=None, track=tr)
 
 
+def _bot_age_key(path):
+    """Newest-first order for the RACE page's bots: the file's mtime, then
+    its name. The name breaks ties -- a fresh copy or an install gives every
+    checkpoint the same mtime, and the list and bot 1 (race_newest_bot)
+    must still agree on which bot is 'newest'."""
+    return (os.path.getmtime(path), os.path.basename(path))
+
+
 def race_bot_choices() -> list:
-    """[(spec, label)] the RACE page cycles through: none, the anchor, then
-    YOUR bots -- the swarm's checkpoints, newest first, so RIGHT from the
-    anchor is the bot you saved last -- then the trained ones (train.py),
-    newest first."""
+    """[(spec, label)] the RACE page cycles through: none (an empty slot),
+    the anchor (the built-in driver, theta = 0), then YOUR bots -- the
+    swarm's checkpoints, newest first, so RIGHT from the anchor is the bot
+    you saved last -- then the trained ones (train.py), newest first. The
+    labels are the player's words (task 45)."""
     import glob
-    out = [("none", "None"), (RACE_BOT_ANCHOR, "Built-in driver (the anchor, theta = 0)")]
+    out = [("none", "empty (LEFT / RIGHT adds a bot)"), (RACE_BOT_ANCHOR, "Built-in driver")]
     paths = sorted(glob.glob(os.path.join(RACE_CHECKPOINT_DIR, "*.json")),
-                   key=os.path.getmtime, reverse=True)
+                   key=_bot_age_key, reverse=True)
     mine = [p for p in paths if os.path.basename(p).startswith("swarm_")]
     for path in mine + [p for p in paths if p not in mine]:
         out.append((path, os.path.basename(path)[:-5]))
@@ -1045,7 +1130,7 @@ def race_newest_bot():
     a session starts, so racing your newest bot is ESC > Race > Start."""
     import glob
     c = sorted(glob.glob(os.path.join(RACE_CHECKPOINT_DIR, "swarm_*.json")),
-               key=os.path.getmtime)
+               key=_bot_age_key)
     return c[-1] if c else None
 
 
@@ -1092,6 +1177,18 @@ def _swarm_car(name, car, cfg_kwargs: dict, session_car_name: str) -> tuple:
         return car, cfg_kwargs, session_car_name
     c = cars.get(name)
     return c, dict(cfg_kwargs, mu_scale=float(c.mu_scale)), name
+
+
+def swarm_wings_label(cfg_kwargs: dict, build_name: str = "", wing: str = "off") -> str:
+    """The swarm window's wings, in the player's words (task 45): the
+    garage build the cars breed with, by its name, else a flank panel
+    (--wing), else none."""
+    if any(cfg_kwargs.get(k) is not None for k in ("dev_left", "dev_right", "top")):
+        return (f"wings: your garage build ({build_name})" if build_name
+                else "wings: your garage build")
+    if wing and wing != "off":
+        return f"wings: {wing} flank panel"
+    return "no wings"
 
 
 def _swarm_state_car(path: str, session_car_name: str) -> str:
@@ -1160,7 +1257,7 @@ def _load_bot(spec: str, tr):
         print(f"  NOTE: trained on '{meta['track']}', racing on '{tr.name}' -- "
               f"it has never seen this track")
     #  the name over the ghost and on the HUD: short, so three of them fit
-    return pol, ("anchor" if spec == RACE_BOT_ANCHOR else race_bot_label(spec))
+    return pol, (RACE_ANCHOR_TAG if spec == RACE_BOT_ANCHOR else race_bot_label(spec))
 
 
 class Rival:
@@ -1376,6 +1473,11 @@ class LapTimer:
         self.sector_best: list = [float("nan")] * len(self.lines)
         self.lap_valid = True
         self._valid_run = True
+        #  the sector bests as they stood when the running lap started, and
+        #  (BEST, sector bests) from before the last lap closed: what
+        #  `void_last` puts back when the recorder voids that lap after all
+        self._sec_best0: list = list(self.sector_best)
+        self._undo = None
         self.crossings: list = []          # (t_cross, kind, index)
 
     def restart(self):
@@ -1383,8 +1485,11 @@ class LapTimer:
         the session's BEST, LAST and sector bests stay on the HUD. `reset`
         is the full wipe, for a new session."""
         best, last, sec_best = self.best_lap, self.last_lap, self.sector_best
+        last_ok = self.lap_valid           # LAST stays, and so does whether it counted
         self.reset()
         self.best_lap, self.last_lap, self.sector_best = best, last, sec_best
+        self._sec_best0 = list(sec_best)
+        self.lap_valid = last_ok
 
     # ---------------------------------------------------------------- #
     def _crossed(self, S, s_prev, s_now):
@@ -1403,8 +1508,14 @@ class LapTimer:
         return True, d0 / ds
 
     def update(self, t_prev, s_prev, s_now, dt, all_off_track=False,
-               active=True):
+               active=True, counts=True):
         """Advance one physics step. Returns the list of events for this step.
+
+        `counts=False`: the session's recorder has dropped the running lap
+        (the wet toggle, a setting change, slow motion). The lap still
+        closes and shows as LAST, but it is no BEST and none of its sectors
+        a sector best -- the same verdict as the HUD's void LAST (task 45).
+        A scripted run has no recorder: always True there.
 
         `active=False` (the car is off the ribbon -- in the middle of the
         open map's pad) suspends crossing detection: there the nearest
@@ -1427,14 +1538,19 @@ class LapTimer:
             if not hit:
                 continue
             t_cross = t_prev + frac * dt
+            #  whether the sector (or lap) closing here counts, read before
+            #  the line re-arms the validity for the next lap
+            ok = self._valid_run and counts
             if idx == 0:
                 if self.t_lap_start is not None:
                     if t_cross - self.t_lap_start < self.lockout:
                         continue           # lockout: a re-fire, not a lap
                     self.last_lap = t_cross - self.t_lap_start
                     self.lap_valid = self._valid_run
-                    if self._valid_run and (math.isnan(self.best_lap)
-                                            or self.last_lap < self.best_lap):
+                    self._undo = (self.best_lap, list(self._sec_best0))
+                    if not ok:             # a void lap gives nothing: the sector
+                        self.sector_best = list(self._sec_best0)   # bests it set go
+                    elif math.isnan(self.best_lap) or self.last_lap < self.best_lap:
                         self.best_lap = self.last_lap
                     self.lap += 1
                     events.append(("lap", self.lap, t_cross, self.last_lap))
@@ -1447,15 +1563,28 @@ class LapTimer:
             if self.t_sec_start is not None and len(self.lines) > 1:
                 prev = (idx - 1) % len(self.lines)
                 self.sector_times[prev] = t_cross - self.t_sec_start
-                if (math.isnan(self.sector_best[prev])
-                        or self.sector_times[prev] < self.sector_best[prev]):
+                if ok and (math.isnan(self.sector_best[prev])
+                           or self.sector_times[prev] < self.sector_best[prev]):
                     self.sector_best[prev] = self.sector_times[prev]
                 events.append(("sector", prev, t_cross, self.sector_times[prev]))
+            if idx == 0:                   # the lap now running starts from these
+                self._sec_best0 = list(self.sector_best)
             self.t_sec_start = t_cross
             self.sector = idx
         if self.t_lap_start is not None:
             self.lap_time = (t_prev + dt) - self.t_lap_start
         return events
+
+    def void_last(self):
+        """The recorder voided the lap that just closed after the timer had
+        passed it ('not a full lap': the timer counts any crossing after its
+        lockout, however the car got back to the line). BEST and the sector
+        bests go back to what they were before it; LAST keeps its time."""
+        if self._undo is not None:
+            self.best_lap, sec0 = self._undo
+            self.sector_best = list(sec0)
+            self._sec_best0 = list(sec0)
+            self._undo = None
 
 
 # ==================================================================== #
@@ -1492,13 +1621,34 @@ class NullSkidBuffer:
         return 0
 
 
-#: F / G on a car with nothing to deploy (Sim._wings_fitted)
-NO_WINGS_NOTE = "no wings fitted - BACKSPACE: the garage"
+#: F / G on a car with nothing to deploy (Sim._wings_fitted). Round 3 of
+#: task 45 (the owner: wings sooner): it says what fits one -- the garage's W
+NO_WINGS_NOTE = "no wings fitted - BACKSPACE, then W: try a ready-made wing"
 
 
 # ==================================================================== #
 #  THE SIM                                                             #
 # ==================================================================== #
+def rtf_window(q, wall: float, t_sim: float) -> float:
+    """The real-time factor over the last RTF_WINDOW_S of running frames
+    (task 45): `q` is the window's (wall, sim t) samples, which the caller
+    clears whenever the sim was not asked to run (a pause, the first frame
+    after one or after a reset, a slow-motion change). Appends this frame's
+    sample, drops the ones older than the window, and returns delta sim t /
+    delta wall -- 1.0 until the window holds RTF_MIN_S. Rounded to the HUD's
+    two decimals, so the accumulator's sub-millisecond jitter never reads as
+    'RTF 1.00' on a machine at real time. The old figure was sim t over the
+    wall time since the session opened, pauses and all: 0.44 after a few
+    seconds on the TIME TRIAL page, on a machine running at exactly 1.0."""
+    q.append((float(wall), float(t_sim)))
+    while len(q) > 2 and wall - q[1][0] >= RTF_WINDOW_S:
+        q.popleft()
+    w = wall - q[0][0]
+    if w < RTF_MIN_S:
+        return 1.0
+    return round((t_sim - q[0][1]) / w, 2)
+
+
 class Sim:
     """One car, one track, one driver, one loop.
 
@@ -1571,8 +1721,10 @@ class Sim:
         self.single_step = False
         self.quit = False
         self.rtf = 0.0
-        self._rtf_wall = 0.0
-        self._rtf_sim = 0.0
+        #  the RTF's window of running frames (`rtf_window`), and the slow
+        #  motion it was measured at
+        self._rtf_q = collections.deque()
+        self._rtf_scale = 1.0
 
         self.wing_on = (wing != "off")
 
@@ -1597,8 +1749,9 @@ class Sim:
         self._seed_prompt = None
         self._ui_text = None
         self._prompt_was_paused = False
-        #: the G key's wing MODE (drive/airbrake.py, task 35): AUTO (0), AIR
-        #: BRAKE (3), ALL 3 (2), LEFT (+1), RIGHT (-1). Not AUTO goes to the
+        #: the G key's wing MODE (drive/airbrake.py, tasks 35, 44): AUTO (0),
+        #: AIR BRAKE (3), TOP (4), TOP FIXED (5), TOP FIX+SIDE (6), LEFT (+1),
+        #: RIGHT (-1); 2 was ALL 3, removed. Not AUTO goes to the
         #: physics as `Controls.wing_cmd`, merged only when nothing else
         #: commanded the wings (a script, a replay, a bot never are touched).
         self.wing_side_mode = 0
@@ -1612,9 +1765,17 @@ class Sim:
         # pause menu (ESC / OPTIONS): built lazily, render path only
         self.menu = None
         self.has_garage = False            # set by the interactive session
+        self.has_title = False             # ... and this: ESC > Title screen (a titled launch)
         self.hud_cfg = None                # the garage build's HudData fields
         self._menu_was_paused = False
         self._menu_page = "main"           # 'main' | 'settings' | 'swarm' | 'race'
+        #: task 45: the pause page's Quit to desktop was picked once (the
+        #: second ENTER quits; a move or any other pick disarms it), and the
+        #: page the title screen opened this session on (Sim.open_page),
+        #: whose Back / ESC is the title again until the menu closes into
+        #: driving or the pause page shows
+        self._quit_armed = False
+        self._from_title = None
         self.swarm_opts = dict(SWARM_MENU_DEFAULTS, T=swarm_T(track))   # the Deploy-swarm page
         self._swarm_typed = None           # its digits typed on Cars / Sim time (task 34)
         self.swarm_launch = None           # set when the page fires 'Deploy'
@@ -1648,6 +1809,9 @@ class Sim:
         # build (name, json) here and restarts the session on it
         self.prerace = None
         self.prerace_pick = None
+        #  round 3 of task 45: the page's 'Try ready-made wings' -- the garage
+        #  this session ends into opens with its W pressed (Garage.try_ready_made)
+        self.garage_try_wing = False
         #  (name, build json): Settings > Default saved -- or found in the
         #  library -- the build being driven under `name` (task 41 review)
         self.build_saved_as = None
@@ -1657,20 +1821,33 @@ class Sim:
         # the driving tutorial (drive/tutorial.py, task 23): a player session
         # has `progress_file` (runs/progress.json; `progress` above is the
         # race's metres); `tutorial` is the running one, `tutorial_car` = this
-        # session drives the tutorial's wing car
+        # session drives the tutorial's wing car, `tutorial_map_prev` = the
+        # player's own map, which the tutorial moved (task 45; None: it did not)
         self.progress_file = None
         self.tutorial = None
         self.tutorial_car = False
+        self.tutorial_map_prev = None
         self.wing_tutor_start = False      # the Tutorial page's wing-design row (task 24)
         # challenges (drive/challenges.py, task 25): `challenge` is the one
         # being driven (a ChallengeRun: its meter sees every step, event and
         # reset); `challenge_pick` / `challenge_end` ask run_interactive_cli
         # for a session in its class / back out of it; `challenge_build` is
-        # (build json, library) for the constraint check, player sessions only
+        # (the WORKING build's json, library) for the constraint check, player
+        # sessions only. `ch_pick` (task 44): the (car, config) the page's Car
+        # and Wings rows picked -- None until the player picks: the car being
+        # driven, FULL WING -- remembered for the launch (opts.ch_pick).
+        # Task 45: `ch_from_title` -- the Start was on the list the title
+        # opened (the ended run's list goes back to the title, else to the
+        # pause page); `_ch_back` -- where a challenge's page goes back to:
+        # the list, or the pause page for the running one's (This challenge)
         self.challenge = None
         self.challenge_pick = None
         self.challenge_end = False
         self.challenge_build = None
+        self.ch_pick = None
+        self.ch_from_title = False
+        self._ch_back = "challenges"
+        self.stop_hold = None              # a stop held at its v0 (challenges.StopHold, task 42)
         self.garage_lib = None             # the garage library: a bot's own build (task 26)
         self._results = None               # the last lap's results card (drive/results.py)
         self._results_n = 0
@@ -1727,6 +1904,47 @@ class Sim:
             self.crr[i] = crr
             self.on_track4[i] = on
 
+    def _hold_step(self, hold, dt: float, ctl) -> None:
+        """A step of a stop held at its v0 (challenges.StopHold, task 42): the
+        car moves on at V0 down the strip in the pose a reset gives -- the
+        centre line, static loads, wheels rolling, the automatic's gear -- and
+        no physics, so every stop lets go from the same state. Past its room
+        it goes back to the start, as R does. The top wing rides it as it
+        would at v0 (`_hold_top`, task 44)."""
+        s, wrapped = hold.advance(dt)
+        tr = self.track
+        x, y = trk.point_at(tr, s, 0.0)
+        _, _, _, psi_c, _ = trk.project(tr, x, y)
+        self.veh.reset(x, y, psi_c, V=hold.V0, gear=hold.gear)
+        self._hold_top(ctl)
+        if wrapped:                            # a teleport: no smear, no timing across it
+            self.pose_prev = (self.veh.x, self.veh.y, self.veh.psi)
+            self._s_prev = None
+
+    def _hold_top(self, ctl) -> None:
+        """The top wing of a stop held at v0 (task 44): as it would be running
+        straight at V0 with no brake, under this step's controls -- vehicle.
+        _aero's top-wing command, cruising. A FIXED one is out (the owner's
+        "the top wing always out"), a moving one in: its law has no trigger
+        on a straight with no brake. A reset starts every wing stowed, so
+        before this a fixed top wing let go stowed and spent its whole
+        extension lag in the stop: ONLY TOP, FIXED measured ONLY TOP to the
+        bit. The mode's cruising command (`airbrake.cruise_top`), not the
+        step's `wing_cmd`: a held step may carry a pedal on its way down,
+        and AIR BRAKE's top wing comes out on the brake, from the let-go, as
+        the reference's does (its pedal is at full on the first step). The
+        flanks stay as the reset leaves them: in, as the law has them on a
+        straight."""
+        veh = self.veh
+        top = veh.cfg.top
+        if top is None:
+            return
+        from .airbrake import cruise_top
+        out = cruise_top(self.wing_side_mode)
+        if out is None:
+            out = top.mode != "active"         # the slot's own: fixed out, active in
+        veh.state.top_raw = veh.top_deploy = 1.0 if (out and ctl.wing_on) else 0.0
+
     # ---------------------------------------------------------------- #
     def step_physics(self, dt: float) -> None:
         """Exactly one physics step. No wall clock, no pygame, no allocation storm."""
@@ -1741,7 +1959,9 @@ class Sim:
         ctl = self.inp.update(dt, V, beta_deg, veh.rpm, veh.gear)
         if self.wing_on and not ctl.wing_on:
             ctl.wing_on = True             # the harness's F toggle, OR'd in
-        if self.wing_side_mode and ctl.wing_cmd is None:
+        #  (in AUTO only while G's hand-back of the top wing runs: never on a
+        #  scripted or acceptance path, which has no G -- V20)
+        if (self.wing_side_mode or self._airbrake.handing) and ctl.wing_cmd is None:
             ctl.wing_cmd = self._airbrake.command(self.wing_side_mode, ctl,
                                                   hypot(veh.u, veh.v), veh, dt)
         if self.recorder is not None:
@@ -1749,7 +1969,14 @@ class Sim:
         self.ctl = ctl
 
         self.pose_prev = (veh.x, veh.y, veh.psi)
-        veh.step(ctl, tuple(self.mu), tuple(self.crr), dt)
+        hold = self.stop_hold if self.challenge is not None else None
+        if hold is not None and hold.holds(ctl.brake, dt):
+            self._hold_step(hold, dt, ctl)     # held at v0 until the brake is in (task 42)
+        else:
+            if hold is not None:               # let go: from the held state, its top wing
+                self._hold_top(ctl)            # too (the reference lets go on step 1)
+            self.stop_hold = None
+            veh.step(ctl, tuple(self.mu), tuple(self.crr), dt)
 
         s_prev = self.s if self._s_prev is not None else None
         s, n_lat, kt, psi_c, _i = trk.project(tr, veh.x, veh.y)
@@ -1761,11 +1988,19 @@ class Sim:
                                       and trk.on_tarmac(tr, veh.x, veh.y, n_lat))
 
         t_prev = self.t
+        rec = self.recorder
+        closed = False
         if s_prev is not None:
+            #  a lap the recorder has dropped (T, a setting change, slow
+            #  motion) is no BEST (task 45); a tutorial's practice lap is
+            #  the recorder's to drop, not the player's (hud_data's rule)
             evs = self.lap.update(t_prev, s_prev, s, dt,
                                   all_off_track=not any(self.on_track4),
-                                  active=abs(n_lat) <= 0.5 * tr.width + 2.0)
+                                  active=abs(n_lat) <= 0.5 * tr.width + 2.0,
+                                  counts=(rec is None or getattr(rec, "recording", True)
+                                          or self._tutorial_quiet()))
             for e in evs:
+                closed = closed or e[0] == "lap"
                 self.events_log.append(e)
                 if self.telem is not None and e[0] in ("lap", "sector"):
                     self.telem.mark(f"{e[0]}{e[1]}")
@@ -1811,8 +2046,15 @@ class Sim:
 
         self.n += 1
         self.t = self.n * dt               # t = n*dt, NEVER accumulated
-        if self.recorder is not None:
-            self.recorder.after_step(self)
+        rec = self.recorder
+        if rec is not None:
+            rec.after_step(self)
+            #  the recorder's verdict on the lap that just closed is final
+            #  now: one it voided ('not a full lap') gives BEST back
+            if closed and not self._tutorial_quiet():
+                rl = getattr(rec, "last", None)
+                if isinstance(rl, dict) and not rl.get("valid", True):
+                    self.lap.void_last()
         if self.challenge is not None:
             self.challenge.step(self)          # the challenge's meter (challenges.py)
         self._log(self.n)
@@ -1910,13 +2152,20 @@ class Sim:
         return n
 
     # ---------------------------------------------------------------- #
-    def reset(self, to_checkpoint: bool = False, standing: bool = False) -> None:
+    def reset(self, to_checkpoint: bool = False, standing: bool = False,
+              by_key: bool = False) -> None:
         """R = back to the last sector line; SHIFT+R = full reset.
 
         Both force the first-frame guard, because the wall-clock gap across a
         reset is exactly the 0.5-2 s pause the guard exists for. A full reset
-        in a time trial is a rolling start before the line (`_rolling_pose`)
-        unless `standing` asks for the line itself (the seed lap's).
+        where there is a rolling start (`_rolling_pose`: a time trial, a lap
+        challenge, the tutorial's laps) is that start, before the line, unless
+        `standing` asks for the line itself (the seed lap's). So is an R with
+        nothing to keep (task 45): on the out-lap, where the last line is a
+        whole lap back, or when that line is the start line, where the lap it
+        voids would be a dead lap -- the clock waits for the line again, and
+        the skid marks stay. `by_key`: the player's R / SHIFT+R (the keys, the
+        pad's CREATE, the pause rows) -- a note says where the car went.
         """
         if self.recorder is not None:
             self.recorder.discard("reset")     # a teleport is not a lap
@@ -1925,6 +2174,7 @@ class Sim:
         if self.challenge is not None:
             self.challenge.reset()             # a teleport ends the attempt
         tr = self.track
+        pose = self._rolling_pose()            # None in a race and a stop challenge
         s0 = 0.0
         V0 = 0.0
         gear = 1
@@ -1933,6 +2183,9 @@ class Sim:
             s0 = max(cands) if cands else 0.0
             V0 = min(hypot(self.veh.u, self.veh.v), 25.0)
             gear = max(self.veh.gear, 1)
+        voids = to_checkpoint and self.lap.t_lap_start is not None
+        r_roll = (to_checkpoint and pose is not None
+                  and (self.lap.t_lap_start is None or s0 == 0.0))
         if self.rivals:
             # a race restarts from the line: teleporting one car to a sector
             # line while the others keep lapping is not a gap anyone can read
@@ -1945,16 +2198,24 @@ class Sim:
             self._race_note(f"RACE vs {self._rivals_label()}: GO", 3.0)
         roll = (self.challenge.rolling(tr, self.veh.pt_p)
                 if self.challenge is not None and not self.rivals else None)
+        self.stop_hold = None
         if roll is not None:               # a stop challenge: R and SHIFT+R roll again (task 40)
             to_checkpoint = False
             s0, V0, gear = roll
-        if not to_checkpoint and not standing:
-            s0, V0, gear = self._rolling_pose() or (s0, V0, gear)
+        if (r_roll or not to_checkpoint) and not standing and pose is not None:
+            s0, V0, gear = pose
         x, y = trk.point_at(tr, s0, 0.0)
         _, _, _, psi_c, _ = trk.project(tr, x, y)
         if self.gearbox == "clutch" and V0 < 0.5:
             gear = 0                       # a stationary H-pattern car sits in neutral
         self.veh.reset(x, y, psi_c, V=V0, gear=gear)
+        self._airbrake.handing = False     # the car's top-wing hold starts afresh too
+        if roll is not None:               # at its v0: held until the brake is in (task 42)
+            self.stop_hold = self.challenge.hold(tr, roll)
+            self.challenge.placed(self, V0)
+            kb = getattr(self.inp, "kb", None)
+            if self.stop_hold is not None and kb is not None and hasattr(kb, "brake"):
+                kb.brake = 0.0             # DOWN still down at R ramps again: 0.2 s to let go of it
         self.s = s0
         self._s_prev = None
         self.acc = 0.0
@@ -1965,39 +2226,131 @@ class Sim:
             self.skid.clear()
             if self.renderer is not None and hasattr(self.renderer, "smoke"):
                 self.renderer.smoke.clear()
+        elif r_roll:
+            self.lap.restart()             # a fresh lap from the next crossing; the marks stay
         elif self.lap.t_lap_start is not None:
             self.lap._valid_run = False    # a teleport mid-lap: never the BEST
             self._reset_lap_at = self.lap.t_lap_start
+        if by_key and not self.rivals and roll is None:   # a race and a stop say their own
+            if r_roll:
+                note = "R: rolling start - the clock starts at the line"
+            elif to_checkpoint:
+                i = tr.sector_s.index(s0) if s0 in tr.sector_s else 0
+                note = ("R: back to the " + (f"sector {i + 1} line" if i else "start line")
+                        + (" - this lap does not count" if voids else ""))
+            else:
+                note = ("SHIFT+R: rolling start" if pose is not None and not standing
+                        else "SHIFT+R: back to the start line")
+            self._rec_note(note, 2.5)
         if self.seed_rows is not None:
             self.seed_rows = None          # a reset is not a lap; stays armed
             self._seed_note("seed lap: discarded (reset)"
                             + (" - still armed" if self.seed_armed else ""), 3.0)
 
     def _rolling_pose(self):
-        """A time trial's full reset: (s0, V0, gear) 150 m before the line
-        (at most 15% of the lap) at the speed the run-in's tightest corner
-        takes at 0.8 g, capped at 22 m/s, in the gear the automatic holds
-        there on full throttle -- so the clock starts seconds later instead
-        of after a standing out-lap. None = a standing start: an open map,
-        the skidpad, the dragstrip, a race, a challenge, the tutorial, and
-        every scripted Sim (no recorder, no pre-race page)."""
-        tr, tut = self.track, self.tutorial
-        if (not tr.closed or tr.name not in trk.CIRCUITS or self.rivals
-                or self.challenge is not None
-                or (tut is not None and getattr(tut, "active", True))
-                or (self.prerace is None and self.recorder is None)):
+        """A full reset's rolling start: (s0, V0, gear) on a straight with a
+        clear run ahead, inside the last sector (the four cases at ROLL_*):
+        the straight into the line where the map has one of ROLL_RUNIN_MIN_M,
+        else the nearest straight back from the line with ROLL_CLEAR_S at V0
+        before its corner, else the nearest straight with V0 cut to that. V0
+        is the speed the run-in's tightest corner takes at 0.8 g, capped at
+        22 m/s, in the gear the automatic holds there on full throttle -- so
+        the clock starts seconds later instead of after a standing out-lap,
+        the car is never dropped mid-corner, and holding UP is never a crash
+        within ROLL_CLEAR_S (task 45; the first cut sat 16 m before the
+        arena's hairpin at its 60 km/h). No straight (the skidpad): 150 m /
+        15% back, in the corner itself, at ROLL_CORNER_G of the surface's
+        grip (the tutorial's wing laps: the gentler ROLL_TUTORIAL_G, round
+        3). Rolling: a time trial on any
+        closed map (the circuits, the open map's perimeter, the skidpad), a
+        lap or circle challenge, and the tutorial's timed laps
+        (TUTORIAL_ROLLING) -- those two with a window only, so the challenge
+        references (challenges.measure) never move. None = a standing start:
+        the dragstrip, a race, a stop or strip challenge (a stop rolls its own
+        way, ChallengeRun.rolling), the tutorial's other steps, and every
+        scripted Sim (no recorder, no pre-race page)."""
+        tr, tut, ch = self.track, self.tutorial, self.challenge
+        if not tr.closed or self.rivals:
+            return None
+        corner_g = ROLL_CORNER_G
+        if ch is not None:
+            if self.renderer is None or ch.meter.metric not in ("lap_time", "skid_ay"):
+                return None
+        elif tut is not None and getattr(tut, "active", True):
+            if self.renderer is None or tut.step.id not in TUTORIAL_ROLLING:
+                return None
+            corner_g = ROLL_TUTORIAL_G     # a new player's first circle: gentle (round 3)
+        elif self.prerace is None and self.recorder is None:
             return None
         L = float(tr.length)
-        s0 = L - min(150.0, 0.15 * L)
-        k = np.abs(np.asarray(tr.kappa)[np.asarray(tr.s) >= s0])
-        k_max = float(k.max()) if k.size else 0.0
-        V0 = min(22.0, sqrt(0.8 * G / k_max)) if k_max > 1e-9 else 22.0
+        s_tab = np.asarray(tr.s)
+        k_tab = np.abs(np.asarray(tr.kappa))
+
+        def v_cap(s, a_lat=0.8 * G):       # the run-in's tightest corner at a_lat, <= 22 m/s
+            k = k_tab[s_tab >= s]
+            k_max = float(k.max()) if k.size else 0.0
+            return min(22.0, sqrt(a_lat / k_max)) if k_max > 1e-9 else 22.0
+
+        s_back = L - min(ROLL_BACK_M, ROLL_BACK_FRAC * L)
+        s_lo = max(L - min(ROLL_BACK_MAX_M, ROLL_BACK_MAX_FRAC * L), max(tr.sector_s or [0.0]))
+        bend = k_tab >= ROLL_STRAIGHT_KAPPA
+        s_bend = s_tab[bend]
+        runs = []                          # the straights, nearest the line first:
+        if s_bend.size:                    # (start, where the next corner starts)
+            first = ~bend & np.concatenate(([True], bend[:-1]))
+            for a in s_tab[first][::-1]:
+                ahead = s_bend[s_bend > a]
+                b = float(ahead[0]) if ahead.size else L + float(s_bend[0])   # past the line
+                if b <= s_lo:
+                    break                  # behind the last split, or too far back
+                runs.append((max(float(a), s_lo), b))
+        pose = None
+        if runs and runs[0][1] > L:        # 1. the straight into the line
+            a, b = runs.pop(0)
+            s0 = max(a, L - min(ROLL_RUNIN_MAX_M, ROLL_BACK_MAX_FRAC * L))
+            V0 = v_cap(s0)
+            if L - s0 >= ROLL_RUNIN_MIN_M and b - ROLL_CLEAR_S * V0 >= s0:
+                pose = s0, V0
+        for a, b in (runs if pose is None else ()):
+            V0 = v_cap(a)                  # 2. ROLL_CLEAR_S before its corner, at most
+            s_room = b - ROLL_CLEAR_S * V0     # ROLL_BACK_M out where that allows
+            if s_room >= a:
+                pose = max(a, min(s_back, s_room)), V0
+                break
+        for a, b in (runs if pose is None else ()):
+            if b - a >= ROLL_STRAIGHT_M:   # 3. the nearest, V0 cut to ROLL_CLEAR_S
+                pose = a, min(v_cap(a), (b - a) / ROLL_CLEAR_S)
+                break
+        if pose is None:                   # 4. no straight: in the corner (the skidpad)
+            pose = s_back, v_cap(s_back, corner_g * G * min(float(self.global_wet), 1.0))
+        s0, V0 = pose
         from . import powertrain as ptm
         p = self.veh.pt_p
         gear = next((g for g in range(1, len(p.gear))
                      if ptm.rpm_at_speed(p, g, V0) < ptm.n_up_schedule(p, g, 1.0)),
                     len(p.gear))
         return s0, V0, gear
+
+    def roll_time_trial(self) -> bool:
+        """A time-trial session opens rolling (round 3 of task 45): the
+        pre-race page's RACE rolls the car up to the line, but a session that
+        opens without the page -- a restart on the same class and build, a
+        page the title opened -- stood on the line with a whole out-lap to
+        drive and nothing said SHIFT+R. So every time trial starts at
+        `_rolling_pose`, with the note RACE gives; the page, when it opens,
+        rolls again. Not a race (its grid, `start_race`), a challenge (its
+        own start at the session's start), the tutorial (its step's own,
+        tutorial.Tutorial.tick) or a map with no rolling start (the
+        dragstrip, a scripted Sim); the seed lap's K arms for the next
+        crossing and the Swarm page's Drive seed lap stands on the line
+        (`reset(standing=True)`). True: the car was rolled."""
+        if (self.challenge is not None or self.tutorial is not None or self.rivals
+                or self._rolling_pose() is None):
+            return False
+        self.reset(to_checkpoint=False)
+        if not (self._rec_msg and self.n < self._rec_msg_until):   # never over UNLIMITED's
+            self._rec_note("TIME TRIAL: rolling start - the clock starts at the line", 4.0)
+        return True
 
     def unpause(self):
         self.paused = False
@@ -2030,7 +2383,6 @@ class Sim:
         # render thread burns the ~8 ms it would otherwise have slept.
         self._first_frame = True
         self._log(0)
-        t_wall0 = time.perf_counter()
         while not self.quit:
             dt_wall = clock.tick_busy_loop(FPS) / 1000.0
             for ev in self.inp.poll_events():
@@ -2040,6 +2392,7 @@ class Sim:
             if self._bot_test is not None:
                 self._bot_test_poll()
 
+            guard = self._first_frame          # this frame's wall time is not run
             if self.paused:
                 if self.single_step:
                     self.step_physics(self.dt)
@@ -2052,10 +2405,16 @@ class Sim:
             if self.tutorial is not None:
                 self._tutorial_tick()
 
-            w = time.perf_counter() - t_wall0
-            self._rtf_wall = w
-            self._rtf_sim = self.t
-            self.rtf = self.t / w if w > 0 else 0.0
+            #  the RTF over running time only (task 45): a pause (the TIME
+            #  TRIAL page, a menu, P), the first frame after it or after a
+            #  reset (the first-frame guard runs one step whatever the wall
+            #  clock did), and a slow-motion change start the window again.
+            #  The accumulator's owed remainder counts as run: it is.
+            if self.paused or guard or self.time_scale != self._rtf_scale:
+                self._rtf_q.clear()
+                self._rtf_scale = self.time_scale
+            self.rtf = (1.0 if self.paused else
+                        rtf_window(self._rtf_q, time.perf_counter(), self.t + self.acc))
 
             if self.renderer is not None:
                 hud = self.hud_data()
@@ -2155,8 +2514,8 @@ class Sim:
         tut = self.tutorial
         if key == "gearbox" and tut is not None and tut.gearbox_prev is not None:
             tut.set_gearbox_prev(None)         # the player chose a box: it stays theirs
-        if self.recorder is not None and key not in ("sound", "camera", "shake", "graphics",
-                                                     "paint", "wing_limits"):
+        if self.recorder is not None and key not in ("sound", "camera", "hud", "shake",
+                                                     "graphics", "paint", "wing_limits"):
             self.recorder.discard(f"{key} changed")   # the lap cannot be replayed
             self.recorder.retarget(s, self._pending)   # the engine is in the class,
             #                                             the aids go with the lap
@@ -2185,6 +2544,9 @@ class Sim:
         elif key == "camera":
             if self.renderer is not None:
                 self.renderer.cfg.mode = s.camera
+        elif key == "hud":
+            if self.renderer is not None:
+                self.renderer.cfg.hud = s.hud
         elif key == "graphics":
             sl = getattr(self.renderer, "set_look", None)
             if sl is not None:
@@ -2262,6 +2624,16 @@ class Sim:
         self.stop_reason = "restart"
         self.quit = True
 
+    def track_next(self) -> None:
+        """TAB: the next map, same car, same settings, new session -- while
+        driving, and from the pause page and the TIME TRIAL page (task 45:
+        their footers say so; `_menu_event` closes the menu first). The
+        tutorial keeps its map: a note says how to leave it instead."""
+        if self.tutorial is not None and self.tutorial.active:
+            self._rec_note("the tutorial picks the map - ESC > end the tutorial first", 3.0)
+        elif self.apply_setting("track"):
+            self.restart()
+
     def _wings_missing(self) -> str:
         """'' when the car has a wing for F / G to move (a flank panel, the
         pair, the top wing), else the note that says there is none."""
@@ -2287,15 +2659,11 @@ class Sim:
         elif ev == "menu":
             self._menu_open()
         elif ev == "reset":
-            self.reset(to_checkpoint=True)
+            self.reset(to_checkpoint=True, by_key=True)
         elif ev in ("full_reset", "reset_full"):
-            self.reset(to_checkpoint=False)
+            self.reset(to_checkpoint=False, by_key=True)
         elif ev == "track_next":
-            # TAB: the next map, same car, same settings, new session
-            if self.tutorial is not None and self.tutorial.active:
-                self._rec_note("the tutorial picks the map - ESC > end the tutorial first", 3.0)
-            elif self.apply_setting("track"):
-                self.restart()
+            self.track_next()              # TAB: the next map, a new session
         elif ev == "gearbox":
             self.apply_setting("gearbox")
         elif ev == "pause":
@@ -2310,7 +2678,6 @@ class Sim:
         elif ev in ("realtime", "normal_speed"):
             self.time_scale = 1.0
         elif ev == "wing":
-            self.wing_on = not self.wing_on
             #  the keyboard folds F into its own copy too (input.py), and the
             #  two are OR'd in step_physics: on a car that starts ARMED (a
             #  garage build, --wing) F could never switch the wing off, while
@@ -2318,17 +2685,49 @@ class Sim:
             kb = getattr(self.inp, "kb", None)
             if kb is not None and hasattr(kb, "wing_on"):
                 kb.wing_on = False
-            self._rec_note(self._wings_missing()
-                           or ("wings ARMED" if self.wing_on else "wings OFF"), 3.0)
-        elif ev == "wing_side":                # G / TRIANGLE: the wing mode (task 35)
-            from .airbrake import next_mode, LABELS, WHAT
+            missing = self._wings_missing()
+            if missing:
+                #  nothing for F to arm (task 45): the toggle stays as it is,
+                #  so the HUD and the tutorial's box never read a wing ON
+                #  that is not there
+                self._rec_note(missing, 3.0)
+                return
+            self.wing_on = not self.wing_on
+            self._rec_note("wings ARMED" if self.wing_on else "wings OFF", 3.0)
+        elif ev in ("wing_side", "wing_side_prev"):
+            #  G / TRIANGLE: the wing mode (task 35); SHIFT+G one back (task 45)
+            from .airbrake import next_mode, prev_mode, LABELS, WHAT
             if self._wings_missing():
                 self._rec_note(self._wings_missing(), 3.0)   # nothing for a mode to move
                 return
-            self.wing_side_mode = next_mode(self.wing_side_mode)
-            self._rec_note(f"wings {LABELS[self.wing_side_mode]}: "
-                           f"{WHAT[self.wing_side_mode]}"
-                           + ("" if self.wing_on else " (wings are OFF - F arms them)"), 3.0)
+            back = (ev == "wing_side_prev")
+            old = self.wing_side_mode
+            cfg_ = (self.challenge.ch.get("config") if self.challenge is not None else None)
+            if cfg_ is not None:
+                #  task 44: a challenge's wing config IS its wing mode: G may
+                #  only add the air brake, where there are side wings for it
+                from .challenges import g_modes, CONFIG_LABELS
+                modes = g_modes(cfg_)
+                if len(modes) < 2:
+                    self._rec_note(f"the challenge sets the wings: {CONFIG_LABELS[cfg_]} "
+                                   "(G changes nothing here)", 3.0)
+                    return
+                if self.wing_side_mode in modes:
+                    i = modes.index(self.wing_side_mode)
+                    self.wing_side_mode = modes[(i + (-1 if back else 1)) % len(modes)]
+                else:
+                    self.wing_side_mode = modes[0]
+            else:
+                #  the next (previous) mode THIS car can use: the TOP modes
+                #  need a top wing
+                step = prev_mode if back else next_mode
+                self.wing_side_mode = step(self.wing_side_mode, self.veh.cfg)
+            #  the mode's latches start afresh, and a top wing leaving a TOP
+            #  mode is handed back to the physics' own law (the task 44 review)
+            self._airbrake.g_changed(old, self.wing_side_mode, self.veh)
+            #  the warning first (task 45): a disarmed car's mode does nothing
+            self._rec_note(("" if self.wing_on else "wings OFF - F arms them.  ")
+                           + f"{LABELS[self.wing_side_mode]}: {WHAT[self.wing_side_mode]}", 3.0)
         elif ev == "wet":
             self.global_wet = (MU_WET_SCALE if self.global_wet == 1.0 else 1.0)
             self._sample_surfaces()
@@ -2365,51 +2764,102 @@ class Sim:
 
     # ---------------------------------------------------------------- #
     def _menu_subtitle(self) -> str:
+        """The pause pages' subtitle, in the TIME TRIAL page's words (task
+        45): 'Arena circuit  ·  Opel Corsa C 1.2  ·  build: my corsa  ·
+        Manual (auto clutch)'. The build is the one the PICK page names
+        (`_picker`), '(not saved)' when the car on the road is not that
+        saved build; with no builds, 'no wings' or the wings' own names; a
+        challenge run adds its wing config ('ONLY TOP')."""
         cfg = self.veh.cfg
-        wing = (f"{cfg.wing} x_w {cfg.x_w:+.2f} h_w {cfg.h_w:.2f}"
-                if cfg.wing != "off" else "no wings")
-        if getattr(cfg, "has_designed", lambda: False)():
+        wing = (f"wings: {cfg.wing} flank panel" if cfg.wing != "off" else "no wings")
+        designed = getattr(cfg, "has_designed", lambda: False)()
+        pk = self._picker()
+        if designed and pk is not None and pk.build_name:
+            wing = f"build: {pk.build_name}" + ("  (not saved)" if pk.unsaved() else "")
+        elif designed:
             names = [getattr(w, "name", "") for w in (cfg.dev_left, cfg.dev_right, cfg.top)
                      if w is not None]
-            wing = "garage build: " + ", ".join(dict.fromkeys(names))
+            wing = "wings: " + (", ".join(n for n in dict.fromkeys(names) if n)
+                                or "your garage build")
+        ch_cfg = (getattr(self.challenge, "ch", None) or {}).get("config")
+        if ch_cfg:                             # a challenge drives its wing config
+            from .challenges import CONFIG_LABELS
+            wing += "  ·  " + CONFIG_LABELS.get(ch_cfg, ch_cfg)
         run = self._pending.get("car", self.settings.car)   # not a car only browsed
         title = self.track.title or trk.TRACK_TITLES.get(self.track.name, self.track.name)
-        unl = "   UNLIMITED (not official)" if self.unlimited else ""    # task 41
-        return (f"{title}   {cars.car_name(run)}   lap {self.lap.lap}   "
-                f"{wing}   {GEARBOX_HUD.get(self.gearbox, '')}{unl}")
+        unl = "  ·  UNLIMITED (not official)" if self.unlimited else ""    # task 41
+        return (f"{title}  ·  {cars.car_name(run)}  ·  {wing}  ·  "
+                f"{GEARBOX_LABELS.get(self.gearbox, '')}{unl}")
 
     def _menu_show_main(self, idx: int = 0) -> None:
-        """The pause page: resume / settings / resets / garage / quit."""
-        items = [("Resume", "resume"),
-                 ("Settings: map, gearbox, ABS, aids, camera", "settings"),
-                 ("Controls: the DualSense and the keyboard", "controls")]
-        if self.prerace is not None:
-            items.append(("Time trial: your top 5, medals, the build", "timetrial"))
-        if self.progress_file is not None:
-            from .tutorial import menu_row
-            items.append((menu_row(self.progress_file, self.tutorial), "tutorial"))
-        if self.progress_file is not None and self.challenge_build is not None:
-            from .challenges import menu_row as ch_row
-            items.append((ch_row(self.progress_file, self.challenge), "challenges"))
-        items += [("Reset to last sector line", "reset"),
-                 ("Full reset (skid marks + timing)", "full_reset")]
-        if self.has_garage:
-            items.append(("Garage: build the flank panel (3D)", "garage"))
-        items.append(("Deploy swarm: learning cars that breed", "swarm"))
-        items.append((("Race vs bot: " + self._rivals_label()) if self.rivals
-                      else "Race vs bot: the ML driver, in your car or another", "race"))
-        items.append(("Quit", "quit"))
+        """The pause page: resume / settings / resets / garage / the title /
+        quit. Task 45: 'Main menu' ends the session for the title screen
+        (run_interactive_cli shows it again), and Quit to desktop asks twice
+        -- the first ENTER re-shows the page with the row saying so
+        (`_quit_armed`). A challenge run has its own short page (task 45):
+        Retry, R (not on a stop, where R is a retry as well), This challenge
+        (its page: the car and the wings), the list -- none of free
+        driving's time trial, tutorial, garage, swarm or race rows."""
+        self._from_title = None            # the pause page: Back is here from now on
+        run = self.challenge
+        if run is not None:
+            sector = run.meter.metric != "stop_distance"
+            items = [("Resume", "resume"), ("Retry (SHIFT+R)", "full_reset")]
+            if sector:
+                items.append(("Back to the last sector line (R)", "reset"))
+            if self.challenge_build is not None:
+                items.append(("This challenge: car and wings", "ch_this"))
+                if self.progress_file is not None:
+                    from .challenges import menu_row as ch_row
+                    items.append((ch_row(self.progress_file, run), "challenges"))
+            items += [("Settings: map, gearbox, ABS, aids, camera", "settings"),
+                      ("Controls: keyboard and gamepad", "controls")]
+        else:
+            items = [("Resume", "resume"),
+                     ("Settings: map, gearbox, ABS, aids, camera", "settings"),
+                     ("Controls: keyboard and gamepad", "controls")]
+            if self.prerace is not None:
+                items.append(("Time trial: your top 5, medals, the build", "timetrial"))
+            if self.progress_file is not None:
+                from .tutorial import menu_row
+                items.append((menu_row(self.progress_file, self.tutorial), "tutorial"))
+            if self.progress_file is not None and self.challenge_build is not None:
+                #  task 45: the stars of the pick the list opens on (its
+                #  subtitle's 'This car + wings'), not every car x config's
+                from .challenges import menu_row as ch_row
+                car, cfg = self._ch_combo()
+                items.append((ch_row(self.progress_file, self.challenge, car=car, config=cfg),
+                              "challenges"))
+            #  what each reset does HERE (task 45): SHIFT+R is a rolling start
+            #  where there is one (`_rolling_pose`), else the start line
+            items += [("Back to the last sector line (R)", "reset"),
+                      ("Restart the lap: rolling start (SHIFT+R)"
+                       if self._rolling_pose() is not None
+                       else "Back to the start line (SHIFT+R)", "full_reset")]
+            if self.has_garage:
+                items.append(("Garage: wings and builds", "garage"))
+            items.append(("Deploy swarm: learning cars that breed", "swarm"))
+            items.append((("Race vs bot: " + self._rivals_label()) if self.rivals
+                          else "Race vs bot: the ML driver, in your car or another", "race"))
+        if self.has_title:                 # a titled launch: the way back to it
+            items.append(("Main menu", "title"))
+        items.append(("Quit to desktop: ENTER again" if self._quit_armed else "Quit to desktop",
+                      "quit"))
         layout = getattr(self.inp, "layout", None)
         try:
             from .input import menu_help, MENU_NO_PAD
             #  one column: the pad's when one is connected, else the keyboard's
             #  (both side by side ran off the panel; task 37) -- Controls has all
             sections = menu_help(layout)[-1:]
-            note = ("Controls (above): the DualSense drawn with what every button does, "
-                    "and every key." + ("" if layout else "  " + MENU_NO_PAD))
+            note = ("Controls (in the list): every key and every gamepad button."
+                    + ("" if layout else "  " + MENU_NO_PAD.capitalize() + "."))
         except Exception:
             sections, note = [], ""
-        foot = "ESC / OPTIONS resume   R reset   SHIFT+R full reset   TAB next map"
+        if run is not None:                # the keys a run has (TAB would end it)
+            foot = ("ESC / OPTIONS resume   SHIFT+R retry"
+                    + ("   R sector line" if sector else ""))
+        else:                              # the rows' words, short (task 45)
+            foot = "ESC / OPTIONS resume   R sector line   SHIFT+R restart lap   TAB next map"
         if self.has_garage:
             foot += "   BACKSPACE garage"
         self.revert_pending()
@@ -2424,32 +2874,33 @@ class Sim:
         # the Paint row is the car the Car row shows: while another car is
         # only browsed, the row says whose paint it is
         whose = f"  (for the {cars.car_name(s.car)})" if "car" in p else ""
-        rows = [(f"{'Map':<11s}{trk.TRACK_TITLES.get(s.track, s.track)}"
+        rows = [(f"{'Map':<12s}{trk.TRACK_TITLES.get(s.track, s.track)}"
                  f"{mark['track']}", "set:track"),
-                (f"{'Car':<11s}{cars.car_name(s.car)}  "
+                (f"{'Car':<12s}{cars.car_name(s.car)}  "
                  f"{s.car_base.m:.0f} kg{mark['car']}", "set:car"),
-                (f"{'Paint':<11s}{pnt.PAINT_LABELS[s.paint_of()]}{whose}", "set:paint"),
-                (f"{'Wing limits':<11s} {WING_LIMIT_LABELS[s.wing_limits]}", "set:wing_limits"),
-                (f"{'Ballast':<11s}{s.ballast_text()}{mark['ballast']}", "set:ballast"),
-                (f"{'Ballast at':<11s}{cars.BALLAST_LABELS[s.ballast_at]}"
+                (f"{'Paint':<12s}{pnt.PAINT_LABELS[s.paint_of()]}{whose}", "set:paint"),
+                (f"{'Wing limits':<12s}{WING_LIMIT_LABELS[s.wing_limits]}", "set:wing_limits"),
+                (f"{'Ballast':<12s}{s.ballast_text()}{mark['ballast']}", "set:ballast"),
+                (f"{'Ballast at':<12s}{cars.BALLAST_LABELS[s.ballast_at]}"
                  f"{mark['ballast_at']}", "set:ballast_at"),
-                (f"{'Engine':<11s}"
+                (f"{'Engine':<12s}"
                  f"{engine_label(s.engine, self.veh.car)}", "set:engine"),
-                (f"{'Gearbox':<11s}{GEARBOX_LABELS[s.gearbox]}", "set:gearbox"),
-                (f"{'ABS':<11s}{'On' if s.abs else 'Off'}", "set:abs"),
-                (f"{'TC':<11s}{'On' if s.tc else 'Off'}", "set:tc"),
-                (f"{'Steer aid':<11s}{'On' if s.steer_aid else 'Off'}", "set:steer_aid"),
-                (f"{'Surface':<11s}{SURFACE_LABELS[s.wet]}{mark['wet']}", "set:wet"),
-                (f"{'Camera':<11s}{CAMERA_LABELS[s.camera]}", "set:camera"),
-                (f"{'Sound':<11s}{SOUND_LABELS[s.sound]}", "set:sound"),
-                (f"{'Shake':<11s}{'On' if s.shake else 'Off'}  (camera, kerbs / off road)",
+                (f"{'Gearbox':<12s}{GEARBOX_LABELS[s.gearbox]}", "set:gearbox"),
+                (f"{'ABS':<12s}{'On' if s.abs else 'Off'}", "set:abs"),
+                (f"{'TC':<12s}{'On' if s.tc else 'Off'}", "set:tc"),
+                (f"{'Steer aid':<12s}{'On' if s.steer_aid else 'Off'}", "set:steer_aid"),
+                (f"{'Surface':<12s}{SURFACE_LABELS[s.wet]}{mark['wet']}", "set:wet"),
+                (f"{'Camera':<12s}{CAMERA_LABELS[s.camera]}", "set:camera"),
+                (f"{'HUD':<12s}{HUD_LABELS[s.hud]}", "set:hud"),
+                (f"{'Sound':<12s}{SOUND_LABELS[s.sound]}", "set:sound"),
+                (f"{'Shake':<12s}{'On' if s.shake else 'Off'}  (camera, kerbs / off road)",
                  "set:shake"),
-                (f"{'Graphics':<11s}{GRAPHICS_LABELS[s.graphics]}", "set:graphics")]
+                (f"{'Graphics':<12s}{GRAPHICS_LABELS[s.graphics]}", "set:graphics")]
         if self.recorder is not None:          # the lap's results card, again (task 32)
             from .results import summary
             last = self._results_log[-1] if self._results_log else None
-            rows.append((f"{'Last lap':<11s}{summary(last, short=True)}", "lap_results"))
-        rows.append(("Controls: the DualSense and the keyboard", "controls"))
+            rows.append((f"{'Last lap':<12s}{summary(last, short=True)}", "lap_results"))
+        rows.append(("Controls: keyboard and gamepad", "controls"))
         #  task 41: the car's builds from the drive, on every map -- the build
         #  this session drives (ENTER: the PICK page) and the car's own default
         #  (ENTER: this build becomes it). The car on the road, not one only
@@ -2457,14 +2908,14 @@ class Sim:
         pk = self._picker()
         if self.has_garage and pk is not None:
             run = self._pending.get("car", s.car)
-            tag = "" if pk.saved() else "  (not saved)"
-            rows.append((f"{'Build':<11s}{(pk.build_name or '(unnamed)')[:24]}{tag}",
+            tag = "  (not saved)" if pk.unsaved() else ""     # the TIME TRIAL page's rule
+            rows.append((f"{'Build':<12s}{(pk.build_name or '(unnamed)')[:24]}{tag}",
                          "build_pick"))
             from .prerace import car_label
-            rows.append((f"{'Default':<11s}{s.build_of(run)[:24] or 'none'}  "
+            rows.append((f"{'Default':<12s}{s.build_of(run)[:24] or 'none'}  "
                          f"(the {car_label(run)}'s)", "build_default"))
         if self.has_garage:
-            rows.append(("Garage (3D panel editor)", "garage"))
+            rows.append(("Garage: wings and builds", "garage"))
         rows.append(("Back", "settings_back"))
         return rows
 
@@ -2473,7 +2924,6 @@ class Sim:
         itself, settled, drawn by the renderer into the page (Menu.show's
         `art`), and this session's laps; ESC / Back return to the row."""
         from .results import page_rows
-        from .records import class_label
         last = self._results_log[-1] if self._results_log else None
         rnd = self.renderer
         art, art_h = None, 0
@@ -2483,7 +2933,7 @@ class Sim:
         key = (last or {}).get("key") or getattr(self.recorder, "key", "") or ""
         self.menu.show(items=[("Back", "results_back")],
                        sections=[("THIS SESSION", page_rows(self._results_log, key))],
-                       subtitle=class_label(key) if key else "", note="",
+                       subtitle=_class_title(key) if key else "", note="",
                        footer="ENTER / CROSS back   ESC / CIRCLE back", title="LAP RESULTS",
                        idx=0, columns=1, art=art, art_h=art_h)
         self._menu_page = "results"
@@ -2498,10 +2948,20 @@ class Sim:
         return [SETTINGS_NAV] + list(SETTINGS_ROW_HELP.get(act, []))
 
     def _menu_show_controls(self, idx: int = 0) -> None:
-        """The CONTROLS page (drive/controls_page.py): the DualSense drawn
-        with what every button does (the menu's art hook), what it does in a
-        menu; a row to the keyboard's keys."""
+        """The Controls row (task 45): with a gamepad connected, its page;
+        with none, the keyboard's keys first -- the keys the player is using
+        -- and the gamepad's drawing one row away."""
+        if getattr(self.inp, "layout", None) is None:
+            self._menu_show_controls_kb(idx)
+        else:
+            self._menu_show_controls_pad(idx)
+
+    def _menu_show_controls_pad(self, idx: int = 0) -> None:
+        """The gamepad's CONTROLS page (drive/controls_page.py): the DualSense
+        drawn with what every button does (the menu's art hook), what it
+        does in a menu; a row to the keyboard's keys."""
         from .controls_page import draw_pad, MENU_PAD
+        from .input import MENU_NO_PAD
         rnd = self.renderer
         art, art_h = None, 0
         if rnd is not None and hasattr(rnd, "screen"):
@@ -2511,8 +2971,7 @@ class Sim:
         layout = getattr(self.inp, "layout", None)
         sub = ("PS5 DualSense: connected" if layout == "ps" else
                "PS5 DualSense -- another pad is connected: its buttons differ, the pause "
-               "page lists them" if layout else
-               "PS5 DualSense (none connected: CREATE + PS pairs it)")
+               "page lists them" if layout else MENU_NO_PAD)
         self.menu.show(items=[("Keyboard keys", "ctl_kb"), ("Back", "ctl_back")],
                        sections=[("IN A MENU", list(MENU_PAD))], subtitle=sub, note="",
                        footer="ENTER / CROSS select   ESC / CIRCLE back", title="CONTROLS",
@@ -2520,9 +2979,14 @@ class Sim:
         self._menu_page = "controls"
 
     def _menu_show_controls_kb(self, idx: int = 0) -> None:
+        """The keyboard's CONTROLS page; its first row is the gamepad's page
+        (`_menu_show_controls_pad`), whatever is connected."""
         from .controls_page import kb_rows
-        self.menu.show(items=[("The DualSense", "controls"), ("Back", "ctl_back")],
-                       sections=[("KEYBOARD", kb_rows())], subtitle="the keyboard", note="",
+        from .input import MENU_NO_PAD
+        sub = "the keyboard" + ("" if getattr(self.inp, "layout", None)
+                                else "  ·  " + MENU_NO_PAD)
+        self.menu.show(items=[("Gamepad (drawing)", "controls"), ("Back", "ctl_back")],
+                       sections=[("KEYBOARD", kb_rows())], subtitle=sub, note="",
                        footer="ENTER / CROSS select   ESC / CIRCLE back", title="CONTROLS",
                        idx=idx, columns=1)
         self._menu_page = "controls_kb"
@@ -2826,7 +3290,7 @@ class Sim:
             #  the rollout has no global wet: the same grip through the config
             kw["mu_scale"] = float(kw["mu_scale"]) * self.global_wet
             jobs.append(dict(spec=spec, car=car, cfg_kwargs=kw, tr=self.track, T=T))
-        label = "anchor" if spec == RACE_BOT_ANCHOR else race_bot_label(spec)
+        label = RACE_ANCHOR_TAG if spec == RACE_BOT_ANCHOR else race_bot_label(spec)
         n = len(jobs) if workers is None else max(1, min(int(workers), len(jobs)))
         pool = mp.Pool(n)
         self._bot_test = dict(spec=spec, label=label, T=T_run, pool=pool,
@@ -2926,6 +3390,8 @@ class Sim:
         """The recorder's callback when a lap closes: the medal it earned
         (drive/medals.py) and the HUD note."""
         from .records import lap_note
+        if self._tutorial_quiet() and not res.get("valid"):
+            return      # a tutorial's practice lap (task 45): its box says what counts
         if res.get("valid") and "medal" not in res:
             res["medal"], res["medal_best"] = self._lap_medal(res)
         text, secs = lap_note(res)
@@ -3011,7 +3477,8 @@ class Sim:
             return
         self.menu.show(items=items, sections=secs, subtitle=sub,
                        note="", footer="ENTER / CROSS race   ESC / CIRCLE the pause menu   "
-                                       "or click a row", title="TIME TRIAL", idx=idx, columns=1)
+                                       "TAB next map   or click a row",   # TAB: task 45
+                       title="TIME TRIAL", idx=idx, columns=1)
         self._menu_page = "prerace"
 
     def _picker(self):
@@ -3093,8 +3560,8 @@ class Sim:
         self._rec_note(f"'{name}' is the {car_label(run)}'s default build", 3.0)
 
     def start_timed(self) -> None:
-        """RACE: the car rolling up to the line on a circuit (standing on it
-        elsewhere) and the clock from the next crossing; this build becomes
+        """RACE: the car rolling up to the line on a closed map (standing on
+        it on the dragstrip) and the clock from the next crossing; this build becomes
         the map's default (`runs/records/last_builds.json`)."""
         pr = self.prerace
         if pr is not None and pr.build_json is not None and not self.tutorial_car:
@@ -3130,8 +3597,12 @@ class Sim:
             elif action.endswith("set:pr_ghost") and self.ghosts is not None:
                 self.ghosts.step_slot(-1 if action.startswith("prev:") else +1)
                 self._menu_show_prerace(idx=idx)
-            elif action == "pr_edit" and self.has_garage:   # the garage, on this
-                self._menu_close()             # build; its ENTER comes back here
+            elif action in ("pr_edit", "pr_wings") and self.has_garage:
+                #  the garage, on this build; its ENTER comes back here. 'Try
+                #  ready-made wings' (round 3): with its W already pressed on
+                #  the first empty slot -- a ready-made wing on the car
+                self._menu_close()
+                self.garage_try_wing = action == "pr_wings"
                 self.stop_reason = "garage"
                 self.quit = True
             else:
@@ -3164,8 +3635,25 @@ class Sim:
         if not tut.active:
             self.tutorial = None
             return
+        if self._tutorial_quiet() and self.recorder is not None:
+            self.recorder.discard("the tutorial")   # a practice lap: never filed (task 45)
         if self.menu is not None and self.menu.open:
             return                             # a page is up: nothing moves
+        st = tut.step
+        if (tut.wants_wing() and not self.tutorial_car and not self._has_flank()
+                and st.map in (None, self.track.name) and not self.quit
+                and getattr(tut, "_wing_restart_i", None) != tut.i):
+            #  a wing step on its own map in a car with no flank wing (the
+            #  tutorial continued on the skidpad, task 45): run_interactive_cli
+            #  fits the tutorial's plate (tutorial.wing_car). Once a step: a
+            #  library with no plate cannot loop the session
+            tut._wing_restart_i = tut.i
+            self._rec_note("tutorial: fitting the tutorial wing", 3.0)
+            self.restart()
+            return
+        if (st.id == "wing_off" and getattr(tut, "_setup_due", False)
+                and st.map in (None, self.track.name)):
+            self.wing_on = False               # lap 1 is OFF: it counts without F (task 45)
         act = tut.tick(self)
         if act == "restart" and not self.quit:
             self._rec_note(f"tutorial: to the {tut.map_wanted()}", 3.0)
@@ -3198,6 +3686,23 @@ class Sim:
             self.recorder.retarget(self.settings, self._pending)
         self._save_settings()
         self._rec_note(f"{why}: {GEARBOX_LABELS[mode]}", 3.0)
+
+    def _has_flank(self) -> bool:
+        """The car has a flank wing (the one the tutorial's wing laps measure;
+        tutorial.frame_of's `has_flank`): the analytic wing, or a garage
+        build's panel on either side."""
+        cfg = self.veh.cfg
+        return (str(getattr(cfg, "wing", "off") or "off") != "off"
+                or getattr(cfg, "dev_left", None) is not None
+                or getattr(cfg, "dev_right", None) is not None)
+
+    def _tutorial_quiet(self) -> bool:
+        """A tutorial step whose laps are practice (every step but
+        TUTORIAL_RECORDED's, task 45): the tick discards the recorder's lap,
+        `_rec_lap` shows no card, `hud_data` no flash and no delta."""
+        tut = self.tutorial
+        return (tut is not None and bool(getattr(tut, "active", False))
+                and tut.step.id not in TUTORIAL_RECORDED)
 
     def _tutorial_ctx(self):
         from types import SimpleNamespace
@@ -3241,10 +3746,33 @@ class Sim:
             self._menu_open()
         self.menu.show(items=tu.offer_items(garage=bool(self.has_garage)),
                        sections=tu.step_list(),
-                       subtitle="carsim: a Corsa, a flank wing, a stopwatch", note=tu.OFFER_NOTE,
+                       subtitle="cars, wings that move, and a stopwatch", note=tu.OFFER_NOTE,
                        footer="ENTER / CROSS select   ESC / CIRCLE not now   or click a row",
                        title="WELCOME", idx=0, columns=1)
         self._menu_page = "tutorial_offer"
+
+    def open_page(self, page: str, title: bool = True) -> bool:
+        """The title screen's pick (drive/title.py, task 44): this session
+        opens on the pause menu's Settings, Challenges or Tutorial page.
+        Task 45: Back / ESC there is the title again (`_from_title`, read by
+        `_menu_event`), not the pause page -- the player came from the title.
+        A page this session cannot list (no progress file, no garage
+        library) opens the pause page instead, whose Main menu row is the
+        title. False without a window: nothing to show it on. `title`
+        False: the list an ended challenge opens on when the run was not
+        started from the title's list -- its Back is the pause page."""
+        if self.renderer is None:
+            return False
+        self._menu_open()
+        if page == "settings":
+            self._menu_show_settings()
+        elif (page == "challenges" and self.progress_file is not None
+              and self.challenge_build is not None):
+            self._menu_show_challenges()
+        elif page == "tutorial" and self.progress_file is not None:
+            self._menu_show_tutorial()
+        self._from_title = page if (title and self._menu_page == page) else None
+        return True
 
     def _tutorial_begin(self, start=None) -> None:
         from .tutorial import Tutorial
@@ -3265,8 +3793,9 @@ class Sim:
         if self.menu is not None and (self.menu.open or self._menu_page != "main"):
             self._menu_close()
         self._rec_note(why, 4.0)
-        if self.tutorial_car:
-            self.restart()
+        prev = self.tutorial_map_prev
+        if self.tutorial_car or (prev is not None and prev != self.track.name):
+            self.restart()                     # the player's own car and map back
 
     def _tutorial_event(self, action: str) -> bool:
         """The tutorial's pages; False lets the hotkeys (R, SHIFT+R,
@@ -3352,39 +3881,117 @@ class Sim:
 
     # ---- challenges (drive/challenges.py) ---------------------------------
     def _challenge_stats(self, ch) -> dict:
-        """The current build's stats in the challenge's car."""
-        from .challenges import build_stats
+        """The stats of the copy a challenge would drive (task 44: the
+        working build with the combo's wing config applied, fitted to its
+        car -- `challenges.config_build`); a bare file: the build as it is."""
+        from .challenges import build_stats, config_build
         from .records import split_key
         js, lib = self.challenge_build
-        return build_stats(js, lib, cars.get(split_key(ch["class"])[1]),
-                           self.settings.ballast)
+        car = split_key(ch["class"])[1]
+        if ch.get("config"):
+            js = config_build(js, lib, car, ch["config"]).to_json()
+        return build_stats(js, lib, cars.get(car), self.settings.ballast)
 
-    def _menu_show_challenges(self, idx: int = 0) -> None:
-        """The CHALLENGES page: every challenge with its stars and best."""
+    def _ch_combo(self) -> tuple:
+        """(car, config) the challenge pages show (task 44): the player's
+        last pick, else the running challenge's, else the car being driven
+        with FULL WING (the owner's defaults)."""
+        from .challenges import CONFIGS
+        p = self.ch_pick
+        if isinstance(p, (tuple, list)) and len(p) == 2 and p[0] in cars.CARS and p[1] in CONFIGS:
+            return tuple(p)
+        run = self.challenge.ch if self.challenge is not None else {}
+        if run.get("config"):
+            return run["car"], run["config"]
+        return (self.settings.car if self.settings.car in cars.CARS else cars.CAR_DEFAULT), "full"
+
+    def _ch_step(self, key: str, d: int) -> None:
+        """LEFT / RIGHT (or a click) on the page's Car / Wings row."""
+        from .challenges import CONFIGS
+        car, cfg = self._ch_combo()
+        if key == "ch_car":
+            car = cars.CAR_ORDER[(cars.CAR_ORDER.index(car) + d) % len(cars.CAR_ORDER)]
+        else:
+            cfg = CONFIGS[(CONFIGS.index(cfg) + d) % len(CONFIGS)]
+        self.ch_pick = (car, cfg)
+
+    def _menu_show_challenges(self, idx: int | None = None, cid: str | None = None) -> None:
+        """The CHALLENGES page: every challenge with its stars and best for
+        the picked car and wing config (task 44). Task 45: the page's Car
+        and Wings rows on top of it too (LEFT / RIGHT or a click cycles
+        them; the rows' stars follow the pick); with no `idx` the cursor
+        starts on `cid`'s row (a challenge's page, Back), else on the
+        running challenge's (the '<- now' one), else on the first
+        challenge; the subtitle says which one is running, or the pick's
+        stars -- out of its own, then out of every car and wing config's."""
         from . import challenges as chm
         self._ch_all = chm.load_all()
-        self.menu.show(items=chm.list_items(self._ch_all, self.progress_file, self.challenge),
-                       sections=chm.LIST_HELP, subtitle=chm.menu_row(self.progress_file,
-                                                                     self.challenge),
-                       note="", footer="ENTER / CROSS open   ESC / CIRCLE back   or click a row",
+        car, cfg = self._ch_combo()
+        run = self.challenge
+        try:
+            parts = chm.config_parts(self.challenge_build[0], self.challenge_build[1], cfg)
+        except Exception:                  # noqa: BLE001 -- the rows name the pick all the same
+            parts = dict(top=(chm.STOCK_TOP, "stock"), side=None)
+        pick = chm.pick_rows(car, cfg, parts)[:2]   # (the page's line under them is not here)
+        items = pick + chm.list_items(self._ch_all, self.progress_file, run, car=car, config=cfg)
+        if idx is None:
+            acts = [a for _, a in items]
+            want = f"ch:{cid}" if cid else (f"ch:{run.ch['id']}" if run is not None else None)
+            idx = acts.index(want) if want in acts else len(pick)
+        if run is not None:
+            head = f"Now running: {run.ch['title']}   -   shown: " + chm.pick_text(car, cfg)
+        else:
+            #  this pick's stars out of the ones it has (3 per challenge it
+            #  can drive), then every combo's: "0 of 456" alone said nothing.
+            #  The pause page's row counts the pick the same way (`pick_stars`)
+            refs = chm.load_refs()
+            got, of = chm.pick_stars(self.progress_file, car, cfg, self._ch_all, refs)
+            g_all, t_all = chm.total_stars(self.progress_file, self._ch_all, refs)
+            head = (f"This car + wings: {got} of {of} stars   (all: {g_all} of {t_all})   "
+                    + chm.pick_text(car, cfg))
+        self.menu.show(items=items, sections=chm.LIST_HELP, subtitle=head, note="",
+                       footer="LEFT / RIGHT car, wings   ENTER / CROSS open   "
+                              "ESC / CIRCLE back   or click a row",
                        title="CHALLENGES", idx=idx, columns=1)
         self._menu_page = "challenges"
 
-    def _menu_show_challenge(self, cid: str, idx: int = 0) -> None:
-        """One challenge: its class, goal, stars, rules against THIS build,
-        your best; Start, or why it cannot."""
+    def _ch_resolved(self, cid: str) -> dict:
         from . import challenges as chm
-        ch = self._ch_all[cid]
+        car, cfg = self._ch_combo()
+        return chm.resolve(self._ch_all[cid], car, cfg)
+
+    def _menu_show_challenge(self, cid: str, idx: int | None = None) -> None:
+        """One challenge: the Car and Wings rows (task 44), its class, goal,
+        stars, rules against the copy THIS build drives in that config, your
+        best; Start, or why it cannot. Task 45: opened (no `idx`), the
+        cursor is on Start -- one ENTER drives it -- or, with no Start, on
+        Back; a re-show after a Car / Wings step keeps the row. Round 3:
+        YOUR SETUP -- the Settings' ABS, TC and gearbox and whose wings
+        drive, against what the stars were set with (the challenge keeps
+        them all: the owner's call)."""
+        from . import challenges as chm
+        ch = self._ch_resolved(cid)
+        parts = None
         try:
+            parts = chm.config_parts(self.challenge_build[0], self.challenge_build[1],
+                                     ch["config"])
             stats = self._challenge_stats(ch)
         except Exception as exc:           # noqa: BLE001 -- a bad build: say so
             stats, why = None, [f"the build cannot be read ({type(exc).__name__})"]
+            parts = parts or dict(top=(chm.STOCK_TOP, "stock"), side=None)
         else:
             why = chm.refusals(ch["constraints"], stats)
-        items, secs, note = chm.detail(ch, stats, why, self.progress_file)
+        items, secs, note = chm.detail(ch, stats, why, self.progress_file, parts=parts,
+                                       setup=chm.player_setup(self.settings))
+        if idx is None:
+            acts = [a for _, a in items]
+            idx = next((i for i, a in enumerate(acts) if a.startswith("ch_go:")),
+                       acts.index("ch_list") if "ch_list" in acts else 0)
+        #  round 3: the note (the blurb, or why it cannot start) under the
+        #  items' key legend -- YOUR SETUP filled the help column
         self.menu.show(items=items, sections=secs, subtitle=chm.class_text(ch), note=note,
-                       footer="ENTER / CROSS select   ESC / CIRCLE back", title=ch["title"].upper(),
-                       idx=idx, columns=1)
+                       footer="LEFT / RIGHT car, wings   ENTER / CROSS select   ESC / CIRCLE back",
+                       title=ch["title"].upper(), idx=idx, columns=1, note_under=True)
         self._menu_page = "challenge"
         self._ch_cur = cid
 
@@ -3397,7 +4004,13 @@ class Sim:
                 self._menu_show_main()
                 self.menu.idx = [a for _, a in self.menu.items].index("challenges")
             elif action.startswith("ch:") and action[3:] in getattr(self, "_ch_all", {}):
+                self._ch_back = "challenges"   # its Back: this list
                 self._menu_show_challenge(action[3:])
+            elif action.startswith(("prev:set:ch_", "next:set:ch_", "set:ch_")):
+                #  task 45: the list's own Car / Wings rows, as the page's;
+                #  every row's stars follow the pick
+                self._ch_step(action.rsplit(":", 1)[1], -1 if action.startswith("prev:") else +1)
+                self._menu_show_challenges(idx=idx)
             elif action == "ch_end" and self.challenge is not None:
                 self.challenge_end = True      # run_interactive_cli restores the class
                 self._menu_close()
@@ -3405,12 +4018,27 @@ class Sim:
             else:
                 self._menu_show_challenges(idx=idx)
             return True
-        if action in ("resume", "ch_list"):
-            ids = list(getattr(self, "_ch_all", {}))
-            cur = getattr(self, "_ch_cur", None)
-            self._menu_show_challenges(idx=ids.index(cur) if cur in ids else 0)
+        if action in ("resume", "ch_list") and self._ch_back == "main":
+            #  the running challenge's page (the pause page's This challenge,
+            #  task 45): Back is the pause page, on that row
+            self._menu_show_main()
+            acts = [a for _, a in self.menu.items]
+            self.menu.idx = acts.index("ch_this") if "ch_this" in acts else 0
+        elif action in ("resume", "ch_list"):
+            self._menu_show_challenges(cid=getattr(self, "_ch_cur", None))   # on its row
+        elif action.startswith(("prev:set:ch_", "next:set:ch_", "set:ch_")):
+            #  task 44: LEFT / RIGHT on the Car / Wings row, ENTER or a click
+            #  steps it on; the page (its rules, stars, Start) follows
+            self._ch_step(action.rsplit(":", 1)[1], -1 if action.startswith("prev:") else +1)
+            self._menu_show_challenge(self._ch_cur, idx=idx)
         elif action.startswith("ch_go:"):
+            if not self._ch_resolved(action[len("ch_go:"):])["available"]:
+                self._menu_show_challenge(self._ch_cur, idx=idx)   # not for this car
+                return True
+            self.ch_pick = self._ch_combo()    # the pick it starts in: remembered
             self.challenge_pick = action[len("ch_go:"):]
+            #  started from the list the title opened: its end goes back there
+            self.ch_from_title = self._from_title == "challenges"
             self._menu_close()
             self.restart()                     # a session in its class
         else:
@@ -3472,6 +4100,8 @@ class Sim:
         self.revert_pending()
         self.menu.hide()
         self._menu_page = "main"
+        self._quit_armed = False
+        self._from_title = None            # driving now: the title's page is left
         sm = getattr(self.inp, "set_menu", None)
         if sm is not None:
             sm(False)
@@ -3515,6 +4145,16 @@ class Sim:
             self._rec_note("ghosts " + ("on" if self.ghosts.enabled else "off"), 2.0)
             self._menu_show_prerace(idx=self.menu.idx)          # Ghosts row says (J)
             return
+        if ev == "track_next":
+            #  TAB, as the pause page's and the TIME TRIAL page's footers say
+            #  (task 45): the menu closes (a browsed setting is dropped) and
+            #  it is driving's TAB -- the next map's session opens on its own
+            #  TIME TRIAL page, so TAB there flicks through the maps. Every
+            #  other page ignores it
+            if self._menu_page in ("main", "prerace", "prerace_pick", "results"):
+                self._menu_close()
+                self.track_next()
+            return
         if ev in ("reset", "full_reset", "garage"):
             if self._menu_page in ("tutorial_offer", "tutorial_step"):
                 return                     # WELCOME and a page step are answered, not skipped
@@ -3522,7 +4162,27 @@ class Sim:
         else:
             action = self.menu.handle(ev)
             if action is None:
+                if self._quit_armed and self.menu.action() != "quit":
+                    self._quit_armed = False   # the cursor left Quit: disarmed (task 45)
+                    self._menu_show_main(idx=self.menu.idx)
                 return
+        #  task 45: Quit to desktop asks twice -- the first ENTER (or click)
+        #  re-shows the pause page with the row saying so, the second quits;
+        #  any other pick disarms it (a move off the row does, above)
+        if action == "quit" and self._menu_page == "main" and not self._quit_armed:
+            self._quit_armed = True
+            self._menu_show_main(idx=self.menu.idx)
+            return
+        if action != "quit":
+            self._quit_armed = False
+        #  task 45: Back / ESC on the page the title opened is the title
+        #  again, not the pause page (TITLE_BACK: each page's Back row)
+        if (self._from_title is not None and self._menu_page == self._from_title
+                and action in ("resume", TITLE_BACK.get(self._from_title))):
+            self._menu_close()
+            self.stop_reason = "title"
+            self.quit = True
+            return
         if self._menu_page in ("prerace", "prerace_pick") and self._prerace_event(action):
             return
         if self._menu_page.startswith("tutorial") and self._tutorial_event(action):
@@ -3540,11 +4200,11 @@ class Sim:
             if action == "ctl_kb":
                 self._menu_show_controls_kb()
                 return
-            if action == "controls":
-                self._menu_show_controls()
+            if action == "controls":           # the keyboard page's Gamepad row
+                self._menu_show_controls_pad()
                 return
             if action not in ("reset", "full_reset", "garage"):   # the hotkeys fall through
-                (self._menu_show_controls if self._menu_page == "controls"
+                (self._menu_show_controls_pad if self._menu_page == "controls"
                  else self._menu_show_controls_kb)(idx=self.menu.idx)   # the cursor stays
                 return
         if self._menu_page == "results":       # Settings > Last lap (task 32)
@@ -3712,27 +4372,50 @@ class Sim:
         elif action == "challenges" and self.challenge_build is not None:
             self._menu_show_challenges()
             return
+        elif (action == "ch_this" and self.challenge is not None
+              and self.challenge_build is not None):
+            #  the challenge pause page's This challenge (task 45): the
+            #  running one's page, on the car and wings it runs in -- Start
+            #  there drives it again in the ones picked; Back is this page
+            from .challenges import CONFIGS, load_all
+            run = self.challenge.ch
+            self._ch_all = load_all()
+            if run["id"] in self._ch_all:
+                if run.get("car") in cars.CARS and run.get("config") in CONFIGS:
+                    self.ch_pick = (run["car"], run["config"])
+                self._ch_back = "main"
+                self._menu_show_challenge(run["id"])
+            return
         self._menu_close()
         if action == "reset":
-            self.reset(to_checkpoint=True)
+            self.reset(to_checkpoint=True, by_key=True)
         elif action == "full_reset":
-            self.reset(to_checkpoint=False)
+            self.reset(to_checkpoint=False, by_key=True)
         elif action == "garage":
             self.stop_reason = "garage"
             self.quit = True
-        elif action == "quit":
+        elif action == "title":
+            #  Main menu (task 45): run_interactive_cli shows the title again
+            self.stop_reason = "title"
             self.quit = True
+        elif action == "quit":
+            self.quit = True               # the second press (armed above)
 
     def _view_event(self, ev: str) -> None:
         """Camera / HUD toggles. Renderer config only; never physics. The
-        camera and the HUD level are settings too: the next session (TAB, a
-        restart, the garage, the next launch) comes back the way they were left."""
+        camera, the HUD level and the force arrows are settings too: the next
+        session (TAB, a restart, the garage, the next launch) comes back the
+        way they were left. Each key says what it did (task 45): the note is
+        drawn with the HUD off too, so H never leaves the screen blank
+        without a word."""
         cfg = self.renderer.cfg
         if ev == "camera":
-            order = ("car_up", "chase", "world_up")
-            cfg.mode = order[(order.index(cfg.mode) + 1) % 3] if cfg.mode in order else "car_up"
+            order = CAMERA_MODES
+            cfg.mode = (order[(order.index(cfg.mode) + 1) % len(order)] if cfg.mode in order
+                        else "car_up")
             self.settings.camera = cfg.mode
             self._save_settings()
+            self._rec_note(f"camera: {CAMERA_LABELS[cfg.mode]} (C)", 2.5)
         elif ev == "zoom_in":
             self.renderer.set_zoom(self.renderer.zoom_manual * 1.25)
         elif ev == "zoom_out":
@@ -3740,12 +4423,19 @@ class Sim:
         elif ev == "zoom_auto":
             self.renderer.set_zoom(1.0)
         elif ev == "hud":
-            order = ("full", "minimal", "off")
-            cfg.hud = order[(order.index(cfg.hud) + 1) % 3] if cfg.hud in order else "full"
+            #  the race HUD -> full -> off -> the race HUD (HUD_ORDER): the
+            #  first press shows more; the note says what the next one does
+            order = HUD_ORDER
+            cfg.hud = (order[(order.index(cfg.hud) + 1) % len(order)] if cfg.hud in order
+                       else "minimal")
             self.settings.hud = cfg.hud
             self._save_settings()
+            self._rec_note(HUD_NOTES[cfg.hud], 2.5)
         elif ev == "vectors":
             cfg.show_vectors = not cfg.show_vectors
+            self.settings.vectors = bool(cfg.show_vectors)
+            self._save_settings()
+            self._rec_note(f"force arrows {'on' if cfg.show_vectors else 'off'} (V)", 2.5)
         elif ev == "gg":
             cfg.show_gg = not cfg.show_gg
         elif ev == "skid":
@@ -3894,11 +4584,13 @@ class Sim:
         #  the RUNNING lap's validity, live (`lap.lap_valid` is the last lap's,
         #  for LAST and the results): all four wheels off, an R, or the
         #  recorder dropping the lap (a setting change, slow motion) voids it
-        #  now, not at the line. The out-lap has nothing to void.
-        lt, rec = self.lap, self.recorder
+        #  now, not at the line. The out-lap has nothing to void; nor does a
+        #  tutorial's practice lap, never recorded (task 45): its own box says
+        #  whether it counts, and only off track or a reset voids it here
+        lt, rec, quiet = self.lap, self.recorder, self._tutorial_quiet()
         live_ok = lt.t_lap_start is None or (
-            lt._valid_run and (rec is None or getattr(rec, "recording", True)))
-        void_why = "" if live_ok else (getattr(rec, "_why", "") or (
+            lt._valid_run and (rec is None or quiet or getattr(rec, "recording", True)))
+        void_why = "" if live_ok else ((not quiet and getattr(rec, "_why", "")) or (
             "not recorded" if lt._valid_run
             else "reset" if self._reset_lap_at == lt.t_lap_start else "off track"))
         L = float(self.track.length)
@@ -3939,7 +4631,7 @@ class Sim:
             car_name=cars.car_name(self.settings.car), mass_kg=v.car.m,
             F_top=float(getattr(v, "F_top", 0.0)), D_top=float(getattr(v, "D_top", 0.0)),
             top_deploy=float(getattr(v, "top_deploy", 0.0)),
-            wing_mode=_wing_mode_label(self.wing_side_mode),
+            wing_mode=_wing_mode_shown(self),
             air_brake=_air_brake_showing(self),
             msg=self._hud_msg(),
         )
@@ -3961,6 +4653,8 @@ class Sim:
                 d["ghosts"] = g + d.get("ghosts", [])
             d["delta_s"] = gs.delta(self)
             f = gs.flash_now(self)
+            if self._tutorial_quiet():         # a practice lap (task 45): no delta, no flash
+                d["delta_s"], f = float("nan"), None
             if f:
                 d["sector_flash"], d["flash_col"] = f
         if self._results is not None:      # the lap's results card (task 27)
@@ -4009,6 +4703,19 @@ class Sim:
             d["tutorial"] = self.challenge.overlay(self)   # the same box (challenges.py)
         if self.hud_cfg:
             d.update(self.hud_cfg)          # the garage build's wing geometry
+        from .airbrake import flanks_hidden, TOP, TOP_FIXED, TOP_FIX_SIDE
+        #  the aero panel's TOP line (ACT / FIX) says what G's mode makes the
+        #  top wing do, not the garage slot's mode (task 44 review)
+        if self.wing_side_mode == TOP:
+            d["top_mode"] = "active"
+        elif self.wing_side_mode in (TOP_FIXED, TOP_FIX_SIDE):
+            d["top_mode"] = "fixed"
+        if flanks_hidden(self.wing_side_mode) and v.wing_deploy <= 0.0:
+            #  TOP / TOP FIXED (task 44): the owner's "just hide and no use for
+            #  side wing" -- once the flanks are in, the car is drawn without
+            #  them and the HUD shows none (the physics already has them stowed)
+            d["dev_left"] = d["dev_right"] = False
+            d["wing_type"] = "off"
         try:
             from .render import HudData
             h = HudData(**d)
@@ -4019,6 +4726,20 @@ class Sim:
         #  (None = the clock is running): plain attributes, which the HUD
         #  reads with getattr whether or not HudData declares them
         h.lap_void_why, h.out_lap_m = void_why, out_lap_m
+        #  task 45: the wet chip's surface (T's global wet, 1.0 = dry) and
+        #  whether the LAST lap counted (`lap.lap_valid` is the last lap's;
+        #  `lap_valid` above is the running one's), for the HUD to read with
+        #  getattr
+        h.global_wet = self.global_wet
+        #  the recorder can void a lap the timer passed (T, a setting change,
+        #  slow motion): its card says NOT COUNTED, so LAST says void too; a
+        #  tutorial's practice lap is the recorder's to drop, not the player's
+        rl = None if (rec is None or quiet) else getattr(rec, "last", None)
+        h.last_valid = bool(self.lap.lap_valid) and (
+            not isinstance(rl, dict) or bool(rl.get("valid", True)))
+        #  task 45, round 3: a stop challenge's (brake marker s, board s) for
+        #  the renderer to paint on the strip; None off one (or off its map)
+        h.stop_board = self.challenge.marks(self) if self.challenge is not None else None
         return h
 
 
@@ -4518,10 +5239,11 @@ class BrakeDriver(StraightDriver):
     yaws into the wet side and an open-loop brake script leaves the strip.
     """
 
-    def __init__(self, v_trigger=100 / 3.6, pedal=1.0):
+    def __init__(self, v_trigger=100 / 3.6, pedal=1.0, clutch=1.0):
         super().__init__(throttle=1.0)
         self.v_trigger = v_trigger
         self.pedal = pedal
+        self.clu_brake = clutch            # 1 declutched; 0 the automatic's, a player's (task 42)
         self.braking = False
         self.t0 = None
         self.p0 = None
@@ -4543,7 +5265,7 @@ class BrakeDriver(StraightDriver):
                 self.kappa_min = min(self.kappa_min, min(float(k) for k in veh.kappa))
             elif self.t_stop is None:
                 self.t_stop = t
-            self.thr, self.brk, self.clu = 0.0, self.pedal, 1.0
+            self.thr, self.brk, self.clu = 0.0, self.pedal, self.clu_brake
         else:
             self.thr, self.brk, self.clu = 1.0, 0.0, 0.0
         return super().__call__(t, veh, tr)
@@ -5521,8 +6243,9 @@ def _v31_records(tmp, verbose=True):
     size_ok = max(sizes) <= 300 * 1024
     rs = recm.resimulate(filed[len(filed) // 2])
     replay_ok = rs["exact"] and rs["sectors_exact"]
-    # a lap with a reset in it is not a record
-    for _ in range(int(3.0 / sim.dt)):
+    # a lap with a reset in it is not a record: R past the first split (in
+    # the first sector R is a fresh rolling start, nothing to file; task 45)
+    for _ in range(int(25.0 / sim.dt)):
         sim.step_physics(sim.dt)
     sim.reset(to_checkpoint=True)
     n0 = rec.n_laps
@@ -5542,6 +6265,30 @@ def _v31_records(tmp, verbose=True):
     reset_ok = (reset_ok and was and not rec.recording
                 and rec.key == recm.class_key("arena", st.car, st.engine, st.wet)
                 and rec.meta["assists"]["abs"] == bool(st.abs) and rec._why == "engine changed")
+    # task 45, round 3: the dropped lap still closes as LAST, but it is no
+    # BEST and none of its sectors a sector best (a T-voided lap read 'LAST
+    # void 1:00.968' next to 'BEST 1:00.968'); nor is the next one, which the
+    # recorder calls 'not a full lap' at the line after the timer passed it.
+    # BEST and the sector bests are set out of reach first, so the old rule
+    # could not pass by luck
+    lt = sim.lap
+    lt.best_lap, lt.sector_best = 999.0, [999.0] * len(lt.sector_best)
+    lt._sec_best0 = list(lt.sector_best)
+    void = []
+    for short in (False, True):
+        n0 = rec.n_laps
+        if short and rec._open is not None:
+            rec._open["short"] = True           # a line crossed out of order
+        for _ in range(int(90.0 / sim.dt)):
+            sim.step_physics(sim.dt)
+            if rec.n_laps > n0:
+                break
+        h = sim.hud_data()
+        void.append((rec.last["valid"], rec.last["why"], lt.last_lap, lt.best_lap,
+                     lt.sector_best == [999.0] * len(lt.sector_best), h.last_valid))
+    void_ok = [(v[0], v[1], v[2] < 999.0, v[3], v[4], v[5]) for v in void] == [
+        (False, "engine changed", True, 999.0, True, False),
+        (False, "not a full lap", True, 999.0, True, False)]
     # the medal each lap earned (drive/medals.py, task 21) is on its note, and
     # the class's best is kept in its file
     try:
@@ -5554,7 +6301,7 @@ def _v31_records(tmp, verbose=True):
                     and recm.RecordBook(root).load(key)["best_medal"] == (order[0] if order else None))
     except Exception as exc:               # noqa: BLE001
         want_m, medal_ok = [f"{type(exc).__name__}: {exc}"], False
-    ok = file_ok and size_ok and replay_ok and reset_ok and medal_ok
+    ok = file_ok and size_ok and replay_ok and reset_ok and medal_ok and void_ok
     if verbose:
         print(f"  V31 records     : 3 laps {[round(r['time'], 3) for r in laps]} -> file "
               f"{[round(lp['time'], 3) for lp in filed]} ({file_ok}); "
@@ -5562,7 +6309,9 @@ def _v31_records(tmp, verbose=True):
               f"{rs['time'] if rs['time'] is None else round(rs['time'], 6)} s from the log, "
               f"bit for bit {rs['exact']}, sectors {rs['sectors_exact']}; reset mid-lap -> "
               f"not filed, a live engine / ABS change -> the new class and assists "
-              f"({reset_ok}); medals {want_m}, best kept ({medal_ok})  -> {'ok' if ok else 'FAIL'}")
+              f"({reset_ok}); medals {want_m}, best kept ({medal_ok}); BEST never a voided "
+              f"lap: {', '.join(f'{v[1]} LAST {v[2]:.3f} BEST {v[3]:.0f}' for v in void)} "
+              f"({void_ok})  -> {'ok' if ok else 'FAIL'}")
     return ok, dict(laps=[r["time"] for r in laps], kb=max(sizes) / 1024.0,
                     replay=rs["time"], exact=rs["exact"], notes=notes)
 
@@ -5606,7 +6355,7 @@ def _v32_prerace(tmp, verbose=True):
     open_ok = (sim.menu.open and sim._menu_page == "prerace" and sim.paused
                and sim.menu.action() == "pr_race")
     ev("select")                                   # RACE: one press, a rolling start
-    s_roll = sim.track.length - min(150.0, 0.15 * sim.track.length)   # before the line
+    s_roll = sim._rolling_pose()[0]                # before the line, on a straight (task 45)
     race_ok = (not sim.menu.open and not sim.paused and sim.s == s_roll
                and hypot(sim.veh.u, sim.veh.v) > 5.0 and sim.lap.lap == 0
                and sim.lap.t_lap_start is None
@@ -5635,6 +6384,22 @@ def _v32_prerace(tmp, verbose=True):
     ev("select")
     edit_ok = sim.quit and sim.stop_reason == "garage" and not sim.menu.open
     sim.quit, sim.stop_reason = False, ""
+    #  round 3 of task 45: a car with no wings has 'Try ready-made wings'
+    #  under Edit; it goes to the garage asking for its W (the loop hands
+    #  that to Garage.try_ready_made); EDIT does not ask for it
+    no_edit_w = not sim.garage_try_wing and "pr_wings" not in [a for _, a in sim.menu.items]
+    pr_keep = sim.prerace
+    b_bare = dict(b_cur, name="bare", slots={"left": {"wing": ""}, "right": {"wing": ""},
+                                             "top": {"wing": ""}})
+    sim.prerace = prm.PreRace(key, book, "bare", b_bare, builds={"my corsa": b_cur})
+    sim.open_prerace()
+    rows_w = [a for _, a in sim.menu.items]
+    goto("pr_wings")
+    ev("select")
+    wings_ok = (no_edit_w and rows_w[:4] == ["pr_race", "pr_pick", "pr_edit", "pr_wings"]
+                and sim.quit and sim.stop_reason == "garage" and sim.garage_try_wing
+                and not sim.menu.open)
+    sim.quit, sim.stop_reason, sim.garage_try_wing, sim.prerace = False, "", False, pr_keep
     sim.open_prerace()
     ev("menu")                                     # ESC on the pre-race: the pause page
     esc_ok = sim._menu_page == "main" and sim.menu.open
@@ -5691,6 +6456,19 @@ def _v32_prerace(tmp, verbose=True):
                     and not sim.paused)
     except Exception as exc:                       # noqa: BLE001
         print(f"    V32 mouse: {type(exc).__name__}: {exc}")
+    # TAB on the page (task 45; its footer says 'TAB next map'): the menu
+    # closes and the next map's session is asked for, as TAB while driving.
+    # Last: the map change discards the recorder's lap and retargets it
+    sim.quit, sim.stop_reason = False, ""
+    sim.open_prerace()
+    t_was = sim.settings.track
+    ev("track_next")
+    t_want = trk.TRACK_ORDER[(trk.TRACK_ORDER.index(t_was) + 1) % len(trk.TRACK_ORDER)]
+    tab_ok = ("TAB next map" in sim.menu.footer and sim.quit
+              and sim.stop_reason == "restart" and sim.settings.track == t_want
+              and not sim.menu.open)
+    sim.quit, sim.stop_reason = False, ""
+    sim.settings.track = t_was
     # who gets the screen
     o = _Opts(headless=False, script=None, ml_drive=None, render=None)
     s_ = Settings(path="", track="arena")
@@ -5698,14 +6476,16 @@ def _v32_prerace(tmp, verbose=True):
               and not prm.wanted(_Opts(script="lap"), s_)
               and not prm.wanted(o, Settings(path="", track="dragstrip")))
     ok = all((open_ok, race_ok, tt_ok, pick_ok, back_ok, picked, edit_ok, esc_ok,
-              mouse_ok, who_ok, ghost_ok))
+              mouse_ok, who_ok, ghost_ok, tab_ok, wings_ok))
     if verbose:
         print(f"  V32 pre-race    : opens on RACE {open_ok}; one press races {race_ok}; "
               f"Time trial {tt_ok}; pick lists builds + class bests {pick_ok}; "
               f"ESC back {back_ok}; pick restarts on it {picked}; EDIT -> garage {edit_ok}; "
+              f"no wings: 'Try ready-made wings' -> the garage's W {wings_ok}; "
               f"ESC -> pause page {esc_ok}; ghost-2 row + J {ghost_ok}; mouse hover + click "
-              f"{mouse_ok}; scripted / headless / dragstrip skip it {who_ok}")
-    return ok, dict(open=open_ok, race=race_ok, pick=pick_ok, mouse=mouse_ok)
+              f"{mouse_ok}; TAB -> the next map ({t_want}) {tab_ok}; "
+              f"scripted / headless / dragstrip skip it {who_ok}")
+    return ok, dict(open=open_ok, race=race_ok, pick=pick_ok, mouse=mouse_ok, tab=tab_ok)
 
 
 #: V33's tolerance on the live delta against the lap's own trace: the trace's
@@ -5767,22 +6547,246 @@ def _v33_ghost_delta(tmp, verbose=True):
     return ok, dict(max_delta_s=dmax, max_gap_m=gmax, flashes=flashes)
 
 
+def _v44p_challenge_pick(tmp, verbose=True):
+    """The challenge page's CAR and WINGS rows (task 44, part B; the owner:
+    "the player picks the config at the top of the challenge page, and also
+    picks the car"), by events with no window, and the loop they feed
+    (`_loop_run`). (a) The page opens on the car being driven with FULL
+    WING; LEFT / RIGHT and a click cycle the Car and Wings rows, and the
+    line under them, the rules and Start follow; the list shows the pick's
+    stars; a combo with no reference (the bus, governed under a stop's v0)
+    says "not for this car" and never starts. (b) G in a challenge run: the
+    config IS the mode -- AUTO / AIR BRAKE with side wings, nothing on a
+    top-only config -- and a session starts on it armed. (c) The next
+    session drives the picked car and the config's fitted copy: a top-only
+    config has no flanks in it, the stock top is lent to a build that lacks
+    one, a build's own top is kept (fixed in a FIXED config), the working
+    build never moves, and the pick is kept for the launch. (d) A stop held
+    at v0 lets go with a FIXED top wing out, as a car running at v0 has it
+    (`Sim._hold_top`), and a moving one in -- the reference and a player's
+    late, ramped DOWN alike; AIR BRAKE's top wing comes out on the brake."""
+    from types import SimpleNamespace
+    from . import challenges as chm
+    from .aero.library import Library
+    from .progress import Progress
+    root = os.path.join(tmp, "pick44")
+    lib = Library(os.path.join(root, "library"), use_xfoil=False)
+    mine = lib.wings["rear-s1223"].copy(name="my-top", builtin=False)
+    lib.save_wing(mine)
+    fl = dict(wing="flank-e423", x=0.97, h=0.9, inc_deg=2.0, mode="active")
+    flanks = dict(version=2, name="my fins", mirror=True, builtin=False, car="corsa",
+                  slots=dict(left=dict(fl), right=dict(fl),
+                             top=dict(wing="", x=-0.9, h=1.55, inc_deg=6.0, mode="active")))
+    #  (a) the page
+    sim = _build("arena", driver=lambda t, v, T_: Controls())
+    sim.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
+    sim.progress_file = Progress(os.path.join(root, "progress.json"))
+    sim.settings = Settings(path="", car="corsa")
+    sim.challenge_build = (flanks, lib)
+    ev = sim.handle_event
+
+    def goto(action):
+        i = [a for _, a in sim.menu.items].index(action)
+        while sim.menu.idx != i:
+            ev("nav_down")
+
+    def rows():
+        return [t for t, _ in sim.menu.items[:3]]
+
+    def rule(k):
+        return dict((a, b) for a, b in dict(sim.menu.sections)["RULES"]).get(k)
+
+    def wings_row():                               # whose wings: the WINGS section's first row
+        return dict(sim.menu.sections)["WINGS"][0]
+    sim.progress_file.section(chm.SECTION)[chm.combo_key("lap_arena", "mx5", "top_fixed")] = (
+        dict(best=61.0, stars=2))
+    ev("menu")
+    goto("challenges")
+    ev("select")
+    sub0 = sim.menu.subtitle
+    goto("ch:lap_arena")
+    ev("select")
+    rows0, start0, wl0 = rows(), [a for _, a in sim.menu.items if a.startswith("ch_go:")], wings_row()
+    on0 = sim.menu.action()                        # task 45: the page opens on Start
+    goto("set:ch_car")
+    ev("nav_right")                                # Car: the Corsa -> the MX-5
+    ev("nav_down")
+    ev("nav_right")                                # Wings: FULL -> ONLY TOP
+    rows1, idx1, wings1, wl1 = rows(), sim.menu.idx, rule("wings in"), wings_row()
+    ev("select")                                   # ENTER / a click steps it on: ONLY TOP, FIXED
+    rows2 = rows()
+    ev("nav_left")
+    ev("nav_left")                                 # back past ONLY TOP to FULL, then on
+    rows3 = rows()
+    ev("nav_right")
+    ev("nav_right")
+    #  task 45: Start is the third row (whose wings drive is the WINGS
+    #  section's first row: a row of its own took the cursor)
+    page_ok = (rows0 == [f"Car     < {cars.car_name('corsa')} >", "Wings   < FULL WING: top + side >",
+                         "Start"]
+               and wl0 == ("wings", "top: Rear wing (stock) - side: Low-drag side wing (yours)")
+               and start0 == ["ch_go:lap_arena"] and on0 == "ch_go:lap_arena"
+               and rows1 == [f"Car     < {cars.car_name('mx5')} >", "Wings   < ONLY TOP >", "Start"]
+               and wl1 == ("wings", "top: Rear wing (stock) - side wings hidden")
+               and idx1 == 1 and wings1 == "top" and rows2[1] == "Wings   < ONLY TOP, FIXED >"
+               and rows3[1] == "Wings   < FULL WING: top + side >"
+               and sim.ch_pick == ("mx5", "top_fixed")
+               and sub0.startswith("This car + wings: ")
+               and sub0.endswith(cars.car_name("corsa") + ", FULL WING: top + side"))
+    ev("menu")                                     # ESC: the list, for the pick
+    listed = dict((a, t) for t, a in sim.menu.items)
+    list_ok = (sim._menu_page == "challenges" and "[**-]" in listed["ch:lap_arena"]
+               and sim.menu.subtitle.endswith(chm.pick_text("mx5", "top_fixed")))
+    sim.ch_pick = ("bus", "full")                  # governed to 80 km/h: no stop from 100
+    sim._menu_show_challenges()
+    bus_row = dict((a, t) for t, a in sim.menu.items)["ch:brake_100"]
+    goto("ch:brake_100")
+    ev("select")
+    no_start = (not any(a.startswith("ch_go:") for _, a in sim.menu.items)
+                and (sim.menu.note or "").startswith("NOT FOR THIS CAR")
+                and "governed to 80 km/h" in sim.menu.note and "not for this car" in bus_row)
+    sim._challenge_event("ch_go:brake_100")       # forced: still refused
+    no_start = no_start and not sim.quit and sim.challenge_pick is None
+    ev("menu")
+    sim.ch_pick = ("mx5", "top_fixed")
+    sim._menu_show_challenges()
+    goto("ch:lap_arena")
+    ev("select")
+    goto("ch_go:lap_arena")
+    ev("select")
+    go_ok = (sim.quit and sim.stop_reason == "restart" and sim.challenge_pick == "lap_arena"
+             and sim.ch_pick == ("mx5", "top_fixed"))
+    #  (b) G in a challenge run, and the session's start
+    g_seen = {}
+    for cfg in ("top", "full"):
+        s_ = _build("skidpad", wing="plate", driver=lambda t, v, T_: Controls())
+        tr_ = s_.track
+        s_.challenge = chm.ChallengeRun(chm.resolve(chm.load_all()["skid_dry"], "corsa", cfg),
+                                        tr_, {})
+        s_.wing_side_mode, s_.wing_on = 3, False       # AIR BRAKE kept from before
+        _challenge_wings(s_)
+        start = (s_.wing_side_mode, s_.wing_on)
+        seq = []
+        for _ in range(3):
+            s_.handle_event("wing_side")
+            seq.append(s_.wing_side_mode)
+        g_seen[cfg] = (start, seq, getattr(s_, "_rec_msg", ""))
+    g_ok = (g_seen["top"][0] == (0, True) and g_seen["top"][1] == [0, 0, 0]
+            and g_seen["top"][2].startswith("the challenge sets the wings: ONLY TOP")
+            and g_seen["full"][0] == (3, True) and g_seen["full"][1] == [0, 3, 0])
+    #  (c) the loop: the next session's car and fitted copy
+    own = json.loads(json.dumps(flanks))
+    own["name"] = "my top"
+    own["slots"]["left"]["wing"] = own["slots"]["right"]["wing"] = ""
+    own["slots"]["top"]["wing"] = "my-top"
+    lp = _loop_run(os.path.join(root, "a"), lib, flanks, dict(car="corsa", track="arena"),
+                   [dict(pick="lap_arena", combo=("mx5", "top")),
+                    dict(pick="skid_dry", combo=("express", "full")),
+                    dict(end=True), dict(pick="brake_100", combo=("bus", "full")),
+                    dict(stop="quit")])
+    lq = _loop_run(os.path.join(root, "b"), lib, own, dict(car="corsa", track="arena"),
+                   [dict(pick="lap_open", combo=("corsa", "top_fixed")), dict(stop="quit")])
+
+    def sl(e, k):
+        return e["build"]["slots"][k]
+    loop_ok = (len(lp) == 5 and len(lq) == 2
+               and lp[1]["car"] == "mx5" and lp[1]["key"] == "lap_arena|mx5|top"
+               and sl(lp[1], "left")["wing"] == sl(lp[1], "right")["wing"] == ""
+               and sl(lp[1], "top")["wing"] == chm.STOCK_TOP
+               and sl(lp[1], "top")["mode"] == "active" and lp[1]["pick"] == ("mx5", "top")
+               and lp[2]["car"] == "express" and lp[2]["key"] == "skid_dry|express|full"
+               and sl(lp[2], "left")["wing"] == "flank-e423"
+               and sl(lp[2], "top")["wing"] == chm.STOCK_TOP
+               and sl(lp[2], "top")["h"] > 1.85             # fitted: the van's own station
+               and all(e["design"]["name"] == "my fins"
+                       and e["design"]["slots"]["top"]["wing"] == "" for e in lp)
+               and lp[3]["car"] == "corsa" and lp[3]["key"] is None
+               and sl(lp[3], "top")["wing"] == ""
+               and lp[4]["car"] == "corsa" and lp[4]["key"] is None       # the bus: refused
+               and lq[1]["key"] == "lap_open|corsa|top_fixed"
+               and sl(lq[1], "top")["wing"] == "my-top" and sl(lq[1], "top")["mode"] == "fixed"
+               and sl(lq[1], "left")["wing"] == "")
+    #  (d) a stop held at v0 (Sim._hold_top): ONLY TOP, FIXED's top wing is
+    #  out while held (the HUD) and on the first step after the let-go, ONLY
+    #  TOP's in, for the reference (its pedal at full on the first step) and
+    #  a player (held 0.5 s, then DOWN on the keyboard's ramp) alike; AIR
+    #  BRAKE's top wing (FULL WING from 150) stays in through the ramp and
+    #  comes out on the brake, as the reference's. Each stops as refs.json
+    #  says; the fixed one shorter than the moving one
+
+    class _Late(StraightDriver):
+        def __call__(self, t, veh, tr):
+            if t >= 0.5:
+                self.brk = min(1.0, self.brk + 5.0 * DT_PHYS)   # input.RATE_BRAKE
+            return super().__call__(t, veh, tr)
+    held = {}
+    for cid, cfg in (("brake_100", "top"), ("brake_100", "top_fixed"), ("airbrake_150", "full")):
+        c_ = chm.resolve(chm.load_all()[cid], "corsa", cfg)
+        for who in ("ref", "player"):
+            rec = {}
+
+            def probe(s_, rec=rec):
+                if s_.stop_hold is not None:
+                    rec["held"] = float(s_.veh.top_deploy)     # the last held step's
+                elif "let" not in rec:
+                    rec["let"] = float(s_.veh.top_deploy)
+            r_ = chm.measure(c_, lib, probe=probe,
+                             driver=None if who == "ref" else _Late(throttle=0.0))
+            held[(cfg, who)] = (rec.get("held"), rec.get("let", -1.0), r_["value"],
+                                c_["ref"]["value"])
+    mid = {k: v[0] for k, v in held.items()}           # the top wing, last held step (HUD)
+    let = {k: v[1] for k, v in held.items()}           # ... first step let go
+    val = {k: v[2:] for k, v in held.items()}          # (the stop, refs.json's)
+    hold_ok = (let[("top_fixed", "ref")] == let[("top_fixed", "player")] == 1.0
+               and all(let[(c, w)] < 0.01 for c in ("top", "full") for w in ("ref", "player"))
+               and mid[("top_fixed", "player")] == 1.0 and mid[("top", "player")] == 0.0
+               and mid[("full", "player")] == 0.0 and mid[("top_fixed", "ref")] is None
+               and all((v == r) if k[1] == "ref" else abs(v - r) < 1e-3
+                       for k, (v, r) in val.items())
+               and val[("top_fixed", "ref")][0] < val[("top", "ref")][0])
+    ok = page_ok and list_ok and no_start and go_ok and g_ok and loop_ok and hold_ok
+    if verbose:
+        print(f"  V44p ch. pick   : page rows {rows0[:2]} -> {rows1[:2]}, ENTER {rows2[1]!r}, "
+              f"rules follow: {page_ok}; the list shows the pick's stars {list_ok}; bus / stop "
+              f"from 100 not for this car, never starts {no_start}; Start in the pick "
+              f"{go_ok}; G: ONLY TOP {g_seen['top'][:2]}, FULL {g_seen['full'][:2]} {g_ok}; "
+              f"the next sessions: {[(e['car'], e['key']) for e in lp]}, own top fixed "
+              f"{sl(lq[1], 'top')['wing'] if len(lq) > 1 else None}: {loop_ok}; held at v0 "
+              f"(Corsa, stop from 100), the top wing at the let-go: ONLY TOP, FIXED "
+              f"{let[('top_fixed', 'ref')]:.2f} ({val[('top_fixed', 'ref')][0]:.2f} m), "
+              f"ONLY TOP {let[('top', 'ref')]:.2f} ({val[('top', 'ref')][0]:.2f} m), a "
+              f"player's {let[('top_fixed', 'player')]:.2f} / {let[('top', 'player')]:.2f}, "
+              f"AIR BRAKE's through the ramp {mid[('full', 'player')]}: {hold_ok}  "
+              f"-> {'ok' if ok else 'FAIL'}")
+    return ok, dict(page=page_ok, list=list_ok, bus=no_start, go=go_ok, g=g_seen, loop=loop_ok,
+                    hold=held)
+
+
 #: V34's ceiling on the tutorial's sim time (it takes ~200 s)
 V34_MAX_SIM_S = 900.0
 
 
 def _v35_challenges(tmp, verbose=True):
-    """Challenges (drive/challenges.py). ACHIEVABILITY: every challenge's
-    reference run is driven again, headless, exactly as a session builds the
-    car and with the meter attached through the Sim's own hooks; it must earn
-    THREE stars, on a build that meets the challenge's rules and its 3-star
-    efficiency bound, and give back the very value the file's thresholds were
-    derived from (so the thresholds are the ones a measured run derives, not
+    """Challenges (drive/challenges.py). ACHIEVABILITY: a deterministic
+    subset of the 160 combos' reference runs (task 44: every challenge in the
+    Corsa with FULL WING, and one other car + wing config per challenge,
+    rotating through them) is driven again, headless, exactly as a session
+    builds the car and with the meter attached through the Sim's own hooks;
+    each must earn THREE stars, on a build that meets the challenge's rules
+    and its 3-star efficiency bound, and give back the very value refs.json
+    holds (so the thresholds are the ones a measured run derives, not
     typed). And the page flow, by events with no window: ESC > Challenges
     lists them, a build that breaks a rule is refused with the reason and no
     Start, an allowed one starts (a restart in the challenge's class). A
     stop challenge starts rolling at its start_kmh (a lap stands), R rolls it
-    again, and its box keeps the LAST stop (task 40)."""
+    again, and its box keeps the LAST stop (task 40). At v0 it is held there
+    until the brake is in: a player's DOWN, pressed late, with the
+    keyboard's pedal ramp, stops exactly as the reference does (task 42).
+    Round 3's precision stop board: a stop's 3rd star is its nose within 1 m
+    of the board, so each stop's reference is held on to the brake point
+    that ends it there (3 stars, refs.json's distance to the bit); braked 2
+    m late, the same distance is 2 stars, and so is DOWN at 1.5 s, far
+    short of it."""
     from types import SimpleNamespace
     from . import challenges as chm
     from .aero.library import Library
@@ -5790,23 +6794,46 @@ def _v35_challenges(tmp, verbose=True):
     t_wall = time.perf_counter()
     lib = Library(os.path.join(tmp, "chal_lib"), use_xfoil=False)
     allc = chm.load_all()
-    rows, all_ok, sim_s = [], len(allc) == 8, 0.0
+    refs = chm.load_refs()
+    others = [(c_, k_) for c_ in cars.CAR_ORDER for k_ in chm.CONFIGS
+              if (c_, k_) != ("corsa", "full")]
+    subset = []
+    for i, ch in enumerate(allc.values()):
+        subset.append(chm.resolve(ch, "corsa", "full", refs))
+        for j in range(len(others)):           # the next available one, rotating
+            c_ = chm.resolve(ch, *others[(5 * i + j) % len(others)], refs)
+            if c_["available"]:
+                subset.append(c_)
+                break
+    rows, all_ok, sim_s = [], len(allc) == 8 and len(subset) == 16, 0.0
     roll_ok = True
-    for cid, ch in allc.items():
-        r = chm.measure(ch, lib)
+    for ch in subset:
+        if not ch["available"]:
+            all_ok = False
+            rows.append(f"{ch['key']} unavailable FAIL")
+            continue
+        #  round 3: a stop's 3rd star is its nose on the board, so its
+        #  reference is held on to the brake point that stops it there
+        #  (`board_brake_s`); the held car lets go there in the state it has
+        #  at the start, so the distance is still refs.json's to the bit
+        bb = chm.board_brake_s(ch)
+        r = chm.measure(ch, lib, brake_at=bb)
         v, ref = r["value"], ch["ref"]["value"]
         same = math.isfinite(v) and abs(v - ref) <= 1e-9 * max(1.0, abs(ref))
-        good = r["stars"] == 3 and not r["refusals"] and same
+        on = bb is None or (r["miss"] is not None and abs(r["miss"]) < 0.1)
+        good = r["stars"] == 3 and not r["refusals"] and same and on
         all_ok = all_ok and good
         sim_s += r["t_sim"]
-        rows.append(f"{cid} {chm.fmt_value(ch['goal']['metric'], v)} "
-                    f"[{chm.stars_text(r['stars'])}]" + ("" if good else " FAIL"))
+        rows.append(f"{ch['key']} {chm.fmt_value(ch['goal']['metric'], v)} "
+                    f"[{chm.stars_text(r['stars'])}]"
+                    + (f" board {r['miss']:+.2f} m" if bb is not None and r["miss"] is not None
+                       else "") + ("" if good else " FAIL"))
         g_, (s_, V_, n_) = ch["goal"], r["start"]
         roll_ok = roll_ok and (
             (s_ == chm.START_S and abs(V_ * 3.6 - g_["start_kmh"]) < 1e-9 and n_ > 1)
             if g_["metric"] == "stop_distance" else V_ == 0.0)
     #  R mid-stop rolls again; after the stop the box's line keeps it
-    bc, rec = allc["brake_100"], {}
+    bc, rec = chm.resolve(allc["brake_100"], "corsa", "full", refs), {}
 
     def probe(s_):
         c_ = s_.challenge
@@ -5816,17 +6843,59 @@ def _v35_challenges(tmp, verbose=True):
         elif "R" in rec and "armed" not in rec:
             rec["armed"] = c_.meter.armed
         if c_.last is not None:
-            rec["status"] = c_.overlay(s_)["status"]
+            rec["status"], rec["flash"] = c_.overlay(s_)["status"], c_.overlay(s_)["flash"]
+            rec["aim"] = c_.overlay(s_)["aim"]
     r_ = chm.measure(bc, lib, probe=probe)
+    #  round 3: the same reference braked 2 m late stops its nose 2 m past
+    #  the board -- the 3-star distance, 2 stars
+    r_late = chm.measure(bc, lib, brake_at=chm.board_brake_s(bc) + 2.0)
+    late_ok = (r_late["stars"] == 2 and r_late["miss"] is not None
+               and abs(r_late["miss"] - 2.0) < 0.1 and r_late["value"] == bc["ref"]["value"])
+    #  held at v0 (task 42): a 170 ms tap of DOWN at 1.0 s (it never lets
+    #  go), then DOWN at 1.5 s, the keyboard's ramp (input.RATE_BRAKE, 5 /s up,
+    #  8 /s down), the clutch left to the automatic -- held on at v0 till
+    #  then, then the reference's very stop
+    hold_rec = {}
+
+    class _Down(StraightDriver):
+        def __call__(self, t, veh, tr):
+            if 1.0 <= t < 1.17 or t >= 1.5:
+                self.brk = min(1.0, self.brk + 5.0 * DT_PHYS)
+            else:
+                self.brk = max(0.0, self.brk - 8.0 * DT_PHYS)
+            return super().__call__(t, veh, tr)
+
+    def probe_h(s_):
+        if "t1" not in hold_rec and s_.t >= 1.0:
+            m_ = s_.challenge.meter
+            hold_rec["t1"] = (hypot(s_.veh.u, s_.veh.v) * 3.6, s_.s, m_.armed, m_.counting,
+                              s_.stop_hold is not None, s_.challenge.overlay(s_)["status"])
+        if "tap" not in hold_rec and s_.t >= 1.45:
+            hold_rec["tap"] = s_.stop_hold is not None
+        if "let" not in hold_rec and s_.stop_hold is None:
+            hold_rec["let"] = (s_.t, float(s_.ctl.brake))
+    r_h = chm.measure(bc, lib, probe=probe_h, driver=_Down(throttle=0.0))
+    V1, s1, arm1, cnt1, h1, st1 = hold_rec.get("t1", (0.0, 0.0, False, True, False, ""))
+    t_let, b_let = hold_rec.get("let", (0.0, 0.0))
+    held_ok = (abs(V1 - bc["goal"]["v0_kmh"]) < 1e-9 and abs(s1 - (chm.START_S + V1 / 3.6))
+               < 0.05 and arm1 and not cnt1 and h1
+               and st1 == f"held at {bc['goal']['v0_kmh']:.0f} km/h: DOWN / L2 brakes"
+               and hold_rec.get("tap") and abs(t_let - 1.7) < 0.0025 and b_let == 1.0
+               #  round 3: braked 1.7 s in, far short of the board: 2 stars
+               and r_h["stars"] == 2 and r_h["miss"] < -chm.BOARD_TOL
+               and abs(r_h["value"] - bc["ref"]["value"]) < 1e-3)
     again_ok = (rec.get("R", (0, 0))[0] == chm.START_S
                 and abs(rec["R"][1] - bc["goal"]["start_kmh"]) < 1e-9 and rec.get("armed")
-                and rec.get("status", "").startswith(
-                    "LAST STOP " + chm.fmt_value("stop_distance", r_["value"]) + " [")
-                and rec["status"].endswith(f"R: again from {bc['goal']['start_kmh']:.0f} km/h"))
+                and rec.get("flash", "").startswith(
+                    f"{bc['title']}: " + chm.fmt_value("stop_distance", r_["value"]) + " [")
+                and rec.get("status") == f"R: again from {bc['goal']['start_kmh']:.0f} km/h"
+                and rec.get("aim") == chm.board_text(r_["miss"], r_["stars"])
+                and rec["aim"].endswith(" short - 3rd star needs within 1 m"))
     # --- the page flow
     sim = _build("arena", driver=lambda t, v, T_: Controls())
     sim.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
     sim.progress_file = Progress(os.path.join(tmp, "chal_progress.json"))
+    sim.settings = Settings(path="", car="corsa", ballast=50.0)   # the wet circle allows none
     top = dict(version=2, name="tall", mirror=True, builtin=False,
                slots={"left": {"wing": "plate"}, "top": {"wing": "rear-s1223", "x": -0.9,
                                                           "h": 1.55, "inc_deg": 6.0}})
@@ -5844,28 +6913,34 @@ def _v35_challenges(tmp, verbose=True):
     ev("select")
     listed = [a for _, a in sim.menu.items if a.startswith("ch:")]
     list_ok = sim._menu_page == "challenges" and len(listed) == 8
-    goto("ch:skid_dry")
+    goto("ch:skid_wet")
     ev("select")
     refused = (sim._menu_page == "challenge" and "CANNOT START" in (sim.menu.note or "")
-               and "top wing is not allowed" in sim.menu.note
+               and "50 kg of ballast" in sim.menu.note
                and not any(a.startswith("ch_go:") for _, a in sim.menu.items))
     ev("menu")                                     # ESC: back to the list
     back_ok = sim._menu_page == "challenges"
-    sim.challenge_build = (chm.ref_build("plate"), lib)
-    goto("ch:skid_dry")
+    sim.settings.ballast = 0.0
+    goto("ch:skid_wet")
     ev("select")
-    goto("ch_go:skid_dry")
+    goto("ch_go:skid_wet")
     ev("select")
-    started = sim.quit and sim.stop_reason == "restart" and sim.challenge_pick == "skid_dry"
+    started = (sim.quit and sim.stop_reason == "restart" and sim.challenge_pick == "skid_wet"
+               and sim.ch_pick == ("corsa", "full"))
     flow_ok = row_ok and list_ok and refused and back_ok and started
-    ok = all_ok and flow_ok and roll_ok and again_ok
+    ok = all_ok and flow_ok and roll_ok and again_ok and held_ok and late_ok
     wall = time.perf_counter() - t_wall
     if verbose:
-        print(f"  V35 challenges  : {len(allc)} references, each 3 stars on its own rules and "
-              f"value = the file's: {all_ok}; {', '.join(rows)}; pages: row {row_ok}, list "
-              f"{list_ok}, a top wing refused with the reason {refused}, ESC {back_ok}, start "
+        print(f"  V35 challenges  : {len(subset)} references, each 3 stars on its own rules and "
+              f"value = refs.json's (a stop braked for its board): {all_ok}; {', '.join(rows)}; "
+              f"braked 2 m late: board {r_late['miss']:+.2f} m "
+              f"[{chm.stars_text(r_late['stars'])}] {late_ok}; pages: row {row_ok}, list "
+              f"{list_ok}, ballast refused with the reason {refused}, ESC {back_ok}, start "
               f"{started}; stops start rolling {roll_ok}, R rolls again and the box keeps "
-              f"'{rec.get('status', '')}' {again_ok}; {sim_s:.0f} s sim in {wall:.1f} s  "
+              f"'{rec.get('status', '')}' / '{rec.get('aim', '')}' {again_ok}; held at v0 "
+              f"through a tap {hold_rec.get('tap')}, DOWN let go at "
+              f"{t_let:.3f} s, {chm.fmt_value('stop_distance', r_h['value'])} "
+              f"[{chm.stars_text(r_h['stars'])}] {held_ok}; {sim_s:.0f} s sim in {wall:.1f} s  "
               f"-> {'ok' if ok else 'FAIL'}")
     return ok, dict(rows=rows, sim_s=sim_s)
 
@@ -5880,7 +6955,10 @@ def _v34_tutorial(tmp, verbose=True):
     exactly as run_interactive runs it (events, 1/FPS of physics, the tick).
     Every drive step must PASS its own predicate (nothing skipped), the maps
     must go arena -> skidpad -> arena, and the progress file (a temporary
-    one) must say done, with both wing circles and the lap measured."""
+    one) must say done, with both wing circles and the lap measured. Round
+    3 of task 45: lap 2 measures the wing's own push, and the wing page's
+    payoff row says it, positive -- the LapDriver drives both laps to the
+    same profile, so their mean g cannot show the wing (0.739 vs 0.733 g)."""
     from types import SimpleNamespace
     from . import tutorial as tu
     from .progress import Progress
@@ -5965,6 +7043,8 @@ def _v34_tutorial(tmp, verbose=True):
             if sim._menu_page != "tutorial_step":
                 break
             pages.append(sid)
+            if sid == "wing_result" and "wing_page" not in box:
+                box["wing_page"] = tu._pg_wing(None, tut)[1][0][1]
             sim.inp.events.append("select")        # ENTER: Continue
         elif sid == "reset" and tut._t0 is not None and sim.t - tut._t0 > 2.0:
             sim.inp.events.append("reset")         # R
@@ -5994,17 +7074,26 @@ def _v34_tutorial(tmp, verbose=True):
     gb_ok = box.get("gb") == "manual" and sim.settings.gearbox == "auto" == sim.gearbox
     measured = bool(off and on and lap and math.isfinite(off["ay"]) and off["ay"] > 0.3
                     and on["ay"] > 0.3 and 40.0 < lap["t"] < 120.0)
+    #  round 3: the wing's push on lap 2 -- the plate at ~72 km/h is ~0.01 g
+    #  -- and the wing page's last row saying it, positive, never '-0.0'
+    push_g = (on or {}).get("push_g", float("nan"))
+    w_rows = box.get("wing_page") or [("", "")]
+    push_ok = (isinstance(push_g, float) and 0.005 < push_g < 0.05 and "push_g" not in (off or {})
+               and w_rows[-1][0] == "wing's push" and w_rows[-1][1].startswith("+0.0")
+               and not any("-0.00" in w_ for _, w_ in w_rows))
     ok = (row_ok and page_ok and start_ok and passed == drive_ids and pages == page_ids
           and maps == ["arena", "skidpad", "arena"] and tut is not None and tut.done
           and not tut.skipped and sv["done"] and measured and heads == set(drive_ids)
-          and sim.tutorial is None and gb_ok)
+          and sim.tutorial is None and gb_ok and push_ok)
     wall = time.perf_counter() - t_wall
     if verbose:
         print(f"  V34 tutorial    : menu row {row_ok}, page {page_ok}, started {start_ok}; "
               f"drive steps passed {len(passed)}/{len(drive_ids)}, pages {len(pages)}/"
               f"{len(page_ids)}, maps {' -> '.join(maps)}; wing off "
               f"{off['ay'] if off else float('nan'):.3f} g / on "
-              f"{on['ay'] if on else float('nan'):.3f} g, lap "
+              f"{on['ay'] if on else float('nan'):.3f} g, the wing's push on lap 2 "
+              f"{push_g:.4f} g ({(on or {}).get('push', float('nan')):.0f} N), the page's "
+              f"payoff '{w_rows[-1][1]}' {push_ok}; lap "
               f"{lap['t'] if lap else float('nan'):.3f} s; manual box for its step and "
               f"back {gb_ok}; done + saved {sv['done']}; "
               f"{sim_t:.0f} s sim in {wall:.1f} s  -> {'ok' if ok else 'FAIL'}")
@@ -6076,23 +7165,49 @@ def _wing_mode_label(m) -> str:
     return LABELS.get(m, "AUTO")
 
 
+def _wing_mode_shown(sim) -> str:
+    """The WINGS chip's word (HudData.wing_mode): the G mode -- but in a
+    challenge run on a config with no side wings, where G has nothing to
+    step (`challenges.g_modes`), the config itself: 'ONLY TOP', 'ONLY TOP,
+    FIXED' (task 45: the chip said AUTO while the config set the wing)."""
+    run = getattr(sim, "challenge", None)
+    cfg = run.ch.get("config") if run is not None else None
+    if cfg is not None:
+        from .challenges import g_modes, CONFIG_LABELS
+        if len(g_modes(cfg)) < 2:
+            return CONFIG_LABELS[cfg].split(":")[0]
+    return _wing_mode_label(sim.wing_side_mode)
+
+
 def _air_brake_showing(sim) -> bool:
     from .airbrake import showing
     return showing(sim.wing_side_mode, sim._airbrake, getattr(sim, "ctl", None), sim.veh.cfg)
 
 
 def _v38_airbrake(tmp, verbose=True):
-    """The wing mode's air brake (drive/airbrake.py, task 35). The Corsa
-    (tuned) with the plate on both flanks and the rear-s1223 top wing stops
-    from 150 km/h on the dragstrip -- full brake, ABS, built as a session
-    builds it (`challenges.measure`) -- in AUTO and in AIR BRAKE. In AIR
-    BRAKE no flank is out on the straight before the brake, all three
-    wings are out during the stop, and the stop is shorter; in AUTO no
-    command ever does (the published law, as every scripted run has it). ALL
-    3 keeps them out on the way up too. A build with ONE flank under AIR
-    BRAKE keeps its line (its flank is left out; the top wing still works)."""
+    """The wing modes (drive/airbrake.py, tasks 35, 44). The Corsa (tuned)
+    with the plate on both flanks and the rear-s1223 top wing (its slot
+    'active') stops from 150 km/h on the dragstrip -- full brake, ABS,
+    built as a session builds it (`challenges.measure`) -- in every mode.
+    AUTO: no command ever (the published law, as every scripted run has
+    it). AIR BRAKE: no flank out on the straight before the brake, all three
+    out during the stop, and the stop is shorter. TOP: no flank ever out,
+    and the top wing on the ACTIVE law even where the slot says 'fixed' (in
+    on the way up, out under braking), exactly AUTO's active top wing on the
+    'active' slot. TOP FIXED: the top wing out on the way up too (slower to
+    150), no flank ever out. TOP FIX+SIDE: the flanks' commands None (the
+    law), the top wing out on the way up. A build with ONE flank under AIR
+    BRAKE keeps its line (its flank is left out; the top wing still works).
+    On the skidpad (the published plate pair, trail-braking): AIR BRAKE's
+    flanks never jump; TOP never puts one out; TOP FIX+SIDE's outer flank
+    is AUTO's, bit for bit. On a session: G skips the TOP modes on a car
+    with no top wing, the old ALL 3 (2) is not restored, and TOP hides the
+    flanks on the HUD once they are in."""
+    import dataclasses
+    from . import airbrake as ab
     from . import challenges as chm
     from .aero.library import Library
+    from .vehicle import TopAero
     lib = Library(os.path.join(tmp, "airbrake_lib"), use_xfoil=False)
     base = dict(kind=chm.KIND, id="v38", title="V38", blurb="", class_="",
                 constraints={}, goal=dict(metric="stop_distance", v0_kmh=150.0,
@@ -6100,30 +7215,43 @@ def _v38_airbrake(tmp, verbose=True):
                 stars={"2": {"threshold": 1e9}, "3": {"threshold": 1e9, "efficiency": {}}},
                 ref=dict(driver="brake:1.0:150", build="tall", abs=True, tc=True))
     base["class"] = "dragstrip|corsa|tuned|none"
+    tall_fixed = chm.ref_build("tall")
+    tall_fixed["name"] = "ref-tall-fixed"
+    tall_fixed["slots"]["top"]["mode"] = "fixed"
 
     def run(mode, build="tall"):
         ch = dict(base, ref=dict(base["ref"], wing_mode=mode, build=build))
-        rec = dict(cmd_any=0, dep_before=0.0, all_out=0.0, psi0=None, dpsi=0.0, y_max=0.0)
+        rec = dict(cmd_any=0, dep_before=0.0, all_out=0.0, psi0=None, dpsi=0.0, y_max=0.0,
+                   flank_max=0.0, top_before=0.0, top_braking=0.0, t_brake=None,
+                   cmds=set(), tops=[])
 
         def probe(sim):
             v, c = sim.veh, sim.ctl
             braking = float(getattr(c, "brake", 0.0)) > 0.3
             if c.wing_cmd is not None:
                 rec["cmd_any"] += 1
+                rec["cmds"].add(tuple(c.wing_cmd))
+            rec["flank_max"] = max(rec["flank_max"], v.wing_deploy_l, v.wing_deploy_r)
+            rec["tops"].append(v.top_deploy)
             if not braking and rec["psi0"] is None:    # the run up to the stop
                 rec["dep_before"] = max(rec["dep_before"], v.wing_deploy_l, v.wing_deploy_r)
+                rec["top_before"] = max(rec["top_before"], v.top_deploy)
             if braking:
                 rec["all_out"] = max(rec["all_out"], min(v.wing_deploy_l, v.wing_deploy_r,
                                                          v.top_deploy))
+                rec["top_braking"] = max(rec["top_braking"], v.top_deploy)
                 if rec["psi0"] is None:
-                    rec["psi0"] = v.psi
+                    rec["psi0"], rec["t_brake"] = v.psi, sim.t
                 rec["dpsi"] = max(rec["dpsi"], abs(math.degrees(v.psi - rec["psi0"])))
         r = chm.measure(ch, lib, probe=probe)
         return r["value"], rec, r["t_sim"]
 
     auto, ra, ta = run("auto")
     air, rb, tb = run("air_brake")
-    _all, rc, tc_ = run("all")
+    top_, rt, _ = run("top", tall_fixed)             # the slot says fixed: TOP makes it active
+    top_a, rta, _ = run("top")                       # ... and on the active slot, AUTO's own law
+    fix, rc, tc_ = run("top_fixed")
+    fxs, rs, _ = run("top_fixed_side")
     one = dict(version=2, name="one flank", mirror=False, builtin=False,
                slots={"left": {"wing": "plate", "x": 0.97, "h": 0.9, "inc_deg": 0.0},
                       "top": {"wing": "rear-s1223", "x": -0.9, "h": 1.55, "inc_deg": 6.0}})
@@ -6141,33 +7269,193 @@ def _v38_airbrake(tmp, verbose=True):
             return c
         s_ = _build("skidpad", wing="plate", driver=drv, start_V=19.0, gear=3)
         s_.wing_on, s_.wing_side_mode = True, mode
-        prev, jump, peak = None, 0.0, 0.0
+        prev, jump, peak, one_out, trace = None, 0.0, 0.0, 0.0, []
         for _ in range(int(9.5 / s_.dt)):
             s_.step_physics(s_.dt)
             d_ = (s_.veh.wing_deploy_l, s_.veh.wing_deploy_r)
             if prev is not None:
                 jump = max(jump, abs(d_[0] - prev[0]), abs(d_[1] - prev[1]))
             peak = max(peak, min(d_))
+            one_out = max(one_out, max(d_))
+            trace.append(d_)
             prev = d_
-        return jump, peak
-    j_air, both_out = corner(3)
+        return jump, peak, one_out, trace
+    j_air, both_out, _o, _t = corner(ab.AIR)
+    _j, _b, auto_one, auto_trace = corner(ab.AUTO)
+    _j, _b, top_one, _t = corner(ab.TOP)
+    _j, _b, fxs_one, fxs_trace = corner(ab.TOP_FIX_SIDE)
     ok_smooth = j_air < 0.01 and both_out > 0.95
     ok_auto = ra["cmd_any"] == 0 and math.isfinite(auto)
     ok_air = (rb["dep_before"] < 0.01 and rb["cmd_any"] > 0 and rb["all_out"] > 0.95
               and math.isfinite(air) and air < auto)
-    ok_all = rc["dep_before"] > 0.9 and tc_ > tb                # out on the way up: slower to 150
+    n_ = min(len(ra["tops"]), len(rta["tops"]))
+    top_same = max((abs(a_ - b_) for a_, b_ in zip(ra["tops"][:n_], rta["tops"][:n_])),
+                   default=1.0)
+    ok_top = (rt["flank_max"] == 0.0 and rt["top_before"] < 0.01 and rt["top_braking"] > 0.95
+              and math.isfinite(top_) and rta["flank_max"] == 0.0 and top_same < 1e-9
+              and top_one == 0.0 and auto_one > 0.95)
+    ok_fix = (rc["flank_max"] == 0.0 and rc["top_before"] > 0.95 and ra["top_before"] < 0.01
+              and rc["t_brake"] is not None and rb["t_brake"] is not None
+              and rc["t_brake"] > rb["t_brake"] and math.isfinite(fix))  # slower to 150
+    ok_fxs = (rs["cmds"] == {(None, None, True)} and rs["top_before"] > 0.95
+              and math.isfinite(fxs) and fxs_trace == auto_trace and fxs_one > 0.95)
     ok_one = math.isfinite(one_v) and rd["dpsi"] < 0.5
-    ok = ok_auto and ok_air and ok_all and ok_one and ok_smooth
+    # --- G on a session: the TOP modes need a top wing; ALL 3 is not restored
+    def g_cycle(sim_):
+        out = []
+        for _ in range(len(ab.CYCLE)):
+            sim_.handle_event("wing_side")
+            out.append(ab.LABELS[sim_.wing_side_mode])
+            if sim_.wing_side_mode == ab.AUTO:
+                break
+        return out
+    def g_back(sim_):
+        out = []                                   # SHIFT+G (task 45): one back each
+        for _ in range(len(ab.CYCLE)):
+            sim_.handle_event("wing_side_prev")
+            out.append(ab.LABELS[sim_.wing_side_mode])
+            if sim_.wing_side_mode == ab.AUTO:
+                break
+        return out
+    s_plate = _build("skidpad", wing="plate")
+    s_top = _build("skidpad", wing="plate")
+    s_top.veh.cfg = dataclasses.replace(s_top.veh.cfg, top=TopAero(mode="fixed"))
+    g_plate, g_top = g_cycle(s_plate), g_cycle(s_top)
+    b_plate, b_top = g_back(s_plate), g_back(s_top)
+    s_top.handle_event("wing_side")                # AIR BRAKE ...
+    s_top.wing_on = False
+    s_top.handle_event("wing_side_prev")           # ... and one back to AUTO, disarmed
+    b_note = s_top._rec_msg
+    s_top.wing_on = True
+    ok_g = (g_plate == ["AIR BRAKE", "LEFT", "RIGHT", "AUTO"]
+            and g_top == ["AIR BRAKE", "TOP", "TOP FIXED", "TOP FIX+SIDE", "LEFT", "RIGHT", "AUTO"]
+            and b_plate == g_plate[-2::-1] + ["AUTO"] and b_top == g_top[-2::-1] + ["AUTO"]
+            and s_top.wing_side_mode == ab.AUTO
+            and b_note == "wings OFF - F arms them.  AUTO: " + ab.WHAT[ab.AUTO]
+            and not ab.usable(2, s_top.veh.cfg) and not ab.usable(ab.TOP, s_plate.veh.cfg)
+            and chm.REF_WING_MODES == {"auto": ab.AUTO, "air_brake": ab.AIR, "top": ab.TOP,
+                                       "top_fixed": ab.TOP_FIXED,
+                                       "top_fixed_side": ab.TOP_FIX_SIDE})
+    # --- the HUD: TOP hides the flanks once they are in; AUTO draws them
+    s_plate.wing_on, s_plate.wing_side_mode = True, ab.TOP
+    for _ in range(5):
+        s_plate.step_physics(s_plate.dt)
+    h_top = s_plate.hud_data()
+    s_plate.wing_side_mode = ab.AUTO
+    h_auto = s_plate.hud_data()
+    #  ... and the aero panel's TOP line says what the MODE makes the top
+    #  wing do (ACT / FIX), not the garage slot's mode (task 44 review)
+    s_top.hud_cfg = dict(top_mode="fixed")
+    hud_top = {}
+    for slot_, m_ in (("fixed", ab.TOP), ("active", ab.TOP_FIXED),
+                      ("active", ab.TOP_FIX_SIDE), ("active", ab.AUTO), ("fixed", ab.AUTO)):
+        s_top.hud_cfg["top_mode"], s_top.wing_side_mode = slot_, m_
+        hud_top[(slot_, ab.LABELS[m_])] = s_top.hud_data().top_mode
+    ok_hud = (h_top.wing_type == "off" and not h_top.dev_left and h_top.wing_mode == "TOP"
+              and h_auto.wing_type == "plate"
+              and list(hud_top.values()) == ["active", "fixed", "fixed", "active", "fixed"])
+    # --- AIR BRAKE -> AUTO -> AIR BRAKE in a challenge run (G's only two
+    # there): the air brake takes the car's side latch afresh, so in the
+    # opposite corner the outer flank is out from the first step, not after
+    # a stale 0.3 s side hold with both flanks in (task 44 review)
+    steer = {"d": 0.10}
+    s_ch = _build("skidpad", wing="plate", start_V=15.0, gear=2,
+                  driver=lambda t, v_, T_: Controls(delta=steer["d"], throttle=0.1))
+    s_ch.challenge = chm.ChallengeRun(chm.resolve(chm.load_all()["skid_dry"], "corsa", "full"),
+                                      s_ch.track, {})
+    _challenge_wings(s_ch)
+
+    def steps(sim_, sec, log=None):
+        for _ in range(int(round(sec / sim_.dt))):
+            sim_.step_physics(sim_.dt)
+            if log is not None:
+                log.append(sim_.ctl.wing_cmd)
+    s_ch.handle_event("wing_side")                 # AIR BRAKE in a left-hand bend
+    steps(s_ch, 1.0)
+    s_ch.handle_event("wing_side")                 # AUTO in a right-hand one
+    steer["d"] = -0.10
+    steps(s_ch, 1.5)
+    side_auto = s_ch.veh.state.dev_side
+    s_ch.handle_event("wing_side")                 # AIR BRAKE again, mid-corner
+    back = []
+    steps(s_ch, 0.05, back)
+    ok_reseed = (side_auto == -1 and back[0] == (True, False, None)
+                 and all(c_ == back[0] for c_ in back))
+    # --- leaving a TOP mode hands an ACTIVE top wing back to the physics'
+    # own law without the hold it froze with (task 44 review): the
+    # tuned Corsa's active top wing, a touch of brake in AUTO, TOP down the
+    # straight (in), G on to AUTO: it stays in on the straight, comes out
+    # on the brake (and the hand-back ends), and the whole run -- G presses
+    # and all -- replays from its logged controls bit for bit, as a
+    # recorded lap is re-simulated (records.resimulate)
+    ped = {"b": 1.0}
+    s_h = _build("dragstrip", start_V=20.0, gear=2,
+                 driver=lambda t, v_, T_: Controls(throttle=0.3, brake=ped["b"]))
+    s_h.veh.cfg = dataclasses.replace(s_h.veh.cfg, top=TopAero(mode="active"))
+    s_h.wing_on = True
+    log_h, tops_h = [], []
+
+    def steps_h(sec):
+        top_max = 0.0
+        for _ in range(int(round(sec / s_h.dt))):
+            s_h.step_physics(s_h.dt)
+            log_h.append(dataclasses.replace(s_h.ctl))
+            tops_h.append(s_h.veh.top_deploy)
+            top_max = max(top_max, s_h.veh.top_deploy)
+        return top_max
+    steps_h(0.1)                                   # AUTO's hold: 0.8 s
+    ped["b"] = 0.0
+    s_h.handle_event("wing_side")
+    s_h.handle_event("wing_side")
+    in_top = (s_h.wing_side_mode == ab.TOP)
+    steps_h(3.0)
+    top_in_top = s_h.veh.top_deploy
+    while s_h.wing_side_mode != ab.AUTO:
+        s_h.handle_event("wing_side")
+    straight = steps_h(1.5)
+    handing = s_h._airbrake.handing
+    ped["b"] = 0.5
+    braked = steps_h(0.5)
+    ended = not s_h._airbrake.handing
+    ped["b"] = 0.0
+    steps_h(3.0)
+    top_end = s_h.veh.top_deploy
+    it = iter(log_h)
+    s_r = _build("dragstrip", start_V=20.0, gear=2,
+                 driver=lambda t, v_, T_: dataclasses.replace(next(it)))
+    s_r.veh.cfg = dataclasses.replace(s_r.veh.cfg, top=TopAero(mode="active"))
+    tops_r = []
+    for _ in range(len(log_h)):
+        s_r.step_physics(s_r.dt)
+        tops_r.append(s_r.veh.top_deploy)
+    ok_hand = (in_top and top_in_top < 0.01 and straight < 0.01 and handing
+               and braked > 0.95 and ended and top_end < 0.01 and tops_r == tops_h
+               and (s_r.veh.x, s_r.veh.u) == (s_h.veh.x, s_h.veh.u))
+    ok = ok_auto and ok_air and ok_top and ok_fix and ok_fxs and ok_one and ok_smooth \
+        and ok_g and ok_hud and ok_reseed and ok_hand
     if verbose:
-        print(f"  V38 air brake   : stop from 150 (tuned Corsa, plate x2 + rear-s1223, ABS): AUTO "
+        print(f"  V38 wing modes  : stop from 150 (tuned Corsa, plate x2 + rear-s1223, ABS): AUTO "
               f"{auto:.2f} m (no wing command) {ok_auto}; AIR BRAKE {air:.2f} m "
               f"({100.0 * (air - auto) / auto:+.1f} %), all three out {rb['all_out']:.2f}, no "
-              f"flank out before the brake {ok_air}; ALL 3 out on the way up {ok_all}; one flank "
-              f"under the "
+              f"flank out before the brake {ok_air}; TOP {top_:.2f} m: no flank, the fixed "
+              f"slot in on the way up {rt['top_before']:.2f} and out braking "
+              f"{rt['top_braking']:.2f}, AUTO's active top to {top_same:.1e}, never a flank "
+              f"on the skidpad {ok_top}; TOP FIXED {fix:.2f} m: out on the way up "
+              f"{rc['top_before']:.2f}, brakes at {rc['t_brake'] or 0.0:.2f} s vs "
+              f"{rb['t_brake'] or 0.0:.2f} {ok_fix}; TOP FIX+SIDE {fxs:.2f} m: flanks on the "
+              f"law, AUTO's outer flank on the skidpad {ok_fxs}; one flank under the "
               f"air brake: heading within {rd['dpsi']:.2f} deg {ok_one}; trail-braking on the "
-              f"skidpad: both flanks out {both_out:.2f}, largest step {j_air:.4f} {ok_smooth}"
+              f"skidpad: both flanks out {both_out:.2f}, largest step {j_air:.4f} {ok_smooth}; "
+              f"G without a top wing {g_plate}, with {len(g_top)} modes, SHIFT+G back "
+              f"{b_plate}, the OFF warning first {ok_g}; TOP hides "
+              f"the flanks on the HUD, its TOP line the mode's ACT / FIX "
+              f"{list(hud_top.values())} {ok_hud}; AIR BRAKE -> AUTO -> AIR BRAKE in the "
+              f"other corner: the outer flank {back[0]} from the first step {ok_reseed}; "
+              f"TOP -> AUTO hands the top wing back: in on the straight {straight:.2f}, out "
+              f"braking {braked:.2f}, in after {top_end:.2f}, replays bit for bit "
+              f"{tops_r == tops_h} {ok_hand}"
               f"  -> {'ok' if ok else 'FAIL'}")
-    return ok, dict(auto=auto, air=air, one=one_v)
+    return ok, dict(auto=auto, air=air, one=one_v, top=top_, top_fixed=fix, top_fixed_side=fxs)
 
 
 def _v39_controls(tmp, verbose=True):
@@ -6578,11 +7866,26 @@ def _v21_rtf(tmp, seconds=60.0, verbose=True):
     wall = time.perf_counter() - t0
     sim.telem.close()
     rtf = seconds / wall
+    #  the HUD's RTF (task 45, `rtf_window`), on made-up clocks: a machine at
+    #  real time reads 1.0 after 5 s paused on the TIME TRIAL page (the old
+    #  sim t / wall since the start read 0.38 there), a half-speed one 0.5,
+    #  and nothing is claimed before RTF_MIN_S of running
+    q = collections.deque()
+    early = {rtf_window(q, k / 60, k / 120) for k in range(0, 25)}   # 0.4 s at half speed
+    q.clear()
+    for k in range(0, 181):                        # 3 s at real time after the page
+        after = rtf_window(q, 5.0 + k / 60, k / 60)
+    q_half = collections.deque()
+    for k in range(0, 181):
+        half = rtf_window(q_half, k / 60, k / 120)
+    hud_ok = early == {1.0} and after == 1.0 and half == 0.5 and len(q) <= RTF_WINDOW_S * 60 + 2
     if verbose:
         print(f"  V21 real-time   : {seconds:.0f} s sim in {wall:.2f} s wall, "
               f"RTF {rtf:.2f} (need >= 2.0, target >= 3.0), "
-              f"{sim.telem.rows_written} telemetry rows")
-    return rtf >= 2.0, dict(wall_s=wall, rtf=rtf, rows=sim.telem.rows_written)
+              f"{sim.telem.rows_written} telemetry rows; the HUD's RTF over running "
+              f"time only: {after:.2f} after a paused page, {half:.2f} at half speed, "
+              f"1.00 before {RTF_MIN_S} s {early == {1.0}}  -> {hud_ok}")
+    return rtf >= 2.0 and hud_ok, dict(wall_s=wall, rtf=rtf, rows=sim.telem.rows_written)
 
 
 def _v23_accumulator(verbose=True):
@@ -6645,11 +7948,29 @@ def _v25_lap_timing(verbose=True):
     times = [c[0] for c in starts + laps]
     measured = [b - a for a, b in zip(times, times[1:])]
     err = max(abs(m - exact) for m in measured) if measured else float("inf")
-    ok = bool(measured) and err < 0.002
+    #  task 45: a faster lap the recorder dropped (`counts=False`) is LAST
+    #  but no BEST and no sector best; a faster one it voided at the line
+    #  (`void_last`) gives BEST and the sector bests back
+    lt2, s_, t_, seen = LapTimer(tr), L - 30.0, 0.0, []
+    for V_, cnt in ((30.0, True), (33.0, False), (36.0, True)):
+        while True:
+            s_n = (s_ + V_ * dt) % L
+            evs = lt2.update(t_, s_, s_n, dt, counts=cnt)
+            s_, t_ = s_n, t_ + dt
+            if any(e[0] == "lap" for e in evs):
+                break
+        seen.append((lt2.last_lap, lt2.best_lap, list(lt2.sector_best)))
+    lt2.void_last()
+    (b1, _, sb1), (l2, b2, sb2), (l3, b3, sb3) = seen
+    void_ok = (b2 == b1 and sb2 == sb1 and l2 < b1 and b3 == l3 < b1
+               and all(x < y for x, y in zip(sb3, sb1))
+               and lt2.best_lap == b1 and lt2.sector_best == sb1 and lt2.last_lap == l3)
+    ok = bool(measured) and err < 0.002 and void_ok
     if verbose:
         print(f"  V25 lap timing  : L/V = {exact:.6f} s, measured "
               f"{[round(m, 6) for m in measured]}, max error {err*1e6:.2f} us "
-              f"(tol 2000 us)")
+              f"(tol 2000 us); a dropped lap {l2:.3f} is LAST, BEST {b2:.3f} and the "
+              f"sector bests kept, a voided one gives them back ({void_ok})")
     return ok, dict(exact_s=exact, measured_s=measured, max_err_s=err)
 
 
@@ -6658,7 +7979,10 @@ def _accel_end_to_end(tmp, verbose=True):
     o = _Opts(track="dragstrip", wet="none", duration=40.0, telemetry=p)
     res = accel_script(o)
     rows = sum(1 for _ in open(p)) - 1
-    ok = (14.5 <= res["t_0_100_s"] <= 16.0) and rows > 0
+    #  task 45: the lower bound 14.5 -> 14.0 s. The automatic now changes up
+    #  under the soft limiter (powertrain.n_up_schedule) instead of crawling
+    #  1.1 s through its fade band: 14.80 -> 14.31 s (Opel quotes 14.4 s)
+    ok = (14.0 <= res["t_0_100_s"] <= 16.0) and rows > 0
     if verbose:
         print(f"  accel run       : 0-100 km/h {res['t_0_100_s']:.3f} s in gear "
               f"{res['gear_at_100']} at {res['rpm_at_100']:.0f} rpm; "
@@ -6682,13 +8006,14 @@ def _v26_settings_and_menu(tmp, verbose=True):
     s.engine, s.tc, s.sound = "tuned", False, "low"
     s.car, s.ballast, s.ballast_at = "mx5", 75.0, "boot"
     s.paint = {"mx5": "cobalt", "540i": "burgundy"}
+    s.vectors = True                                # the force arrows (V), task 45
     s.save()
     back = Settings.load(path)
     rt_ok = (back.track, back.gearbox, back.abs, back.wet, back.camera,
              back.engine, back.tc, back.sound,
-             back.car, back.ballast, back.ballast_at) == (
+             back.car, back.ballast, back.ballast_at, back.vectors) == (
         "open", "clutch", False, "all", "car_up", "tuned", False, "low",
-        "mx5", 75.0, "boot")
+        "mx5", 75.0, "boot", True) and Settings(path="").vectors is False
     # the Paint setting, per car: what was saved comes back, and a car never
     # painted reads 'factory'
     paint_ok = (back.paint == {"mx5": "cobalt", "540i": "burgundy"}
@@ -6971,6 +8296,49 @@ def _v26_settings_and_menu(tmp, verbose=True):
     back_ok = sim._menu_page == "main" and sim.menu.open
     ev("menu")                                      # ESC on main -> closed, running
     closed_ok = (not sim.menu.open and not sim.paused and not inp.menu)
+    #  task 45: H / C / V say what they did, and all three are kept. H: the
+    #  race HUD -> full -> off -> the race HUD (the first press shows MORE);
+    #  V: the force arrows, off by default and a setting now; the Settings
+    #  page's HUD row applies at once
+    rc = sim.renderer.cfg
+    rc.hud, rc.show_vectors = st.hud, st.vectors
+    seen_k = []
+    for key_ in ("hud", "hud", "hud", "vectors", "camera"):
+        ev(key_)
+        seen_k.append((rc.hud, rc.show_vectors, rc.mode, sim._rec_msg, Settings.load(path)))
+    keys_ok = (HUD_ORDER == ("minimal", "full", "off") and rc.hud == "minimal"
+               and [k_[0] for k_ in seen_k[:3]] == ["full", "off", "minimal"]
+               and [k_[4].hud for k_ in seen_k[:3]] == ["full", "off", "minimal"]
+               and [k_[3] for k_ in seen_k[:3]] == [
+                   "HUD: full (H again: off)", "HUD: off (H again: race HUD)", "HUD: race HUD"]
+               and seen_k[3][1] is True and seen_k[3][4].vectors is True
+               and seen_k[3][3] == "force arrows on (V)"
+               and seen_k[4][2] == "world_up" and seen_k[4][4].camera == "world_up"
+               and seen_k[4][3] == "camera: World up (C)")
+    ev("vectors")
+    keys_ok = (keys_ok and rc.show_vectors is False and Settings.load(path).vectors is False
+               and sim._rec_msg == "force arrows off (V)")
+    ev("menu"); ev("nav_down"); ev("select")        # settings
+    i_hud = goto("set:hud")
+    ev("select")                                    # the race HUD -> full, live
+    keys_ok = (keys_ok and st.hud == rc.hud == "full" and Settings.load(path).hud == "full"
+               and HUD_LABELS["full"] in sim.menu.items[i_hud][0]
+               and [a for _, a in sim._settings_items()].index("set:hud")
+               == [a for _, a in sim._settings_items()].index("set:camera") + 1
+               and "HUD" in [t for t, _ in sim._settings_help(i_hud)])
+    ev("nav_left")                                  # LEFT: back to the race HUD
+    keys_ok = keys_ok and st.hud == rc.hud == "minimal" and not sim.quit
+    ev("menu"); ev("menu")                          # the pause page, then driving
+    keys_ok = keys_ok and not sim.menu.open and not sim.paused
+    #  the HUD's data for the wet chip and a void LAST (task 45): T's surface,
+    #  and whether the last lap counted -- kept through SHIFT+R with LAST
+    h0 = sim.hud_data()
+    sim.lap.lap_valid = False                       # a void last lap ...
+    sim.lap.restart()                               # ... and SHIFT+R: LAST stays void
+    h1 = sim.hud_data()
+    sim.lap.lap_valid = True
+    keys_ok = (keys_ok and h0.global_wet == sim.global_wet and h0.last_valid is True
+               and h1.last_valid is False)
     # the map order is trk.TRACK_ORDER's, whatever it holds: from the arena
     # the Map row and TAB each step one on, and the browse below walks
     # either way from there (t2 is the running map through it)
@@ -7031,21 +8399,40 @@ def _v26_settings_and_menu(tmp, verbose=True):
         ev("nav_down")
     ev("select")
     gar2_ok = sim.stop_reason == "garage" and sim.quit and not sim.menu.open
+    # TAB with the menu up (task 45): the pause page's footer says 'TAB next
+    # map', so there it closes the menu and is driving's TAB (the next map,
+    # saved, a restart); the settings page ignores it (the Map row is there)
+    sim.quit, sim.stop_reason = False, ""
+    t_was = st.track
+    ev("menu"); ev("nav_down"); ev("select")        # settings
+    ev("track_next")
+    tabm_ok = (sim.menu.open and sim._menu_page == "settings" and st.track == t_was
+               and not sim.quit)
+    ev("menu")                                      # ESC: the pause page
+    ev("track_next")                                # TAB there: the next map
+    tabm_ok = (tabm_ok and sim.quit and sim.stop_reason == "restart"
+               and st.track == nxt(t_was) and Settings.load(path).track == nxt(t_was)
+               and not sim.menu.open and not inp.menu)
+    sim.quit, sim.stop_reason = False, ""
     ok = all((rt_ok, clamp_ok, cli_ok, cycle_ok, car_ok, m_open, page_ok,
               eng_ok, gb_ok, abs_ok, tc_ok, aid_ok, cam_ok, snd_ok, row_ok,
               saved_ok, back_ok, closed_ok, map_ok, tab_ok, prev_ok, gar_ok,
-              gar2_ok, paint_ok))
+              gar2_ok, paint_ok, tabm_ok, keys_ok))
     if verbose:
         print(f"  V26 settings    : round-trip {rt_ok}, clamp {clamp_ok}, cli {cli_ok}, "
               f"cycle {cycle_ok}; menu open {m_open}, settings page {page_ok}, "
               f"engine {eng_ok}, gearbox {gb_ok}, abs {abs_ok}, tc {tc_ok}, aid {aid_ok}, "
               f"camera {cam_ok}, sound {snd_ok}, saved {saved_ok}, back {back_ok}, "
-              f"closed {closed_ok}, map restart {map_ok} ({t1}), TAB {tab_ok} ({t2}), "
+              f"closed {closed_ok}, H / V / C say it and keep it, the HUD row, the wet / "
+              f"LAST data {keys_ok}, "
+              f"map restart {map_ok} ({t1}), TAB {tab_ok} ({t2}), "
+              f"TAB on the pause page {tabm_ok} ({nxt(t_was)}; nothing on settings), "
               f"browse {prev_ok}, garage {gar_ok}/{gar2_ok}; car/ballast {car_ok}, "
               f"rows {row_ok}; paint {paint_ok} (per car, clamp, live {live_ok})")
     return ok, dict(round_trip=rt_ok, cli=cli_ok, car=car_ok and row_ok,
                     menu=m_open and page_ok and eng_ok and gb_ok and tc_ok and snd_ok,
-                    map_restart=map_ok, garage=gar_ok and gar2_ok, paint=paint_ok)
+                    map_restart=map_ok, tab_menu=tabm_ok, garage=gar_ok and gar2_ok,
+                    paint=paint_ok, keys=keys_ok)
 
 
 def _v41_paint_on_the_road(tmp, verbose=True):
@@ -7482,18 +8869,29 @@ def _v41_builds(tmp, verbose=True):
                     default=default_ok, pick=pick_ok)
 
 
-def _loop_run(root, lib, design_json, st_kw, script, argv=(), last=None):
+def _loop_run(root, lib, design_json, st_kw, script, argv=(), last=None, title="drive",
+              titles=None, garage_acts=()):
     """`run_interactive_cli`'s REAL loop, every session stubbed by one step of
     `script`, in the folder `root` (the loop's runs/ files -- settings, the
     garage car, last_builds.json, progress -- all land there; the player's
     runs/ is never touched) with `lib` as the garage library. A step may set
     `car` (the Settings page's Car row, during the session), `pick` (a
     challenge id), `end` (the challenge's end), `prerace_pick` ((name, json)),
-    `saved_as` (Settings > Default's library name for the build driven) and
+    `saved_as` (Settings > Default's library name for the build driven),
+    `combo` ((car, config): the challenge page's pick, task 44), `tut` (a
+    driving tutorial the session hands back running, task 45), `from_title`
+    (the pick was on the list the title opened, task 45) and
     `stop` ('restart' by default; the script ends with 'quit'). `last`:
     {(track, car): build json} seeded into the per-map memory first.
     Returns one row per session: its car, the build it DROVE (opts.build_json),
-    the working build (opts.design_json), its over-limit reasons, the challenge."""
+    the working build (opts.design_json), its over-limit reasons, the challenge,
+    the pause-menu page it opens on (task 44) and whether that page's Back
+    is the title (`page_title`), the map (task 45). The title
+    screen is stubbed to pick `title` ('drive' by default: the loop as before
+    it existed; a list: its picks in turn, the last one kept), each call's
+    bottom line appended to `titles`; the garage is stubbed to hand the build
+    back and return `garage_acts`' next ('drive' once they run out; task 45's
+    'title' is its Main menu) -- a {'garage': True} row."""
     import contextlib
     import io
     import json as _json
@@ -7502,14 +8900,21 @@ def _loop_run(root, lib, design_json, st_kw, script, argv=(), last=None):
     from . import garage as grg
     from .records import RecordBook
     log, steps = [], iter(script)
+    picks, g_acts = list(title if isinstance(title, (list, tuple)) else [title]), iter(garage_acts)
 
     def fake(opts, pad=None, settings=None, garage=False):
         st = next(steps)
         cp = lambda v: _json.loads(_json.dumps(v))          # noqa: E731
-        log.append(dict(car=settings.car, build=cp(opts.build_json),
+        log.append(dict(car=settings.car, track=settings.track, build=cp(opts.build_json),
                         design=cp(getattr(opts, "design_json", None)),
                         over=_session_over_limits(opts, settings),
-                        chal=(getattr(opts, "challenge", None) or {}).get("id")))
+                        chal=(getattr(opts, "challenge", None) or {}).get("id"),
+                        key=(getattr(opts, "challenge", None) or {}).get("key"),
+                        pick=getattr(opts, "ch_pick", None),
+                        page=getattr(opts, "open_page", None),
+                        page_title=getattr(opts, "open_page_title", True),
+                        tut=getattr(opts, "tutorial", None) is not None))
+        opts.open_page, opts.open_page_title = None, True
         if "car" in st:
             settings.car = st["car"]
             settings.save()
@@ -7517,10 +8922,30 @@ def _loop_run(root, lib, design_json, st_kw, script, argv=(), last=None):
         return NS(stop_reason=st.get("stop", "restart"), inp=NS(pad=None), race_opts={},
                   rivals=[], prerace_pick=st.get("prerace_pick"), wing_side_mode=0,
                   ghosts=None, challenge_pick=st.get("pick"), challenge_end=st.get("end", False),
-                  tutorial=None, wing_tutor_start=False, swarm_launch=None,
+                  ch_pick=st.get("combo"), ch_from_title=st.get("from_title", False),
+                  tutorial=st.get("tut"), wing_tutor_start=False, swarm_launch=None,
+                  track=NS(name=settings.track),
                   build_saved_as=saved)
+
+    def fake_title(opts, settings, size, pad, bottom, lib=None):
+        if titles is not None:
+            titles.append(bottom)
+        return (picks.pop(0) if len(picks) > 1 else picks[0]), pad
+
+    class _Garage:
+        def __init__(self, grg_, size, design, pad, lib_, settings):
+            self.design, self.pad, self.progress, self.tutor = design, pad, None, None
+
+        def handed_back(self):
+            return self.design
+
+        def run(self):
+            log.append(dict(garage=True))
+            return next(g_acts, "drive")
+
     cwd, argv0, lib0 = os.getcwd(), list(sys.argv), grg._LIB
     real_is, quit0 = globals()["_interactive_session"], pygame.quit
+    real_title, real_garage = globals()["_title_screen"], globals()["_painted_garage"]
     os.makedirs(os.path.join(root, "runs"), exist_ok=True)
     try:
         os.chdir(root)
@@ -7533,11 +8958,13 @@ def _loop_run(root, lib, design_json, st_kw, script, argv=(), last=None):
         sys.argv = ["drive"] + list(argv)
         opts = build_parser().parse_args(list(argv))
         globals()["_interactive_session"] = fake
+        globals()["_title_screen"], globals()["_painted_garage"] = fake_title, _Garage
         pygame.quit = lambda: None         # the rest of the self-check keeps its display
         with contextlib.redirect_stdout(io.StringIO()):
             run_interactive_cli(opts)
     finally:
         globals()["_interactive_session"] = real_is
+        globals()["_title_screen"], globals()["_painted_garage"] = real_title, real_garage
         pygame.quit = quit0
         grg._LIB, sys.argv[:] = lib0, argv0
         os.chdir(cwd)
@@ -7790,6 +9217,1044 @@ def _v43d_swarm_T(tmp, verbose=True):
     return ok, dict(old=old, page=page_ok, lap=e.lap_times)
 
 
+def _v44_title(tmp, verbose=True):
+    """The title screen (drive/title.py, task 44) in the REAL loop
+    (`_loop_run`, the title stubbed to pick each action in turn): Drive is
+    today's first session, on no page; Challenges / Tutorial / Settings a
+    session opened on that page, once (the restart after it opens on none);
+    Garage the garage, then its drive; Quit no session at all. The title is
+    shown once per launch, with the car, the map and the build Drive would
+    drive. Which launches open on it (a bare one, --build, --track) and which
+    do not (--garage, --race, --seed-lap, --ml-drive, offscreen, headless).
+    And `Sim.open_page` on a session with a progress file and a library:
+    each page opens, ESC from the Challenges page is the title again (task
+    45: it was the pause page; V45c has the rest)."""
+    from types import SimpleNamespace
+    from . import garage as grg
+    from .aero.library import Library
+    from .progress import Progress
+    root = os.path.join(tmp, "title44")
+    lib = Library(os.path.join(root, "library"), use_xfoil=False)
+    own = grg.new_build("corsa")
+    own.name, own.left.wing = "t44 car", "fin"
+    own.sync_mirror("left")
+    got, bottoms = {}, {}
+    for act in ("drive", "challenges", "garage", "tutorial", "settings", "quit"):
+        seen = []
+        lg = _loop_run(os.path.join(root, act), lib, own.to_json(),
+                       dict(car="corsa", track="linden"),
+                       [dict(), dict(stop="quit")] if act != "quit" else [],
+                       title=act, titles=seen)
+        got[act] = ([("GARAGE" if e.get("garage") else e["page"]) for e in lg], len(seen))
+        bottoms[act] = seen[0] if seen else None
+    want = {"drive": ([None, None], 1), "challenges": (["challenges", None], 1),
+            "garage": (["GARAGE", None, None], 1), "tutorial": (["tutorial", None], 1),
+            "settings": (["settings", None], 1), "quit": ([], 1)}
+    loop_ok = got == want and bottoms["drive"] == [
+        ("CAR", cars.car_name("corsa")), ("MAP", trk.TRACK_TITLES["linden"]), ("BUILD", "t44 car")]
+    #  back to the title (the owner, 2026-09-26): ESC > Title screen shows it
+    #  again and runs its new pick; the garage's Title screen row too; a
+    #  challenge running is over (the player's car back)
+    back_runs = {}
+    for tag, script_, picks, g_ in (
+            ("session", [dict(stop="title"), dict(), dict(stop="quit")],
+             ["drive", "settings"], "drive"),
+            ("garage", [], ["garage", "quit"], ["title"]),
+            ("challenge", [dict(pick="brake_100", combo=("mx5", "full")), dict(stop="title"),
+                           dict(stop="quit")], ["drive", "drive"], "drive")):
+        seen = []
+        lg = _loop_run(os.path.join(root, "back_" + tag), lib, own.to_json(),
+                       dict(car="corsa", track="linden"), script_, title=picks,
+                       titles=seen, garage_acts=g_ if isinstance(g_, list) else ())
+        back_runs[tag] = ([("GARAGE" if e.get("garage") else
+                            (e["page"], e["car"], e["chal"])) for e in lg], len(seen))
+    back_want = {
+        "session": ([(None, "corsa", None), ("settings", "corsa", None),
+                     (None, "corsa", None)], 2),
+        "garage": (["GARAGE"], 2),
+        "challenge": ([(None, "corsa", None), (None, "mx5", "brake_100"),
+                       (None, "corsa", None)], 2)}
+    back_ok = back_runs == back_want
+    loop_ok = loop_ok and back_ok
+    flags = {}
+    for argv in ([], ["--build", "x"], ["--track", "arena"], ["--garage"], ["--race", "anchor"],
+                 ["--seed-lap"], ["--ml-drive", "x.json"], ["--render", "offscreen"],
+                 ["--headless"]):
+        flags[" ".join(argv) or "(bare)"] = _title_wanted(build_parser().parse_args(argv))
+    flag_ok = flags == {"(bare)": True, "--build x": True, "--track arena": True,
+                        "--garage": False, "--race anchor": False, "--seed-lap": False,
+                        "--ml-drive x.json": False, "--render offscreen": False,
+                        "--headless": False}
+    import contextlib
+    import io
+    with contextlib.redirect_stdout(io.StringIO()):
+        sim = _build("linden", driver=lambda t, v, T_: Controls())
+    sim.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
+    sim.has_garage, sim.garage_lib = True, lib
+    sim.settings = Settings(path="", car="corsa")
+    sim.progress_file = Progress(os.path.join(root, "progress.json"))
+    sim.challenge_build = (own.to_json(), lib)
+    pages = {}
+    for p_ in TITLE_PAGES:
+        opened = sim.open_page(p_)
+        pages[p_] = (opened, sim._menu_page, sim.paused, bool(sim.menu and sim.menu.open))
+        if p_ != "challenges":
+            sim._menu_close()
+        else:
+            sim.handle_event("menu")               # ESC: the title again (task 45)
+            back = (sim.stop_reason, sim.quit, sim.menu.open)
+            sim.quit, sim.stop_reason = False, ""
+    sim.progress_file = None                       # nothing to list: the pause page
+    fall = (sim.open_page("challenges"), sim._menu_page)
+    sim._menu_close()
+    #  the pause page's Title screen row: on a titled launch only; picking it
+    #  ends the session for the title
+    rows_t = {}
+    for flag in (False, True):
+        sim.has_title = flag
+        sim._menu_show_main()
+        rows_t[flag] = [a for _, a in sim.menu.items]
+        if flag:
+            sim.menu.idx = rows_t[flag].index("title")
+            sim._menu_event("select")
+            picked_t = (sim.stop_reason, sim.quit)
+        sim._menu_close()
+    sim.quit, sim.stop_reason, sim.has_title = False, "", False
+    title_row_ok = ("title" not in rows_t[False] and rows_t[True][-2:] == ["title", "quit"]
+                    and picked_t == ("title", True))
+    sim.renderer = None
+    none_ = sim.open_page("settings")
+    from .title import PAGES as _TP, ACTIONS as _TA
+    page_ok = (all(v == (True, k, True, True) for k, v in pages.items())
+               and back == ("title", True, False) and fall == (True, "main")
+               and none_ is False and tuple(_TP) == TITLE_PAGES
+               and set(TITLE_PAGES) < set(_TA) and {"drive", "garage", "quit"} < set(_TA)
+               and title_row_ok)
+    ok = loop_ok and flag_ok and page_ok
+    if verbose:
+        print(f"  V44 title       : back to the title {back_runs}: {back_ok}; pause-page "
+              f"row {rows_t[True][-2:]} -> {picked_t}: {title_row_ok}")
+        print(f"  V44 title       : the loop runs each pick {got}: {loop_ok}; bottom line "
+              f"{bottoms['drive']}; opens on it {sorted(k for k, v in flags.items() if v)}, "
+              f"not {sorted(k for k, v in flags.items() if not v)}: {flag_ok}; "
+              f"Sim.open_page {dict((k, v[1]) for k, v in pages.items())}, ESC -> {back}, "
+              f"nothing to list -> {fall[1]}, no window {none_}: {page_ok}")
+    return ok, dict(loop=got, flags=flags, pages=pages)
+
+
+def _v45_rolling_start(verbose=True):
+    """Task 45's rolling start (`Sim._rolling_pose`), with no window and no
+    physics step: a time trial rolls up to the line on EVERY closed map --
+    the open map's perimeter and the skidpad too -- from a straight
+    (|kappa| < ROLL_STRAIGHT_KAPPA for ROLL_STRAIGHT_M ahead) where the map
+    has one, inside the last sector, with ROLL_CLEAR_S at V0 before the first
+    corner or a straight run to the line (the player review: the first cut
+    sat 16-20 m before a corner, holding UP was gravel in 2 s), and at
+    ROLL_CORNER_G on the skidpad's circle, where it has
+    none. A lap or circle challenge and the tutorial's timed laps roll with a
+    window only (challenges.measure's references never move); a stop
+    challenge, the dragstrip, a race and a plain scripted Sim do not. R on
+    the out-lap, or back to the start line, is that rolling start with the
+    clock waiting for the line (never a dead lap) and the skid marks kept;
+    R past a split keeps its line and voids the lap; each R and SHIFT+R says
+    so on the HUD, and the pause rows name what the keys do. Round 3: the
+    tutorial's circle rolls in at ROLL_TUTORIAL_G, and a time-trial session
+    opens rolling whether or not the pre-race page opens
+    (`Sim.roll_time_trial`)."""
+    from types import SimpleNamespace
+    from . import challenges as chm
+    win = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
+
+    def stand_in():                                # a session's recorder, for the rule
+        return SimpleNamespace(discard=lambda *a: None, retarget=lambda *a: None)
+
+    def near_k(tr, s):                             # the road the car sets off on
+        s_tab = np.asarray(tr.s)
+        m = (s_tab >= s) & (s_tab <= s + ROLL_STRAIGHT_M)
+        return float(np.abs(np.asarray(tr.kappa))[m].max())
+
+    def clear_run(tr, s0, V0):
+        """(s at V0 to the first corner ahead, past the line if need be; the
+        road straight all the way to the line)"""
+        s_tab, L = np.asarray(tr.s), float(tr.length)
+        s_bend = s_tab[np.abs(np.asarray(tr.kappa)) >= ROLL_STRAIGHT_KAPPA]
+        ahead = s_bend[s_bend > s0]
+        return (((float(ahead[0]) if ahead.size else L + float(s_bend[0])) - s0) / V0,
+                not ahead.size)
+
+    poses, clear = {}, {}
+    for name in trk.TRACK_ORDER:
+        s_ = _build(name, driver=lambda t, v, T_: Controls())
+        plain = s_._rolling_pose()
+        s_.recorder = stand_in()
+        p = s_._rolling_pose()
+        poses[name] = (plain, p, float(s_.track.length),
+                       near_k(s_.track, p[0]) if p else float("nan"))
+        if name in trk.CIRCUITS + ("open",):
+            clear[name] = clear_run(s_.track, p[0], p[1]) + (max(s_.track.sector_s),)
+    L_sk = poses["skidpad"][2]
+    pose_ok = (all(v[0] is None for v in poses.values()) and poses["dragstrip"][1] is None
+               and all(v[1] is not None and 0.0 < v[1][0] < v[2] and v[1][1] > 5.0
+                       and v[1][2] >= 1 for n, v in poses.items() if n != "dragstrip"))
+    straight_ok = (all(poses[n][3] < ROLL_STRAIGHT_KAPPA
+                       for n in trk.CIRCUITS + ("open",))
+                   and poses["arena"][3] < 0.005          # never the run-in's R = 35 m corner
+                   and poses["skidpad"][1][0] == L_sk - min(ROLL_BACK_M, ROLL_BACK_FRAC * L_sk)
+                   and abs(poses["skidpad"][1][1] ** 2 * poses["skidpad"][3]
+                           - ROLL_CORNER_G * G) < 1e-6)
+    #  the player review: on every circuit (and the open map) ROLL_CLEAR_S at
+    #  V0 before the first corner, or a straight run to the line; never behind
+    #  the last split. Where each lands: the pit straights of linden, kestrel
+    #  and ashdown run straight into the line; the open map's back straight
+    #  keeps its 150 m; the arena has no straight with 3 s at a corner's speed
+    #  between T5 and the line (40 m, 30 m), so it sets off out of T6 at
+    #  36 km/h (30 m / 3 s) with only the flat-out T7 left; the skidpad keeps
+    #  its circle
+    at = {n: round(v[1][0], 1) for n, v in poses.items() if v[1]}
+    clear_ok = (all((c[0] >= ROLL_CLEAR_S - 1e-9
+                     or (c[1] and poses[n][2] - poses[n][1][0] >= ROLL_RUNIN_MIN_M))
+                    and poses[n][1][0] > c[2] for n, c in clear.items())
+                and {n for n, c in clear.items() if c[1]} == {"linden", "kestrel", "ashdown"}
+                and at == {"arena": 1106.2, "linden": 1060.4, "kestrel": 1843.3,
+                           "ashdown": 1330.5, "open": 1492.7, "skidpad": 267.0}
+                and abs(poses["arena"][1][1] - 30.0 / ROLL_CLEAR_S) < 0.01
+                and all(poses[n][1][1] == 22.0 for n in ("linden", "kestrel", "ashdown")))
+    # who rolls: a lap / circle challenge and the tutorial's laps with a
+    # window; a stop goal, a race and the tutorial's other steps never
+    who = {}
+    for cid, map_ in (("lap_arena", "arena"), ("skid_dry", "skidpad"), ("brake_100", "arena")):
+        s_ = _build(map_, driver=lambda t, v, T_: Controls())
+        s_.challenge = chm.ChallengeRun(chm.resolve(chm.load_all()[cid], "corsa", "full"),
+                                        s_.track, {})
+        bare = s_._rolling_pose()
+        s_.renderer = win
+        who[cid] = (bare is None, s_._rolling_pose() is not None)
+    tut_sk = None
+    for sid in ("lap", "wing_off", "turn1", "manual"):
+        s_ = _build("skidpad" if sid == "wing_off" else "arena",
+                    driver=lambda t, v, T_: Controls())
+        s_.tutorial = SimpleNamespace(active=True, step=SimpleNamespace(id=sid),
+                                      command=lambda ev: None)
+        bare = s_._rolling_pose()
+        s_.renderer = win
+        who["tut_" + sid] = (bare is None, s_._rolling_pose() is not None)
+        if sid == "wing_off":
+            tut_sk = s_._rolling_pose()
+    #  round 3: the tutorial's circle rolls in gently (ROLL_TUTORIAL_G, 44 km/h
+    #  dry), from the time trial's point; the time trial keeps ROLL_CORNER_G
+    k_sk = poses["skidpad"][3]
+    gentle_ok = (tut_sk is not None and tut_sk[0] == poses["skidpad"][1][0]
+                 and abs(tut_sk[1] ** 2 * k_sk - ROLL_TUTORIAL_G * G) < 1e-6
+                 and tut_sk[1] < poses["skidpad"][1][1])
+    s_ = _build("arena", driver=lambda t, v, T_: Controls())
+    s_.recorder, s_.rivals = stand_in(), [object()]
+    who["race"] = (True, s_._rolling_pose() is not None)
+    who_ok = who == {"lap_arena": (True, True), "skid_dry": (True, True),
+                     "brake_100": (True, False), "tut_lap": (True, True),
+                     "tut_wing_off": (True, True), "tut_turn1": (True, False),
+                     "tut_manual": (True, False), "race": (True, False)}
+    # R and SHIFT+R in an arena time trial (the sector lines 0 / 391 / 851)
+    sim = _build("arena", driver=lambda t, v, T_: Controls())
+    sim.recorder = stand_in()
+    s0 = sim._rolling_pose()[0]
+    cleared = []
+    sim.skid = SimpleNamespace(clear=lambda: cleared.append(1))   # what a reset clears
+    lt = sim.lap
+
+    def r_key(full=False, s=None, t_start=None):
+        if s is not None:
+            sim.s = s
+        lt.t_lap_start = t_start
+        sim.reset(to_checkpoint=not full, by_key=True)
+        return (round(sim.s, 3), lt.t_lap_start, lt._valid_run, sim._rec_msg, len(cleared))
+
+    lt.best_lap = 61.0
+    out = r_key(s=1200.0)                          # R on the out-lap: not 851 m back
+    first = r_key(s=100.0, t_start=5.0)            # R in the first sector: no dead lap
+    split = r_key(s=600.0, t_start=5.0)            # R past a split: its line, lap void
+    full = r_key(full=True)
+    r_ok = (out == (round(s0, 3), None, True, "R: rolling start - the clock starts at the line", 0)
+            and first == (round(s0, 3), None, True,
+                          "R: rolling start - the clock starts at the line", 0)
+            and lt.best_lap == 61.0
+            and split == (390.639, 5.0, False,
+                          "R: back to the sector 2 line - this lap does not count", 0)
+            and full == (round(s0, 3), None, True, "SHIFT+R: rolling start", 1))
+    # no rolling start (a scripted Sim): R and SHIFT+R go to the start line
+    bare = _build("arena", driver=lambda t, v, T_: Controls())
+    bare.s, bare.lap.t_lap_start = 100.0, 5.0
+    bare.reset(to_checkpoint=True, by_key=True)
+    b_r = (bare.s, bare.lap.t_lap_start, bare._rec_msg)
+    bare.reset(by_key=True)
+    b_ok = (b_r == (0.0, 5.0, "R: back to the start line - this lap does not count")
+            and bare.s == 0.0 and bare._rec_msg == "SHIFT+R: back to the start line")
+    # the pause rows say what the keys do here, and the footer the same, short
+    rows, feet = {}, {}
+    for tag, s_ in (("tt", sim), ("bare", bare)):
+        s_.renderer = win
+        s_._menu_open()
+        rows[tag] = [lbl for lbl, a in s_.menu.items if a in ("reset", "full_reset")]
+        feet[tag] = s_.menu.footer
+        s_._menu_close()
+        s_.renderer = None
+    rows_ok = (rows["tt"] == ["Back to the last sector line (R)",
+                              "Restart the lap: rolling start (SHIFT+R)"]
+               and rows["bare"] == ["Back to the last sector line (R)",
+                                    "Back to the start line (SHIFT+R)"]
+               and all("   R sector line   SHIFT+R restart lap   " in f_
+                       and "full reset" not in f_ for f_ in feet.values()))
+    #  round 3: a time-trial session opens rolling, with the page or without
+    #  it (`Sim.roll_time_trial`, at the session's start); a race, a
+    #  challenge, the tutorial, the dragstrip and a scripted Sim do not, and
+    #  a note already up (UNLIMITED's) is not written over
+    opened = {}
+    for tag in ("tt", "noted", "plain", "race", "challenge", "tutorial", "dragstrip"):
+        s_ = _build("dragstrip" if tag == "dragstrip" else "arena",
+                    driver=lambda t, v, T_: Controls())
+        if tag != "plain":
+            s_.recorder = stand_in()
+        if tag == "noted":
+            s_._rec_note("UNLIMITED run: its laps are kept apart", 6.0)
+        elif tag == "race":
+            s_.rivals = [object()]
+        elif tag == "challenge":
+            s_.challenge = chm.ChallengeRun(chm.resolve(chm.load_all()["lap_arena"], "corsa",
+                                                        "full"), s_.track, {})
+            s_.renderer = win
+        elif tag == "tutorial":
+            s_.tutorial = SimpleNamespace(active=True, step=SimpleNamespace(id="turn1"),
+                                          command=lambda ev: None)
+            s_.renderer = win
+        rolled = s_.roll_time_trial()
+        s_.renderer = None
+        opened[tag] = (rolled, round(s_.s, 3), round(hypot(s_.veh.u, s_.veh.v), 3),
+                       s_._rec_msg)
+    p_tt = poses["arena"][1]
+    note_tt = "TIME TRIAL: rolling start - the clock starts at the line"
+    open_ok = (opened["tt"] == (True, round(p_tt[0], 3), round(p_tt[1], 3), note_tt)
+               and opened["noted"] == (True, round(p_tt[0], 3), round(p_tt[1], 3),
+                                       "UNLIMITED run: its laps are kept apart")
+               and all(opened[k] == (False, 0.0, 0.0, "")
+                       for k in ("plain", "race", "challenge", "tutorial", "dragstrip")))
+    ok = (pose_ok and straight_ok and clear_ok and who_ok and r_ok and b_ok and rows_ok
+          and gentle_ok and open_ok)
+    if verbose:
+        runs = {n: (f"{c[0]:.1f} s" + (", straight to the line" if c[1] else ""))
+                for n, c in clear.items()}
+        print(f"  V45 rolling     : a time trial rolls from {at} m, a plain Sim / the "
+              f"dragstrip stand ({pose_ok}); on a straight, the skidpad at "
+              f"{ROLL_CORNER_G} g ({straight_ok}); clear run at V0 {runs}, the arena "
+              f"out of T6 at {poses['arena'][1][1] * 3.6:.0f} km/h ({clear_ok}); "
+              f"challenges / tutorial / race {who_ok}; "
+              f"R out-lap {out[0]} m, first sector {first[0]} m (fresh clock), past a split "
+              f"{split[0]} m (void), SHIFT+R {full[0]} m, marks kept by R ({r_ok}); no "
+              f"rolling start: the line ({b_ok}); pause rows {rows_ok}; the tutorial's "
+              f"circle at {ROLL_TUTORIAL_G} g, "
+              f"{(tut_sk[1] if tut_sk else float('nan')) * 3.6:.0f} km/h ({gentle_ok}); a "
+              f"time trial opens rolling, a race / challenge / tutorial / dragstrip / "
+              f"scripted Sim not, UNLIMITED's note kept ({open_ok})"
+              f"  -> {'ok' if ok else 'FAIL'}")
+        if not ok:
+            print(f"    poses {poses}\n    clear {clear}\n    who {who}"
+                  f"\n    R {out} {first} {split} {full}\n    bare {b_r}\n    rows {rows}\n    tutorial circle {tut_sk}"
+                  f"\n    opened {opened}")
+    return ok, dict(poses={n: v[1] for n, v in poses.items()}, who=who)
+
+
+def _v45b_tutorial_session(verbose=True):
+    """Task 45's tutorial session, with no window and no progress file: F on
+    a car with no wings leaves the toggle OFF; a wing step on its own map in
+    a car with no flank wing asks for a session with the tutorial's plate,
+    once a step (a library with no plate cannot loop it); lap 1 of the wing
+    starts OFF; a practice lap (every step but TUTORIAL_RECORDED's) is
+    discarded, carded nowhere and shows no delta or flash, while step 10's
+    lap keeps its card; the map the tutorial borrowed comes back
+    (`_tutorial_map_move` / `_tutorial_map_restore`), and ending it restarts
+    the session when that moves the map."""
+    from types import SimpleNamespace
+    from .tutorial import Tutorial
+    idle = lambda t, v, T_: Controls()             # noqa: E731
+    # F with no wings: the toggle stays OFF and the note says why; with one, F arms
+    bare = _build("skidpad", driver=idle)
+    bare.handle_event("wing")
+    plate = _build("skidpad", wing="plate", driver=idle)
+    plate.wing_on = False
+    plate.handle_event("wing")
+    f_ok = (not bare.wing_on and bare._rec_msg == "no wings fitted"
+            and plate.wing_on and plate._rec_msg == "wings ARMED")
+    # the wing step on the skidpad with no flank wing: one restart for the plate
+    bare.tutorial = Tutorial(None, start="wing_off")
+    bare._tutorial_tick()
+    first = (bare.quit, bare.stop_reason, bare._rec_msg)
+    bare.quit, bare.stop_reason = False, ""
+    bare._tutorial_tick()                          # the same step, still no plate: no loop
+    again = bare.quit
+    fitted = _build("skidpad", driver=idle)        # the plate session (tutorial_car)
+    fitted.tutorial, fitted.tutorial_car = Tutorial(None, start="wing_off"), True
+    fitted._tutorial_tick()
+    w_ok = (first == (True, "restart", "tutorial: fitting the tutorial wing")
+            and not again and not fitted.quit)
+    # lap 1 OFF: an armed car is disarmed as the step starts, and stays so
+    plate.tutorial = Tutorial(None, start="wing_off")
+    plate._tutorial_tick()
+    on_at_start = plate.wing_on
+    plate.handle_event("wing")                     # the step's F: armed, and kept armed
+    plate._tutorial_tick()
+    off_ok = not on_at_start and plate.wing_on and not plate.quit
+    # a practice lap: discarded, no card, no delta, no flash, and the running
+    # lap not INVALID on the panel for it; step 10's is carded, and voided
+    why, cards = [], {}
+    sim = _build("arena", driver=idle)
+    sim.recorder = SimpleNamespace(discard=why.append, last=None, recording=False,
+                                   _why="the tutorial", key="arena|corsa|sport|patch",
+                                   book=SimpleNamespace(pb_time=lambda k: None))
+    sim.ghosts = SimpleNamespace(sync=lambda k=None: None, ghost_tuples=lambda s_: [],
+                                 delta=lambda s_: -0.18,
+                                 flash_now=lambda s_: ("S1  5.000  -0.100", "green"))
+    lap = dict(time=16.8, valid=False, pos=None, pb_before=None,
+               key="arena|corsa|sport|patch", why="the tutorial")
+    for sid in ("turn1", "lap"):
+        sim.tutorial = Tutorial(None, start=sid)
+        sim._results, sim._rec_msg = None, ""
+        sim._tutorial_tick()
+        sim._rec_lap(dict(lap))
+        sim.lap.t_lap_start = sim.t                # a lap running, the recorder not on it
+        hud = sim.hud_data()
+        cards[sid] = (sim._results is not None, bool(sim._rec_msg),
+                      math.isnan(hud.delta_s), hud.sector_flash,
+                      hud.lap_valid, hud.lap_void_why)
+    q_ok = (why and why[0] == "the tutorial" and "the tutorial" not in why[1:]
+            and cards["turn1"] == (False, False, True, "", True, "")
+            and cards["lap"] == (True, True, False, "S1  5.000  -0.100",
+                                 False, "the tutorial"))
+    # the player's map: remembered once, moved, put back, forgotten
+    opts, st = SimpleNamespace(), SimpleNamespace(track="linden")
+    moves = (_tutorial_map_move(opts, st, "arena"), _tutorial_map_move(opts, st, None),
+             _tutorial_map_move(opts, st, "skidpad"), opts.tutorial_map_prev, st.track)
+    back = (_tutorial_map_restore(opts, st), st.track, opts.tutorial_map_prev,
+            _tutorial_map_restore(opts, st))
+    own = SimpleNamespace(track="arena")           # the tutorial never moved it
+    own_ok = not _tutorial_map_move(opts, own, "arena") and opts.tutorial_map_prev is None
+    m_ok = (moves == (True, False, True, "linden", "skidpad")
+            and back == (True, "linden", None, False) and own_ok)
+    # ending it on the skidpad restarts onto the player's map; on their map, not
+    stops = []
+    for prev in ("linden", "skidpad"):
+        s_ = _build("skidpad", driver=idle)
+        s_.tutorial, s_.tutorial_map_prev = Tutorial(None, start="wing_result"), prev
+        s_._tutorial_stop("tutorial ended")
+        stops.append(s_.stop_reason)
+    e_ok = stops == ["restart", ""]
+    ok = f_ok and w_ok and off_ok and q_ok and m_ok and e_ok
+    if verbose:
+        print(f"  V45b tutorial   : F with no wings stays OFF ({f_ok}); the wing step "
+              f"fits the plate once ({w_ok}); lap 1 starts OFF ({off_ok}); a practice "
+              f"lap discarded, no card / delta / flash / INVALID, step 10's carded ({q_ok}); "
+              f"the map back ({m_ok}); ending restarts onto it ({e_ok})"
+              f"  -> {'ok' if ok else 'FAIL'}")
+        if not ok:
+            print(f"    wing {first} {again} {fitted.quit}  off {on_at_start} {plate.wing_on}"
+                  f"\n    why {why}  cards {cards}\n    map {moves} {back} {own_ok}"
+                  f"  stops {stops}")
+    return ok, dict(cards=cards, stops=stops)
+
+def _v45c_title_back(tmp, verbose=True):
+    """Task 45's way back to the title. The pause page has a Main menu row
+    (action 'title') right above Quit to desktop; Main menu ends the session
+    with 'title'; Quit to desktop asks twice -- the first select re-labels
+    the row and quits nothing, the second quits, a move off the row disarms
+    it. Back or ESC on a page the title opened (Sim.open_page) is the title
+    again -- also after the challenge's own page and back to the list --
+    while the same page reached from the pause page goes back to it, and a
+    session that has driven since is an ordinary one. In the REAL loop
+    (`_loop_run`): every 'title' stop, and the garage's, shows the title
+    again and runs its pick as at launch; a running challenge's class and a
+    running tutorial's map are put back first; Quit there exits."""
+    import contextlib
+    import io
+    from types import SimpleNamespace
+    from . import garage as grg
+    from .aero.library import Library
+    from .progress import Progress
+    from .tutorial import Tutorial
+    root = os.path.join(tmp, "title45")
+    lib = Library(os.path.join(root, "library"), use_xfoil=False)
+    own = grg.new_build("corsa")
+    own.name, own.left.wing = "t45 car", "fin"
+    own.sync_mirror("left")
+    with contextlib.redirect_stdout(io.StringIO()):
+        sim = _build("linden", driver=lambda t, v, T_: Controls())
+    sim.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
+    sim.has_garage, sim.garage_lib = True, lib
+    sim.has_title = True                   # a titled launch: its Main menu row is there
+    sim.settings = Settings(path="", car="corsa")
+    sim.progress_file = Progress(os.path.join(root, "progress.json"))
+    sim.challenge_build = (own.to_json(), lib)
+
+    def rows():
+        return [a for _, a in sim.menu.items]
+
+    def label(act):
+        return {a: lb for lb, a in sim.menu.items}.get(act)
+
+    def fresh():
+        sim.quit, sim.stop_reason = False, ""
+        if sim.menu is not None and sim.menu.open:
+            sim._menu_close()
+    # the pause page: Main menu right above Quit to desktop
+    sim._menu_open()
+    r = rows()
+    row_ok = ("title" in r and r.index("title") == r.index("quit") - 1
+              and label("title") == "Main menu" and label("quit") == "Quit to desktop")
+    # Quit to desktop: the first select re-labels the row, the second quits
+    sim.menu.idx = r.index("quit")
+    sim.handle_event("select")
+    first = (sim.quit, sim.menu.open, label("quit"), sim.menu.action())
+    sim.handle_event("select")
+    second = (sim.quit, sim.stop_reason)
+    fresh()
+    # a move off the row disarms it (two presses again); ESC resumes, disarmed
+    sim._menu_open()
+    sim.menu.idx = r.index("quit")
+    sim.handle_event("select")
+    sim.handle_event("nav_up")
+    moved = (label("quit"), sim.menu.action(), sim.quit)
+    sim.handle_event("nav_down")
+    sim.handle_event("select")
+    again = (sim.quit, label("quit"))
+    sim.handle_event("menu")
+    esc = (sim.quit, sim._quit_armed, sim.menu.open)
+    quit_ok = (first == (False, True, "Quit to desktop: ENTER again", "quit")
+               and second == (True, "") and moved == ("Quit to desktop", "title", False)
+               and again == (False, "Quit to desktop: ENTER again")
+               and esc == (False, False, False))
+    fresh()
+    # Main menu: the session ends for the title
+    sim._menu_open()
+    sim.menu.idx = rows().index("title")
+    sim.handle_event("select")
+    main_ok = (sim.quit, sim.stop_reason, sim.menu.open) == (True, "title", False)
+    fresh()
+    # a page the title opened: ESC and its Back row are the title again
+    from_title = {}
+    for p_ in TITLE_PAGES:
+        got = []
+        for how in ("ESC", "Back"):
+            sim.open_page(p_)
+            flag = sim._from_title
+            if how == "ESC":
+                sim.handle_event("menu")
+            else:
+                sim.menu.idx = rows().index(TITLE_BACK[p_])
+                sim.handle_event("select")
+            got.append((flag, sim.stop_reason, sim.quit))
+            fresh()
+        from_title[p_] = got
+    # into a challenge's own page and back: the list, then the title
+    sim.open_page("challenges")
+    sim.menu.idx = next(i for i, a in enumerate(rows()) if a.startswith("ch:"))
+    sim.handle_event("select")
+    deep = [sim._menu_page]
+    sim.handle_event("menu")
+    deep.append(sim._menu_page)
+    sim.handle_event("menu")
+    deep += [sim.stop_reason, sim.quit]
+    fresh()
+    # the same page from the pause page: back to the pause page; and once the
+    # player has driven, a title-opened session is an ordinary one
+    ordinary = []
+    for first_ in ("pause", "driven"):
+        if first_ == "driven":
+            sim.open_page("settings")
+            sim._menu_close()                          # the menu closes into driving
+        sim._menu_open()
+        sim.menu.idx = rows().index("settings")
+        sim.handle_event("select")
+        sim.handle_event("menu")
+        ordinary.append((sim._menu_page, sim.menu.open, sim.quit))
+        fresh()
+    page_ok = (all(v == [(k, "title", True)] * 2 for k, v in from_title.items())
+               and deep == ["challenge", "challenges", "title", True]
+               and ordinary == [("main", True, False)] * 2)
+    # the REAL loop: title > Settings > back; > Challenges > a challenge >
+    # Main menu (its class put back); > Garage > its Main menu; > Drive, the
+    # tutorial started, on its own map > Main menu (the tutorial dropped, the
+    # map put back); > Drive (the player's map, no tutorial) > Main menu; > Quit
+    seen = []
+    tut45 = Tutorial(None, start="turn1")          # (on the arena)
+    lg = _loop_run(os.path.join(root, "loop"), lib, own.to_json(),
+                   dict(car="corsa", track="linden"),
+                   [dict(stop="title"), dict(pick="lap_arena", combo=("corsa", "full")),
+                    dict(stop="title"), dict(tut=tut45), dict(tut=tut45, stop="title"),
+                    dict(stop="title")],
+                   title=["settings", "challenges", "garage", "drive", "drive", "quit"],
+                   titles=seen, garage_acts=["title"])
+    run = [("GARAGE",) if e.get("garage") else (e["page"], e["chal"], e["track"], e["tut"])
+           for e in lg]
+    end = Settings.load(os.path.join(root, "loop", "runs", "settings.json"))
+    want = [("settings", None, "linden", False), ("challenges", None, "linden", False),
+            (None, "lap_arena", "arena", False), ("GARAGE",), (None, None, "linden", False),
+            (None, None, "arena", True), (None, None, "linden", False)]
+    loop_ok = run == want and len(seen) == 6 and (end.track, end.car) == ("linden", "corsa")
+    ok = row_ok and quit_ok and main_ok and page_ok and loop_ok
+    if verbose:
+        print(f"  V45c title back: Main menu above Quit to desktop ({row_ok}); Quit asks "
+              f"twice, a move disarms it ({quit_ok}); Main menu -> 'title' ({main_ok}); "
+              f"ESC / Back on a page the title opened -> the title, via a challenge's "
+              f"page too, from the pause page or after driving -> the pause page "
+              f"({page_ok}); the loop shows the title {len(seen)} times, the class and the "
+              f"map put back ({loop_ok})  -> {'ok' if ok else 'FAIL'}")
+        if not ok:
+            print(f"    rows {r}\n    quit {first} {second} {moved} {again} {esc}"
+                  f"\n    pages {from_title} {deep} {ordinary}\n    loop {run} "
+                  f"{len(seen)} {(end.track, end.car)}")
+    return ok, dict(rows=r, pages=from_title, loop=run)
+
+
+def _v45d_challenge_pause(tmp, verbose=True):
+    """Task 45's challenge pause page, by events with no window. ESC in a
+    run shows a short page -- Resume, Retry (SHIFT+R), R only where it is
+    not a retry too (a lap, not a stop), This challenge, the list, Settings,
+    Controls, Main menu, Quit to desktop -- with no time trial, tutorial,
+    garage, swarm or race row. This challenge opens the running one's page
+    on its car and wings, cursor on Start; Back is the pause page, on that
+    row. The list opens on the running row, says what is running, and a
+    challenge opened from it goes back to it. A challenge's page opens on
+    Start (on Back when it has none). In the REAL loop (`_loop_run`), End
+    the challenge opens the next session on the CHALLENGES list, whose Back
+    is the title only when the run began on the title's list (or was picked
+    inside a run that did), else the pause page."""
+    import contextlib
+    import io
+    from types import SimpleNamespace
+    from . import challenges as chm
+    from . import garage as grg
+    from .aero.library import Library
+    from .progress import Progress
+    root = os.path.join(tmp, "chpause45")
+    lib = Library(os.path.join(root, "library"), use_xfoil=False)
+    own = grg.new_build("corsa")
+    own.name, own.left.wing = "t45d car", "fin"
+    own.sync_mirror("left")
+
+    def session(cid, map_):
+        with contextlib.redirect_stdout(io.StringIO()):
+            s_ = _build(map_, driver=lambda t, v, T_: Controls())
+        s_.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
+        s_.has_garage, s_.garage_lib = True, lib
+        s_.has_title = True                # a titled launch: Main menu above Quit
+        s_.settings = Settings(path="", car="corsa")
+        s_.progress_file = Progress(os.path.join(root, "progress.json"))
+        s_.challenge_build = (own.to_json(), lib)
+        if cid is not None:
+            s_.ch_pick = ("corsa", "full")
+            s_.challenge = chm.ChallengeRun(chm.resolve(chm.load_all()[cid], "corsa", "full"),
+                                            s_.track, {})
+        return s_
+    sim = session("airbrake_150", "dragstrip")     # (not the list's first row)
+    ev = sim.handle_event
+
+    def acts():
+        return [a for _, a in sim.menu.items]
+
+    def goto(action):
+        i = acts().index(action)
+        while sim.menu.idx != i:
+            ev("nav_down")
+    # the short page: a stop (R is a retry there too) and a lap
+    ev("menu")
+    stop_rows, foot = acts(), sim.menu.footer
+    retry = dict((a, t) for t, a in sim.menu.items).get("full_reset")
+    lap = session("lap_arena", "arena")
+    lap._menu_open()
+    lap_rows = [a for _, a in lap.menu.items]
+    rows_ok = (stop_rows == ["resume", "full_reset", "ch_this", "challenges", "settings",
+                             "controls", "title", "quit"]
+               and lap_rows == ["resume", "full_reset", "reset", "ch_this", "challenges",
+                                "settings", "controls", "title", "quit"]
+               and retry == "Retry (SHIFT+R)" and "TAB" not in foot and "SHIFT+R retry" in foot)
+    # This challenge: its page on Start, on the car and wings it runs in;
+    # Back is the pause page, on that row
+    sim.ch_pick = ("mx5", "top")                   # a pick browsed and left
+    goto("ch_this")
+    ev("select")
+    this = (sim._menu_page, sim.menu.title, sim.menu.action(), sim.ch_pick)
+    ev("nav_right")                                # (the cursor stays on Start)
+    kept = sim.menu.action()
+    ev("menu")
+    this_back = (sim._menu_page, sim.menu.action())
+    this_ok = (this == ("challenge", "AIR BRAKE FROM 150", "ch_go:airbrake_150",
+                        ("corsa", "full"))
+               and kept == "ch_go:airbrake_150" and this_back == ("main", "ch_this"))
+    # the list: on the running row, says it runs; a challenge from it and back
+    goto("challenges")
+    ev("select")
+    lst = (sim._menu_page, sim.menu.action(), "<- now" in sim.menu.items[sim.menu.idx][0],
+           sim.menu.subtitle.startswith("Now running: Air brake from 150   -   shown: "))
+    goto("ch:lap_arena")
+    ev("select")
+    other = sim.menu.action()
+    ev("menu")
+    other_back = (sim._menu_page, sim.menu.action())
+    goto("ch_end")
+    ev("select")
+    ended = (sim.challenge_end, sim.quit, sim.stop_reason)
+    free = session(None, "arena")                  # no run: the full page, the list on its
+    #                                                first challenge (under the Car and Wings rows)
+    free._menu_open()
+    free_rows = [a for _, a in free.menu.items]
+    free.menu.idx = free_rows.index("challenges")
+    free.handle_event("select")
+    idle = (free.menu.action(), free.menu.subtitle.startswith("This car + wings: "))
+    list_ok = (lst == ("challenges", "ch:airbrake_150", True, True)
+               and other == "ch_go:lap_arena" and other_back == ("challenges", "ch:lap_arena")
+               and ended == (True, True, "restart") and idle == ("ch:brake_100", True)
+               and {"swarm", "race", "garage", "reset", "tutorial"} <= set(free_rows)
+               and "ch_this" not in free_rows)
+    # Start from the list the title opened: the run remembers it; the list
+    # an ended run opens on without it goes back to the pause page
+    t_ = session(None, "arena")
+    t_.open_page("challenges")
+    t_.menu.idx = [a for _, a in t_.menu.items].index("ch:lap_arena")
+    t_.handle_event("select")
+    t_.menu.idx = [a for _, a in t_.menu.items].index("ch_go:lap_arena")
+    t_.handle_event("select")
+    p_ = session(None, "arena")
+    p_.open_page("challenges", title=False)
+    flag = p_._from_title
+    p_.handle_event("menu")
+    start_ok = (t_.ch_from_title and t_.challenge_pick == "lap_arena" and flag is None
+                and (p_._menu_page, p_.menu.action(), p_.quit) == ("main", "challenges", False))
+    # the REAL loop: title > Challenges > a run > another from inside it >
+    # End (the list; Back is the title) > a run from the pause page > End
+    # (the list; Back is the pause page)
+    lg = _loop_run(os.path.join(root, "loop"), lib, own.to_json(),
+                   dict(car="corsa", track="linden"),
+                   [dict(pick="brake_100", combo=("corsa", "full"), from_title=True),
+                    dict(pick="airbrake_150", combo=("corsa", "full")),
+                    dict(end=True), dict(pick="brake_100", combo=("corsa", "full")),
+                    dict(end=True), dict(stop="quit")],
+                   title="challenges")
+    run = [(e["page"], e["page_title"], e["chal"], e["track"]) for e in lg]
+    loop_ok = run == [("challenges", True, None, "linden"),
+                      (None, True, "brake_100", "dragstrip"),
+                      (None, True, "airbrake_150", "dragstrip"),
+                      ("challenges", True, None, "linden"),
+                      (None, True, "brake_100", "dragstrip"),
+                      ("challenges", False, None, "linden")]
+    ok = rows_ok and this_ok and list_ok and start_ok and loop_ok
+    if verbose:
+        print(f"  V45d ch. pause  : a run's page {stop_rows} (a lap adds R) ({rows_ok}); "
+              f"This challenge on {this[2]} in {this[3]}, Back -> {this_back} ({this_ok}); "
+              f"the list on {lst[1]}, a page from it back to it, End restarts ({list_ok}); "
+              f"a Start on the title's list is remembered ({start_ok}); End -> the list "
+              f"{[r_[:2] for r_ in run if r_[0]]} ({loop_ok})  -> {'ok' if ok else 'FAIL'}")
+        if not ok:
+            print(f"    rows {stop_rows} {lap_rows} {retry!r} {foot!r}\n    this {this} {kept} "
+                  f"{this_back}\n    list {lst} {other} {other_back} {ended} {idle} "
+                  f"{free_rows}\n    start {t_.ch_from_title} {t_.challenge_pick} {flag} "
+                  f"{(p_._menu_page, p_.menu.action(), p_.quit)}\n    loop {run}")
+    return ok, dict(rows=stop_rows, loop=run)
+
+
+def _v45e_challenge_list(tmp, verbose=True):
+    """Task 45's CHALLENGES list, by events with no window. Its first two
+    rows are the page's Car and Wings (set:ch_car, set:ch_cfg): LEFT /
+    RIGHT and ENTER step the pick there, the cursor stays on the row and
+    every challenge row's stars follow it; the list opens on the first
+    challenge, under them. The subtitle is this car + wings' stars out of
+    3 per challenge it can drive, then every combo's; the pause page's row
+    counts the same pick (not every combo's '1 of 456'), and follows it
+    when the list's Back returns there. A stub Air brake from
+    150 run in FULL WING starts on AIR BRAKE (its reference's mode; G steps
+    back to AUTO), in ONLY TOP on AUTO; the WINGS chip says the config
+    ('ONLY TOP') where G has nothing to step, the G mode elsewhere."""
+    import contextlib
+    import io
+    from types import SimpleNamespace
+    from . import airbrake as ab
+    from . import challenges as chm
+    from . import garage as grg
+    from .aero.library import Library
+    from .progress import Progress
+    root = os.path.join(tmp, "chlist45")
+    lib = Library(os.path.join(root, "library"), use_xfoil=False)
+    own = grg.new_build("corsa")
+    own.name, own.left.wing = "t45e car", "fin"
+    own.sync_mirror("left")
+    with contextlib.redirect_stdout(io.StringIO()):
+        sim = _build("arena", driver=lambda t, v, T_: Controls())
+    sim.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
+    sim.settings = Settings(path="", car="corsa")
+    sim.progress_file = Progress(os.path.join(root, "progress.json"))
+    sim.challenge_build = (own.to_json(), lib)
+    sec = sim.progress_file.section(chm.SECTION)
+    sec[chm.combo_key("lap_arena", "corsa", "full")] = dict(best=61.0, stars=2)
+    sec[chm.combo_key("lap_arena", "corsa", "top")] = dict(best=60.0, stars=3)
+    ev = sim.handle_event
+
+    def acts():
+        return [a for _, a in sim.menu.items]
+
+    def row(a):
+        return dict((a_, t) for t, a_ in sim.menu.items)[a]
+
+    def goto(action):
+        i = acts().index(action)
+        while sim.menu.idx != i:
+            ev("nav_down")
+
+    def mine(car, cfg):                    # 3 per challenge the pick can drive
+        return 3 * sum(chm.resolve(ch, car, cfg)["available"] for ch in chm.load_all().values())
+    g_all, t_all = chm.total_stars(sim.progress_file)
+    ev("menu")
+    pause0 = row("challenges")
+    goto("challenges")
+    ev("select")
+    first = (acts()[:2], sim.menu.action(), sim.menu.subtitle, "LEFT / RIGHT car, wings"
+             in sim.menu.footer, "[**-]" in row("ch:lap_arena"))
+    goto("set:ch_cfg")
+    ev("nav_right")                                # Wings: FULL -> ONLY TOP
+    top = (sim.ch_pick, sim._menu_page, sim.menu.action(), sim.menu.items[1][0],
+           "[***]" in row("ch:lap_arena"), sim.menu.subtitle)
+    ev("select")                                   # ENTER steps it on: ONLY TOP, FIXED
+    fixed = (sim.ch_pick, sim._menu_page, sim.menu.action())
+    goto("set:ch_car")
+    ev("nav_left")                                 # Car: the Corsa -> the Citaro (wraps)
+    bus = (sim.ch_pick, "not for this car" in row("ch:brake_100"), sim.menu.subtitle)
+    goto("ch_back")
+    ev("select")                                   # Back: the pause page, the Citaro pick
+    pause1 = (sim._menu_page, row("challenges"))
+    list_ok = (first[0] == ["set:ch_car", "set:ch_cfg"] and first[1] == "ch:brake_100"
+               and first[2] == (f"This car + wings: 2 of {mine('corsa', 'full')} stars   "
+                                f"(all: {g_all} of {t_all})   " + chm.pick_text("corsa", "full"))
+               and first[3] and first[4] and g_all == 5
+               and top[:4] == (("corsa", "top"), "challenges", "set:ch_cfg",
+                               "Wings   < ONLY TOP >")
+               and top[4] and top[5].startswith(f"This car + wings: 3 of {mine('corsa', 'top')} ")
+               and fixed == (("corsa", "top_fixed"), "challenges", "set:ch_cfg")
+               and bus[0] == ("bus", "top_fixed") and bus[1]
+               and bus[2].startswith(f"This car + wings: 0 of {mine('bus', 'top_fixed')} ")
+               and mine("bus", "top_fixed") < mine("corsa", "full")
+               and pause0 == f"Challenges: 2 of {mine('corsa', 'full')} stars (this car + wings)"
+               and pause1 == ("main", f"Challenges: 0 of {mine('bus', 'top_fixed')} stars "
+                                      "(this car + wings)"))
+    # the start mode and the chip, on stub runs
+    runs = {}
+    for cfg in ("full", "top"):
+        with contextlib.redirect_stdout(io.StringIO()):
+            s_ = _build("dragstrip", wing="plate", driver=lambda t, v, T_: Controls())
+        s_.challenge = chm.ChallengeRun(chm.resolve(chm.load_all()["airbrake_150"], "corsa", cfg),
+                                        s_.track, {})
+        s_.wing_side_mode, s_.wing_on = ab.AUTO, False
+        _challenge_wings(s_)
+        start, chip = s_.wing_side_mode, s_.hud_data().wing_mode
+        s_.handle_event("wing_side")
+        runs[cfg] = (start, chip, s_.wing_side_mode, s_.hud_data().wing_mode, s_.wing_on)
+    free_chip = sim.hud_data().wing_mode           # no run: the G mode
+    start_ok = (runs["full"] == (ab.AIR, "AIR BRAKE", ab.AUTO, "AUTO", True)
+                and runs["top"] == (ab.AUTO, "ONLY TOP", ab.AUTO, "ONLY TOP", True)
+                and free_chip == "AUTO")
+    ok = list_ok and start_ok
+    if verbose:
+        print(f"  V45e ch. list   : rows {first[0]} on top, opens on {first[1]}; Wings RIGHT / "
+              f"ENTER / Car LEFT -> {top[0]} {fixed[0]} {bus[0]}, stars follow, pause row "
+              f"{pause0!r} -> {pause1[1]!r} ({list_ok}); "
+              f"Air brake from 150 starts on {ab.LABELS[runs['full'][0]]} in FULL, "
+              f"chip {runs['top'][1]!r} in ONLY TOP ({start_ok})  -> {'ok' if ok else 'FAIL'}")
+        if not ok:
+            print(f"    first {first}\n    top {top}\n    fixed {fixed}\n    bus {bus}"
+                  f"\n    pause {pause0!r} {pause1}"
+                  f"\n    mine {mine('corsa', 'full')} {mine('corsa', 'top')} "
+                  f"{mine('bus', 'top_fixed')} all {g_all} {t_all}\n    runs {runs} {free_chip}")
+    return ok, dict(first=first[:2], runs=runs)
+
+
+def _v45f_menu_copy(verbose=True):
+    """Task 45's one vocabulary in the drive's menus, by events with no
+    window. The pause pages' subtitle is the TIME TRIAL page's words: no
+    'lap N', the build by its name (never its wings' file names), the
+    gearbox spelled out; the garage row is 'Garage: wings and builds' on
+    the pause and Settings pages; with no gamepad, Controls opens on the
+    keyboard's keys, its first row the gamepad's drawing, whose subtitle
+    says none is connected; every Settings label is 12 wide; the Settings
+    help lists all five cars; the RACE page says 'empty' and 'Built-in
+    driver' and that driver's tag is 'built-in'; the swarm window names
+    its wings in words; LAP RESULTS names the class in full."""
+    import contextlib
+    import io
+    from types import SimpleNamespace
+    from .input import MENU_NO_PAD
+    from .prerace import PreRace
+    from .records import class_label
+    with contextlib.redirect_stdout(io.StringIO()):
+        sim = _build("arena", driver=lambda t, v, T_: Controls())
+    sim.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"), screen=object(), ui=1.0)
+    sim.has_garage = True
+    sim.settings = Settings(path="", car="corsa")
+    sim.inp.layout = None                          # no gamepad connected
+    ev = sim.handle_event
+
+    def goto(action):
+        i = [a for _, a in sim.menu.items].index(action)
+        while sim.menu.idx != i:
+            ev("nav_down")
+
+    #  the subtitle: a named, saved build whose wings have file names
+    cfg0, fin = sim.veh.cfg, SimpleNamespace(name="flank-new")
+    sim.veh.cfg = SimpleNamespace(wing="off", has_designed=lambda: True, dev_left=fin,
+                                  dev_right=fin, top=SimpleNamespace(name="rear-new"))
+    b = {"name": "my corsa", "slots": {}}
+    sim.build_pick = PreRace(None, None, "my corsa", b, builds={"my corsa": dict(b)})
+    named = sim._menu_subtitle()
+    sim.challenge = SimpleNamespace(ch={"config": "top"})   # a run: its wing config too
+    in_run = sim._menu_subtitle()
+    sim.challenge = None
+    sim.build_pick = None                          # no builds: the wings by name
+    bare = sim._menu_subtitle()
+    sim.veh.cfg = cfg0
+    plain = sim._menu_subtitle()
+    sub_ok = ("lap " not in named + bare + plain and "build: my corsa" in named
+              and "(not saved)" not in named and "flank-new" not in named
+              and "rear-new" not in named and "flank-new, rear-new" in bare
+              and "build: my corsa  ·  ONLY TOP  ·  " in in_run
+              and plain.endswith("no wings  ·  " + GEARBOX_LABELS[sim.gearbox]))
+    #  the pause page, then Controls with no pad: the keyboard first
+    ev("menu")
+    rows = [t for t, _ in sim.menu.items]
+    pause_ok = ("Garage: wings and builds" in rows and "Controls: keyboard and gamepad" in rows
+                and sim.menu.note.startswith("Controls (in the list):")
+                and MENU_NO_PAD.capitalize() in sim.menu.note)
+    goto("controls")
+    ev("select")
+    kb_first = (sim._menu_page == "controls_kb"
+                and sim.menu.items[0] == ("Gamepad (drawing)", "controls")
+                and MENU_NO_PAD in sim.menu.subtitle)
+    ev("select")                                   # the Gamepad row: the drawing
+    pad = (sim._menu_page == "controls" and sim.menu.art is not None
+           and sim.menu.subtitle == MENU_NO_PAD)
+    ev("menu")
+    back = sim._menu_page == "main" and sim.menu.items[sim.menu.idx][1] == "controls"
+    #  Settings: one label width, the garage row, the five cars
+    goto("settings")
+    ev("select")
+    srows = [t for t, a in sim.menu.items if a.startswith("set:")]
+    cars_help = " ".join(k for k, _w in dict(SETTINGS_HELP)["CAR"])
+    set_ok = (all(len(t) > 12 and t[11] == " " and t[12] != " " for t in srows)
+              and "Garage: wings and builds" in [t for t, _ in sim.menu.items]
+              and "Express" in cars_help and "Citaro" in cars_help)
+    #  RACE VS BOT: the player's words, and the built-in driver's tag
+    ch = dict(race_bot_choices())
+    with contextlib.redirect_stdout(io.StringIO()):
+        lb = _load_bot(RACE_BOT_ANCHOR, sim.track)
+    race_rows = " | ".join(t for t, _ in sim._race_items())
+    race_ok = (ch["none"] == "empty (LEFT / RIGHT adds a bot)"
+               and ch[RACE_BOT_ANCHOR] == "Built-in driver" and lb is not None
+               and lb[1] == "built-in" and "theta" not in race_rows and "None" not in race_rows)
+    #  the swarm window's wings; LAP RESULTS' class
+    sw = (swarm_wings_label({"dev_left": fin, "top": None}, "my corsa"),
+          swarm_wings_label({"dev_left": None}, "", "plate"), swarm_wings_label({}, "", "off"))
+    sw_ok = sw == ("wings: your garage build (my corsa)", "wings: plate flank panel", "no wings")
+    cls = _class_title("arena|corsa|sport|patch")
+    cls_ok = (cls == "Arena circuit  ·  Opel Corsa C 1.2  ·  Sport (~150 hp)  ·  Dry, wet patches"
+              and _class_title("not a key") == class_label("not a key"))
+    ok = (sub_ok and pause_ok and kb_first and pad and back and set_ok and race_ok
+          and sw_ok and cls_ok)
+    if verbose:
+        print(f"  V45f menu copy  : subtitle {named!r}, no lap / wing file names {sub_ok}; "
+              f"garage + controls rows {pause_ok}; no pad: keyboard first {kb_first}, the "
+              f"drawing a row away {pad}, back {back}; Settings 12 wide + five cars {set_ok}; "
+              f"race 'Built-in driver' / 'built-in' {race_ok}; swarm wings {sw_ok}; class "
+              f"title {cls_ok}  -> {'ok' if ok else 'FAIL'}")
+        if not ok:
+            print(f"    {named!r}\n    {in_run!r}\n    {bare!r}\n    {plain!r}\n"
+                  f"    rows {rows}\n    set {srows}\n    race {race_rows} {ch.get('none')} "
+                  f"{lb}\n    sw {sw}\n    class {cls!r}")
+    return ok, dict(subtitle=named)
+
+
+def _v45g_car_named_build(tmp, verbose=True):
+    """Task 45: a first launch's build ('my corsa', made for any car) taken
+    to the Express in Settings is DRIVEN as 'my express', the name the
+    garage gives it (`garage.other_car_name`, `Garage._fit_in`): the
+    session's copy (what the TIME TRIAL page, the pause subtitle and a lap
+    say, `opts.build_name`), the per-map memory's name and the title's BUILD
+    agree, while the working build, runs/garage_design.json and the library
+    keep 'my corsa' -- driving renames no saved file -- and back on the
+    Corsa it is 'my corsa' again. A name the player chose stays, and so does
+    the library's own 'my corsa'; a PICK autosaves the build under the name
+    it was shown; a challenge's copy is named the same way."""
+    import json as _json
+    from types import SimpleNamespace as NS
+    from . import garage as grg
+    from .aero.library import Library
+    from .records import RecordBook
+    root = os.path.join(tmp, "name45")
+    lib = Library(os.path.join(root, "library"), use_xfoil=False)
+
+    def names(rows):
+        return [(e["car"], (e["build"] or {}).get("name"), (e["design"] or {}).get("name"))
+                for e in rows if "car" in e]
+    #  (a) a first launch (no garage car yet): Corsa -> Express -> the
+    #  title -> Express -> Corsa
+    titles = []
+    la = _loop_run(os.path.join(root, "a"), lib, None, dict(car="corsa", track="arena"),
+                   [dict(car="express"), dict(stop="title"), dict(car="corsa"),
+                    dict(stop="quit")], titles=titles)
+    mem = RecordBook(os.path.join(root, "a", "runs", "records")).last_builds()
+    ex, co = mem.get("arena|express") or {}, mem.get("arena|corsa") or {}
+    gd = os.path.join(root, "a", "runs", "garage_design.json")
+    kept = (not os.path.exists(gd)) or _json.load(open(gd)).get("name") == "my corsa"
+    title_b = [dict(t).get("BUILD") for t in titles]
+    first_ok = (names(la) == [("corsa", "my corsa", "my corsa"),
+                              ("express", "my express", "my corsa"),
+                              ("express", "my express", "my corsa"),
+                              ("corsa", "my corsa", "my corsa")]
+                and ex.get("name") == "my express" and ex["build"].get("name") == "my corsa"
+                and co.get("name") == "my corsa"
+                and title_b == ["my corsa  (no wings)", "my express  (no wings)"]
+                and kept and not any(n.startswith("my express") for n in lib.builds))
+    #  (b) a name the player chose stays
+    own = grg.new_build("corsa")
+    own.name, own.car, own.left.wing = "fast one", "", "plate"
+    own.sync_mirror("left")
+    lb_ = _loop_run(os.path.join(root, "b"), lib, own.to_json(), dict(car="corsa", track="arena"),
+                    [dict(car="express"), dict(stop="quit")])
+    chose_ok = names(lb_)[1:] == [("express", "fast one", "fast one")]
+    #  (c) a PICK on the Express autosaves the car it was driving as it was
+    #  shown ('my express (autosave)'); the library then has no 'my corsa'
+    wb = grg.new_build("corsa")
+    wb.car, wb.left.wing = "", "plate"
+    wb.sync_mirror("left")
+    lc = _loop_run(os.path.join(root, "c"), lib, wb.to_json(), dict(car="express", track="arena"),
+                   [dict(prerace_pick=("fast one", own.to_json())), dict(stop="quit")])
+    auto_ok = (names(lc)[0] == ("express", "my express", "my corsa")
+               and "my express (autosave)" in lib.builds
+               and "my corsa (autosave)" not in lib.builds)
+    #  (d) the library's own 'my corsa' (same content) keeps its name
+    lib.save_build(dict(la[0]["design"], builtin=False))
+    ld = _loop_run(os.path.join(root, "d"), lib, None, dict(car="express", track="arena"),
+                   [dict(stop="quit")])
+    lib_ok = names(ld) == [("express", "my corsa", "my corsa")]
+    #  (e) a challenge's copy (its wing config) is named the same way
+    o_ = NS(challenge=dict(config="top"))
+    _drive_design(o_, grg.CarBuild.from_json(wb.to_json()), lib, "express")
+    chal_ok = (o_.build_name == "my express" and o_.build_json["name"] == "my express"
+               and o_.design_json["name"] == "my corsa")
+    ok = first_ok and chose_ok and auto_ok and lib_ok and chal_ok
+    if verbose:
+        print(f"  V45g build name : a first launch's 'my corsa' on the Express is 'my "
+              f"express' on the page / memory / title, the saved build keeps its name "
+              f"{first_ok}; a chosen name kept {chose_ok}; PICK autosaves 'my express "
+              f"(autosave)' {auto_ok}; the library's own 'my corsa' kept {lib_ok}; a "
+              f"challenge copy {chal_ok}  -> {'ok' if ok else 'FAIL'}")
+        if not ok:
+            print(f"    {names(la)}\n    memory {ex.get('name')!r} {co.get('name')!r} "
+                  f"titles {title_b} kept {kept} lib {sorted(lib.builds)}\n    "
+                  f"{names(lb_)} {names(lc)} {names(ld)} {getattr(o_, 'build_name', None)}")
+    return ok, dict(first=first_ok, chose=chose_ok, auto=auto_ok, lib=lib_ok, chal=chal_ok)
+
+
 def self_check(verbose=True) -> bool:
     """python3 -m drive.drive  ->  the harness acceptance numbers."""
     tmp = _tmpdir()
@@ -7809,6 +10274,14 @@ def self_check(verbose=True) -> bool:
                      ("V43b", lambda: _v43b_launch_and_judges(tmp, verbose)),
                      ("V43c", lambda: _v43c_default_build(tmp, verbose)),
                      ("V43d", lambda: _v43d_swarm_T(tmp, verbose)),
+                     ("V44", lambda: _v44_title(tmp, verbose)),
+                     ("V45", lambda: _v45_rolling_start(verbose)),
+                     ("V45b", lambda: _v45b_tutorial_session(verbose)),
+                     ("V45c", lambda: _v45c_title_back(tmp, verbose)),
+                     ("V45d", lambda: _v45d_challenge_pause(tmp, verbose)),
+                     ("V45e", lambda: _v45e_challenge_list(tmp, verbose)),
+                     ("V45f", lambda: _v45f_menu_copy(verbose)),
+                     ("V45g", lambda: _v45g_car_named_build(tmp, verbose)),
                      ("V27", lambda: _v27_gearbox_modes(verbose)),
                      ("V28", lambda: _v28_open_map(verbose)),
                      ("V29", lambda: _v29_engine_tc(verbose)),
@@ -7818,6 +10291,7 @@ def self_check(verbose=True) -> bool:
                      ("V33", lambda: _v33_ghost_delta(tmp, verbose)),
                      ("V34", lambda: _v34_tutorial(tmp, verbose)),
                      ("V35", lambda: _v35_challenges(tmp, verbose)),
+                     ("V44p", lambda: _v44p_challenge_pick(tmp, verbose)),
                      ("V36", lambda: _v36_grid(tmp, verbose)),
                      ("V37", lambda: _v37_results_page(tmp, verbose)),
                      ("V42", lambda: _v42_wing_limits(tmp, verbose)),
@@ -7844,15 +10318,15 @@ def self_check(verbose=True) -> bool:
 KEYS_HELP = """\
 ARROW UP throttle | ARROW DOWN brake | ARROW LEFT/RIGHT steer | LSHIFT fine
 Z clutch | SPACE handbrake | S starter | E shift up | Q shift down
-F wings armed on / off | G wing mode: auto / air brake / all 3 / left / right
-R reset to last sector line | SHIFT+R full reset
+F wings armed on / off | G / SHIFT+G wing mode: next / back (auto, air brake, top ..., left, right)
+R back to the last sector line | SHIFT+R restart the lap
 P pause | O single physics step | [ ] slow-mo 0.25x / 1.0x
-C camera | - / = zoom | 0 auto zoom | H HUD | V vectors | B g-g | N skid | X clear
+C camera | - / = zoom | 0 auto zoom | H HUD: race / full / off | V force arrows | B g-g | N skid | X clear
 T toggle wet | M telemetry marker | L toggle recording | K arm a SEED LAP for the swarm | TAB next map | J ghosts
-BACKSPACE garage (3D panel editor) | ESC menu: settings (map, engine, gearbox, ABS, TC, aids, sound), reset, race vs bot, quit
+BACKSPACE garage: wings and builds | ESC menu: settings (map, engine, gearbox, ABS, TC, aids, sound), reset, race vs bot, main menu, quit
 PS5 pad: R2 throttle | L2 brake | L-stick steer | R1/L1 shift | CROSS handbrake | SQUARE clutch
-         CIRCLE wing | TRIANGLE wing side | OPTIONS menu | CREATE reset | TOUCHPAD garage
-         d-pad up HUD / down vectors / left slow-mo / right normal | R3 camera | L3 auto zoom"""
+         CIRCLE wing | TRIANGLE wing mode | OPTIONS menu | CREATE sector line | TOUCHPAD garage
+         d-pad up HUD / down force arrows / left slow-mo / right normal | R3 camera | L3 auto zoom"""
 _HELP_PRINTED = False
 
 
@@ -8158,6 +10632,23 @@ def _fitted(design, lib, car):
     return grg.CarBuild.from_json(design.to_json()).clamp(lib, car)
 
 
+def _drive_name(design, lib, car) -> str:
+    """What a session on `car` calls the build `design` (task 45): its own
+    name, except a build still called by ANOTHER car's new-build name -- a
+    first launch's 'my corsa' taken to the Express in Settings -- which is
+    called this car's ('my express'), by the garage's own rule
+    (`garage.other_car_name`, as `Garage._fit_in` renames its copy): a name
+    the player chose stays, and so does the library's own build of that
+    name. Only the session's copy and its labels say it (the TIME TRIAL page,
+    the pause pages, the lap records, the per-map memory's name); the build
+    as the player holds it -- the loop's, runs/garage_design.json, the
+    library -- keeps its name: driving never renames a saved file."""
+    from . import garage as grg
+    if isinstance(design, grg.CarBuild) and grg.other_car_name(design, car, lib):
+        return grg.default_build_name(car)
+    return str(getattr(design, "name", "") or "")
+
+
 def _drive_design(opts, design, lib, car) -> dict:
     """The next session drives `design` on `car` (review of task 41, the root
     design). The player's WORKING build -- the loop's `design`, the garage's
@@ -8169,9 +10660,26 @@ def _drive_design(opts, design, lib, car) -> dict:
     what a lap is filed under, what `_session_over_limits` judges -- which
     `bodies.over_limits` judges as fitted anyway), and `opts.design_json` the
     working build as the player holds it (what the library holds, what the
-    per-map memory remembers)."""
-    kw = _apply_design(opts, _fitted(design, lib, car), lib)
+    per-map memory remembers).
+
+    Task 45: the copy is called what the garage calls the build on `car`
+    (`_drive_name`: the first launch's 'my corsa' is 'my express' on the
+    Express), so the TIME TRIAL page and the pause pages say what the garage
+    says; `opts.design_json` keeps the player's own name."""
     from . import garage as grg
+    chal = getattr(opts, "challenge", None)
+    if (chal is not None and chal.get("config") and isinstance(design, grg.CarBuild)
+            and lib is not None):
+        #  task 44: a challenge drives its wing config -- the build's own
+        #  wings where it has them, the stock ones lent, the side wings
+        #  gone on a top-only config -- fitted to the challenge's car
+        from .challenges import config_build
+        fitted = config_build(design.to_json(), lib, car, chal["config"])
+    else:
+        fitted = _fitted(design, lib, car)
+    if isinstance(fitted, grg.CarBuild):
+        fitted.name = _drive_name(design, lib, car)   # only the copy (task 45)
+    kw = _apply_design(opts, fitted, lib)
     opts.design_json = design.to_json() if isinstance(design, grg.CarBuild) else None
     return kw
 
@@ -8202,7 +10710,10 @@ def run_interactive_cli(opts) -> int:
       drive   -> a session. stop_reason 'garage'  -> mode = garage (BACKSPACE,
                  touchpad, or the menu / settings entry); 'restart' -> a new
                  session (the settings page changed the map or the surface,
-                 or TAB); anything else -> exit.
+                 or TAB); 'title' -> the title screen again (task 45: the
+                 pause page's Main menu, Back on a page the title opened;
+                 the garage's Main menu returns 'title' too); anything
+                 else -> exit.
     The pad object survives every transition (hot-plugged or not) and its
     edge state is re-seeded at each boundary so the button that ended one
     session cannot act in the next. Settings and the garage design are both
@@ -8273,11 +10784,53 @@ def run_interactive_cli(opts) -> int:
             print(f"progress unavailable ({type(exc).__name__}: {exc})")
             opts.screen_notes.append(f"progress unavailable ({type(exc).__name__})")
             opts.progress = None
+    def title(again: bool = False) -> bool:
+        """The title screen (drive/title.py, task 44) and its pick, which
+        the loop below runs with what it already does -- Drive is today's
+        first session (WELCOME, the TIME TRIAL page), Garage the garage,
+        Challenges / Tutorial / Settings a session opened on that page
+        (Sim.open_page). False: Quit (exit 0). `again` (task 45): a session
+        or the garage ended with 'title' -- what a quit would put back is
+        put back first (a running challenge's class, a running tutorial's
+        gearbox and map, a race), and Drive opens as at launch."""
+        nonlocal mode, pad
+        if again:
+            _challenge_restore(opts, settings)     # the player's own class back
+            tut_ = getattr(opts, "tutorial", None)
+            opts.tutorial = None               # dropped as a quit drops it (Tutorial continues it)
+            if _tutorial_gearbox_restore(tut_, settings):
+                settings.save()
+            if _tutorial_map_restore(opts, settings):
+                settings.save()
+            opts.race_menu = dict(getattr(opts, "race_menu", None) or {}, active=False)
+            opts.prerace_seen = None           # Drive: the TIME TRIAL page, as at launch
+        act, pad = _title_screen(opts, settings, (w, h), pad,
+                                 _title_bottom(grg, lib, design, settings, opts,
+                                               seen_track, explicit), lib=lib)
+        if act == "quit":
+            return False
+        mode = "garage" if (act == "garage" and grg is not None) else "drive"
+        opts.open_page = act if act in TITLE_PAGES else None
+        opts.open_page_title = True            # its Back: the title
+        return True
+
     try:
+        #  an interactive launch opens on the title screen (task 44); only
+        #  such a launch offers the way back to it (Sim.has_title)
+        opts.title_on = _title_wanted(opts)
+        if opts.title_on and not title():
+            return 0
         while True:
             from_garage = False
             if mode == "garage":
                 g = _painted_garage(grg, (w, h), design, pad, lib, settings)
+                if getattr(opts, "garage_try_wing", False):
+                    opts.garage_try_wing = False   # the TIME TRIAL page's 'Try
+                    g.try_ready_made()             # ready-made wings' (round 3)
+                if getattr(opts, "garage_hint", ""):
+                    g.hint, opts.garage_hint = opts.garage_hint, ""   # Change car's note
+                #  a challenge's car is the challenge's: no Change car (review 2)
+                g.car_fixed = getattr(opts, "challenge", None) is not None
                 #  the wing-design tutorial (drive/wing_tutorial.py) rides
                 #  on opts across the garage <-> drive round trips
                 g.progress = getattr(opts, "progress", None)
@@ -8292,6 +10845,16 @@ def run_interactive_cli(opts) -> int:
                 t_ = g.tutor
                 opts.wing_tutor = t_ if (t_ is not None and t_.active) else None
                 _save_design(design, opts)     # quitting from the garage keeps the car too
+                if action == "title":          # its Main menu (task 45): the title again
+                    if not title(again=True):
+                        break
+                    continue
+                if action == "car":
+                    #  its Change car (2026-09-27): the garage again, on the
+                    #  car picked, opened as the Settings Car row opens it
+                    design, seen_car = _garage_car(grg, lib, design, g.car_wanted,
+                                                   settings, opts, seen_car)
+                    continue
                 if action != "drive":
                     break
                 print(f"garage -> drive: {design.summary(lib)}")
@@ -8301,9 +10864,11 @@ def run_interactive_cli(opts) -> int:
             tut = getattr(opts, "tutorial", None)
             if tut is not None and not tut.active:
                 tut = opts.tutorial = None
-            if tut is not None and tut.map_wanted() and settings.track != tut.map_wanted():
-                settings.track = tut.map_wanted()   # the step's map: TAB cannot leave it
-                settings.save()
+            if tut is not None:
+                if _tutorial_map_move(opts, settings, tut.map_wanted()):
+                    settings.save()            # the step's map: TAB cannot leave it
+            elif _tutorial_map_restore(opts, settings):
+                settings.save()                # it is over: the player's own map (task 45)
             #  a challenge (drive/challenges.py) runs in its class; a class
             #  changed from the settings page ends it
             chal = getattr(opts, "challenge", None)
@@ -8321,7 +10886,7 @@ def run_interactive_cli(opts) -> int:
                     #  file is saved there first, as a PICK does (review
                     #  finding 2) -- an empty car carries nothing to lose
                     if design.has_any(lib):
-                        _autosave_build(design, lib)
+                        _autosave_build(design, lib, car=seen_car)   # as it was shown
                     design = d2
                 #  (else the build in hand stays -- this car's, or any-car --
                 #  and is driven as a copy fitted to the new car, below)
@@ -8356,11 +10921,15 @@ def run_interactive_cli(opts) -> int:
                 _drive_design(opts, design, lib, settings.car)
             opts.tutorial_car = tut_car is not None
             if grg is not None and design is not None and tut_car is None:
-                _track_build_used(settings.track, design, opts, car=settings.car)
+                _track_build_used(settings.track, design, opts, car=settings.car, lib=lib)
             sim = _interactive_session(opts, pad=pad, settings=settings,
                                        garage=(grg is not None))
             t_ = getattr(sim, "tutorial", None)    # started, or still running
             opts.tutorial = t_ if (t_ is not None and t_.active) else None
+            if (opts.tutorial is None and getattr(opts, "tutorial_map_prev", None) is not None
+                    and opts.tutorial_map_prev == sim.track.name):
+                opts.tutorial_map_prev = None  # it ended on the player's map: a map
+                #                                 chosen after it (TAB) is theirs
             _challenge_switch(sim, opts, settings)
             pad = getattr(sim.inp, "pad", pad)
             opts.race_menu = dict(sim.race_opts, active=bool(sim.rivals))
@@ -8377,16 +10946,23 @@ def run_interactive_cli(opts) -> int:
             if pick and grg is not None:
                 #  the pre-race PICK: that saved build is the car from now on;
                 #  a car being driven that is in no library file is saved as
-                #  one first, so a pick never loses it
-                _autosave_build(design, lib)
+                #  one first, so a pick never loses it (named as it was shown)
+                _autosave_build(design, lib, car=seen_car)
                 design = grg.CarBuild.from_json(pick[1])   # fitted per session
                 print(f"pre-race: driving the build '{pick[0]}'")
             if getattr(sim, "wing_tutor_start", False) and grg is not None:
                 from .wing_tutorial import WingTutor, saved_state
                 opts.wing_tutor = WingTutor(opts.progress,
                                             start=saved_state(opts.progress)["step"])
+            if sim.stop_reason == "title":
+                #  the pause page's Main menu, or Back on a page the title
+                #  opened (task 45): the title again, its pick run as at launch
+                if not title(again=True):
+                    break
+                continue
             if sim.stop_reason == "garage" and grg is not None:
                 mode = "garage"
+                opts.garage_try_wing = bool(getattr(sim, "garage_try_wing", False))
                 continue
             if sim.stop_reason == "swarm":
                 # the pause menu's Deploy: the swarm runs in THIS window on
@@ -8432,6 +11008,8 @@ def run_interactive_cli(opts) -> int:
         _challenge_restore(opts, settings)     # quit mid-challenge: the player's class back
         if _tutorial_gearbox_restore(getattr(opts, "tutorial", None), settings):
             settings.save()                    # quit mid manual step: the player's box back
+        if _tutorial_map_restore(opts, settings):
+            settings.save()                    # quit mid-tutorial: the player's map back (task 45)
         pygame.quit()
     return 0
 
@@ -8595,6 +11173,7 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
         cfg_kwargs = dict(cfg_kwargs, mu_scale=cfg_kwargs["mu_scale"] * global_wet)
     track_kw = dict(radius=opts.radius, cw=opts.cw, surfaces=(opts.wet != "none"))
     car_title = cars.car_name(car_name) + (" (stock)" if stock else "")
+    sw_wings = swarm_wings_label(cfg_kwargs, getattr(opts, "build_name", ""), opts.wing)
     opts.swarm_saved = None         # the checkpoint this run writes, if any
 
     user_replay = None
@@ -8920,14 +11499,13 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
 
             # --- overlay -------------------------------------------------
             lines = [f"SWARM {sw.name}   {sw.pop} cars   seed {sw.seed_source}   "
-                     f"{tr.title or tr.name} / {car_title} / wing {opts.wing}"]
+                     f"{tr.title or tr.name} / {car_title} / {sw_wings}"]
             if shown is not None:
                 lb = shown["lap_best"]
                 lines.append(f"generation {shown['gen']}:  best {shown['best']:.0f} m   "
                              f"mean {shown['mean']:.0f} m   lapped {shown['n_lapped']}/{sw.pop}   "
-                             + (f"best lap {lb:.2f} s" if lb else "no full lap yet"))
-                lines.append(f"  {', '.join(f'{k} {v}' for k, v in shown['ended'].items())}"
-                             f"   sigma {shown['sigma']:.3f}   computed in {shown['secs']} s")
+                             + (f"best lap {lb:.2f} s" if lb else "no full lap yet")
+                             + f"   computed in {shown['secs']} s")
             if sw.best is not None:
                 b = sw.best
                 lines.append(f"all-time best: gen {b.get('gen', 0)} car #{b['id']}   "
@@ -8942,12 +11520,12 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
                 lines.append("!REPLAY OFF - breeding flat out; V to watch the next generation")
                 hist = sw.history[-SWARM_TABLE_ROWS:]
                 if hist:
-                    lines.append("   gen    best m    mean m    lap s   lapped   sigma   secs")
+                    lines.append("   gen    best m    mean m    lap s   lapped   secs")
                     for h in hist:
                         lb = h["lap_best"]
                         lines.append(f"  {h['gen']:4d}  {h['best']:8.0f}  {h['mean']:8.0f}  "
                                      + (f"{lb:7.2f}" if lb else "     --")
-                                     + f"   {h['n_lapped']:2d}/{sw.pop:<3d}  {h['sigma']:.3f}  "
+                                     + f"   {h['n_lapped']:2d}/{sw.pop:<3d}  "
                                      f"{h['secs']:5.1f}")
             nxt = ("ready" if sw.ready() else "computing ...") if sw._pending is not None else (
                 "closing" if closing else ("stopped (--swarm-gens reached)" if not allowed else "-"))
@@ -9133,6 +11711,69 @@ def _save_design(design, opts) -> None:
             notes.append(f"garage car NOT saved ({type(exc).__name__})")
 
 
+#: the flags that say what a launch is FOR: none of them opens on the title
+#: screen (drive/title.py, task 44). Read with getattr, so a mode flag that
+#: does not exist yet (--challenge, --tutorial, a replay) is already covered
+TITLE_SKIP = ("garage", "race", "challenge", "tutorial", "ml_drive", "swarm",
+              "swarm_resume", "replay", "script", "seed_lap", "headless",
+              "pad_calib", "self_check")
+#: the title's picks that are a session opened on a pause-menu page
+#: (title.PAGES; Sim.open_page)
+TITLE_PAGES = ("challenges", "tutorial", "settings")
+#: each of those pages' Back row (task 45): it and ESC there end a session
+#: the title opened on it with 'title' -- the title again (Sim._menu_event)
+TITLE_BACK = {"challenges": "ch_back", "tutorial": "tut_back", "settings": "settings_back"}
+
+
+def _title_wanted(opts) -> bool:
+    """Does this launch open on the title screen? A player session (a
+    window, a human at the wheel) with no mode flag (TITLE_SKIP)."""
+    return _player_session(opts) and not any(getattr(opts, k, None) for k in TITLE_SKIP)
+
+
+def _title_bottom(grg, lib, design, settings, opts, seen_track, explicit) -> list:
+    """The title's bottom line, [(label, value)]: the car, the map and the
+    build Drive's first session drives -- the map's memory where the loop's
+    first pass takes it (the same test as there), else the build in hand."""
+    import contextlib
+    import io
+    d = design
+    try:
+        if (grg is not None and d is not None and settings.track != seen_track
+                and not (explicit and seen_track is None)):
+            with contextlib.redirect_stdout(io.StringIO()):
+                d = _track_build(grg, lib, design, settings.track, opts,
+                                 car=settings.car) or design
+        if grg is None or d is None or not isinstance(d, grg.CarBuild):
+            build = (f"{opts.wing} panel" if getattr(opts, "wing", "off") != "off"
+                     else "no wings")
+        else:
+            #  what the session will call it (task 45: 'my express', `_drive_name`)
+            build = ((_drive_name(d, lib, settings.car) or "unnamed")[:28]
+                     + ("" if d.has_any(lib) else "  (no wings)"))
+    except Exception:                      # noqa: BLE001 -- a label never stops a launch
+        build = getattr(design, "name", "") or "?"
+    return [("CAR", cars.car_name(settings.car)),
+            ("MAP", trk.TRACK_TITLES.get(settings.track, settings.track)),
+            ("BUILD", build)]
+
+
+def _title_screen(opts, settings, size, pad, bottom, lib=None):
+    """The title screen (drive/title.py): (its pick, the pad it ends with).
+    It never stops a launch: a title that cannot open is Drive. `lib`: the
+    garage library the scene cars' wings come from (None: the default)."""
+    try:
+        from .title import Title
+        t = Title(size, pad=pad, fps=getattr(opts, "fps", FPS) or FPS,
+                  graphics=settings.graphics, paint=lambda car: paint_rgb(settings, car),
+                  bottom=bottom, headless=(getattr(opts, "render", None) == "offscreen"),
+                  lib=lib)
+        return t.run(), t.pad
+    except Exception as exc:               # noqa: BLE001
+        print(f"title screen unavailable ({type(exc).__name__}: {exc}); driving")
+        return "drive", pad
+
+
 def _player_session(opts) -> bool:
     """A windowed, human-driven session: the only kind that reads or writes
     the per-map builds (a player file). Not `--ml-drive`, not headless, not
@@ -9141,14 +11782,23 @@ def _player_session(opts) -> bool:
                 or getattr(opts, "render", None) in ("off", "offscreen"))
 
 
-def _track_build_used(track, design, opts, car: str | None = None) -> None:
+def _track_build_used(track, design, opts, car: str | None = None, lib=None) -> None:
     """This session drives `design` on `track`: it is that map's build from
     now on (the plan's "the last build used on this track") -- for `car`, the
     car driving it (task 41: the memory is per map AND car). The working
     build as the player holds it, not the session's fitted copy. Never a
     build made for another car (a 540i build in a Corsa challenge): `car`
     could never read it back, so it would only wipe `car`'s own entry
-    (review finding 0; `RecordBook.set_last_build` refuses it too)."""
+    (review finding 0; `RecordBook.set_last_build` refuses it too).
+
+    Task 45: filed under the name the session calls it (`_drive_name`: 'my
+    express' for the first launch's 'my corsa' on the Express), the name
+    the TIME TRIAL page shows and RACE files (`start_timed`); the build in
+    the entry keeps the player's own. The entry is the whole build, never a
+    pointer into the library, so a name no library file has ('my express'
+    before S saves it -- 'my corsa' on a first launch is in none either)
+    brings it back all the same. An entry that differs only in that name
+    (filed before task 45) is rewritten once."""
     if not _player_session(opts):
         return
     try:
@@ -9156,17 +11806,20 @@ def _track_build_used(track, design, opts, car: str | None = None) -> None:
         js = design.to_json()
         if car and not build_fits(js, car):
             return
+        name = _drive_name(design, lib, car)
         book = RecordBook()
         cur = book.last_builds().get(last_key(track, car) if car else track)
-        if not isinstance(cur, dict) or cur.get("build") != js:
-            book.set_last_build(track, design.name, js, car=car)
+        if not isinstance(cur, dict) or cur.get("build") != js or cur.get("name") != name:
+            book.set_last_build(track, name, js, car=car)
     except Exception as exc:               # noqa: BLE001 -- never stops a drive
         print(f"pre-race: per-map build not saved ({type(exc).__name__}: {exc})")
 
 
-def _autosave_build(design, lib) -> None:
+def _autosave_build(design, lib, car: str | None = None) -> None:
     """Put a car that is in no library file into the library before a PICK
-    replaces it (as '<name> (autosave)', '... 2', ...)."""
+    replaces it (as '<name> (autosave)', '... 2', ...). With `car`, the car
+    it was driven on (task 45): the name is the one the session showed
+    (`_drive_name`: 'my express (autosave)', not 'my corsa (autosave)')."""
     try:
         from .prerace import _same_build
         js = design.to_json()
@@ -9174,7 +11827,8 @@ def _autosave_build(design, lib) -> None:
             return
         #  free as a FILE name too: 'My Corsa (autosave)' and 'my corsa
         #  (autosave)' are one file, which Library._write refuses to overwrite
-        name = lib.unique_name("builds", f"{design.name} (autosave)")
+        shown = _drive_name(design, lib, car) if car else design.name
+        name = lib.unique_name("builds", f"{shown} (autosave)")
         js["name"] = name
         js["builtin"] = False
         lib.save_build(js)
@@ -9252,6 +11906,39 @@ def _car_build(grg, lib, design, car: str, settings, track: str | None = None, o
     return d, f"the {car_label(car)} starts with no wings ({whose}): garage F sets its default"
 
 
+def _garage_car(grg, lib, design, car, settings, opts, seen_car):
+    """The garage's Change car (2026-09-27): `car` becomes the Settings car
+    (saved) and the build it opens with is the one a car change on the
+    Settings page gives it (`_car_build`: its default build, else the build
+    in hand when it may ride on it, else its last build on this map, else
+    none) -- a build in hand it replaces that is in no library file is saved
+    there first, as `(autosave)`. The note for the next garage's hint goes to
+    `opts.garage_hint`. Returns (the build, the car the loop takes as seen:
+    the new one, so the next session does not change it again). A car that
+    is not a car, this one, or any car while a challenge runs (its car is
+    the challenge's: the garage shows no row then) changes nothing."""
+    from .prerace import car_label
+    was = settings.car
+    if car not in CAR_MODES or car == was or getattr(opts, "challenge", None) is not None:
+        return design, seen_car
+    note = ""
+    if grg is not None:
+        d2, note = _car_build(grg, lib, design, car, settings, track=settings.track, opts=opts)
+        if d2 is not None:
+            if design is not None and design.has_any(lib):
+                had = set(lib.builds)
+                _autosave_build(design, lib, car=was)      # named as it was shown
+                kept = sorted(set(lib.builds) - had)
+                if kept:
+                    note = (note + "  ·  " if note else "") + f"your wings saved as '{kept[0]}'"
+            design = d2
+    settings.car = car
+    settings.save()
+    print(f"garage: now the {cars.car_name(car)}" + (f" ({note})" if note else ""))
+    opts.garage_hint = note or f"now the {car_label(car)}"
+    return design, car
+
+
 def _stamp_car(design, entered, car: str) -> None:
     """Back from the garage (task 41): a car the player CHANGED there -- wings,
     stations, a build loaded -- is now this car's build; one only looked at
@@ -9262,9 +11949,59 @@ def _stamp_car(design, entered, car: str) -> None:
         design.car = car
 
 
+def _challenge_wings(sim) -> None:
+    """A challenge session's wings at its start (task 44): the config IS the
+    wing mode -- AUTO, or the air brake kept (G survives a restart) on a
+    config with side wings for it -- and the wings armed, as the
+    reference's are (every config has a top wing). Task 45: a run whose
+    reference drives a mode of its own that G can reach there (Air brake
+    from 150's AIR BRAKE, with side wings) starts in it -- the run the
+    challenge is named after; G still steps back to AUTO. No challenge, or
+    one with no config: nothing changes."""
+    run = getattr(sim, "challenge", None)
+    cfg = run.ch.get("config") if run is not None else None
+    if cfg is None:
+        return
+    from .airbrake import AUTO
+    from .challenges import g_modes, REF_WING_MODES
+    modes = g_modes(cfg)
+    own = REF_WING_MODES.get(run.ch.get("ref", {}).get("wing_mode", "auto"), AUTO)
+    if own != AUTO and own in modes:
+        sim.wing_side_mode = own
+    elif sim.wing_side_mode not in modes:
+        sim.wing_side_mode = AUTO
+    sim.wing_on = True
+
+
 def _challenge_class(settings) -> str:
     """The class key the settings drive (plan D1)."""
     return "|".join((settings.track, settings.car, settings.engine, settings.wet))
+
+
+def _tutorial_map_move(opts, settings, want) -> bool:
+    """The tutorial's step is driven on `want` (Tutorial.map_wanted; None: a
+    page, wherever): `settings` moves there, and the player's own map is
+    remembered the first time it moves (opts.tutorial_map_prev, task 45) for
+    `_tutorial_map_restore`. True when `settings` changed."""
+    if not want or settings.track == want:
+        return False
+    if getattr(opts, "tutorial_map_prev", None) is None:
+        opts.tutorial_map_prev = settings.track
+    settings.track = want
+    return True
+
+
+def _tutorial_map_restore(opts, settings) -> bool:
+    """The tutorial is over (finished, ended, or a quit mid-way): the
+    player's own map back (task 45) -- the tutorial only borrowed it, as it
+    borrows the gearbox. True when `settings` changed; the memory is
+    cleared either way."""
+    prev = getattr(opts, "tutorial_map_prev", None)
+    opts.tutorial_map_prev = None
+    if prev is None or settings.track == prev:
+        return False
+    settings.track = prev
+    return True
 
 
 def _tutorial_gearbox_restore(tut, settings) -> bool:
@@ -9304,6 +12041,15 @@ def _challenge_switch(sim, opts, settings) -> None:
     tutorial (ESC > Tutorial continues it), a tutorial started over a
     challenge ends the challenge."""
     pick = getattr(sim, "challenge_pick", None)
+    if getattr(sim, "ch_pick", None):
+        opts.ch_pick = tuple(sim.ch_pick)      # the page's car + wings: kept for the launch
+    if pick:
+        #  task 45: started from the list the title opened -- or picked in a
+        #  run that was (This challenge, another from the list): its End
+        #  goes back to the title's list
+        opts.ch_from_title = bool(getattr(sim, "ch_from_title", False)
+                                  or (getattr(opts, "challenge", None) is not None
+                                      and getattr(opts, "ch_from_title", False)))
     tut = getattr(opts, "tutorial", None)
     if pick and tut is not None:
         tut.end()
@@ -9315,12 +12061,31 @@ def _challenge_switch(sim, opts, settings) -> None:
         tut is not None and not pick and getattr(opts, "challenge", None) is not None)
     if ending and not pick:
         _challenge_restore(opts, settings)
+        if getattr(sim, "challenge_end", False):
+            #  End the challenge (task 45): the next session, in the
+            #  player's own class, opens on the CHALLENGES list (as the
+            #  title's Challenges does; not the TIME TRIAL page) -- its Back
+            #  is the title when the run began on the title's list
+            opts.open_page = "challenges"
+            opts.open_page_title = bool(getattr(opts, "ch_from_title", False))
         return
     if not pick:
         return
-    from .challenges import load_all
-    ch = load_all().get(pick)
-    if ch is None:
+    from .challenges import load_all, resolve, CONFIGS
+    from .records import split_key
+    base = load_all().get(pick)
+    if base is None:
+        return
+    #  task 44: in the car and wing config the page picked (a caller that
+    #  picked none: the file's own car, FULL WING); a combo with no
+    #  reference never starts (the page has no Start for it)
+    cp = getattr(sim, "ch_pick", None)
+    if not (isinstance(cp, (tuple, list)) and len(cp) == 2 and cp[0] in cars.CARS
+            and cp[1] in CONFIGS):
+        cp = (split_key(base["class"])[1], "full")
+    ch = resolve(base, cp[0], cp[1])
+    if not ch["available"]:
+        print(f"challenge '{ch['title']}': not for this car ({ch['unavailable']})")
         return
     if getattr(opts, "challenge_prev", None) is None:
         opts.challenge_prev = dict(track=settings.track, car=settings.car,
@@ -9435,6 +12200,9 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
             rnd.set_paint(paint_rgb(settings))   # before the build: the prebuilt mesh
             cfgv = rnd.ViewConfig(size=(w, h), fps=opts.fps, mode=settings.camera,
                                   hud=settings.hud, **rnd.look_config(settings.graphics))
+            #  the force arrows (V) are the player's setting, off by default
+            #  (task 45): an engineering overlay, not the race view
+            cfgv.show_vectors = bool(settings.vectors)
             renderer = rnd.Renderer(cfgv, tr,
                                     headless=(opts.render == "offscreen"
                                               or opts.headless))
@@ -9455,6 +12223,7 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     sim = Sim(veh, tr, inp, renderer=renderer, telem=telem, dt=opts.dt,
               wing=opts.wing, global_wet=global_wet, settings=settings)
     sim.has_garage = bool(garage)          # the menu offers the garage
+    sim.has_title = bool(getattr(opts, "title_on", False))   # ... and the title screen
     sim.track_radius, sim.track_cw = float(opts.radius), bool(opts.cw)
     #  lap records (drive/records.py): the ONE place runs/records/ is
     #  attached -- scripted and headless runs never read player files
@@ -9512,6 +12281,7 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     tut = getattr(opts, "tutorial", None)
     sim.tutorial = tut if (tut is not None and tut.active and sim.progress_file is not None) else None
     sim.tutorial_car = bool(getattr(opts, "tutorial_car", False))
+    sim.tutorial_map_prev = getattr(opts, "tutorial_map_prev", None)
     offer_now = (bool(getattr(opts, "tutorial_offer", False)) and sim.progress_file is not None
                  and renderer is not None and sim.tutorial is None)
     opts.tutorial_offer = False            # once a launch
@@ -9542,17 +12312,33 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
         except Exception as exc:           # noqa: BLE001 -- never stops a drive
             print(f"build list unavailable ({type(exc).__name__}: {exc})")
     if sim.progress_file is not None and lib is not None:
-        sim.challenge_build = (getattr(opts, "build_json", None), lib)
+        #  task 44: the WORKING build (the page applies each wing config to
+        #  it); the session's own copy when there is none (a tutorial car)
+        dj = getattr(opts, "design_json", None)
+        sim.challenge_build = (dj if isinstance(dj, dict) else getattr(opts, "build_json", None),
+                               lib)
+    sim.ch_pick = getattr(opts, "ch_pick", None)
     chal = getattr(opts, "challenge", None)
     if chal is not None and sim.challenge_build is not None:
         try:
-            from .challenges import ChallengeRun, build_stats, refusals
-            stats = build_stats(sim.challenge_build[0], lib, car, settings.ballast)
+            from .challenges import ChallengeRun, build_stats, config_parts, refusals
+            #  judged on what it drives: the copy with the config applied
+            #  (`_drive_design`), as the page judged it
+            stats = build_stats(getattr(opts, "build_json", None), lib, car, settings.ballast)
             why = refusals(chal["constraints"], stats)
-            sim.challenge = ChallengeRun(chal, tr, stats, sim.progress_file)
+            #  whose wings drive, for the result's 'the stars were set with
+            #  the stock wings' (round 3): the page's own reading
+            try:
+                parts = (config_parts(sim.challenge_build[0], lib, chal["config"])
+                         if chal.get("config") else None)
+            except Exception:          # noqa: BLE001 -- only the result's words need it
+                parts = None
+            sim.challenge = ChallengeRun(chal, tr, stats, sim.progress_file, parts=parts)
             prerace_now = False
-            if sim.challenge.rolling(tr, sim.veh.pt_p) is not None:
-                sim.reset()                # a stop challenge starts rolling (task 40)
+            if (sim.challenge.rolling(tr, sim.veh.pt_p) is not None
+                    or sim._rolling_pose() is not None):
+                sim.reset()                # a stop challenge starts rolling, held at v0 (tasks 40, 42);
+                                           # a lap or circle one rolls up to the line (task 45)
             if why:                        # listed and endable, never counted
                 #  on the HUD there is no "first row" (that is the challenge
                 #  page's): the garage is BACKSPACE while driving
@@ -9607,12 +12393,18 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
         race_on = True                     # a restart keeps the race on
     if race_on:
         sim.start_race()
+    sim.roll_time_trial()                  # a time trial opens rolling, page or none (round 3)
     sim.hud_cfg = getattr(opts, "hud_cfg", None)   # the build's wing geometry
-    from .airbrake import CYCLE as _WING_MODES
-    if getattr(opts, "wing_mode", 0) in _WING_MODES:
-        sim.wing_side_mode = getattr(opts, "wing_mode", 0)   # the G mode, kept across a restart
+    from .airbrake import usable as _wing_mode_usable
+    if _wing_mode_usable(getattr(opts, "wing_mode", 0), cfg):
+        #  the G mode, kept across a restart -- one this car can use (a TOP
+        #  mode needs a top wing; the old ALL 3, 2, is not a mode any more)
+        sim.wing_side_mode = getattr(opts, "wing_mode", 0)
     if cfg.has_designed():
         sim.wing_on = True                 # a garage build starts armed, as --wing does
+    if sim.tutorial is not None and sim.tutorial.step.id == "wing_off":
+        sim.wing_on = False                # the tutorial's lap 1 is OFF: it counts without F (task 45)
+    _challenge_wings(sim)
     if not _HELP_PRINTED:
         print(KEYS_HELP)
         _HELP_PRINTED = True
@@ -9646,7 +12438,15 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
         opts.records_noted = True
     if notes:
         sim._rec_note(" / ".join(notes)[:120], 6.0)
-    if offer_now:
+    #  the title screen's pick (drive/title.py, task 44): Challenges,
+    #  Tutorial or Settings opens this first session on that page, in place
+    #  of WELCOME (still offered, at the next launch) or the pre-race page
+    page = getattr(opts, "open_page", None)
+    back_title = getattr(opts, "open_page_title", True)   # False: an ended run's list
+    opts.open_page, opts.open_page_title = None, True     # once
+    if page and sim.open_page(page, title=back_title):
+        pass
+    elif offer_now:
         sim.open_tutorial_offer()          # the first launch: WELCOME
     elif prerace_now:
         sim.open_prerace()                 # RACE (ENTER / CROSS) is one press

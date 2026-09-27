@@ -2,34 +2,22 @@
   "kind": "carsim-challenge-1",
   "id": "skid_wet",
   "title": "Wet circle",
-  "blurb": "The skidpad, wet all over, in the stock car: a flying lap, as much lateral g as it will hold without sliding off.",
+  "blurb": "The skidpad, wet all over, with the stock engine: a flying lap, as much lateral g as the car will hold without sliding off. Anticlockwise: steer left and follow the road ring's centre line.",
   "class": "skidpad|corsa|stock|all",
   "constraints": {
     "max_ballast": 0
   },
   "goal": {
-    "metric": "skid_ay",
-    "threshold": 0.4128269672983331
+    "metric": "skid_ay"
   },
   "stars": {
-    "2": {
-      "threshold": 0.43619453148503123
-    },
     "3": {
-      "threshold": 0.45330019938640503,
       "efficiency": {
-        "max_wing_mass": 12
+        "max_wing_mass": 15
       }
     }
   },
   "ref": {
-    "driver": "lapdriver:0.85",
-    "build": "plate",
-    "value": 0.46236620337413314,
-    "x": [
-      1.12,
-      1.06,
-      1.02
-    ]
+    "driver": "lapdriver:0.85"
   }
 }

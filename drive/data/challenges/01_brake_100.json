@@ -2,7 +2,7 @@
   "kind": "carsim-challenge-1",
   "id": "brake_100",
   "title": "Stop from 100",
-  "blurb": "You start rolling at 120 km/h: brake, and stop as short as you can. The distance runs from 100 km/h down to a standstill; R (CREATE) starts you again.",
+  "blurb": "You start at 100 km/h, and the car holds it until you brake: stop short, with your nose on the checkered board. The distance runs from the brake to a standstill; R (CREATE) starts you again.",
   "class": "dragstrip|corsa|stock|none",
   "constraints": {
     "max_ballast": 100
@@ -10,28 +10,16 @@
   "goal": {
     "metric": "stop_distance",
     "v0_kmh": 100.0,
-    "start_kmh": 120.0,
-    "threshold": 47.569501223974065
+    "start_kmh": 100.0
   },
   "stars": {
-    "2": {
-      "threshold": 45.02113508697545
-    },
     "3": {
-      "threshold": 43.322224328976375,
       "efficiency": {
-        "max_wing_mass": 0
+        "max_wing_mass": 15
       }
     }
   },
   "ref": {
-    "driver": "brake:1.0:100",
-    "build": "none",
-    "value": 42.47276894997684,
-    "x": [
-      1.12,
-      1.06,
-      1.02
-    ]
+    "driver": "brake:1.0:100:0"
   }
 }

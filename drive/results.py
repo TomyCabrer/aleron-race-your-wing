@@ -39,6 +39,16 @@ def _num(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
+def next_text(nx) -> str:
+    """The card's words for `prerace.next_medal`'s (name, target, gap): the
+    medal and the time still to find, 'AUTHOR in 0.421 s' (the TIME TRIAL
+    page's '(0.421 s to go)'; no minus sign, which read as already under
+    it). '' when there is none or no gap yet."""
+    if not nx or len(nx) < 3 or not _num(nx[2]):
+        return ""
+    return f"{str(nx[0]).upper()} in {float(nx[2]):.3f} s"
+
+
 def card(res: dict, book=None) -> dict:
     """The card for one closed lap. `book` is the RecordBook it was filed in
     (None: no sector colours from the class's history)."""
@@ -62,8 +72,7 @@ def card(res: dict, book=None) -> dict:
         try:
             from .prerace import next_medal
             nx = next_medal(c["key"], min(float(t), float(pb0)) if _num(pb0) else float(t))
-            if nx is not None and nx[2] is not None:
-                c["next"] = f"next: {nx[0].upper()} -{nx[2]:.3f}"
+            c["next"] = next_text(nx)
         except Exception:                  # noqa: BLE001 -- a card never stops the car
             c["next"] = ""
     pos = res.get("pos")
@@ -212,8 +221,16 @@ def self_check(verbose: bool = True) -> bool:
     from .prerace import next_medal
     nx = next_medal(key, 60.90)            # the PB after c, and after c2 (slower)
     rep("the next medal from the PB this lap leaves: a new PB's own, a slower lap's the old one's",
-        c["next"] == (f"next: {nx[0].upper()} -{nx[2]:.3f}" if nx else "")
-        and c2["next"] == c["next"] and c3["next"] == "", f"{c['next']!r}")
+        c["next"] == next_text(nx) and c2["next"] == c["next"] and c3["next"] == "",
+        f"{c['next']!r}")
+    #  the words: the medal and the time still to find, never a minus sign
+    #  (Ashdown's 1:05.408 against its author 1:04.987)
+    tg_ = dict(author=64.987, gold=66.0, silver=68.0, bronze=70.0)
+    nt = next_text(next_medal(key, 65.408, tg_))
+    rep("the next medal reads 'AUTHOR in 0.421 s'; nothing past the author or with no gap",
+        nt == "AUTHOR in 0.421 s" and next_text(next_medal(key, 64.9, tg_)) == ""
+        and next_text(next_medal(key, float("inf"), tg_)) == ""
+        and next_text(None) == "", repr(nt))
     rep("the settings row and the page's list: time, delta, place, medal; or why",
         summary(c) == "1:00.900  -0.500  P1  GOLD  NEW PB"
         and summary(c3) == "40.000  not counted: not a full lap"

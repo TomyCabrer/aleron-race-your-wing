@@ -2,7 +2,7 @@
   "kind": "carsim-challenge-1",
   "id": "brake_wet",
   "title": "Wet stop from 80",
-  "blurb": "The whole strip is wet and you start rolling at 96 km/h: stop from 80 as short as you can. The grip is 63 % of the dry, so squeeze the brake. R (CREATE) starts you again.",
+  "blurb": "The whole strip is wet. You start at 80 km/h, and the car holds it until you brake: stop short, with your nose on the checkered board. The grip is 63 % of the dry: with ABS, stamp on the brake; with ABS off, squeeze it. R (CREATE) starts you again.",
   "class": "dragstrip|corsa|stock|all",
   "constraints": {
     "max_ballast": 100
@@ -10,28 +10,16 @@
   "goal": {
     "metric": "stop_distance",
     "v0_kmh": 80.0,
-    "start_kmh": 96.0,
-    "threshold": 44.883855574811534
+    "start_kmh": 80.0
   },
   "stars": {
-    "2": {
-      "threshold": 42.479363311875204
-    },
     "3": {
-      "threshold": 40.876368469917644,
       "efficiency": {
         "max_ballast": 0
       }
     }
   },
   "ref": {
-    "driver": "brake:1.0:80",
-    "build": "none",
-    "value": 40.07487104893887,
-    "x": [
-      1.12,
-      1.06,
-      1.02
-    ]
+    "driver": "brake:1.0:80:0"
   }
 }

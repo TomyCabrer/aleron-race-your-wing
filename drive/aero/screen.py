@@ -55,7 +55,7 @@ import numpy as np
 META = {
     "ldcr": ("L/D at the design cl",
              "the number this surface actually flies at, and the criterion "
-             "AeroBO's own presets put most of the score on"),
+             "WingLab's own presets put most of the score on"),
     "clmax": ("cl_max",
               "how much lift the section reaches before it stalls -- the "
               "headroom a slow corner asks for"),
@@ -125,7 +125,7 @@ CRITERIA = HIGHER_BETTER + LOWER_BETTER
 PRESETS: dict[str, dict] = {
     "wing (downforce)": {"thick": 0.10, "clmax": 0.30, "ldmax": 0.25,
                          "ldcr": 0.35, "cm": 0.0, "astall": 0.0, "cdcr": 0.0},
-    "AeroBO bulk sweep": {"thick": 0.10, "clmax": 0.20, "ldmax": 0.15,
+    "WingLab bulk sweep": {"thick": 0.10, "clmax": 0.20, "ldmax": 0.15,
                           "ldcr": 0.35, "cm": 0.20, "astall": 0.0,
                           "cdcr": 0.0},
     #: A CARSIM END PLATE IS NOT AeroBO'S END PLATE, and the two presets
@@ -196,6 +196,31 @@ DEAD = {
         #  lap on either role -- so it is weighted, not retired.
     },
 }
+
+#: criteria a target does not ASK at all, because another criterion already
+#: asks exactly the same question there. Different from DEAD: a dead
+#: criterion ranks nothing (every candidate scores the same) and is shown,
+#: dimmed, with its reason, as AeroBO does; a redundant one ranks, but in
+#: the same order as its twin, so offering both is two sliders for one
+#: question. It is not offered: no weight row, no ranking column.
+#:
+#: On the WING the design cl is one number for every section, and at a fixed
+#: cl, L/D = cl / cd -- so "cd at the design cl" orders the library exactly
+#: as "L/D at the design cl" does, inverted. Every wing preset already
+#: weights it 0. On the PLATE the pair swaps roles: cl = 0 makes L/D at cl
+#: the dead one, and cd at cl is the plate's only drag criterion, so there
+#: it stays.
+REDUNDANT = {
+    "main": {
+        "cdcr": "at the design cl every section flies the same lift, so "
+                "cl/cd and cd put the library in exactly the same order -- "
+                "'cd at the design cl' repeats 'L/D at the design cl'.",
+    },
+}
+#: ...and the criterion that asks the same question, which takes over a
+#: redundant criterion's weight when a preset written for the other surface
+#: is chosen (a plate preset on the wing).
+REDUNDANT_TWIN = {"cdcr": "ldcr"}
 
 #: THE LIFT A SECTION IS SCREENED AT, when nothing else states one.
 #:
@@ -481,8 +506,8 @@ def self_check(verbose: bool = True) -> bool:
 
     #  AeroBO's own sets are carried unchanged, to the digit, and are what
     #  the divergences below are measured AGAINST
-    rep("AeroBO's gdp-sweep is carried verbatim",
-        PRESETS["AeroBO bulk sweep"] == {"thick": 0.10, "clmax": 0.20,
+    rep("WingLab's gdp-sweep is carried verbatim",
+        PRESETS["WingLab bulk sweep"] == {"thick": 0.10, "clmax": 0.20,
                                          "ldmax": 0.15, "ldcr": 0.35,
                                          "cm": 0.20, "astall": 0.0, "cdcr": 0.0})
     rep("...and its FIN_WEIGHTS, which its own car endplate shares",
@@ -492,7 +517,7 @@ def self_check(verbose: bool = True) -> bool:
     #  the DEFAULT is that set with |cm| removed: a car wing's moment is
     #  carried by its mount, and |cm| lower-better rewards reflex
     d = PRESETS["wing (downforce)"]
-    a = PRESETS["AeroBO bulk sweep"]
+    a = PRESETS["WingLab bulk sweep"]
     rep("the default wing set does not rank a car wing on |cm|",
         d["cm"] == 0.0 and a["cm"] == 0.20)
     rep("...and the weight it freed went to the three lift criteria",
@@ -500,7 +525,7 @@ def self_check(verbose: bool = True) -> bool:
         and d["thick"] == a["thick"] and d["cdcr"] == a["cdcr"],
         f"clmax {a['clmax']} -> {d['clmax']}, ldmax {a['ldmax']} -> {d['ldmax']}, "
         f"ldcr {a['ldcr']} -> {d['ldcr']}")
-    rep("...and `ldcr` is still the largest single weight, as AeroBO has it",
+    rep("...and `ldcr` is still the largest single weight, as WingLab has it",
         max(d, key=lambda k: d[k]) == "ldcr")
     #  a preset does not have to sum to one -- AeroBO's own gdp-rear sums to
     #  0.95 -- because `normalised` divides by the sum. What must hold is
@@ -524,7 +549,7 @@ def self_check(verbose: bool = True) -> bool:
     rep("both roles' sections open on the same set",
         recommended("flank", "main") == recommended("top", "main")
         == "wing (downforce)")
-    rep("the screening reference lift is AeroBO's REFERENCE_CL",
+    rep("the screening reference lift is WingLab's REFERENCE_CL",
         REFERENCE_CL == 1.0)
     w = normalised(PRESETS["wing (downforce)"])
     rep("the weights normalise to one", abs(sum(w.values()) - 1.0) < 1e-12,
@@ -537,6 +562,14 @@ def self_check(verbose: bool = True) -> bool:
         tuple(sorted(DEAD["plate"])) == ("ldcr", "ldmax"),
         ", ".join(sorted(DEAD["plate"])))
     rep("...but |cm| is NOT retired on it", "cm" not in DEAD["plate"])
+    wing_presets = {RECOMMENDED[k] for k in RECOMMENDED if k[1] == "main"}
+    rep("on the WING cd at the design cl is not asked (L/D = cl/cd at one cl): "
+        "every wing preset weights it 0, and its twin is L/D at the design cl",
+        set(REDUNDANT["main"]) == {"cdcr"} and REDUNDANT_TWIN["cdcr"] == "ldcr"
+        and all(PRESETS[p]["cdcr"] == 0.0 for p in wing_presets)
+        and not set(REDUNDANT["main"]) & set(DEAD.get("main", {})))
+    rep("...and on the PLATE it stays: cd at cl = 0 is the plate's only drag criterion",
+        "plate" not in REDUNDANT and "cdcr" not in DEAD["plate"])
 
     #  sub-scores: the band ends are 0 and 100, and a lower-better criterion
     #  is mirrored

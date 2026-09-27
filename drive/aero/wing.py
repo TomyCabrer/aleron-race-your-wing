@@ -411,6 +411,26 @@ class WingSpec:
     #: how the wing is attached to the body -- see MOUNTS. 'pylon' is the
     #: default because it is what every wing in the library was analysed with.
     mount: str = "pylon"
+    #: WHERE a pylon mount grips, as a fraction of the SEMI-span from the
+    #: centreline. 0.56 is where carsim has always drawn its two struts (0.28
+    #: of the span); an AeroBO pylon wing grips at AeroBO's own station
+    #: (`carmount.INBOARD_STATION_FRAC`, 0.35). DRAWN only: carsim's strut
+    #: charge does not depend on where the struts stand.
+    pylon_frac: float = 0.56
+    #: the plate's LEAN, deg from the wing plane: 90 is upright (every
+    #: carsim-analysed wing -- its lattice flies upright plates), less leans
+    #: it outboard. An AeroBO-designed wing carries the lean AeroBO flew
+    #: (stated or searched), and AeroBO priced it in the wing's `aero` law;
+    #: here it is DRAWN, never flown.
+    plate_cant_deg: float = 90.0
+    #: the plate's chord over the wing's TIP chord (AeroBO's designed plate:
+    #: its `endplate_chord_ratio` row). 0.0 = not stated, drawn at carsim's
+    #: customary 1.3 x the tip chord. DRAWN.
+    plate_chord_ratio: float = 0.0
+    #: does the plate continue the wing's chord law past the tip (AeroBO's
+    #: `endplate_chord_follows`, the pylon mount's tip device) instead of
+    #: holding one chord? DRAWN.
+    plate_chord_follows: bool = False
     n_strips: int = 24
     notes: str = ""
     builtin: bool = False
@@ -419,6 +439,23 @@ class WingSpec:
     #: the vehicle then runs its legacy branch bit-for-bit.
     legacy: dict | None = None
     aero: dict = field(default_factory=dict)
+    #: WHERE THIS WING WAS DESIGNED, when it was not designed here. A wing
+    #: the garage's DESIGN page made carries `{"engine": "aerobo", "problem",
+    #: "family", "labels", "x", "flags", "record_path", "n_evals",
+    #: "best_score", "score_units", "objective"}` -- AeroBO's own problem and
+    #: winning vector (drive/aerobo_models.WingModel.fit). Its `aero` is then
+    #: a law SAMPLED FROM AeroBO's evaluator at that vector, so nothing in
+    #: carsim may re-derive it with carsim's lattice (`Library.analyse_wing`
+    #: returns it as stored) or pull its rows into carsim's packaging bands
+    #: (`clamp` leaves them alone: AeroBO's flank plate reaches 0.25-0.70 m
+    #: to the car's side, well past carsim's 0.16 m plate band). Empty on
+    #: every wing designed before, which is what those decode to.
+    design: dict = field(default_factory=dict)
+
+    @property
+    def engine(self) -> str:
+        """'aerobo' for a wing AeroBO's engine designed, else 'carsim'."""
+        return str((self.design or {}).get("engine") or "carsim")
 
     # ---- geometry --------------------------------------------------------
     @property
@@ -459,16 +496,23 @@ class WingSpec:
         if self.plate_shape not in bl.BLEND_SHAPES:
             self.plate_shape = "arc"
         self.plate_blend = float(min(max(self.plate_blend, 0.0), 1.0))
+        self.plate_cant_deg = float(min(max(self.plate_cant_deg, 5.0), 90.0))
+        self.plate_chord_ratio = float(max(self.plate_chord_ratio, 0.0))
+        self.pylon_frac = float(min(max(self.pylon_frac, 0.05), 1.0))
         if self.area <= 0.0:
             self.area = self.span * self.chord * 0.5 * (1.0 + self.taper)
         if self.ride_h <= 0.0:
             self.ride_h = RIDE_H0[self.role]
-        b = BOUNDS[self.role]
-        over = CLAMP_HI.get(self.role, {})
-        for k in design_vars(self.role, owner="spec", area=True):  # page order
-            lo, hi = b[k]
-            hi = max(hi, over.get(k, hi))       # span / area / top ride: per car
-            setattr(self, k, float(min(max(getattr(self, k), lo), hi)))
+        #  an AeroBO wing's rows are AeroBO's box, not carsim's packaging
+        #  bands: clamping them would draw (and weigh) a wing its `aero` law
+        #  was not sampled from
+        if self.engine != "aerobo":
+            b = BOUNDS[self.role]
+            over = CLAMP_HI.get(self.role, {})
+            for k in design_vars(self.role, owner="spec", area=True):  # page order
+                lo, hi = b[k]
+                hi = max(hi, over.get(k, hi))       # span / area / top ride: per car
+                setattr(self, k, float(min(max(getattr(self, k), lo), hi)))
         self.n_strips = int(min(max(self.n_strips, 8), 48))
         return self
 
@@ -509,9 +553,18 @@ class WingSpec:
                    ride_h=float(d.get("ride_h") or (d.get("aero") or {}).get("ride_h") or 0.0),
                    area=float(d.get("area", 0.0)),
                    mount=str(d.get("mount", "pylon")),
+                   #  absent on every wing saved before the mount question:
+                   #  the defaults are exactly how those were drawn
+                   pylon_frac=float(d.get("pylon_frac", 0.56)),
+                   plate_cant_deg=float(d.get("plate_cant_deg", 90.0)),
+                   plate_chord_ratio=float(d.get("plate_chord_ratio", 0.0)),
+                   plate_chord_follows=bool(d.get("plate_chord_follows", False)),
                    n_strips=int(d.get("n_strips", 24)), notes=str(d.get("notes", "")),
                    builtin=bool(d.get("builtin", False)), legacy=d.get("legacy"),
-                   aero=dict(d.get("aero", {}))).clamp()
+                   aero=dict(d.get("aero", {})),
+                   #  absent on every wing designed before the AeroBO pivot:
+                   #  {} is a carsim-analysed wing, which is what they are
+                   design=dict(d.get("design") or {})).clamp()
 
     def reynolds(self, V: float | None = None) -> float:
         return reynolds(V_REF[self.role] if V is None else V, self.mac)
@@ -538,6 +591,108 @@ FLANK_STANDOFF = RIDE_H0["flank"]
 #: deck to measure against -- it may not import the car mesh -- and charges a
 #: constant instead. Fixing it is a separate change with its own numbers.
 TOP_PYLON_L = 0.45
+
+
+# --------------------------------------------------------------------------- #
+#  the mount, DRAWN (the garage's car page and the chase view share these)     #
+# --------------------------------------------------------------------------- #
+#: The plate chord a drawing gives a plate whose ratio is not stated
+#: (`plate_chord_ratio` 0.0), over the wing's tip chord: what carsim has always
+#: drawn, 1.2 on a flank panel and 1.3 on a top wing. A plate that FOLLOWS the
+#: wing's chord law and states no ratio is the law continued, ratio 1 --
+#: AeroBO's fence-family tip device, which carries no chord scale of its own.
+PLATE_CHORD_DRAWN = {"flank": 1.2, "top": 1.3}
+
+
+def plate_chord_scale(role: str, ratio: float, follows: bool) -> float:
+    """The drawn plate's chord over the tip chord (see PLATE_CHORD_DRAWN)."""
+    if float(ratio) > 0.0:
+        return float(ratio)
+    return 1.0 if follows else PLATE_CHORD_DRAWN.get(role, 1.3)
+
+
+#: A SWAN-NECK pylon as drawn: its section (streamwise width x thickness, the
+#: straight post carsim drew before), where it lands on the wing (AeroBO's
+#: `carmount.X_AC_FRAC`: the quarter chord, so the mount winds nothing up),
+#: how far behind the trailing edge it stands and how far over the pressure
+#: surface its neck clears.
+PYLON_W, PYLON_T = 0.06, 0.024
+PYLON_LAND_FRAC, PYLON_TE_GAP, PYLON_CLEAR, PYLON_BEND_R = 0.25, 0.03, 0.05, 0.05
+
+
+def lower_surface(loop) -> np.ndarray:
+    """The LOWER surface of a closed section loop (x in [0, 1], any start,
+    either winding), trailing edge to leading edge -- which an INVERTED wing
+    turns to the sky: a top wing's PRESSURE side, where a swan neck lands."""
+    lp = np.asarray(loop, float)
+    if len(lp) > 2 and np.allclose(lp[0], lp[-1]):
+        lp = lp[:-1]                        # a closing point: one of each
+    lp = np.roll(lp, -int(np.argmax(lp[:, 0])), axis=0)       # start at the TE
+    i = int(np.argmin(lp[:, 0]))
+    a, b = lp[:i + 1], np.vstack([lp[i:], lp[:1]])
+    return a if float(np.mean(a[:, 1])) < float(np.mean(b[:, 1])) else b[::-1]
+
+
+def pylon_rings(side_x, side_z, y: float, deck_z) -> list:
+    """One swan-neck pylon (`MOUNTS` 'pylon' on a top wing, AeroBO's
+    `mount_side='pressure'`) as closed rectangle rings (5 corners, the first
+    repeated) for a loft, world metres: up from the deck BEHIND the trailing
+    edge, over the top, and down onto the wing's upper surface -- which on an
+    inverted wing is its PRESSURE side, the one a swan neck exists to reach so
+    the suction side stays clean (`carmount.MOUNT_SIDES`).
+
+    `side_x` / `side_z` are the pressure surface at the pylon's station y (any
+    order), `deck_z` x -> the deck's height. The foot ring follows the deck's
+    slope under each corner and the landing ring the wing's surface, so the
+    pylon neither floats off the deck nor stands clear of the wing. Two bends
+    of two panels each and the straight runs: 6 segments, 26 polygons."""
+    xs = np.asarray(side_x, float)
+    zs = np.asarray(side_z, float)
+    o = np.argsort(xs)
+    xs, zs = xs[o], zs[o]
+    x_te, x_le = float(xs[0]), float(xs[-1])
+    x_land = x_le - PYLON_LAND_FRAC * (x_le - x_te)
+    z_land = float(np.interp(x_land, xs, zs))
+    z_over = max(float(zs[xs <= x_land + 1e-9].max()), z_land) + PYLON_CLEAR
+    x_f = x_te - PYLON_TE_GAP - 0.5 * PYLON_W
+    z_f = float(deck_z(x_f))
+    r1 = max(1e-3, min(PYLON_BEND_R, 0.45 * (x_land - x_f), 0.9 * (z_over - z_f)))
+    r2 = max(1e-3, min(0.45 * (x_land - x_f), z_over - z_land))     # lands ON the bend
+    k = math.sqrt(0.5)
+    pts = [(x_f, z_f), (x_f, z_over - r1), (x_f + r1 - r1 * k, z_over - r1 + r1 * k),
+           (x_f + r1, z_over), (x_land - r2, z_over),
+           (x_land - r2 + r2 * k, z_over - r2 + r2 * k), (x_land, z_over - r2)]
+    if z_over - r2 > z_land + 1e-4:
+        pts.append((x_land, z_land))
+    P = [np.array(pts[0], float)]
+    for p in pts[1:]:                       # a stowed wing on the deck: short post
+        if math.hypot(p[0] - P[-1][0], p[1] - P[-1][1]) > 1e-4:
+            P.append(np.array(p, float))
+    P = np.array(P)
+    seg = np.diff(P, axis=0)
+    u = seg / np.maximum(np.linalg.norm(seg, axis=1), 1e-12)[:, None]
+    rings = []
+    for i in range(len(P)):
+        if i == 0:
+            tg, sc = u[0], 1.0
+        elif i == len(P) - 1:
+            tg, sc = u[-1], 1.0
+        else:                               # mitred: the bend keeps its width
+            tg = u[i - 1] + u[i]
+            tg = tg / max(np.linalg.norm(tg), 1e-12)
+            sc = 1.0 / max(float(np.dot(tg, u[i])), 0.5)
+        nx, nz = -tg[1] * sc, tg[0] * sc    # in the x-z plane, across the line
+        hw, ht = 0.5 * PYLON_W, 0.5 * PYLON_T
+        cx, cz = P[i]
+        ring = np.array([(cx + hw * nx, y + ht, cz + hw * nz), (cx - hw * nx, y + ht, cz - hw * nz),
+                         (cx - hw * nx, y - ht, cz - hw * nz), (cx + hw * nx, y - ht, cz + hw * nz),
+                         (cx + hw * nx, y + ht, cz + hw * nz)])
+        if i == 0:                          # the foot, on the deck under each corner
+            ring[:, 2] = [float(deck_z(float(xv))) for xv in ring[:, 0]]
+        elif i == len(P) - 1:               # the landing, on the wing's surface
+            ring[:, 2] = np.interp(ring[:, 0], xs, zs)
+        rings.append(ring)
+    return rings
 
 
 #: Least fraction of its own span a wing must keep between its plates. A
@@ -875,7 +1030,7 @@ def self_check(verbose: bool = True) -> bool:
     #  `design_table` -- and the area row appears only when one is declared.
     page_order = ("taper", "twist_root_deg", "twist_deg", "inc_deg",
                   "plate_h", "ride_h", "span")
-    rep("design vector is AeroBO's evaluate_car_wing order (CONTRACT section 7)",
+    rep("design vector is WingLab's evaluate_car_wing order (CONTRACT section 7)",
         design_vars() == page_order, " -> ".join(design_vars()))
     rep("the AREA row sits one ahead of the span, and only when declared",
         design_vars(area=True) == page_order[:-1] + ("area", "span")

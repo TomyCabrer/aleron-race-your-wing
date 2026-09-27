@@ -107,6 +107,14 @@ TRAP_END = 24.0          # m   the dragstrip's sand trap past the end
 
 # colour KEYS: world.py owns the RGB (the palette), this module owns where
 PAINT_WHITE, PAINT_DIM, PAINT_RUBBER = 0, 1, 2
+#: the precision stop board (task 45, round 3; drive/challenges.py
+#: `board_marks`), painted while a stop challenge runs, across the strip as
+#: its gate bars are: the amber BRAKE MARKER, a bar from the marker on, and
+#: the BOARD, a white-and-black checker `tol` either side of its line -- the
+#: nose stopped on the checker is the 3rd star
+PAINT_MARKER, PAINT_BOARD_DARK = 3, 4
+STOP_MARKER_DEPTH = 1.0  # m   the marker bar, from the marker on
+STOP_BOARD_COLS = 12     #     the checker's squares across the strip
 
 
 # ======================================================================= #
@@ -200,6 +208,23 @@ def quads_at(tr, s0, s1, n0, n1, nrm=None) -> np.ndarray:
     P0, P1, N0, N1 = P[:k], P[k:], N[:k], N[k:]
     n0, n1 = n0[:, None], n1[:, None]
     return np.stack([P0 + n0 * N0, P0 + n1 * N0, P1 + n1 * N1, P1 + n0 * N1], axis=1)
+
+
+def stop_board_rects(tr, marks, tol: float = 1.0) -> tuple:
+    """(s0, s1, n0, n1, key) arrays, one entry a road-frame rectangle: a
+    stop's amber brake marker and its board's checker, two rows `tol` deep
+    either side of the board's line (`marks` = (marker s, board s),
+    challenges.board_marks), 0.4 m in from the strip's edges."""
+    marker, board = float(marks[0]), float(marks[1])
+    e = 0.5 * float(tr.width) - 0.4
+    ns = np.linspace(-e, e, STOP_BOARD_COLS + 1)
+    rows = [(marker, marker + STOP_MARKER_DEPTH, -e, e, PAINT_MARKER)]
+    for r, (a, b) in enumerate(((board - tol, board), (board, board + tol))):
+        for j in range(STOP_BOARD_COLS):
+            rows.append((a, b, ns[j], ns[j + 1],
+                         PAINT_WHITE if (r + j) % 2 == 0 else PAINT_BOARD_DARK))
+    s0, s1, n0, n1, key = (np.array(c) for c in zip(*rows))
+    return s0, s1, n0, n1, key.astype(np.int8)
 
 
 def theme_of(tr) -> str:
