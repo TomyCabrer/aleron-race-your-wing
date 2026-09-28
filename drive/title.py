@@ -1,4 +1,4 @@
-"""drive/title.py -- the title screen: ALERÓN over a live 3-D scene (task 44).
+"""drive/title.py -- the title screen: the owner's ALERON logo over a live 3-D scene (task 44).
 
 The owner (2026-09-25): "We need a proper title screen, with a background",
 and of the background: "Randomised the type and number of cars (1 per type
@@ -114,27 +114,22 @@ HINTS = {
     "settings": "map, car, paint, engine, gearbox, aids, camera, sound",
     "quit": "back to the desktop",
 }
-#: the game's name (the owner, 2026-09-27): "Alerón: Race Your Wing". The
-#: logo is the name as the car with its three wings (`logo_surfaces`): the A's
-#: straight left side and the N's right stem are the flank wings, upright with a
-#: winglet each, the accent is the top wing; the subtitle tracked out under it
-LOGO = "ALERÓN"                  # its A and its N are drawn, the rest set in LOGO_FONT
+#: the game's name (the owner, 2026-09-27): "Alerón: Race Your Wing". The logo
+#: and the line under it are the owner's own art (2026-09-28: their
+#: myTitleV1.pdf and RaceYourWing.pdf, cut out of the white page): ALERON in
+#: blue pixel letters, an orange wing out of each side, over a blue rule, and
+#: RACE YOUR WING in blue and orange, fitted under that rule
+LOGO = "ALERÓN"
 SUBTITLE = "RACE YOUR WING"
 CAPTION = "Alerón: Race Your Wing"
-#: the logo's faces, bundled: Titillium Web (SIL OFL 1.1,
-#: data/fonts/LICENSE-TitilliumWeb.txt); a face that will not load is the menu's font
-FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "fonts")
-LOGO_FONT = os.path.join(FONTS_DIR, "TitilliumWeb-BoldItalic.ttf")
-SUB_FONT = os.path.join(FONTS_DIR, "TitilliumWeb-SemiBold.ttf")
-LOGO_SIZE, SUB_SIZE = 124, 22    # px at 1280x800, scaled with the window like the rest
-LOGO_PANEL_REACH = (0.12, 0.08)  # the flank wings past the cap line / below the baseline, cap heights
-LOGO_PANEL_TAPER = 0.55          # a flank wing's width at its tip, x its root's (a stem's)
-LOGO_WINGLET = (60.0, 0.30, 0.16)  # deg from the vertical (30 up from flat), bend radius, length (cap h)
-#: the logo's colours (the owner: ice blue and white): the letters' gradient top
-#: to bottom, the wings and the accent, the outline
-C_LOGO_TOP, C_LOGO_BOT = (236, 248, 255), (96, 172, 255)
-C_LOGO_WING = (250, 250, 252)
-C_LOGO_LINE = (8, 20, 40)
+ART_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "art")
+LOGO_ART = os.path.join(ART_DIR, "logo.png")        # 833 x 150
+SUB_ART = os.path.join(ART_DIR, "subtitle.png")     # 1273 x 116
+LOGO_W = 560                     # the logo's width, px at 1280x800 (the art's own 833: sharp to u 1.5)
+LOGO_RULE = (0.094, 0.923)       # the art's rule under the letters, fractions of its width
+SUB_SIZE = 22                    # the plain subtitle's px at 1280x800 (no art)
+#: the art's blue (the plain logo, the store art's rule and glow)
+C_LOGO_BOT = (40, 92, 226)
 FOOTER = "UP / DOWN move   ENTER / CROSS select   ESC to Quit   or click a row"
 
 #: the scene. A reference lap's engine: the first of these that has one
@@ -541,142 +536,42 @@ def _menu_input(pad=None):
     return inp
 
 
-def _ink_runs(row) -> list:
-    """[(start, end)] of the ink runs (alpha > 128) along one alpha row, end exclusive."""
-    on = np.concatenate(([False], np.asarray(row) > 128, [False]))
-    d = np.flatnonzero(on[1:] != on[:-1])
-    return list(zip(d[0::2].tolist(), d[1::2].tolist()))
+_ART: dict = {}
+
+
+def _art(path: str):
+    """The PNG at `path`, loaded once (converted when a window is up)."""
+    s = _ART.get(path)
+    if s is None:
+        s = pygame.image.load(path)
+        if pygame.display.get_surface() is not None:
+            s = s.convert_alpha()
+        s = _ART[path] = s
+    return s
+
+
+def _fit(art, w: int):
+    """(art `w` px wide, its black silhouette at 140 alpha: the drop shadow)."""
+    w = max(8, int(w))
+    s = pygame.transform.smoothscale(art, (w, max(1, round(art.get_height() * w / art.get_width()))))
+    shadow = s.copy()
+    shadow.fill((0, 0, 0, 255), special_flags=pygame.BLEND_RGBA_MIN)
+    shadow.set_alpha(140)
+    return s, shadow
 
 
 def logo_surfaces(u: float, ss: int | None = None):
-    """(logo, shadow) at scale `u`, each cropped to its ink: LOGO as the car,
-    its three wings white (C_LOGO_WING) as the game's are -- the A's left side
-    and the N's right stem are the flank panels, standing on the road, tapering
-    up to a winglet canted out (LOGO_PANEL_*), and the accent is the top wing;
-    the rest of the letters is the C_LOGO_TOP..BOT gradient, all over a
-    C_LOGO_LINE outline. The A and the N are drawn (off the face's own
-    measures), LERÓ is set in LOGO_FONT. Drawn `ss` x over and smooth-scaled
-    down: 3 x, 2 x past u 1.5 (a 4K window's 3 x wants half a gigabyte for a
-    moment). Raises if the face will not load or measure."""
-    ss = ss or (3 if u <= 1.5 else 2)
-    f = pygame.font.Font(LOGO_FONT, max(8, int(round(LOGO_SIZE * u))) * ss)
-    white, on = (255, 255, 255), (255, 255, 255, 255)
+    """(logo, shadow) at scale `u`: the owner's logo art (LOGO_ART) LOGO_W x u
+    wide, its rule included, and its silhouette for the drop shadow. `ss` is
+    kept for the callers (the art is drawn already). Raises if the art will
+    not load."""
+    return _fit(_art(LOGO_ART), LOGO_W * u)
 
-    def alpha(s_):
-        return pygame.surfarray.array_alpha(f.render(s_, True, white))
 
-    def top(s_):
-        return f.render(s_, True, white).get_bounding_rect().top
-
-    base, cap, o_top = f.get_ascent(), top("N"), top("O")
-    H = base - cap                                        # the cap height
-    n_a = alpha("N")
-    lo, hi = _ink_runs(n_a[:, int(base - 0.15 * H)]), _ink_runs(n_a[:, int(base - 0.85 * H)])
-    slope = (hi[0][0] - lo[0][0]) / (0.70 * H)            # the italic, off the N's left stem
-    sw = lo[0][1] - lo[0][0]                              # a stem's width, across
-    n_feet, n_mid = _ink_runs(n_a[:, base - 2]), _ink_runs(n_a[:, int(base - 0.5 * H)])
-    n0, n1, dw = n_feet[0][0], n_feet[-1][1], n_mid[1][1] - n_mid[1][0]   # dw: the diagonal
-    a_a = alpha("A")
-    a_feet, a_mid = _ink_runs(a_a[:, base - 2]), _ink_runs(a_a[:, int(base - 0.5 * H)])
-    uL, uR, legw = a_feet[0][0], a_feet[-1][1], a_mid[-1][1] - a_mid[-1][0]
-    up, down = LOGO_PANEL_REACH
-    phi, R, Lw = math.radians(LOGO_WINGLET[0]), LOGO_WINGLET[1] * H, LOGO_WINGLET[2] * H
-    pad = int(0.9 * H)
-    x_n = f.size("A")[0] + f.size(LOGO[1:-1])[0]          # the N's origin
-    W = x_n + f.size("N")[0] + 2 * pad + int(slope * H * 1.5)
-    ext_up, ext_dn = int((up + 0.4) * H), int(down * H) + 4
-    Hs = f.get_height() + ext_up + ext_dn
-    by = base + ext_up                                    # the baseline, on the canvas
-
-    def X(uu, v):                                         # upright (u, v) -> pixels
-        return (pad + uu + slope * v, by - v)
-
-    def panel(u0, u1, out):
-        """a flank wing, root on the road, tapering to LOGO_PANEL_TAPER at a
-        winglet turned `out` (-1 left, +1 right) to LOGO_WINGLET's angle from
-        the vertical, mirrored whatever the italic"""
-        x, y = X((u0 + u1) / 2, -down * H)
-        a = math.atan2(-1.0, slope)                       # up, along the italic
-        pts = [(x, y)]
-        straight = (1.0 + up + down) * H - 0.9 * R
-        for k in range(1, 17):
-            pts.append((x + math.cos(a) * straight * k / 16, y + math.sin(a) * straight * k / 16))
-        x, y = pts[-1]
-        step = ((-(math.pi / 2 + phi) if out < 0 else -(math.pi / 2 - phi)) - a) / 24
-        for _ in range(24):
-            a += step
-            x, y = x + math.cos(a) * R * abs(step), y + math.sin(a) * R * abs(step)
-            pts.append((x, y))
-        for k in range(1, 9):
-            pts.append((x + math.cos(a) * Lw * k / 8, y + math.sin(a) * Lw * k / 8))
-        run = [0.0]
-        for p, q in zip(pts, pts[1:]):
-            run.append(run[-1] + math.hypot(q[0] - p[0], q[1] - p[1]))
-        left, right = [], []
-        for i, (px, py) in enumerate(pts):
-            j0, j1 = max(0, i - 1), min(len(pts) - 1, i + 1)
-            dx, dy = pts[j1][0] - pts[j0][0], pts[j1][1] - pts[j0][1]
-            n = math.hypot(dx, dy) or 1.0
-            h = (u1 - u0) * (1.0 - (1.0 - LOGO_PANEL_TAPER) * run[i] / run[-1]) / 2
-            left.append((px - dy / n * h, py + dx / n * h))
-            right.append((px + dy / n * h, py - dx / n * h))
-        return left + right[::-1]
-
-    body = pygame.Surface((W, Hs), pygame.SRCALPHA)
-    wings = pygame.Surface((W, Hs), pygame.SRCALPHA)
-    #  the A: the left panel, then its leg, its bar and its top joining it
-    a0, top_r = uL + sw, sw + 1.05 * legw
-
-    def leg(v):                                           # inside the leg's outer edge
-        return uR - 0.2 * legw - (uR - uL - top_r) * v / H
-
-    vb, bh = 0.24 * H, 0.16 * H
-    for poly in ([X(a0, H), X(uL + top_r, H), X(uR, 0), X(uR - legw, 0)],
-                 [X(uL + sw / 2, vb), X(leg(vb), vb), X(leg(vb + bh), vb + bh), X(uL + sw / 2, vb + bh)],
-                 [X(uL + sw / 2, H), X(a0 + 1, H), X(a0 + 1, 0.82 * H), X(uL + sw / 2, 0.82 * H)]):
-        pygame.draw.polygon(body, on, poly)
-    pygame.draw.polygon(wings, on, panel(uL, uL + sw, -1))
-    #  LERÓ, set; the N: its left stem, its diagonal, then the right panel
-    body.blit(f.render(LOGO[1:-1], True, white), (pad + f.size("A")[0], ext_up),
-              special_flags=pygame.BLEND_RGBA_MAX)
-    N0, N1 = x_n + n0, x_n + n1
-    d_end = N1 - sw / 2
-    for poly in ([X(N0, 0), X(N0 + sw, 0), X(N0 + sw, H), X(N0, H)],
-                 [X(N0, H), X(N0 + dw, H), X(d_end, 0), X(d_end - dw, 0)]):
-        pygame.draw.polygon(body, on, poly)
-    pygame.draw.polygon(wings, on, panel(N1 - sw, N1, +1))
-    #  the accent (all that stands above the O's top) is the top wing
-    cut = o_top + ext_up
-    wings.blit(body, (0, 0), (0, 0, W, cut), special_flags=pygame.BLEND_RGBA_MAX)
-    body.fill((0, 0, 0, 0), (0, 0, W, cut))
-    #  the fills, then the outline: the union of both, dilated, under them
-    grad = pygame.Surface((W, Hs), pygame.SRCALPHA)
-    for y in range(Hs):
-        t = min(1.0, max(0.0, (y - cap - ext_up) / H))
-        grad.fill([int(a + (b - a) * t) for a, b in zip(C_LOGO_TOP, C_LOGO_BOT)] + [255], (0, y, W, 1))
-    grad.blit(body, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-    white_s = pygame.Surface((W, Hs), pygame.SRCALPHA)
-    white_s.fill((*C_LOGO_WING, 255))
-    white_s.blit(wings, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-    sil = body
-    sil.blit(wings, (0, 0), special_flags=pygame.BLEND_RGBA_MAX)
-    sil.fill((*C_LOGO_LINE, 255), special_flags=pygame.BLEND_RGBA_MULT)
-    out = pygame.Surface((W, Hs), pygame.SRCALPHA)
-    r = max(1, int(round(3 * u))) * ss
-    for k in range(24):
-        a_ = 2 * math.pi * k / 24
-        out.blit(sil, (round(r * math.cos(a_)), round(r * math.sin(a_))), special_flags=pygame.BLEND_RGBA_MAX)
-    out.blit(sil, (0, 0), special_flags=pygame.BLEND_RGBA_MAX)
-    out.blit(grad, (0, 0))
-    out.blit(white_s, (0, 0))                             # the wings over the letters they are
-    rect = out.get_bounding_rect()
-    logo = out.subsurface(rect).copy()
-    shadow = logo.copy()
-    shadow.fill((0, 0, 0, 255), special_flags=pygame.BLEND_RGBA_MIN)
-    size = (max(1, rect.w // ss), max(1, rect.h // ss))
-    logo, shadow = pygame.transform.smoothscale(logo, size), pygame.transform.smoothscale(shadow, size)
-    shadow.set_alpha(140)
-    return logo, shadow
+def subtitle_surfaces(w: int):
+    """(subtitle, shadow): the owner's RACE YOUR WING art (SUB_ART) `w` px
+    wide. Raises if it will not load."""
+    return _fit(_art(SUB_ART), w)
 
 
 class Title:
@@ -959,19 +854,6 @@ class Title:
             self._fonts[key] = f
         return f
 
-    def _face(self, path: str, size: float, bold: bool = True):
-        """A bundled face at `size` (scaled), cached; the menu's own font if
-        the file will not load."""
-        key = (path, max(6, int(round(size * self.u))))
-        f = self._fonts.get(key)
-        if f is None:
-            try:
-                f = pygame.font.Font(path, key[1])
-            except Exception:             # noqa: BLE001 -- a missing face is not a crash
-                f = self._font(size, bold)
-            self._fonts[key] = f
-        return f
-
     def _logo(self):
         """(logo, shadow): `logo_surfaces` at this window's scale, built once;
         the name in the menu's font if it cannot be drawn."""
@@ -983,25 +865,35 @@ class Title:
                 print(f"title: a plain logo ({type(exc).__name__}: {exc})")
                 shadow = self._txt(LOGO, 104, (0, 0, 0), True).copy()
                 shadow.set_alpha(150)
-                got = (self._txt(LOGO, 104, C_LOGO_TOP, True), shadow)
+                got = (self._txt(LOGO, 104, C_LOGO_BOT, True), shadow)
             self._surfs["logo"] = got
         return got
 
     def _subtitle(self):
-        """SUBTITLE tracked out, letter by letter, cropped to its ink."""
-        s = self._surfs.get("subtitle")
-        if s is None:
-            f = self._face(SUB_FONT, SUB_SIZE)
-            gap = max(1, int(round(5 * self.u)))
-            gl = [f.render(c, True, C_TEXT) for c in SUBTITLE]
-            s = pygame.Surface((sum(g.get_width() for g in gl) + gap * (len(gl) - 1),
-                                max(g.get_height() for g in gl)), pygame.SRCALPHA)
-            x = 0
-            for g in gl:
-                s.blit(g, (x, 0), special_flags=pygame.BLEND_RGBA_MAX)
-                x += g.get_width() + gap
-            s = self._surfs["subtitle"] = s.subsurface(s.get_bounding_rect()).copy()
-        return s
+        """(subtitle, shadow): `subtitle_surfaces` as wide as the logo's rule,
+        built once; SUBTITLE tracked out in the menu's font if it has no art."""
+        got = self._surfs.get("subtitle")
+        if got is None:
+            try:
+                got = subtitle_surfaces(self._logo()[0].get_width() * (LOGO_RULE[1] - LOGO_RULE[0]))
+            except Exception as exc:      # noqa: BLE001
+                print(f"title: a plain subtitle ({type(exc).__name__}: {exc})")
+                f = self._font(SUB_SIZE, True)
+                gap = max(1, int(round(5 * self.u)))
+                gl = [f.render(c, True, C_TEXT) for c in SUBTITLE]
+                s = pygame.Surface((sum(g.get_width() for g in gl) + gap * (len(gl) - 1),
+                                    max(g.get_height() for g in gl)), pygame.SRCALPHA)
+                x = 0
+                for g in gl:
+                    s.blit(g, (x, 0), special_flags=pygame.BLEND_RGBA_MAX)
+                    x += g.get_width() + gap
+                s = s.subsurface(s.get_bounding_rect()).copy()
+                shadow = s.copy()
+                shadow.fill((0, 0, 0, 255), special_flags=pygame.BLEND_RGBA_MIN)
+                shadow.set_alpha(140)
+                got = (s, shadow)
+            self._surfs["subtitle"] = got
+        return got
 
     def _txt(self, s: str, size: float, col, bold: bool = False):
         key = (s, size, col, bold)
@@ -1070,19 +962,18 @@ class Title:
         left, low, sel = self._shades()
         screen.blit(left, (0, 0))
         screen.blit(low, (0, H - low.get_height()))
-        # the logo (`_logo`, built once), its drop shadow, a rule in the
-        # logo's blue, and the subtitle tracked out under it
+        # the logo (`_logo`, built once: the owner's art, its rule under the
+        # letters) and under it the subtitle, lined up with that rule, each
+        # over its drop shadow
         lx, ly = lay["logo"]
         logo, shadow = self._logo()
         off = max(2, int(round(4 * u)))
         screen.blit(shadow, (lx + off, ly + off))
         screen.blit(logo, (lx, ly))
-        lw = logo.get_width()
-        rule_y = ly + logo.get_height() + int(16 * u)
-        pygame.draw.rect(screen, C_LOGO_BOT, (lx, rule_y, int(lw * 0.36), max(2, int(5 * u))))
-        pygame.draw.rect(screen, C_TEXT, (lx + int(lw * 0.36) + int(6 * u), rule_y,
-                                          int(lw * 0.64) - int(6 * u), max(1, int(2 * u))))
-        screen.blit(self._subtitle(), (lx, rule_y + int(16 * u)))
+        sub, sub_shadow = self._subtitle()
+        sx, sy = lx + int(logo.get_width() * LOGO_RULE[0]), ly + logo.get_height() + int(18 * u)
+        screen.blit(sub_shadow, (sx + off, sy + off))
+        screen.blit(sub, (sx, sy))
         # the menu column
         mx, my, rh, mw = lay["menu_x"], lay["menu_y"], lay["row_h"], lay["menu_w"]
         self._rows = []
@@ -1240,8 +1131,8 @@ def self_check(verbose: bool = True, shots: str | None = None) -> bool:
         inside = all(0 <= x and 0 <= y and x + w <= W and y + h <= H for x, y, w, h in rows)
         menu_bottom = max(y + h for _, y, _, h in rows)
         foot_top = lay["bottom_y"]
-        logo_bottom = (lay["logo"][1] + t._logo()[0].get_height() + int(32 * t.u)
-                       + t._subtitle().get_height())       # the subtitle's foot
+        logo_bottom = (lay["logo"][1] + t._logo()[0].get_height() + int(18 * t.u)
+                       + t._subtitle()[0].get_height())    # the subtitle's foot
         clear = menu_bottom + int(40 * t.u) <= foot_top and logo_bottom < lay["menu_y"]
         #  the bottom line fits; the key hints and the longest caption share a row
         lx, f14 = lay["logo"][0], t._font(14)
