@@ -675,7 +675,7 @@ def self_check(verbose: bool = True) -> bool:
         f"{len(shown1)} of 40 rows shown, {shown1[0]}..{shown1[-1]}, bottom {bottom} px")
     # the key legend: its value column clears 'LEFT / RIGHT', and ENTER / ESC
     # say what the page's footer says (the welcome page's ESC is 'not now')
-    lg = Menu("WELCOME", [("Car        Opel Corsa C", "set:car"), ("Back", "back")],
+    lg = Menu("WELCOME", [("Car        Aurel Civetta", "set:car"), ("Back", "back")],
               footer="ENTER / CROSS select   ESC / CIRCLE not now   or click a row")
     lg.show()
     seen = []
@@ -727,7 +727,7 @@ def self_check(verbose: bool = True) -> bool:
     # label and inside its row (so clear of the help columns), on that row
     # only; the rows stay 2-tuples; a re-show keeps it, new items drop it
     cob = (40, 72, 186)
-    sm = Menu("SETTINGS", [("Car        Opel Corsa C", "set:car"),
+    sm = Menu("SETTINGS", [("Car        Aurel Civetta", "set:car"),
                            ("Paint      cobalt blue", "set:paint"), ("Back", "back")],
               [("KEYBOARD", [("ESC", "back")])])
 

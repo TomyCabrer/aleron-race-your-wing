@@ -108,7 +108,7 @@ made while they were there screened them into
 
 ## Where it was built, and the merge
 
-Built in the git worktree **`/Users/tolomeelsabio/Desktop/carsim-aerobo`**,
+Built in the git worktree **`carsim-aerobo`** (a sibling folder, since removed),
 branch **`aerobo-design`**, off `d244938` (task 37). Nothing is committed;
 the lead merges it into `main`, which moved on meanwhile (tasks 38, 39, and
 task 41 on `task41-wings-cars`). Where the edits meet:
@@ -154,8 +154,7 @@ The plan (`specs/PLAN2.md`), the probes (`pivot/*.py`), the agents'
 progress files and reports (`pivot/A` .. `pivot/F`) and the screenshots
 (`pivot/F/final_shots`, `pivot/F/shots`) are in the building session's
 scratchpad,
-`/private/tmp/claude-501/-Users-tolomeelsabio-Desktop-carsim/7510d2b1-92a0-4ab3-87fa-1e02f35af8ce/scratchpad/`
--- a temporary directory: copy what should outlive the session.
+a temporary directory under `/private/tmp/` -- copy what should outlive the session.
 
 ## The owner's asks, and where each is answered
 

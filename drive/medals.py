@@ -12,11 +12,16 @@ A class nobody laps has NO medals ("--" on the screen) rather than an
 invented time: a gold nobody can prove is reachable is worse than none.
 
 The class is records.py's (plan D1): `track|car|engine|surface`. Seven maps
-(four circuits, the open map, the skidpad, the dragstrip) x five cars (the
-Renault Express and the Citaro bus joined the three in task 41) x three
-engines x three surfaces = 315 classes, every one of which has an entry --
-an author time, or a reason there is none. The DRAGSTRIP has no lap
-(records.py excludes it for the same reason), so its 45 classes say so.
+(four circuits, the open map, the skidpad, the dragstrip) x the cars of
+`cars.CAR_ORDER` (four since task 46: the Corsa, the rally Escort, the 540i
+and the Renault Express -- the MX-5 and the Citaro bus are retired, their
+classes no longer listed) x three engines x three surfaces = 252 classes,
+every one of which has an entry -- an author time, or a reason there is
+none. The DRAGSTRIP has no lap (records.py excludes it for the same
+reason), so its 36 classes say so. A class the table does not hold yet (a
+car added since the last `--build`) simply has no medals at runtime --
+`targets` / `medal_for` return None, the pages show the em dash -- and this
+module's self-check names the cars the table is missing.
 
 How a reference lap is driven
 -----------------------------
@@ -66,7 +71,8 @@ order, with records.encode_trace, into REF_PATH.
 Staleness
 ---------
 `inputs_hash` is a sha256 over what a medal time is a function of: every
-track definition (both surface settings), every car spec, the engine scales,
+track definition (both surface settings), every car spec (not its display
+name: cars.DISPLAY_FIELDS), the engine scales,
 the surface modes, the wet scale, the off-track grip, DT_PHYS, the three
 multipliers -- and the REFERENCE DRIVERS: LapDriver's margins, the lap rules,
 the stop rules and every bundled checkpoint file's sha256. NOT covered: the
@@ -133,9 +139,12 @@ FLYING_LAPS = 2
 #: margin, at the slowest class (the 75 hp car on the all-wet surface). The
 #: circuits after the arena take its 300 s pro rata to their length, rounded
 #: up and never under 1.1x the slowest run measured there (LapDriver 0.60,
-#: all-wet, the 540i with aids on): Linden 252 s, Kestrel 333 s, Ashdown 278 s
+#: all-wet, the 540i with aids on): Linden 252 s, Kestrel 333 s, Ashdown 278 s.
+#: The oval (task 46) takes the same rule, 300 s x 1902.5 / 1249.2 = 457 ->
+#: 460 s, far over its slowest run (it laps fastest of all per metre):
+#: LapDriver 0.60 all-wet, aids on, 241 / 243 / 248 s (Corsa / 540i / Express)
 T_MAX = {"skidpad": 110.0, "arena": 300.0, "open": 420.0,
-         "linden": 280.0, "kestrel": 460.0, "ashdown": 340.0}
+         "linden": 280.0, "kestrel": 460.0, "ashdown": 340.0, "fairfield": 460.0}
 #: LOST: further than this outside the ribbon's edge, or spun (|beta| over
 #: LOST_BETA rad below LOST_V m/s), for LOST_S seconds -- the race bot's
 #: respawn test (`drive.drive.Rival`), which here ends the run instead
@@ -178,7 +187,7 @@ REGEN = "python3 -m drive.medals --build"
 # ==================================================================== #
 def class_keys() -> list:
     """Every class, in menu order: TRACK_ORDER x CAR_ORDER x ENGINE_MODES x
-    SURFACE_MODES (315: 7 maps x 5 cars x 3 x 3)."""
+    SURFACE_MODES (252: 7 maps x 4 cars x 3 x 3, task 46)."""
     import cars
     from . import track as trk
     from .drive import ENGINE_MODES, SURFACE_MODES
@@ -250,7 +259,11 @@ def hash_inputs() -> dict:
         with open(p, "rb") as fh:
             ck[os.path.basename(p)] = hashlib.sha256(fh.read()).hexdigest()
     return dict(tracks=tracks,
-                cars={k: dataclasses.asdict(v) for k, v in sorted(cars.CARS.items())},
+                #  a car's display name (cars.DISPLAY_FIELDS) is words on
+                #  screen, not a medal input (task 49: the cars renamed)
+                cars={k: {f: x for f, x in dataclasses.asdict(v).items()
+                          if f not in cars.DISPLAY_FIELDS}
+                      for k, v in sorted(cars.CARS.items())},
                 engine_scale=dict(ENGINE_SCALE), surface_modes=list(SURFACE_MODES),
                 mu_wet_scale=float(MU_WET_SCALE), dt_phys=float(DT_PHYS),
                 off_track=dict(mu=float(trk.MU_OFF_TRACK), crr=float(trk.CRR_OFF_SCALE)),
@@ -746,9 +759,11 @@ def build(workers=None, only=None, verbose: bool = True) -> dict:
             for aname, a_abs, a_tc in AIDS:
                 jobs.append(dict(key=lead, track=t, car=c, engine=e, surface=s,
                                  driver=dname, path=dpath, aids=aname, abs=a_abs, tc=a_tc))
-    # longest laps first, so the pool does not end on one long run
-    order = {"kestrel": 0, "open": 1, "ashdown": 2, "arena": 3, "linden": 4, "skidpad": 5}
-    jobs.sort(key=lambda j: (order.get(j["track"], 6), j["key"], j["driver"], j["aids"]))
+    # longest laps first, so the pool does not end on one long run (the
+    # oval, task 46: 1.9 km, but the fastest lap, ~55 s, after Linden's)
+    order = {"kestrel": 0, "open": 1, "ashdown": 2, "arena": 3, "linden": 4, "fairfield": 5,
+             "skidpad": 6}
+    jobs.sort(key=lambda j: (order.get(j["track"], 7), j["key"], j["driver"], j["aids"]))
     if verbose:
         n_cls = len(leader)
         print(f"medals --build: {n_cls} classes on {', '.join(todo) or 'no track'} "
@@ -910,10 +925,14 @@ def self_check(verbose: bool = True) -> bool:
         if isinstance(e, dict) and not _good(e.get("author")):
             reasons[e.get("reason")] = reasons.get(e.get("reason"), 0) + 1
     extra = sorted(set(cls) - set(keys))
+    #  task 46: which cars the table has no class for at all (a car added
+    #  since the last build -- their laps simply show no medals until then)
+    unbuilt = sorted({rec.split_key(k)[1] for k in bad if k not in cls})
     rep("every class covered", bool(keys) and not bad,
         f"{len(keys)} classes: {len(auth)} with an author time, "
         + ", ".join(f"{n} '{r}'" for r, n in sorted(reasons.items(), key=lambda x: str(x[0])))
         + (f"; missing/bad {bad[:3]}" if bad else "")
+        + (f"; no class at all for {', '.join(unbuilt)} (rebuild: {REGEN})" if unbuilt else "")
         + (f"; {len(extra)} unknown keys ignored" if extra else ""))
 
     # 1b. every lap map has a run budget: `_drive` reads T_MAX[track], and a

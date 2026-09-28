@@ -26,7 +26,7 @@ Task 41: builds know the car they were made for (`CarBuild.car`, "" for a
 build saved before -- an any-car build). The per-map memory is kept per map
 AND car, and never hands a car another car's build; the PICK page lists the
 driven car's builds first, then the any-car ones, then other cars' (tagged,
-still pickable: a bus wing on a Corsa is the player's own experiment), with
+still pickable: a van's wing on a Corsa is the player's own experiment), with
 the car's own DEFAULT build (Settings.car_build) marked. The same page is
 the Settings page's Build row, on every map (`key` None: no times there).
 
@@ -82,6 +82,8 @@ PR_HELP = [("PRE-RACE", [
     ("Edit", "the garage on this build; its ENTER comes back here"),
     ("Ghosts", "shown / hidden: J on the keyboard, this row on a pad"),
     ("Ghost 2", "LEFT / RIGHT: the reference bot, none, or your P2..P5"),
+    ("Wings", "LEFT / RIGHT: the wing mode -- each one its own leaderboard; FREE "
+              "(your build as designed) never counts"),
     ("ESC", "the pause menu: Resume drives on from here (laps still count)"),
 ])]
 PICK_HELP = [("PICK A BUILD", [
@@ -119,13 +121,15 @@ def no_wings(build_json) -> bool:
 #: short names for a car's tag on a pick row / a library row. The titles
 #: live in `cars.CAR_TITLES`; these are the few letters a row has room for.
 #: A key missing here (a car added later) falls back to its title's first
-#: two words, then to the key itself.
-CAR_SHORT = {"corsa": "Corsa", "mx5": "MX-5", "540i": "540i",
-             "express": "Express", "bus": "Citaro"}
+#: two words, then to the key itself. (Task 46: the MX-5 and the Citaro are
+#: retired; a build tagged with one reads as a Corsa build, so neither tag
+#: reaches a row.)
+CAR_SHORT = {"corsa": "Civetta", "rally": "Halcón", "540i": "N540",
+             "express": "Courier"}
 
 
 def car_label(car: str) -> str:
-    """A car key as a row's tag: 'Corsa', 'MX-5', ... ("" for "")."""
+    """A car key as a row's tag: 'Civetta', 'Halcón', ... ("" for "")."""
     if not car:
         return ""
     if car in CAR_SHORT:
@@ -298,6 +302,11 @@ class PreRace:
         self.titles = dict(titles or {})
         self.ghost_label = None            # task 22: the ghost-2 row, when set
         self.ghosts_on = None              # task 33: the ghosts row (J), when set
+        #: task 47 (drive/leaderboard.py): the wing mode's words -- the Wings
+        #: row, a player session's -- and this session's LEADERBOARD section
+        #: (`leaderboard.prerace_rows`), when set
+        self.wings = None
+        self.board_rows = None
 
     # -- what the build is ------------------------------------------------
     def saved(self) -> bool:
@@ -365,6 +374,8 @@ class PreRace:
             rows.append(("Edit this build in the garage", "pr_edit"))
         if self.offers_wings():
             rows.append((TRY_WINGS, "pr_wings"))
+        if self.wings is not None:         # task 47: LEFT / RIGHT, a new session
+            rows.append((f"{'Wings':<9s}{self.wings}", "set:pr_mode"))
         if self.ghosts_on is not None:
             rows.append((f"{'Ghosts':<9s}{'shown' if self.ghosts_on else 'hidden'}  (J)",
                          "set:pr_ghosts"))
@@ -401,7 +412,7 @@ class PreRace:
     def sections(self) -> list:
         t, c, e, s = rec.split_key(self.key)
         ttl = self.titles
-        secs = [("CLASS", [("map", ttl.get("track", t)), ("car", ttl.get("car", c)),
+        secs = [("CLASS", [("map", ttl.get("track", t)), ("car", ttl.get("car", car_label(c))),
                            ("engine", ttl.get("engine", e)), ("surface", ttl.get("surface", s))])]
         unl = "UNLIMITED " if self.unlimited else ""
         if self.unlimited:
@@ -416,6 +427,8 @@ class PreRace:
             rows_u.append(("", "laps and medals go to this class's Unlimited"))
             rows_u.append(("", "book: never official, never on a public board"))
             secs.append(("UNLIMITED", rows_u))
+        if self.board_rows:                # task 47: this session's leaderboard
+            secs.append(("LEADERBOARD", list(self.board_rows)))
         laps = self.book.laps(self.key)
         rows = []
         names = []
@@ -665,6 +678,19 @@ def self_check(verbose: bool = True) -> bool:
         and PR_HELP[0][1][2][0] == "Edit", str([a for _, a in pr.items()]))
     pr.ghost_label = "reference bot"
     rep("the ghost row appears when set", pr.items()[-1] == ("Ghost 2  reference bot", "set:pr_ghost"))
+    #  task 47: the Wings row (before the ghosts) and the LEADERBOARD section
+    pw = PreRace(key, book, "fast", b_fast)
+    pw.wings, pw.board_rows = "ONLY TOP", [("board", "Arena  ·  Corsa  ·  ONLY TOP")]
+    pw.ghost_label = "reference bot"
+    acts_w = [a for _, a in pw.items()]
+    secs_w = [t for t, _ in pw.sections()]
+    rep("the Wings row (task 47) sits before the ghosts; the LEADERBOARD section after "
+        "the CLASS",
+        acts_w[-2:] == ["set:pr_mode", "set:pr_ghost"] and ("Wings    ONLY TOP", "set:pr_mode")
+        in pw.items() and secs_w[:2] == ["CLASS", "LEADERBOARD"]
+        and "set:pr_mode" not in [a for _, a in pr.items()]
+        and "LEADERBOARD" not in [t for t, _ in pr.sections()]
+        and any(k == "Wings" for k, _ in PR_HELP[0][1]), f"{acts_w} {secs_w}")
     pr.ghosts_on = False
     rep("the ghosts row (J, for a pad) before it, when set",
         pr.items()[-2:] == [("Ghosts   hidden  (J)", "set:pr_ghosts"),
@@ -719,28 +745,40 @@ def self_check(verbose: bool = True) -> bool:
         and not o.prerace_force and not o.prerace_skip, str(seq))
     # -- task 41: builds know their car ------------------------------------
     b_c = dict(b_fast, name="c fast", car="corsa")
-    b_bus = dict(b_wet, name="big bus", car="bus")
+    b_bus = dict(b_wet, name="big rally", car="rally")     # task 46: the rally car
     b_any = dict(b_fast, name="any", slots={"left": {"wing": "x"}})       # before task 41
-    lib41 = {"c fast": b_c, "big bus": b_bus, "any": b_any, "b slow": dict(b_c, name="b slow")}
+    lib41 = {"c fast": b_c, "big rally": b_bus, "any": b_any, "b slow": dict(b_c, name="b slow")}
     p41 = PreRace(key, book, "c fast", dict(b_c), builds=lib41, car="corsa", default="b slow")
     rows41 = [lbl for lbl, _ in p41.pick_items()]
     acts41 = [a for _, a in p41.pick_items()]
     rep("the pick lists this car's builds, then any-car ones, then other cars' "
         "(tagged); the default marked",
-        acts41 == ["pr_build:b slow", "pr_build:c fast", "pr_build:any", "pr_build:big bus",
+        acts41 == ["pr_build:b slow", "pr_build:c fast", "pr_build:any", "pr_build:big rally",
                    "pr_back"]
         and "(default)" in rows41[0] and "<- driving" in rows41[1]
-        and "[Citaro]" in rows41[3] and "[" not in rows41[2] and "[" not in rows41[0],
+        and "[Halcón]" in rows41[3] and "[" not in rows41[2] and "[" not in rows41[0],
         str(rows41))
     rep("pick_order: the garage's order too",
-        pick_order(lib41, "bus") == ["big bus", "any", "b slow", "c fast"]
-        and pick_order(lib41, "") == ["any", "b slow", "big bus", "c fast"],
-        str(pick_order(lib41, "bus")))
+        pick_order(lib41, "rally") == ["big rally", "any", "b slow", "c fast"]
+        and pick_order(lib41, "") == ["any", "b slow", "big rally", "c fast"],
+        str(pick_order(lib41, "rally")))
+    #  task 46: a build made for a RETIRED car ('bus', 'mx5') is a Corsa
+    #  build now -- listed with the Corsa's own, untagged, never another
+    #  car's that no one can drive
+    lib46 = dict(lib41, **{"old bus": dict(b_wet, name="old bus", car="bus"),
+                           "old mx5": dict(b_fast, name="old mx5", car="mx5")})
+    rows46 = {a: t for t, a in PreRace(key, book, "c fast", dict(b_c), builds=lib46,
+                                         car="corsa").pick_items()}
+    rep("a retired car's build is listed as a Corsa build (untagged)",
+        pick_order(lib46, "corsa")[:4] == ["b slow", "c fast", "old bus", "old mx5"]
+        and "[" not in rows46["pr_build:old bus"] and "[" not in rows46["pr_build:old mx5"]
+        and pick_order(lib46, "rally")[0] == "big rally",
+        str(pick_order(lib46, "corsa")))
     rep("a build tagged with its car is the SAME car as its untagged self "
         "(saved, and one build_id)",
-        _same_build(b_fast, dict(b_fast, car="bus"))
+        _same_build(b_fast, dict(b_fast, car="rally"))
         and PreRace(key, book, "fast", dict(b_fast, car="corsa"), builds={"fast": b_fast}).saved()
-        and rec.build_id("fast", b_fast) == rec.build_id("fast", dict(b_fast, car="mx5"))
+        and rec.build_id("fast", b_fast) == rec.build_id("fast", dict(b_fast, car="rally"))
         and not _same_build(b_fast, b_wet))
     nokey = PreRace(None, None, "c fast", dict(b_c), builds=lib41, car="corsa")
     rows_nk = nokey.pick_items()
@@ -766,12 +804,12 @@ def self_check(verbose: bool = True) -> bool:
         and "<- driving" in rows_f["pr_build:fast"] and len(rows_f) == 2
         and not PreRace(stock, book, "fast", f_fast, builds={"fast": b_fast}).saved(),
         rows_f["pr_build:fast"].strip())
-    book.set_last_build("linden", "big bus", b_bus, car="bus")
+    book.set_last_build("linden", "big rally", b_bus, car="rally")
     rep("the default build of a map is per car",
-        default_build(rec.RecordBook(root), "linden", "bus") == ("big bus", b_bus)
+        default_build(rec.RecordBook(root), "linden", "rally") == ("big rally", b_bus)
         and default_build(rec.RecordBook(root), "linden", "corsa") is None)
     rep("car tags: short names, a later car by its key",
-        car_label("mx5") == "MX-5" and car_label("") == "" and car_label("zz9") == "zz9")
+        car_label("rally") == "Halcón" and car_label("") == "" and car_label("zz9") == "zz9")
     if verbose:
         print(f"  {'ALL PASS' if ok else 'FAILURES ABOVE'}: {n_ok}/{n_all} checks")
     return ok

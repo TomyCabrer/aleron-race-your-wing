@@ -451,6 +451,14 @@ class WingSpec:
     #: to the car's side, well past carsim's 0.16 m plate band). Empty on
     #: every wing designed before, which is what those decode to.
     design: dict = field(default_factory=dict)
+    #: task 46: the car this wing was MADE ON, a `cars.py` key -- the car it
+    #: was designed on (WingLab's commit stamps it) or fitted on when the
+    #: garage saved it under its own name (K). A LABEL, as a build's `car`
+    #: is: nothing flies differently for it, and a wing still fits any car
+    #: whose span limit it is within (the garage's Saved wings page). ""
+    #: on every wing saved before the row -- not recorded -- and on the
+    #: built-ins, which are every car's.
+    made_for: str = ""
 
     @property
     def engine(self) -> str:
@@ -564,7 +572,11 @@ class WingSpec:
                    aero=dict(d.get("aero", {})),
                    #  absent on every wing designed before the AeroBO pivot:
                    #  {} is a carsim-analysed wing, which is what they are
-                   design=dict(d.get("design") or {})).clamp()
+                   design=dict(d.get("design") or {}),
+                   #  task 46: absent on every wing saved before it -- "", the
+                   #  car not recorded; a hand-edited non-string tag reads so too
+                   made_for=(d.get("made_for") if isinstance(d.get("made_for"), str)
+                             else "")).clamp()
 
     def reynolds(self, V: float | None = None) -> float:
         return reynolds(V_REF[self.role] if V is None else V, self.mac)

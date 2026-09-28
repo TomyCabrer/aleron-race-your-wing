@@ -1,0 +1,21 @@
+"DepotBuild"
+{
+	// The windows depot. Rendered by steam/upload.sh into steam/out/.
+	// ContentRoot = the folder whose CONTENTS the player gets in the game's
+	// install dir (see steam/README.md, "What goes in each depot").
+	"DepotID" "__DEPOTID__"
+	"ContentRoot" "__CONTENT_DIR__"
+	"FileMapping"
+	{
+		"LocalPath" "*"
+		"DepotPath" "."
+		"Recursive" "1"
+	}
+	// never ship the dev-only app id file, logs, caches or OS litter
+	"FileExclusion" "steam_appid.txt"
+	"FileExclusion" "*.log"
+	"FileExclusion" "*.pdb"
+	"FileExclusion" "__pycache__"
+	"FileExclusion" ".DS_Store"
+	"FileExclusion" "Thumbs.db"
+}

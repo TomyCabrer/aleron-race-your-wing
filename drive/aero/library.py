@@ -110,6 +110,12 @@ class Library:
                         w = WingSpec.from_json(rec)
                         store[w.name] = w
                     else:
+                        #  task 46: a build made for a retired car ('mx5',
+                        #  'bus') is read as a Corsa build (cars.build_car_key;
+                        #  the file keeps its tag until it is saved again)
+                        if isinstance(rec.get("car"), str) and rec["car"]:
+                            import cars as _cars
+                            rec["car"] = _cars.build_car_key(rec["car"])
                         store[str(rec.get("name", f[:-5]))] = rec
                 except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
                     self.log.append(f"{d}/{f}: {exc}")

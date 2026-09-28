@@ -1,0 +1,11 @@
+Copyright (c) 2026 Bartolome Cabrer. All rights reserved.
+
+Alerón: Race Your Wing (this repository's code, data and art) is published
+here to be read. No licence is granted to copy, modify, redistribute, or build
+and distribute the game.
+
+Exceptions:
+- aerobo/ is the author's AeroBO wing-design engine, MIT licensed
+  (aerobo/LICENSE).
+- Third-party data and libraries keep their own terms: see
+  THIRD_PARTY_NOTICES.md.

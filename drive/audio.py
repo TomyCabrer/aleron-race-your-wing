@@ -8,7 +8,7 @@ or level, and what it SHOULD sound like is written beside it.
 
 What you hear
 -------------
-* **Engine**, one of five PROFILES read off the HUD every frame
+* **Engine**, one of four PROFILES read off the HUD every frame
   (`hud.car_key`, else a guess from `hud.car_name`, else the Corsa).  Every
   cylinder FIRING is an event placed at sub-sample precision from the crank
   phase: a four-stroke cycle is two revolutions, so a four fires rpm/30 times
@@ -35,8 +35,8 @@ What you hear
   energy off the cycle harmonics (the review found 0.2-3.6 %: an organ), no
   single line over 41 % at 6000 rpm (the Corsa's 200 Hz was 72 %), and the
   three cars in order bright to deep at every rpm (centroid Corsa 545 / 664
-  / 760 / 827 Hz, MX-5 438 / 585 / 542 / 735, V8 230 / 362 / 468 / 588; the
-  V8 used to sit above the Corsa from 3000 rpm).  Levels (Corsa): 3000 rpm
+  / 760 / 827 Hz, V8 230 / 362 / 468 / 588; the V8 used to sit above the
+  Corsa from 3000 rpm; the retired MX-5's sat between them).  Levels (Corsa): 3000 rpm
   WOT -18.3 dBFS RMS (-17.0 before; see A_ENGINE), overrun 13 dB under it;
   the WOT level rises to the cut on every car (no resonance dip: within
   0.5 dB of the loudest point).  Overrun (load 0, 4500 / 6000 rpm) is 4-15 %
@@ -44,7 +44,7 @@ What you hear
   sim's REAL in-gear idle (551-586 rpm, load 0.24) no 1 ms frame is 40 dB
   under the firing peaks (the Corsa's were 54 %).
   A CONFIRMED lift from high rpm arms a pop window: a per-lift budget of
-  exhaust POPS (Corsa 0-2, MX-5 3-6, V8 2-4; each a WOT-sized blowdown burning
+  exhaust POPS (Corsa 0-2, rally 4-8, V8 2-4; each a WOT-sized blowdown burning
   in the pipe - a dull thump plus a crack, never louder than the WOT peaks)
   spread over ~1.5 s, thick at first, and crackles.  Every shift the physics
   makes starts with a lift (the declutch), so a lift counts only when the
@@ -56,10 +56,11 @@ What you hear
   whine, slowed and loaded once per compression.
   - `corsa` 1.2 16V I4: small and buzzy - short pipe, higher modes, the
     brightest pulse.
-  - `mx5` 1.8 I4: rorty - the 4-2-1 header pairs cylinders 1-4 and 2-3, so
-    alternate pulses differ and the CRANK order growls under the firing
-    tone (0.056 of the firing lines, against the Corsa's 0.003); the most
-    pops.
+  - `rally` 2.0 BDA I4 (the Escort RS1800, task 46): a crisp race four
+    revving to 9000 - a short 4-2-1 manifold (alternate pulses differ, so
+    the CRANK order sits under the firing tone), the brightest note from
+    3000 rpm up, the loudest induction (open trumpets), a lumpy race-cam
+    idle and the most pops and crackle on a lift.
   - `540i` 4.4 V8, cross-plane: deep - each bank's four pulses are UNEVEN
     (270 / 180 / 90 / 180 deg apart), which is the burble.  The two banks'
     non-firing lines are in exact anti-phase (together they are an even
@@ -73,14 +74,9 @@ What you hear
     four than the Corsa's - a longer pipe, more mechanical bed and tappet
     tick, hardly a pop (WOT centroid 467 / 566 / 646 / 722 Hz, under the
     Corsa's and over the V8's at every rpm).
-  - `bus` 6.4 l turbo-diesel I6 (the Citaro, task 41): six firings a cycle
-    at 600-2500 rpm, 83 Hz at its 1650 rpm cruise; combustion clatter at
-    idle and light load, a long pipe through a big silencer, the turbo's
-    hiss high up with boost, and NO pops (a diesel has no spark to cut).
-    Its idle character fades by 950 rpm (EngineProfile.idle_hi) and its
-    self-check sweep is 600-2400 rpm (EngineProfile.rpms) - it is never
-    exercised far above its cut.  WOT centroid 200 / 289 / 238 / 392 Hz at
-    600 / 1200 / 1800 / 2400, under every four's at every rpm.
+  (Task 46 retired the MX-5's rorty 1.8 and the Citaro's OM 906 turbo-
+    diesel six with their cars; the profile fields the diesel brought -
+    `idle_hi`, `rpms`, the cut-scaled demo margins - stay for any engine.)
 * **Drivetrain**: a faint final-drive whine at a frequency proportional to
   road speed (straight-cut reverse: higher and ~8x louder), and ONE clunk per
   gear change as the physics makes it: g -> 0 (the 0.25 s neutral gate) ->
@@ -467,22 +463,32 @@ PROFILES = {
         flow=1.00, flow_lp=7000.0, mech=1.00,
         tick=0.40, jitter=0.10, rasp=0.05, pops=(0, 2), pop_lim=0.8, crackle=3.0,
         pop_rpm=4200.0, level=1.00),
-    # Mazda MX-5 NB 1.8 (BP-Z3): 4-2-1 header pairing 1-4 / 2-3, a free-
-    # flowing sports exhaust - rorty, the crank order under the firing note.
-    # The pipe is 3.6 ms, not 4.6: the longer one's comb notch sat on the
-    # firing fundamental at 6500 rpm (217 Hz) and the level fell 3.7 dB
-    # toward the cut; the header mode on the fundamental is broad and low
-    # (Q 2.2, 0.35) so no single line carries the note.
-    'mx5': EngineProfile(
-        key='mx5', slots=4, bank=(0, 0, 0, 0),
-        cyl_gain=(1.00, 0.70, 1.02, 0.72), idle=800.0, idle_gear=571.0, cut=7000.0,
-        pulse_k=1.00, rise=1.10, pipe_ms=3.6, pipe_fb=-0.40,
-        res=((170.0, 2.2, 0.35), (520.0, 3.0, 0.95), (1250.0, 2.4, 0.50),
-             (62.0, 5.5, 0.60)),
-        direct=0.35, lp_lo=780.0, lp_hi=4400.0, intake_f=320.0, intake=0.70,
-        flow=0.90, flow_lp=5000.0, mech=0.85,
-        tick=0.28, jitter=0.11, rasp=0.22, pops=(3, 6), pop_lim=2.5, crackle=8.0,
-        pop_rpm=3600.0, level=1.00),
+    # Ford Escort RS1800's Cosworth BDA (task 46): 1975 cc, 16 valves, twin
+    # cams on a belt, a Group 4 tune to 9000 rpm -- the crisp, hard wail of a
+    # race four. A short 4-2-1 tubular manifold into a straight-through box
+    # (the shortest pipe, the highest modes, the brightest low-pass: the one
+    # four brighter than the Corsa's from 3000 rpm up), the 1-4 / 2-3 pairing
+    # a milder crank order than a road 4-2-1's, and the loudest INDUCTION of
+    # all -- the open trumpets of its twin chokes (intake band 520 Hz). Race
+    # cams: a lumpy, uneven idle at 1200 rpm (jitter 0.16), still loping over
+    # the Corsa's 1800 (idle_hi 2600: its band scaled with it). A free-flowing
+    # exhaust on a rich overrun crackles and pops the most (pops 4-8 per lift,
+    # crackle 11/s). Idle and cut are cars.ESCORT_RS1800's (1200 / 9000, est);
+    # idle_gear is the Vehicle's in 1st at rest (1078 rpm, creep load 0.11,
+    # measured like the others' on the full model). The front (rise 1.30)
+    # and the rasp (0.12) are held under a road four's: sharper, the soft
+    # clip's DC blocker overshot the ceiling near the 9000 rpm cut (0.935
+    # against CEIL 0.92 in the demo lap). All the rest est.
+    'rally': EngineProfile(
+        key='rally', slots=4, bank=(0, 0, 0, 0),
+        cyl_gain=(1.00, 0.74, 1.02, 0.76), idle=1200.0, idle_gear=1078.0, cut=9000.0,
+        pulse_k=1.30, rise=1.30, pipe_ms=2.8, pipe_fb=-0.42,
+        res=((280.0, 2.4, 0.55), (760.0, 3.2, 0.95), (2000.0, 2.6, 0.70),
+             (86.0, 5.0, 0.40)),
+        direct=0.36, lp_lo=1000.0, lp_hi=7600.0, intake_f=520.0, intake=1.00,
+        flow=0.90, flow_lp=7800.0, mech=0.95,
+        tick=0.30, jitter=0.16, rasp=0.12, pops=(4, 8), pop_lim=3.5, crackle=11.0,
+        pop_rpm=5200.0, level=0.80, idle_hi=2600.0),
     # BMW 540i (E39, M62 4.4 V8), cross-plane crank, firing every 90 deg; the
     # banks' own pulse trains are uneven, so each bank burbles at the cycle
     # rate.  Twin exhaust: bank 0 left and louder, bank 1 right (bank_lr:
@@ -522,52 +528,27 @@ PROFILES = {
         flow=0.95, flow_lp=6000.0, mech=1.15,
         tick=0.55, jitter=0.11, rasp=0.06, pops=(0, 1), pop_lim=0.6, crackle=2.0,
         pop_rpm=4000.0, level=1.00),
-    # Mercedes-Benz OM 906 hLA (6.37 l turbo-diesel straight six, task 41)
-    # behind the Citaro's rear axle: six firings a cycle, 30 Hz at the 600
-    # rpm idle and 83 Hz at the 1650 rpm cruise in 6th.  A diesel has no
-    # spark to cut and no unburnt charge to light in the pipe: NO pops and
-    # no crackle (pops (0, 0), pop_rpm out of reach).  What it has is
-    # combustion knock -- a sharp front on every firing (rise) and a loud
-    # clatter at idle and light load (tick, mech) -- a long pipe through a
-    # big silencer (the darkest low-pass, the lowest modes, dark flow
-    # noise) and the turbo's rushing hiss high up with boost (the intake
-    # band at 1.9-2.9 kHz, x load^1.3 x rpm^1.8 of its own cut).  Its idle
-    # character fades by 950 rpm (idle_hi), and its self-check sweep is
-    # 600-2400 rpm.  Idle and cut are cars.CITARO_O530's (600 / 2500);
-    # idle_gear is drive.Sim's in 1st at rest (458 rpm, load 0.13).  All the
-    # rest est -- nothing here is a recording.
-    'bus': EngineProfile(
-        key='bus', slots=6, bank=(0, 0, 0, 0, 0, 0),
-        cyl_gain=(1.00, 0.96, 1.03, 0.97, 1.02, 0.95), idle=600.0, idle_gear=458.0,
-        cut=2500.0,
-        pulse_k=0.70, rise=1.60, pipe_ms=5.5, pipe_fb=-0.30,
-        res=((92.0, 2.0, 0.60), (230.0, 2.0, 0.45), (520.0, 2.2, 0.30),
-             (38.0, 4.0, 0.80)),
-        direct=0.40, lp_lo=300.0, lp_hi=1400.0, intake_f=2200.0, intake=0.35,
-        flow=0.85, flow_lp=1100.0, mech=1.40,
-        tick=0.90, jitter=0.10, rasp=0.06, pops=(0, 0), pop_lim=0.0, crackle=0.0,
-        pop_rpm=99999.0, level=1.00, idle_hi=950.0,
-        rpms=(600.0, 1200.0, 1800.0, 2400.0)),
 }
 PROFILE_DEFAULT = 'corsa'
 
 
 def profile_key(hud) -> str:
-    """The engine to voice: `hud.car_key` ('corsa' | 'mx5' | '540i' |
-    'express' | 'bus'), else a guess from `hud.car_name` (cars.CAR_TITLES),
-    else the Corsa."""
+    """The engine to voice: `hud.car_key` ('corsa' | 'rally' | '540i' |
+    'express'), else a guess from `hud.car_name` (cars.CAR_TITLES), else the
+    Corsa (task 46: a retired car's key, 'mx5' or 'bus', is the Corsa's, as
+    `cars.get` makes it)."""
     k = str(getattr(hud, 'car_key', '') or '').lower()
     if k in PROFILES:
         return k
     name = str(getattr(hud, 'car_name', '') or '').lower()
-    if 'mx-5' in name or 'mx5' in name or 'miata' in name:
-        return 'mx5'
+    #  the display titles ('Halcón RS18 rally', 'Nordwerk N540', 'Rivière
+    #  Courier 1.4'); the names from before the rename still read
+    if 'rally' in name or 'halc' in name or 'rs18' in name or 'escort' in name:
+        return 'rally'
     if '540' in name or 'v8' in name:
         return '540i'
-    if 'express' in name or 'renault' in name:
+    if 'courier' in name or 'rivi' in name or 'express' in name or 'renault' in name:
         return 'express'
-    if 'citaro' in name or 'bus' in name.split():
-        return 'bus'
     return PROFILE_DEFAULT
 
 
@@ -2607,6 +2588,16 @@ def self_check(verbose: bool = True, wav_path: str | None = None) -> bool:
         Y[np.fft.rfftfreq(len(y), 1.0 / rate) > fc] = 0.0
         return np.fft.irfft(Y, len(y))
 
+    # 0. the engine by the car's shown name alone (no car_key): each title
+    #    (cars.CAR_TITLES) and full name (CarSpec.name) voices its own car
+    import cars as _cars
+    from types import SimpleNamespace as _NS
+    nm_miss = [f"{k}: {nm!r}" for k in _cars.CAR_ORDER
+               for nm in (_cars.CAR_TITLES[k], _cars.get(k).name)
+               if profile_key(_NS(car_key='', car_name=nm)) != k]
+    chk("engine by the car's name alone", not nm_miss,
+        "; ".join(nm_miss) or f"all {len(_cars.CAR_ORDER)} titles and names")
+
     # 1. continuity across chunk boundaries: a fast sweep with every layer
     for ch_, car in ((1, 'corsa'), (2, '540i')):
         s = Synth(rate, CHUNK, seed=3, channels=ch_, car=car)
@@ -2662,13 +2653,13 @@ def self_check(verbose: bool = True, wav_path: str | None = None) -> bool:
     c1, c0 = _centroid(y, rate), _centroid(y0, rate)
     chk("... and brighter", c1 > 1.3 * c0, f"centroid WOT {c1:.0f} Hz vs overrun {c0:.0f} Hz")
 
-    # 3. the three engines at WOT: bright to deep in that order at every rpm,
-    # a car and not an organ (5-15 % of the energy off the harmonics, no
-    # single line carrying the note), the V8's burble, the MX-5's crank order
+    # 3. the engines at WOT: bright to deep in order at every rpm, a car and
+    # not an organ (5-15 % of the energy off the harmonics, no single line
+    # carrying the note), the V8's burble, the rally BDA's crank order
     RPMS = (1500.0, 3000.0, 4500.0, 6000.0)      # the petrols' (EngineProfile.rpms)
     cents, nh, top, halfs, crank = {}, {}, {}, {}, {}
     for car, P in PROFILES.items():
-        for rpm in P.rpms:                   # task 41: the bus sweeps 600-2400
+        for rpm in P.rpms:                   # task 41: a diesel sweeps its own range
             s = Synth(rate, CHUNK, seed=6, car=car)
             _render(s, 0.4, T(rpm=rpm, load=1.0))
             y = _render(s, 1.2 if rpm != P.rpms[1] else 2.0, T(rpm=rpm, load=1.0))
@@ -2679,30 +2670,27 @@ def self_check(verbose: bool = True, wav_path: str | None = None) -> bool:
                 firing = L[P.slots - 1::P.slots].sum()
                 halfs[car] = (L.sum() - firing) / max(firing, 1e-30)
                 crank[car] = L[1::4].sum() / max(firing, 1e-30)   # odd x the crank rate
-    order = all(cents['corsa', r] > 1.05 * cents['mx5', r] > 1.05 ** 2 * cents['540i', r]
-                for r in RPMS)
-    chk("three engines, bright to deep at every rpm (WOT)", order,
-        "centroid corsa / mx5 / 540i " + ", ".join(
-            f"{r / 1000:.1f}k {cents['corsa', r]:.0f}/{cents['mx5', r]:.0f}/{cents['540i', r]:.0f}"
+    #  task 46: the rally BDA the brightest from 3000 rpm up (a race four's
+    #  short pipe and open trumpets), the Corsa's small four next, the V8
+    #  deepest -- each step at least 5 % at every rpm from 3000
+    order = all(cents['rally', r] > 1.05 * cents['corsa', r] > 1.05 ** 2 * cents['540i', r]
+                for r in RPMS[1:]) and cents['corsa', RPMS[0]] > 1.1 * cents['540i', RPMS[0]]
+    chk("the engines, bright to deep at every rpm (WOT)", order,
+        "centroid rally / corsa / 540i " + ", ".join(
+            f"{r / 1000:.1f}k {cents['rally', r]:.0f}/{cents['corsa', r]:.0f}/{cents['540i', r]:.0f}"
             for r in RPMS) + " Hz")
     # task 41: the Express's E7J a plainer, lower four than the Corsa's (under
-    # it and over the V8 at every rpm); the bus's diesel under every petrol
-    # four at every rpm of its own sweep (its turbo hiss lifts it over the
-    # V8's 1500-rpm centroid at the top: 392 Hz at 2400)
-    fours = [cents[c, r] for c in ('corsa', 'mx5', 'express') for r in RPMS]
-    bus_c = [cents['bus', r] for r in PROFILES['bus'].rpms]
-    chk("the van a lower four than the Corsa, the bus diesel under every four",
-        all(cents['540i', r] < cents['express', r] < cents['corsa', r] for r in RPMS)
-        and max(bus_c) < min(fours),
+    # it and over the V8 at every rpm)
+    chk("the van a lower four than the Corsa",
+        all(cents['540i', r] < cents['express', r] < cents['corsa', r] for r in RPMS),
         "centroid express " + "/".join(f"{cents['express', r]:.0f}" for r in RPMS)
-        + " Hz (corsa " + "/".join(f"{cents['corsa', r]:.0f}" for r in RPMS) + "); bus "
-        + "/".join(f"{v:.0f}" for v in bus_c) + f" Hz at 0.6-2.4k, every four >= {min(fours):.0f}")
+        + " Hz (corsa " + "/".join(f"{cents['corsa', r]:.0f}" for r in RPMS) + ")")
     nh_ok = all(0.04 <= nh[c, r] <= 0.20 for c, P in PROFILES.items() for r in P.rpms[1:])
     top_ok = all(top[c, P.rpms[-1]] < 0.5 for c, P in PROFILES.items())
     chk("a car, not an organ: 4-20 % off the harmonics", nh_ok and top_ok,
         "non-harmonic " + ", ".join(f"{c} " + "/".join(f"{100 * nh[c, r]:.0f}" for r in P.rpms)
                                     for c, P in PROFILES.items())
-        + " %; top line at the sweep's top (6k; bus 2.4k) "
+        + " %; top line at the sweep's top (6k) "
         + "/".join(f"{top[c, P.rpms[-1]]:.2f}" for c, P in PROFILES.items()))
     # ... nor the overrun, which plays through the ~0.4 s zero-load declutch +
     # neutral of every real upshift (97-99 % on the harmonics before JIT_OVR)
@@ -2713,15 +2701,16 @@ def self_check(verbose: bool = True, wav_path: str | None = None) -> bool:
             _render(s, 0.4, T(rpm=rpm, load=0.0))
             ovr[car, rpm] = _nonharm(_render(s, 1.2, T(rpm=rpm, load=0.0)), rate, rpm)[0]
     chk("overrun: not a pure tone, >= 3 % off the harmonics", all(v >= 0.03 for v in ovr.values()),
-        "load 0, 4.5k / 6k (bus 1.8k / 2.4k): " + ", ".join(
+        "load 0, 4.5k / 6k: " + ", ".join(
             f"{c} " + "/".join(f"{100 * ovr[c, r]:.0f}" for r in P.rpms[2:])
             for c, P in PROFILES.items()) + " % (was 1-3 %)")
     chk("V8 cross-plane: half-order content (the burble)",
         halfs['540i'] > 3.0 * halfs['corsa'] and halfs['540i'] > 0.15,
         "non-firing / firing lines " + " / ".join(f"{k} {v:.2f}" for k, v in halfs.items()))
-    chk("MX-5 4-2-1: crank order under the firing tone",
-        crank['mx5'] > 0.04 and crank['mx5'] > 5.0 * crank['corsa'],
-        f"crank-order / firing lines mx5 {crank['mx5']:.3f} (floor 0.04) vs corsa {crank['corsa']:.3f}")
+    chk("rally BDA 4-2-1: crank order under the firing tone",
+        crank['rally'] > 0.02 and crank['rally'] > 5.0 * crank['corsa'],
+        f"crank-order / firing lines rally {crank['rally']:.3f} (floor 0.02) vs corsa "
+        f"{crank['corsa']:.3f}")
     P8 = PROFILES['540i']
     s = Synth(rate, CHUNK, seed=6, channels=2, car='540i')
     _render(s, 0.3, T(rpm=P8.idle_gear, load=IDLE_LOAD))
@@ -2792,7 +2781,7 @@ def self_check(verbose: bool = True, wav_path: str | None = None) -> bool:
     chk("upshift: ignition-cut blip", a_cut < 0.45 * a_run,
         f"rms {a_cut:.3f} in the cut vs {a_run:.3f} after")
 
-    # 6. pops: a per-lift BUDGET (Corsa 0-2, MX-5 3-6, V8 2-4), spread over the
+    # 6. pops: a per-lift BUDGET (Corsa 0-2, rally 4-8, V8 2-4), spread over the
     # window, each no louder than the engine at WOT at that rpm; the crack
     counts, loud = {}, {}
     for car, P in PROFILES.items():
@@ -2812,14 +2801,14 @@ def self_check(verbose: bool = True, wav_path: str | None = None) -> bool:
         loud[car] = pk_pop / pk_wot
     budget = all(PROFILES[c].pops[0] <= n <= PROFILES[c].pops[1] for c in PROFILES for n in counts[c])
     chk("pops: a budget per lift, never over the WOT peak",
-        budget and all(v <= 1.0 for v in loud.values()) and sum(counts['mx5']) >= 9,
+        budget and all(v <= 1.0 for v in loud.values()) and sum(counts['rally']) >= 12,
         "pops per lift " + ", ".join(f"{c} {'/'.join(map(str, v))}" for c, v in counts.items())
         + "; loudest vs WOT peak " + " / ".join(f"{v:.2f}" for v in loud.values()))
 
     def overrun(pops):
-        s = Synth(rate, CHUNK, seed=12, car='mx5')
-        _render(s, 0.3, T(rpm=5200.0, load=0.0))
-        return _render(s, 1.5, lambda t: dict(rpm=5200.0, load=0.0,
+        s = Synth(rate, CHUNK, seed=12, car='rally')
+        _render(s, 0.3, T(rpm=6700.0, load=0.0))
+        return _render(s, 1.5, lambda t: dict(rpm=6700.0, load=0.0,
                                                pops=pops * math.exp(-t / POP_TAU)))
     yp, y0 = overrun(1.0), overrun(0.0)
     e_r = _band_energy(yp, rate, 2000.0, 6000.0) / max(_band_energy(y0, rate, 2000.0, 6000.0), 1e-30)
@@ -3035,17 +3024,17 @@ def self_check(verbose: bool = True, wav_path: str | None = None) -> bool:
             if mp(h, 1.0 / fps)['pops'] > 0.0:
                 return i / fps
         return None
-    P = PROFILES['mx5']
+    P = PROFILES['rally']
     hi = 0.9 * P.cut
-    wot = [_hud(car_key='mx5', gear=2, rpm=hi, eng_load=1.0)] * 30
-    fr_up = wot + [_hud(car_key='mx5', gear=g, rpm=r, eng_load=l_)
+    wot = [_hud(car_key='rally', gear=2, rpm=hi, eng_load=1.0)] * 30
+    fr_up = wot + [_hud(car_key='rally', gear=g, rpm=r, eng_load=l_)
                    for g, r, l_ in _shift_frames(2, 3, hi, 0.7 * hi, fps, 1.0)] \
-        + [_hud(car_key='mx5', gear=3, rpm=0.72 * hi, eng_load=1.0)] * 60
-    fr_lift = wot + [_hud(car_key='mx5', gear=2, rpm=hi - 900.0 * i / fps, eng_load=0.0)
+        + [_hud(car_key='rally', gear=3, rpm=0.72 * hi, eng_load=1.0)] * 60
+    fr_lift = wot + [_hud(car_key='rally', gear=2, rpm=hi - 900.0 * i / fps, eng_load=0.0)
                      for i in range(90)]
-    fr_lu = wot + [_hud(car_key='mx5', gear=g, rpm=r, eng_load=0.0)
+    fr_lu = wot + [_hud(car_key='rally', gear=g, rpm=r, eng_load=0.0)
                    for g, r, _ in _shift_frames(2, 3, hi, 0.7 * hi, fps, 0.0)] \
-        + [_hud(car_key='mx5', gear=3, rpm=0.7 * hi, eng_load=0.0)] * 60
+        + [_hud(car_key='rally', gear=3, rpm=0.7 * hi, eng_load=0.0)] * 60
     t_up, t_lift, t_lu = arm_time(fr_up), arm_time(fr_lift), arm_time(fr_lu)
     t_eng = 0.5 + T_DECLUTCH + T_GATE
     chk("pops: not for a shift, only a real lift",
@@ -3074,7 +3063,7 @@ def self_check(verbose: bool = True, wav_path: str | None = None) -> bool:
         chk(f"dead engine at rest is silent ({'stereo' if ch_ == 2 else 'mono'})",
             float(np.abs(y).max()) == 0.0, f"peak {np.abs(y).max():.2e}")
     dc = {}
-    for car, P in PROFILES.items():            # at the sweep's top: 6000 (bus 2400)
+    for car, P in PROFILES.items():            # at the sweep's top: 6000
         s = Synth(rate, CHUNK, seed=3, car=car)
         _render(s, 0.5, T(rpm=P.rpms[-1], load=1.0))
         y = _render(s, 2.0, T(rpm=P.rpms[-1], load=1.0))

@@ -1,0 +1,199 @@
+# Builds the game for Steam's three depots with PyInstaller (packaging/game.spec)
+# and smoke-tests each build with `--probe` on an empty data folder.
+# Runs on a manual trigger or a tag push (v*). Needs the repo on GitHub.
+# A tag push also makes a DRAFT GitHub Release with the player downloads
+# (job `release`): only the repo's owner sees it until it is published
+# (`gh release edit <tag> --draft=false`, or Publish on the release page).
+# A manual run only leaves the artifacts on the run's page.
+name: steam-build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            depot: windows
+          # macos-13 was retired in Dec 2025; macos-15-intel is GitHub's last
+          # Intel image (supported until Aug 2027). macos-15 is Apple silicon.
+          - os: macos-15            # Apple silicon (arm64)
+            depot: macos-arm64
+          - os: macos-15-intel      # Intel (x86_64)
+            depot: macos-x64
+          - os: ubuntu-22.04        # see packaging/build_linux.sh for the Steam Runtime build
+            depot: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Linux libraries for pygame's SDL
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgl1 libegl1 libasound2
+      - name: Install build requirements
+        run: python -m pip install --upgrade pip && python -m pip install -r packaging/requirements-build.txt
+      - name: Icons
+        run: python packaging/make_icons.py
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+      - name: Build
+        run: python -m PyInstaller --noconfirm --clean --distpath dist --workpath build/pyinstaller packaging/game.spec
+      - name: Smoke test (--probe on an empty data folder)
+        shell: bash
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+          CARSIM_DATA_DIR: ${{ runner.temp }}/fresh
+        run: |
+          NAME=$(python -c "from drive import branding; print(branding.ascii_name())")
+          case "${{ runner.os }}" in
+            Windows) BIN="dist/$NAME/$NAME.exe" ;;
+            macOS)   BIN="dist/$NAME.app/Contents/MacOS/$NAME" ;;
+            *)       BIN="dist/$NAME/$NAME" ;;
+          esac
+          "$BIN" --probe
+      - name: Package the depot folder
+        shell: bash
+        run: |
+          NAME=$(python -c "from drive import branding; print(branding.ascii_name())")
+          mkdir -p depot
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            ditto "dist/$NAME.app" "depot/$NAME.app"
+          else
+            cp -R "dist/$NAME/." depot/
+          fi
+          # upload-artifact drops the executable bit and symlinks (a .app's
+          # frameworks, the Linux binary), so the depot travels as one tar:
+          # unpack with `tar -xzf depot-<os>.tar.gz` before steam/collect.sh
+          tar -czf "depot-${{ matrix.depot }}.tar.gz" -C depot .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: depot-${{ matrix.depot }}
+          path: depot-${{ matrix.depot }}.tar.gz
+      # The macOS player download is zipped HERE, on the Mac: `ditto -c -k
+      # --keepParent` keeps the .app's symlinks, exec bits and signature,
+      # which a zip made on Linux would not. A manual run names it dev-<sha>.
+      - name: Player download (macOS zip)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          NAME=$(python -c "from drive import branding; print(branding.ascii_name())")
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then TAG="$GITHUB_REF_NAME"; else TAG="dev-${GITHUB_SHA::7}"; fi
+          mkdir -p player
+          ditto -c -k --keepParent "dist/$NAME.app" "player/$NAME-$TAG-${{ matrix.depot }}.zip"
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
+        with:
+          name: player-${{ matrix.depot }}
+          path: player/*.zip
+          if-no-files-found: error
+          compression-level: 0      # already a zip
+
+  # Tag pushes only: a DRAFT GitHub Release for the tag with one download per
+  # system, named for players (<ascii_name>-<tag>-<system>.zip / .tar.gz).
+  # Draft, so a tag never makes the game a free public download by itself:
+  # the owner publishes it by hand when they want players to have it.
+  # The depot-* artifacts above stay as they are for Steam. Needs all four
+  # builds green; after a flaky runner, "Re-run failed jobs" finishes it.
+  release:
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4     # only drive/branding.py, for the names
+        with:
+          sparse-checkout: |
+            drive/__init__.py
+            drive/branding.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts             # -> artifacts/<artifact name>/<file>
+      - name: Player downloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME=$(python3 -c "from drive import branding; print(branding.ascii_name())")
+          VERSION=$(python3 -c "from drive import branding; print(branding.VERSION)")
+          TAG="$GITHUB_REF_NAME"
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::warning::tag $TAG but drive/branding.py VERSION is $VERSION (the app's metadata says $VERSION)"
+          fi
+          mkdir -p release
+          # Windows: the depot folder as <NAME>/ inside a zip
+          mkdir -p "stage/windows/$NAME"
+          tar -xzf artifacts/depot-windows/depot-windows.tar.gz -C "stage/windows/$NAME"
+          (cd stage/windows && zip -qr -X "../../release/$NAME-$TAG-windows.zip" "$NAME")
+          # Linux: <NAME>/ inside a tar.gz (a zip would drop the exec bit)
+          mkdir -p "stage/linux/$NAME"
+          tar -xzf artifacts/depot-linux/depot-linux.tar.gz -C "stage/linux/$NAME"
+          tar -czf "release/$NAME-$TAG-linux.tar.gz" -C stage/linux "$NAME"
+          # macOS: zipped by the build job on the Mac runners
+          for mac in macos-arm64 macos-x64; do
+            cp "artifacts/player-$mac/$NAME-$TAG-$mac.zip" release/
+          done
+          ls -l release
+      - name: Release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - > notes.md <<'PY'
+          import os
+          from drive import branding
+          name, save, game = branding.ascii_name(), branding.save_id(), branding.GAME_NAME
+          tag = os.environ["GITHUB_REF_NAME"]
+          print(f"""Builds of **{game}** for Windows, macOS and Linux, made by this repository's CI from the tagged code. A Steam release is in preparation.
+
+          ## Download
+
+          | system | file | to play |
+          |---|---|---|
+          | Windows 10/11, 64-bit | `{name}-{tag}-windows.zip` | unzip, open the `{name}` folder, run `{name}.exe` |
+          | macOS, Apple silicon (M1 or later) | `{name}-{tag}-macos-arm64.zip` | unzip, open `{name}.app` (the first time: see below) |
+          | macOS, Intel | `{name}-{tag}-macos-x64.zip` | the same; also runs on Apple silicon through Rosetta 2 |
+          | Linux, x86-64 | `{name}-{tag}-linux.tar.gz` | `tar -xzf {name}-{tag}-linux.tar.gz`, then run `{name}/{name}` (built on Ubuntu 22.04: needs a distribution at least that new) |
+
+          On Windows and Linux keep the `{name}` folder whole: the game needs the `_internal` folder next to it. The game starts fullscreen; F11 or Alt+Enter switches to a window.
+
+          ## These builds are not signed
+
+          - **macOS**: the app is not signed with an Apple Developer ID or notarized, so macOS blocks the first launch. Right-click (Control-click) `{name}.app` > **Open**, then **Open** again. On macOS 15 Sequoia and later, if there is no Open button: close the message, go to System Settings > Privacy & Security and click **Open Anyway**. Or, in Terminal: `xattr -dr com.apple.quarantine {name}.app`.
+          - **Windows**: SmartScreen may say "Windows protected your PC" because the exe is unsigned: click **More info** > **Run anyway**.
+
+          Saves, settings and logs go to your user folder (Windows `%APPDATA%\\{save}`, macOS `~/Library/Application Support/{save}`, Linux `~/.local/share/{save}`), not the download, so a newer version can replace the old folder.
+
+          The source for this version is the tag `{tag}` (the "Source code" archives below).""")
+          PY
+          cat notes.md
+      - name: Create the GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          GAME=$(python3 -c "from drive import branding; print(branding.GAME_NAME)")
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            # a re-run: replace the files, keep the text (it may have been edited)
+            # and the draft/published state (gh finds drafts by tag too)
+            gh release upload "$TAG" release/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            PRE=false
+            case "$TAG" in *-*) PRE=true ;; esac   # v1.0.0-beta1 etc. -> pre-release
+            gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "$GAME $TAG" --notes-file notes.md --prerelease="$PRE" --draft
+            echo "::notice::Draft release $TAG created: publish it with 'gh release edit $TAG --draft=false'"
+          fi

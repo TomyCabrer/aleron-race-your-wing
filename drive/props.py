@@ -37,7 +37,9 @@ pillar 4.8, dragstrip wall 8.8, start-light tree 3.8, tree canopy 36.2.
 
 THE LAYOUT IS GENERIC. It reads the centreline, the curvature (corners are
 runs of |kappa| > 1/200 m^-1; a SLOW corner has R <= 65 m and gets brake boards
-and a stand; a kink of R > 100 m does not end a braking zone), the straights,
+and a stand; a kink of R > 100 m does not end a braking zone; a HALF-TURN of
+150 deg or more is both whatever its radius -- the oval's R150 bends, task
+46), the straights,
 the start line (s = 0: the gantry, the pits and the main stand go on the
 straight that contains it), the sector lines and `Track.gates`, with a
 per-map THEME picked by `track.name` ('arena' circuit, 'open' proving ground,
@@ -165,6 +167,13 @@ K_CORNER = 1.0 / 200.0   # 1/m  |kappa| above this is a corner
 R_SLOW = 65.0            # m    a corner this tight gets brake boards / a stand
 R_KINK = 100.0           # m    a corner gentler than this does not end a
                          #      braking zone (the arena's T7, R130)
+#: ... but a corner that turns this far is braked for, walled with tyres and
+#: watched from a stand whatever its radius (task 46): the oval's two R150
+#: half-turns, 480 m straights in, would otherwise read as kinks -- no
+#: boards, no tyre wall, no corner stand. Every other circuit's corners of
+#: 150 deg or more (Linden's T2, Ashdown's T4, the hairpin test's) are
+#: R <= 65 already, so their layouts are bit for bit unchanged
+TURN_HALF_DEG = 150.0
 
 # --- the chase view
 NEAR_Z = 1.0             # m  a polygon with every vertex deeper than this is
@@ -717,7 +726,8 @@ def _runs(mask, closed: bool) -> list:
 
 
 def _corners(tr) -> list:
-    """Corners as dicts: s_in, s_out, R (min radius), sgn (+1 LEFT), s_mid."""
+    """Corners as dicts: s_in, s_out, R (min radius), sgn (+1 LEFT), s_mid,
+    turn (deg, unsigned)."""
     n = _nper(tr)
     k = np.asarray(tr.kappa[:n], dtype=np.float64)
     out = []
@@ -729,7 +739,8 @@ def _corners(tr) -> list:
         out.append(dict(s_in=s_in, s_out=s_in + ln * tr.ds,
                         R=1.0 / max(abs(float(kk[j])), 1e-9),
                         sgn=1.0 if kk[j] > 0 else -1.0,
-                        s_mid=s_in + 0.5 * ln * tr.ds))
+                        s_mid=s_in + 0.5 * ln * tr.ds,
+                        turn=abs(math.degrees(float(kk.sum()) * tr.ds))))
     out.sort(key=lambda c: c['s_in'])
     return out
 
@@ -1073,6 +1084,16 @@ def _facing(t_track) -> tuple:
     return (float(t_track[1]), -float(t_track[0]))
 
 
+def _slow(c) -> bool:
+    """Braked for, with a stand: R <= R_SLOW, or a half-turn (task 46)."""
+    return c['R'] <= R_SLOW or c.get('turn', 0.0) >= TURN_HALF_DEG
+
+
+def _real(c) -> bool:
+    """Ends a braking zone, walled with tyres: R <= R_KINK, or a half-turn."""
+    return c['R'] <= R_KINK or c.get('turn', 0.0) >= TURN_HALF_DEG
+
+
 def _brake_boards(ctx, corners) -> None:
     """300 / 200 / 100 m boards (3 / 2 / 1 diagonal stripes) before every
     SLOW corner, on its outside (the side the car brakes on), on the approach
@@ -1080,9 +1101,9 @@ def _brake_boards(ctx, corners) -> None:
     does, and a board that would stand in the previous corner is not placed."""
     tr = ctx.tr
     L = float(tr.length)
-    real = [c for c in corners if c['R'] <= R_KINK]
+    real = [c for c in corners if _real(c)]
     for c in corners:
-        if c['R'] > R_SLOW:
+        if not _slow(c):
             continue
         prev = [q for q in real if q is not c]
         if tr.closed and prev:
@@ -1191,7 +1212,7 @@ def _theme_circuit(ctx) -> None:
             ctx.put('flood', 'solid', s_k, stand_side, 36.0 + 13.0 + 7.0, 3.4,
                     1.2, 25.0, tries=(0.0, 4.0), keep=3.0)
     # --- a stand at the slowest corner, on its outside
-    slow = sorted([c for c in corners if c['R'] <= R_SLOW], key=lambda c: c['R'])
+    slow = sorted([c for c in corners if _slow(c)], key=lambda c: c['R'])
     for c in slow[:2]:
         st2 = ctx.put('stand', 'solid', c['s_mid'], -c['sgn'], 36.0, 44.0, 11.0,
                       12.5, tries=(0.0, 4.0, 9.0, 16.0), keep=10.0, roof=True, livery=1)
@@ -1205,7 +1226,7 @@ def _theme_circuit(ctx) -> None:
     for side in (1.0, -1.0):
         kind = np.array(['armco'] * n, dtype=object)
         for c in corners:
-            if c['R'] > R_KINK or -c['sgn'] != side:
+            if not _real(c) or -c['sgn'] != side:
                 continue
             a0, a1 = c['s_in'] - 30.0, c['s_out'] + 40.0
             if tr.closed:
@@ -1475,7 +1496,7 @@ def _theme_drag(ctx) -> None:
 
 
 THEMES = {'arena': _theme_circuit, 'linden': _theme_circuit, 'kestrel': _theme_circuit,
-          'ashdown': _theme_circuit, 'open': _theme_proving,
+          'ashdown': _theme_circuit, 'fairfield': _theme_circuit, 'open': _theme_proving,
           'skidpad': _theme_skidpad, 'dragstrip': _theme_drag}
 
 
@@ -3447,6 +3468,7 @@ REQUIRED = {
     'linden': _CIRCUIT_KINDS,
     'kestrel': _CIRCUIT_KINDS,
     'ashdown': _CIRCUIT_KINDS,
+    'fairfield': _CIRCUIT_KINDS,
     'open': ('hangar', 'tower', 'office', 'windsock', 'fence', 'cones', 'flood', 'car'),
     'skidpad': ('office', 'flood', 'windsock', 'cones'),
     'dragstrip': ('wall', 'xmas', 'timing', 'gatepost', 'stand', 'tower', 'lightpole'),

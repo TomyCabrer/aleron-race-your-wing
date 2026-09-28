@@ -182,19 +182,39 @@ PAD_RATE_DEG = 250.0          # deg/s road wheel; a rate cap, not a ramp - the
                               # position, so ramping it would double-lag it.
 PAD_BLEND_EPS = 0.02          # |pad| above this wins the axis from the keyboard
 
+# The generic (Xbox / Steam Input) layout. Its indices are SDL's GameController
+# button order, which is what `_ControllerPad` below delivers for any pad SDL
+# knows, on every OS (Steam release prep, 2026-09-28). Raw joystick numbering
+# is NOT portable: Windows XInput reports A B X Y LB RB BACK START L3 R3 GUIDE
+# with the triggers on axes 2 / 5, Linux xpad puts GUIDE at 8, macOS HIDAPI
+# uses the controller order. The buttons sit where the DualSense map has them
+# (shifts on the bumpers); GUIDE is left free: Steam (overlay, the Deck's STEAM
+# button) and Windows (Game Bar) take it.
 DEFAULT_PAD_BUTTONS = {
-    0: "handbrake",
-    1: "wing",
-    2: "clutch",
-    3: "reset",
-    4: "shift_down",
-    5: "shift_up",
-    6: "menu",           # start     pause menu (controls + reset)
-    7: "full_reset",
+    0: "handbrake",      # A         held
+    1: "wing",           # B         flank-wing toggle
+    2: "clutch",         # X         held
+    3: "reset",          # Y         tap: the last sector line; hold: restart the lap
+    4: "wing_side",      # BACK      the wing mode (drive/airbrake.py)
+    6: "menu",           # START     pause menu (controls + reset)
+    7: "zoom_auto",      # L3
+    8: "camera",         # R3
+    9: "shift_down",     # LB
+    10: "shift_up",      # RB
+    11: "hud",           # d-pad up
+    12: "vectors",       # d-pad down
+    13: "slowmo",        # d-pad left
+    14: "normal_speed",  # d-pad right
 }
 GENERIC_BUTTON_NAMES = {0: "a", 1: "b", 2: "x", 3: "y", 4: "back", 5: "guide",
-                        6: "start", 7: "l3", 8: "r3", 9: "l1", 10: "r1",
+                        6: "start", 7: "l3", 8: "r3", 9: "lb", 10: "rb",
                         11: "up", 12: "down", 13: "left", 14: "right"}
+#: a DualSense name asked of a generic pad means the button in the same place:
+#: the garage and WingLab poll "cross", "triangle", "l1", "options" ... whatever
+#: pad is attached (`GamepadInput.pressed`)
+PS_NAME_ALIASES = {"cross": "a", "circle": "b", "square": "x", "triangle": "y",
+                   "create": "back", "ps": "guide", "options": "start",
+                   "l1": "lb", "r1": "rb"}
 GENERIC_AXES = {"steer": 0, "ly": 1, "rx": 2, "ry": 3}   # + throttle/brake by count
 
 # PlayStation layout: DualSense (PS5) and DualShock 4 through SDL2's HIDAPI
@@ -215,7 +235,7 @@ PS_PAD_BUTTONS = {
     1: "wing",           # circle    flank-wing toggle
     2: "clutch",         # square    held
     3: "wing_side",      # triangle  the wing mode (drive/airbrake.py)
-    4: "reset",          # create    back to the last sector line
+    4: "reset",          # create    tap: the last sector line; hold: restart the lap
     6: "menu",           # options   pause menu (controls + reset)
     7: "zoom_auto",      # L3
     8: "camera",         # R3
@@ -230,6 +250,11 @@ PS_PAD_BUTTONS = {
 PAD_CONFIG_PATH = os.path.expanduser("~/.carsim_pad.json")
 PAD_RUMBLE = os.environ.get("CARSIM_NO_RUMBLE", "") == ""
 PAD_RUMBLE_HZ = 20.0
+# the owner (2026-09-28): "a button on the playstation controller to do a full
+# reset". The pad had SHIFT+R only on the generic L3, so the reset button
+# (CREATE, the generic Y) got a hold: a tap is still the sector line, sent on
+# RELEASE; held this long it is SHIFT+R ('full_reset') instead, sent at once.
+PAD_HOLD_RESET_S = 0.8
 
 # Gearbox modes (drive.py's settings; powertrain.update_shift's docstring).
 #   name      auto_gearbox  auto_clutch   what the driver does
@@ -257,8 +282,7 @@ MENU_PAD_NAMES = {
     "ps": {"up": "nav_up", "down": "nav_down", "left": "nav_left",
            "right": "nav_right", "cross": "select", "circle": "back",
            "options": "menu", "create": "reset", "touchpad": "garage"},
-    # reset on Y, the button that resets while driving (DEFAULT_PAD_BUTTONS 3);
-    # BACK (4) shifts down there, so it was a reset in the menu only
+    # reset on Y, the button that resets while driving (DEFAULT_PAD_BUTTONS 3)
     "generic": {"up": "nav_up", "down": "nav_down", "left": "nav_left",
                 "right": "nav_right", "a": "select", "b": "back",
                 "start": "menu", "y": "reset"},
@@ -268,6 +292,8 @@ MENU_PAD_NAMES = {
 def detect_pad_layout(name: str) -> str:
     """'ps' for a Sony pad, 'generic' (SDL Xbox order) for anything else."""
     n = (name or "").lower()
+    if "xbox" in n:                     # "Xbox Wireless Controller" (Bluetooth)
+        return "generic"
     if any(k in n for k in ("dualsense", "dualshock", "ps5", "ps4", "sony",
                             "wireless controller")):
         return "ps"
@@ -410,6 +436,8 @@ MENU_HELP_KB = [
     ("J", "ghosts (PB / ghost 2) on / off"),
     ("BACKSPACE", "garage: wings and builds"),
     ("ESC", "this menu / settings"),
+    #  the packaged game's (drive/display_mode.py, installed by launch_game.py)
+    ("F11 / ALT+ENTER", "fullscreen on / off"),
     ("mouse", "click a row, wheel, right-click back"),
 ]
 MENU_HELP_PAD = {
@@ -421,6 +449,7 @@ MENU_HELP_PAD = {
         ("CIRCLE", "wings armed on / off"),
         ("TRIANGLE", "wing mode: auto, air brake, top"),
         ("CREATE", "back to the sector line"),
+        ("hold CREATE", "restart the lap"),
         ("d-pad UP/DOWN", "HUD / force arrows"),
         ("d-pad L/R", "slow-mo / normal"),
         ("R3 / L3", "camera / auto zoom"),
@@ -428,16 +457,20 @@ MENU_HELP_PAD = {
         ("OPTIONS", "this menu / settings"),
     ],
     # what DEFAULT_PAD_BUTTONS does, named by GENERIC_BUTTON_NAMES (SDL's
-    # order: its 4-7 are BACK / GUIDE / START / L3 there); the self-check
-    # presses every row's buttons and holds them to what the row says
+    # GameController order); the self-check presses every row's buttons and
+    # holds them to what the row says
     "generic": [
         ("RT / LT", "throttle / brake"),
         ("left stick", "steer"),
-        ("GUIDE / BACK", "shift up / down"),
+        ("RB / LB", "shift up / down"),
         ("A / X", "handbrake / clutch (hold)"),
         ("B", "wings armed on / off"),
+        ("BACK", "wing mode: auto, air brake, top"),
         ("Y", "back to the sector line"),
-        ("L3", "restart the lap"),
+        ("hold Y", "restart the lap"),
+        ("d-pad UP/DOWN", "HUD / force arrows"),
+        ("d-pad L/R", "slow-mo / normal"),
+        ("R3 / L3", "camera / auto zoom"),
         ("START", "this menu / settings"),
     ],
 }
@@ -462,7 +495,8 @@ C camera cycle | - / = zoom | 0 auto zoom | H HUD: race / full / off | V force a
 T toggle wet (global mu_scale 1.0 <-> 0.632) | M telemetry marker | L toggle recording
 TAB next track | J ghosts on / off | BACKSPACE garage: wings and builds | ESC menu (controls, reset, quit)
 PS5 pad: R2 throttle | L2 brake | L-stick steer | R1/L1 shift | CROSS handbrake | SQUARE clutch
-         CIRCLE wings armed | TRIANGLE wing mode | OPTIONS menu | CREATE sector line | TOUCHPAD garage
+         CIRCLE wings armed | TRIANGLE wing mode | OPTIONS menu | TOUCHPAD garage
+         CREATE sector line | hold CREATE restart the lap
          d-pad: up HUD, down vectors, left slow-mo, right normal | R3 camera | L3 auto zoom"""
 
 
@@ -574,7 +608,9 @@ def aid_for_car(car) -> dict:
     """
     from .vehicle import car_lock_rad
     lock = math.degrees(car_lock_rad(car))
-    if not getattr(car, "own_aids", False):
+    #  task 48: `aid_own` -- the steer aid's own calibration without the rest
+    #  of `own_aids` (the 540i: the scripted drivers keep the Corsa's)
+    if not (getattr(car, "own_aids", False) or getattr(car, "aid_own", False)):
         return dict(lock_deg=lock, k_us_deg=K_US_DEG_MEASURED, aid_L=L_WB,
                     aid_ay=AY_MAX_DRY)
     mu = float(getattr(car, "mu_scale", 1.0))
@@ -930,6 +966,92 @@ class KeyboardInput:
 # ---------------------------------------------------------------------------
 
 
+try:                                    # SDL's GameController API (pygame 2)
+    from pygame._sdl2 import controller as _sdl_controller
+except Exception:                       # pragma: no cover - very old pygame
+    _sdl_controller = None
+
+
+class _ControllerPad:
+    """An SDL GameController behind the joystick interface GamepadInput reads.
+
+    Buttons are SDL_GameControllerButton values (0 a, 1 b, 2 x, 3 y, 4 back,
+    5 guide, 6 start, 7 l3, 8 r3, 9 lb, 10 rb, 11-14 d-pad up/down/left/right,
+    up to 20 touchpad); axes 0 LX, 1 LY, 2 RX, 3 RY, 4 LT, 5 RT as -1..1 with
+    the triggers RESTING AT -1, like a raw trigger axis, so the generic layout
+    (6 axes: throttle 5, brake 4) and `_check_rest` read it unchanged. SDL maps
+    the device from its database, or from the SDL_GAMECONTROLLERCONFIG Steam
+    hands the game for Steam Input's virtual pad, so the numbering is the same
+    on Windows (XInput), Linux / Steam Deck and macOS."""
+
+    NUM_AXES = 6
+    NUM_BUTTONS = 21
+
+    def __init__(self, ctrl):
+        self.ctrl = ctrl
+
+    def init(self) -> None:
+        pass
+
+    def get_name(self) -> str:
+        return str(self.ctrl.name)
+
+    def get_numaxes(self) -> int:
+        return self.NUM_AXES
+
+    def get_numbuttons(self) -> int:
+        return self.NUM_BUTTONS
+
+    def get_numhats(self) -> int:
+        return 0
+
+    def get_axis(self, i: int) -> float:
+        v = float(self.ctrl.get_axis(int(i))) / 32767.0
+        if i >= 4:                      # SDL: a trigger is 0..32767
+            v = 2.0 * v - 1.0
+        return _clamp(v, -1.0, 1.0)
+
+    def get_button(self, i: int) -> bool:
+        if not 0 <= i < self.NUM_BUTTONS:
+            return False
+        try:
+            return bool(self.ctrl.get_button(int(i)))
+        except Exception:               # a button this SDL does not know
+            return False
+
+    def get_hat(self, i: int) -> tuple[int, int]:
+        b = self.get_button
+        return (int(b(14)) - int(b(13)), int(b(11)) - int(b(12)))
+
+    def rumble(self, low: float, high: float, ms: int) -> bool:
+        return bool(self.ctrl.rumble(low, high, int(ms)))
+
+    def stop_rumble(self) -> None:
+        self.ctrl.stop_rumble()
+
+
+def _open_pad(index: int, joystick, layout: str | None = None, module=None):
+    """The object GamepadInput reads for device `index`: a `_ControllerPad`
+    for any non-Sony pad SDL's GameController API knows, else the raw
+    `joystick` (the DualSense path stays raw and exactly as measured; an
+    unknown device keeps the raw generic map and ~/.carsim_pad.json)."""
+    mod = _sdl_controller if module is None else module
+    try:
+        name = joystick.get_name()
+    except Exception:
+        name = ""
+    if mod is None or (layout or detect_pad_layout(name)) == "ps":
+        return joystick
+    try:
+        if not mod.get_init():
+            mod.init()
+        if mod.is_controller(index):
+            return _ControllerPad(mod.Controller(index))
+    except Exception as exc:
+        print(f"gamepad: SDL controller API unusable ({exc}); raw joystick map")
+    return joystick
+
+
 class GamepadInput:
     """Absolute axes: the ramps are bypassed and only a rate cap is applied.
 
@@ -970,6 +1092,7 @@ class GamepadInput:
                 joystick.init()
             except (AttributeError, pygame.error):
                 pass                    # pygame 2 auto-inits; older ones do not
+            joystick = _open_pad(index, joystick, layout)
         self.joy = joystick
         self.index = index
         self.steer_limit = bool(steer_limit)
@@ -1038,6 +1161,12 @@ class GamepadInput:
         self.delta_lim_deg = DELTA_LOCK_DEG
         self._pending_gear = 0
         self._buttons_prev: dict[int, bool] = {}
+        # a reset button's press time, while it is down and has sent nothing
+        # (PAD_HOLD_RESET_S), driving and in the menu; `_clock` is swapped for
+        # a fake in the self-check
+        self._reset_t0: dict[int, float] = {}
+        self._menu_reset_t0: dict[str, float] = {}
+        self._clock: Callable[[], float] = time.monotonic
         self.menu = False
         self._menu_prev: dict[str, bool] = {}
         self._menu_stick = None
@@ -1051,6 +1180,7 @@ class GamepadInput:
         across a session boundary (CROSS that selected 'Drive' in the garage,
         or 'Back to the garage' in the drive's menu) is not a fresh edge in
         the session that follows."""
+        self._reset_t0.clear()
         for btn in self.map["buttons"]:
             self._buttons_prev[btn] = self._button(btn)
 
@@ -1062,6 +1192,7 @@ class GamepadInput:
         if flag and not self.menu:
             table = MENU_PAD_NAMES.get(self.layout, MENU_PAD_NAMES["generic"])
             self._menu_prev = {n: self.pressed(n) for n in table}
+            self._menu_reset_t0.clear()
             from .menu import StickNav
             self._menu_stick = StickNav()
             self._menu_stick_x = StickNav()
@@ -1160,6 +1291,8 @@ class GamepadInput:
     # -- named access (the garage editor and the calib printout use these) --
     def pressed(self, name: str) -> bool:
         i = self._name_to_btn.get(name)
+        if i is None and self.layout != "ps":
+            i = self._name_to_btn.get(PS_NAME_ALIASES.get(name))
         return False if i is None else self._button(i)
 
     def stick(self, which: str = "left") -> tuple[float, float]:
@@ -1221,17 +1354,46 @@ class GamepadInput:
             low = high = 0.0
         self.rumble(low, high, int(1500.0 / PAD_RUMBLE_HZ))
 
+    @staticmethod
+    def _tap_or_hold(t0s: dict, key, now: bool, was: bool, t: float) -> Optional[str]:
+        """The reset button: 'reset' when a tap is let go, 'full_reset' once
+        a press has been held PAD_HOLD_RESET_S, else None. `t0s[key]` is the
+        press time until one of those is sent; a press it never saw sends
+        nothing."""
+        t0 = t0s.get(key)
+        if now and not was:
+            t0s[key] = t
+        elif t0 is not None and not now:
+            del t0s[key]
+            return "reset"
+        elif t0 is not None and t - t0 >= PAD_HOLD_RESET_S:
+            del t0s[key]
+            return "full_reset"
+        return None
+
     def poll_events(self) -> list[str]:
         """Button EDGES. Read from the device state, not the queue, so that a
         BlendedInput's keyboard half can own the queue drain without either
-        half stealing the other's events."""
+        half stealing the other's events.
+
+        A 'reset' button is the one that is not an edge (_tap_or_hold), in
+        the menu too: a tap sends 'reset' when it is let go, a hold of
+        PAD_HOLD_RESET_S sends 'full_reset' then (and nothing on the
+        release). One held across a seed or into / out of the menu sends
+        nothing."""
         cmds: list[str] = []
         if self.menu:
             return self._poll_menu()
+        t = self._clock()
         for btn, cmd in self.map["buttons"].items():
             now = self._button(btn)
             was = self._buttons_prev.get(btn, False)
             self._buttons_prev[btn] = now
+            if cmd == "reset":
+                got = self._tap_or_hold(self._reset_t0, btn, now, was, t)
+                if got:
+                    cmds.append(got)
+                continue
             if now and not was and cmd not in ("handbrake", "clutch"):
                 cmds.append(cmd)
                 if cmd == "shift_up":
@@ -1250,11 +1412,16 @@ class GamepadInput:
         closes (circle = back, then circle = wing) cannot fire on the way out."""
         cmds: list[str] = []
         table = MENU_PAD_NAMES.get(self.layout, MENU_PAD_NAMES["generic"])
+        t = self._clock()
         for name, cmd in table.items():
             now = self.pressed(name)
             was = self._menu_prev.get(name, False)
             self._menu_prev[name] = now
-            if now and not was:
+            if cmd == "reset":             # tap / hold, as while driving
+                got = self._tap_or_hold(self._menu_reset_t0, name, now, was, t)
+                if got:
+                    cmds.append(got)
+            elif now and not was:
                 cmds.append(cmd)
         if self._menu_stick is not None:
             nav = self._menu_stick.poll(self.stick("left")[1])
@@ -1265,6 +1432,7 @@ class GamepadInput:
             nav = self._menu_stick_x.poll(self.stick("left")[0])
             if nav:
                 cmds.append({"nav_up": "nav_left", "nav_down": "nav_right"}[nav])
+        self._reset_t0.clear()
         for btn in self.map["buttons"]:
             self._buttons_prev[btn] = self._button(btn)
         return cmds
@@ -1889,7 +2057,7 @@ def self_check(verbose: bool = True) -> bool:
         """Six axes, SDL2 layout. Sticks centred, triggers at rest (-1)."""
         def __init__(self):
             self.ax = [0.0, 0.0, -1.0, 0.0, -1.0, -1.0]
-            self.bt = [False] * 8
+            self.bt = [False] * 15
 
         def get_numaxes(self):
             return len(self.ax)
@@ -1931,9 +2099,9 @@ def self_check(verbose: bool = True) -> bool:
              c.delta < 0.0, True)
     stub.bt[0] = True
     check("pad button 0 = handbrake", pad.update(DT, 10.0).handbrake, 1.0, 1e-12)
-    stub.bt[5] = True
+    stub.bt[10] = True
     pad.poll_events()
-    check_eq("pad button 5 = shift up (edge)", pad.update(DT, 10.0).gear_req, +1)
+    check_eq("pad button 10 (RB) = shift up (edge)", pad.update(DT, 10.0).gear_req, +1)
     check_eq("pad button held is not a second shift",
              pad.update(DT, 10.0).gear_req, 0)
 
@@ -2055,6 +2223,63 @@ def self_check(verbose: bool = True) -> bool:
     ps.bt[1] = True
     check_eq("ps: a fresh circle press is 'wing' again", pad.poll_events(), ["wing"])
     ps.bt[1] = False
+
+    if verbose:
+        print("\n-- CREATE: tap = sector line, hold = restart the lap --")
+    clk = [100.0]
+    pad._clock = lambda: clk[0]
+    pad.poll_events()
+    ps.bt[4] = True
+    press = pad.poll_events()
+    ps.bt[4] = False
+    check_eq("ps: CREATE tap -> 'reset' on the release, not the press",
+             (press, pad.poll_events()), ([], ["reset"]))
+    ps.bt[4] = True
+    seen = [pad.poll_events()]
+    clk[0] += PAD_HOLD_RESET_S - 0.01
+    seen.append(pad.poll_events())
+    clk[0] += 0.01
+    seen.append(pad.poll_events())
+    clk[0] += 2.0
+    seen.append(pad.poll_events())
+    ps.bt[4] = False
+    seen.append(pad.poll_events())
+    check_eq(f"ps: CREATE held {PAD_HOLD_RESET_S} s -> 'full_reset' once, no 'reset' after",
+             seen, [[], [], ["full_reset"], [], []])
+    ps.bt[4] = True
+    pad.poll_events()
+    pad.seed_edges()                       # a session boundary mid-press
+    clk[0] += 5.0
+    held = pad.poll_events()
+    ps.bt[4] = False
+    check_eq("ps: CREATE held across a seed sends nothing, held or let go",
+             (held, pad.poll_events()), ([], []))
+    ps.bt[4] = True
+    pad.poll_events()
+    pad.set_menu(True)                     # OPTIONS mid-press: the menu has it
+    pad.poll_events()
+    pad.set_menu(False)
+    clk[0] += 5.0
+    held = pad.poll_events()
+    ps.bt[4] = False
+    check_eq("ps: CREATE held into the menu and out sends nothing after",
+             (held, pad.poll_events()), ([], []))
+    pad.set_menu(True)                     # the pause page's help row says it too
+    ps.bt[4] = True
+    press = pad.poll_events()
+    ps.bt[4] = False
+    tap = pad.poll_events()
+    ps.bt[4] = True
+    pad.poll_events()
+    clk[0] += PAD_HOLD_RESET_S + 1e-6     # (112.8 + 0.8) - 112.8 < 0.8 in floats
+    hold = pad.poll_events()
+    ps.bt[4] = False
+    after = pad.poll_events()
+    pad.set_menu(False)
+    check_eq("ps: in the menu too: CREATE tap -> 'reset' on the release, "
+             "hold -> 'full_reset' once", (press, tap, hold, after),
+             ([], ["reset"], ["full_reset"], []))
+    pad._clock = time.monotonic
     import io, contextlib
     ps0 = _StubPS()
     ps0.ax = [0.0] * 6                     # attach before the first HID report
@@ -2150,17 +2375,26 @@ def self_check(verbose: bool = True) -> bool:
 
     def _does(p, stub, name):
         """What pressing the button called `name` does while driving: its
-        edge, else the pedal it holds; None for a name the layout lacks."""
-        i = p._name_to_btn.get(name)
+        edge (or its release: the reset button's tap), else the pedal it
+        holds; None for a name the layout lacks. 'hold x' holds x for
+        PAD_HOLD_RESET_S on a fake clock before letting go."""
+        hold = name.startswith("hold ")
+        i = p._name_to_btn.get(name[5:] if hold else name)
         if i is None:
             return None
+        clock = [0.0]
+        p._clock = lambda: clock[0]
         stub.bt = [False] * len(stub.bt)
         p.poll_events()
         stub.bt[i] = True
         ev = p.poll_events()
         c = p.update(DT, 10.0)
+        if hold:
+            clock[0] = PAD_HOLD_RESET_S
+            ev += p.poll_events()
         stub.bt[i] = False
-        p.poll_events()
+        ev += p.poll_events()
+        p._clock = time.monotonic
         if ev:
             return ev[0] if len(ev) == 1 else tuple(ev)
         return "handbrake" if c.handbrake else ("clutch" if c.clutch else None)
@@ -2204,7 +2438,9 @@ def self_check(verbose: bool = True) -> bool:
         seen += pg.poll_events()
     gh.bt[3] = True
     seen += pg.poll_events()
-    check_eq("generic: the d-pad on hat 0 moves the menu, Y resets there",
+    gh.bt[3] = False
+    seen += pg.poll_events()
+    check_eq("generic: the d-pad on hat 0 moves the menu, Y (a tap) resets there",
              seen, ["nav_down", "nav_left", "reset"])
     # hot-plug (pygame's count and device faked): the new pad gets the car's
     # lock; a pad pulled while driving pauses once, with the menu up nothing
@@ -2301,8 +2537,10 @@ def self_check(verbose: bool = True) -> bool:
         print("\n-- task 41: the aid per car (aid_for_car) --")
     import cars as _cars
     from .vehicle import car_lock_rad, ramp_steer, VehicleConfig
-    #  the stock three get what the launch path always passed them
-    for k in _cars.STOCK_CARS:
+    #  the stock three get what the launch path always passed them -- but a
+    #  stock car with its own steer-aid calibration (task 48: the 540i's
+    #  `aid_own`) is checked below
+    for k in [k_ for k_ in _cars.STOCK_CARS if not _cars.CARS[k_].aid_own]:
         a = aid_for_car(_cars.CARS[k])
         check_eq(f"{k}: the Corsa-calibrated aid, its own lock",
                  (a["k_us_deg"], a["aid_L"], a["aid_ay"], a["lock_deg"]),
@@ -2322,7 +2560,9 @@ def self_check(verbose: bool = True) -> bool:
           K_US_DEG_MEASURED, 0.10 * K_US_DEG_MEASURED, "deg/g")
     #  the bus: its own aid leaves the designed margin over the angle its
     #  peak needs at 20 m/s; the Corsa-calibrated one would not let it turn
-    bus = _cars.CARS["bus"]
+    #  (task 46: the bus is out of the game, kept in `cars.RETIRED` as the
+    #  car that shows the per-car aid is needed at all)
+    bus = _cars.RETIRED["bus"]
     ab = aid_for_car(bus)
     tb = ramp_steer(AID_RAMP_V, car=bus, cfg=VehicleConfig(mu_scale=bus.mu_scale))
     need = math.degrees(float(tb["delta"]))
@@ -2336,6 +2576,121 @@ def self_check(verbose: bool = True) -> bool:
               f"{ab['aid_ay'] / G:.3f} g, L {ab['aid_L']}); the Corsa's {corsa:.2f} deg")
     check_eq("the bus's own aid clears its peak angle, the Corsa's does not",
              (own >= need, corsa < need), (True, True))
+    #  task 48: the 540i's own steer-aid calibration (`aid_own`): its soft
+    #  lock clears the angle its peak needs, which the Corsa's did not
+    e39 = _cars.CARS["540i"]
+    ae = aid_for_car(e39)
+    te = ramp_steer(AID_RAMP_V, car=e39, cfg=VehicleConfig(mu_scale=e39.mu_scale))
+    need_e = math.degrees(float(te["delta"]))
+    own_e = steer_limit_deg(AID_RAMP_V, 0.0, ay_max=ae["aid_ay"], L=ae["aid_L"],
+                            k_us_deg=ae["k_us_deg"], lock_deg=ae["lock_deg"])
+    corsa_e = steer_limit_deg(AID_RAMP_V, 0.0, k_us_deg=K_US_DEG_MEASURED,
+                              lock_deg=ae["lock_deg"])
+    if verbose:
+        print(f"        540i at {AID_RAMP_V:g} m/s: peak needs {need_e:.2f} deg; own aid "
+              f"{own_e:.2f} deg (k_us {ae['k_us_deg']:.2f} deg/g, L {ae['aid_L']}); "
+              f"the Corsa's {corsa_e:.2f} deg")
+    check_eq("the 540i's own aid (aid_own, task 48) clears its peak angle, the Corsa's "
+             "did not; its wheelbase is its own",
+             (e39.aid_own, own_e >= need_e, corsa_e < need_e, ae["aid_L"] == e39.L),
+             (True, True, True, True))
+    #  task 46: and every car in the game that brings its own aid (the
+    #  Express, the rally car) is let turn to the angle its own peak needs
+    for k in _cars.CAR_ORDER:
+        c_k = _cars.CARS[k]
+        if not getattr(c_k, "own_aids", False):
+            continue
+        a_k = aid_for_car(c_k)
+        need_k = math.degrees(float(ramp_steer(AID_RAMP_V, car=c_k, cfg=VehicleConfig(
+            mu_scale=c_k.mu_scale))["delta"]))
+        own_k = steer_limit_deg(AID_RAMP_V, 0.0, ay_max=a_k["aid_ay"], L=a_k["aid_L"],
+                                k_us_deg=a_k["k_us_deg"], lock_deg=a_k["lock_deg"])
+        if verbose:
+            print(f"        {k} at {AID_RAMP_V:g} m/s: peak needs {need_k:.2f} deg; own aid "
+                  f"{own_k:.2f} deg")
+        check_eq(f"{k}: its own aid clears its peak angle", own_k >= need_k, True)
+
+    if verbose:
+        print("\n-- the SDL GameController path (Xbox / Steam Input pads) --")
+
+    class _FakeCtrl:
+        """pygame._sdl2 Controller: ints, triggers 0..32767, SDL button enum."""
+        def __init__(self, name="Xbox Wireless Controller"):
+            self.name, self.ax, self.bt = name, [0] * 6, [False] * 21
+
+        def get_axis(self, i):
+            return self.ax[i]
+
+        def get_button(self, i):
+            return self.bt[i]
+
+        def rumble(self, lo, hi, ms):
+            return True
+
+        def stop_rumble(self):
+            pass
+
+    class _FakeMod:
+        def __init__(self, known):
+            self.known, self.inited = known, False
+
+        def get_init(self):
+            return self.inited
+
+        def init(self):
+            self.inited = True
+
+        def is_controller(self, i):
+            return self.known
+
+        def Controller(self, i):
+            return _FakeCtrl()
+
+    class _RawNamed:
+        def __init__(self, name):
+            self.n = name
+
+        def get_name(self):
+            return self.n
+
+    fc = _FakeCtrl()
+    cp = _ControllerPad(fc)
+    fc.ax[5], fc.ax[1] = 32767, -32768
+    fc.bt[11] = fc.bt[13] = True
+    check_eq("controller: triggers rest at -1 and reach +1, sticks -1..1, d-pad as hat",
+             (cp.get_axis(4), cp.get_axis(5), cp.get_axis(1), cp.get_hat(0)),
+             (-1.0, 1.0, -1.0, (-1, 1)))
+    fc.ax[5], fc.ax[1] = 0, 0
+    fc.bt[11] = fc.bt[13] = False
+    raw_x, raw_ps = _RawNamed("Controller (Xbox One For Windows)"), _RawNamed("DualSense Wireless Controller")
+    check_eq("controller: an Xbox pad SDL knows opens through it; a DualSense, an "
+             "unknown device or no API stays raw",
+             (type(_open_pad(0, raw_x, module=_FakeMod(True))).__name__,
+              _open_pad(0, raw_ps, module=_FakeMod(True)) is raw_ps,
+              _open_pad(0, raw_x, module=_FakeMod(False)) is raw_x,
+              _open_pad(0, raw_x, module=None) is raw_x),
+             ("_ControllerPad", True, True, True))
+    check_eq("an 'Xbox Wireless Controller' is not taken for a DualShock",
+             detect_pad_layout("Xbox Wireless Controller"), "generic")
+    with contextlib.redirect_stdout(io.StringIO()):
+        px = GamepadInput(joystick=cp, steer_limit=False, user_config=False)
+    fc.ax[5] = 32767
+    cx = px.update(DT, 10.0)
+    fc.ax[5] = 0
+    px.update(DT, 10.0)
+    px.poll_events()
+    fc.bt[10] = True                    # RB
+    ev_rb = px.poll_events()
+    fc.bt[10] = False
+    px.poll_events()
+    fc.bt[0] = True                     # A, asked for by its DualSense name
+    alias = (px.pressed("cross"), px.pressed("triangle"), px.pressed("l1"))
+    fc.bt[0] = False
+    check_eq("controller pad: generic layout, RT is throttle, RB shifts up, "
+             "'cross' reads A",
+             (px.layout, px.map["throttle"], px.map["brake"], cx.throttle > 0.0,
+              "shift_up" in ev_rb or px._pending_gear == 1, alias),
+             ("generic", 5, 4, True, True, (True, False, False)))
 
     if verbose:
         print()

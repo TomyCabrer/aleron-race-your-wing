@@ -5,8 +5,8 @@ page and saved with the settings, and it never reaches the class key, a
 ranking, a medal, a ghost, the CarSpec or the garage's CarBuild JSON (a lap
 record's settings snapshot lists it, as it lists Graphics; nothing reads it
 back): a red Corsa and a yellow one set the same times. `PAINT_DEFAULT` ('factory') draws
-each car in its own colour (render.C_CAR_STYLE: the Corsa yellow, the MX-5
-red, the 540i blue), so a session that never picks one -- and every headless
+each car in its own colour (render.C_CAR_STYLE: the Corsa yellow, the rally
+Escort red, the 540i blue, the Express white), so a session that never picks one -- and every headless
 or scripted run -- draws exactly what it drew before paint existed.
 
 Why a fixed palette and not an RGB picker: the self-checks COUNT exact
@@ -40,7 +40,7 @@ PAINT_DEFAULT = "factory"
 PAINTS = {
     "factory": None,
     "yellow": (215, 195, 74),      # the Corsa's own yellow, for the other two
-    "red": (176, 34, 42),          # the MX-5's own red
+    "red": (176, 34, 42),          # the rally Escort's own red (task 46; the MX-5's before)
     "blue": (64, 92, 138),         # the 540i's own blue
     "white": (226, 226, 220),      # warm: a cool (232, 234, 238) is the HUD text
     "silver": (170, 174, 182),     # (174, 180, 191)'s 0.80 tone is the HUD's dim grey

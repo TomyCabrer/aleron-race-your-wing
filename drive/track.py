@@ -39,7 +39,9 @@ system with every other quantity fixed at a round value. They are NOT to be
 re-derived -- rounding either one to 3 dp opens the loop by ~0.5 m. The three
 newer circuits (Linden, Kestrel, Ashdown) were closed the same way, by
 `solve_closure`, and are not in the harness spec: their literals, and the
-rules their shapes answer to, are under "three more circuits" below.
+rules their shapes answer to, are under "three more circuits" below. The
+oval (Fairfield, task 46) closes by symmetry, every number round: "the
+oval" below.
 
 Sign convention (contract section 0): +y is LEFT, psi and turn_deg positive is
 counter-clockwise = a LEFT turn, and `n` from `project()` is positive to the
@@ -835,16 +837,82 @@ ASHDOWN_PATCHES = [
                  label="WET_T4_ENTRY", colour=(43, 58, 74)),
 ]
 
-#: the two straights `solve_closure` solved on each circuit (seg indices)
+# --- the oval (task 46) -----------------------------------------------------
+# The owner (2026-09-28): "1 more track 2 straights and 2 very big curves." A
+# stadium: two 480 m straights joined by two 180-degree R150 bends, counter-
+# clockwise, the line in the middle of the bottom (pit) straight. Three
+# rules of the circuits above it breaks, on purpose, and the self-check
+# holds it to its own numbers instead (_CIRCUIT_R_MAX, _CIRCUIT_WIDTH):
+#   * NOT closed by `solve_closure`: its two straights are parallel (det =
+#     sin 180 = 0, the system is singular), and nothing needs solving --
+#     equal straights and two equal half-turns close it by symmetry, every
+#     number round (closure 6e-14 m);
+#   * R150, past the 30..130 band ("very big"), and 16 m wide, not 12. The
+#     width is the ML anchor's, measured: its lateral feedback is a BARRIER
+#     in the road's NORMALISED width (drive/ml/baseline.py, N_FREE), and a
+#     180-degree bend is a long one -- 14 s at the 540i's 33.7 m/s. Holding
+#     heading on the tangent, the car drifts out at u * beta (~2 m/s at
+#     its -3.5 deg), reaches the barrier's knee and is steered to full lock
+#     in half a second, past the fronts' peak: at 12 m the 540i left T1 on
+#     lap one dry, aids on and off, and a smaller R does not cure it (R90,
+#     R110 and R130 at 12 m, R100 and R120 even at 18 m, each lost a dry
+#     cell); at R150, 15 m lost a cell, and 16, 18 and 20 m lap every one.
+#     On a steady R150 circle, entered slowly, the same car sits at the
+#     knee (n -3.0 m) for ever: it is the ENTRY at speed, and a wider road
+#     moves the knee out and softens the ramp (per metre). Ovals are wide;
+#     16 m is a two-lane road with a lane to spare;
+# and T2's patch is damp, not standing water, for the same drivers (see
+# there).
+FAIRFIELD_STRAIGHT = 480.0     # m   each straight (the pit straight split at the line)
+FAIRFIELD_R = 150.0            # m   both bends: 471.24 m of 180-degree arc each
+FAIRFIELD_WIDTH = 16.0         # m   (the other circuits 12: the comment above)
+CIRCUIT_FAIRFIELD_SEGS = [             # an oval: the pit straight's second half first
+    Seg.straight(0.5 * FAIRFIELD_STRAIGHT),
+    Seg.arc(FAIRFIELD_R, 180.0),       # T1  (s 240 .. 711.2)
+    Seg.straight(FAIRFIELD_STRAIGHT),  #     the back straight (711.2 .. 1191.2)
+    Seg.arc(FAIRFIELD_R, 180.0),       # T2  (s 1191.2 .. 1662.5)
+    Seg.straight(0.5 * FAIRFIELD_STRAIGHT),
+]
+#: the line mid-way along the bottom straight, the bottom straight on
+#: y = 15 as the other circuits' lowest; the bends reach x 15 and 795
+CIRCUIT_FAIRFIELD_ORIGIN = (405.0, 15.0)
+FAIRFIELD_PATCHES = [
+    #  a DAMP band across T2 into its apex (s 1320..1440: 49 .. 95 deg of the
+    #  180), full width, mu x MU_DAMP_SCALE as the arena's DAMP_T5_EXIT --
+    #  not standing water, measured with medals.py's own runs (both drivers,
+    #  the Corsa, the 540i and the Express, aids on and off, 12 cells a
+    #  shape). Water (0.632) in a 33 m/s bend was on a knife edge wherever
+    #  it went: at the entry (+4..+94 m in, -60..+40) the ML anchor sees it
+    #  only 90 m out (MU_HORIZON), stands on the brakes at 42 m/s at the end
+    #  of the back straight and, aids off, LOCKS its fronts into the turn-in
+    #  (all three cars straight on); mid-bend, LapDriver brakes at the
+    #  corner's limit for it and spins the Corsa, aids off, as it leaves the
+    #  water yawed (lost 1 to 3 cells of 12 as the patch moved by 10 m, full,
+    #  inside or outside half); at the exit (+300..+390) the 540i and the
+    #  Express left the road. Damp here: 48 / 48 over four placements
+    #  (1300..1460 down to 1345..1435); the water is on the straight, below
+    SurfacePatch(1320.0, 1440.0, -8.0, 8.0, mu_scale=MU_DAMP_SCALE,
+                 label="DAMP_T2", colour=(51, 57, 63)),
+    #  standing water, n -8..0, the RIGHT half: T1 turns left, so the
+    #  braking car sets up on the right and brakes split-mu in the last 43 m
+    #  of the pit straight
+    SurfacePatch(195.0, 238.0, -8.0, 0.0, mu_scale=MU_WET_SCALE,
+                 label="WET_T1_ENTRY", colour=(43, 58, 74)),
+]
+
+#: the two straights `solve_closure` solved on each circuit (seg indices).
+#: Not the oval (task 46): its straights are parallel, it closes by symmetry
 CLOSURE_FREE = {"arena": (0, 8), "linden": (2, 6), "kestrel": (10, 14),
                 "ashdown": (0, 12)}
 
 
-def _circuit(name, segs, origin, patches, sector_s, title, surfaces) -> Track:
-    """One of the three circuits below: the arena's width, closed, heading 0."""
+def _circuit(name, segs, origin, patches, sector_s, title, surfaces,
+             width=12.0) -> Track:
+    """One of the circuits below: the arena's width (the oval's own 16 m),
+    closed, heading 0."""
     tr = Track(
         name=name,
-        width=12.0,
+        width=float(width),
         segs=list(segs),
         origin=origin,
         heading0=0.0,
@@ -901,6 +969,20 @@ def make_ashdown(surfaces: bool = True) -> Track:
     Corsa). `surfaces` as make_arena."""
     return _circuit("ashdown", CIRCUIT_ASHDOWN_SEGS, CIRCUIT_ASHDOWN_ORIGIN,
                     ASHDOWN_PATCHES, [0.0, 505.0, 930.0], "Ashdown circuit", surfaces)
+
+
+def make_fairfield(surfaces: bool = True) -> Track:
+    """Fairfield oval: 1902.4778 m, counter-clockwise, the fastest lap (task 46).
+
+    Two 480 m straights and two 180-degree R150 bends (the section
+    comment). The sector lines stand at the back straight's two ends, 20 m
+    in from each bend (the rule puts them on straights, and an oval has two):
+    0 -> 730 is the second half of the pit straight and T1, 730 -> 1170 the
+    back straight, 1170 -> the line T2 and the first half. `surfaces` as
+    make_arena."""
+    return _circuit("fairfield", CIRCUIT_FAIRFIELD_SEGS, CIRCUIT_FAIRFIELD_ORIGIN,
+                    FAIRFIELD_PATCHES, [0.0, 730.0, 1170.0], "Fairfield oval", surfaces,
+                    width=FAIRFIELD_WIDTH)
 
 
 def make_skidpad(radius: float = 50.0, cw: bool = False) -> Track:
@@ -1019,6 +1101,7 @@ TRACKS: dict = {
     "linden": make_linden,
     "kestrel": make_kestrel,
     "ashdown": make_ashdown,
+    "fairfield": make_fairfield,
     "open": make_open,
     "skidpad": make_skidpad,
     "dragstrip": make_dragstrip,
@@ -1028,6 +1111,7 @@ TRACK_TITLES: dict = {
     "linden": "Linden park",
     "kestrel": "Kestrel ring",
     "ashdown": "Ashdown circuit",
+    "fairfield": "Fairfield oval",
     "open": "Open proving ground",
     "skidpad": "Skidpad",
     "dragstrip": "Dragstrip",
@@ -1036,11 +1120,12 @@ TRACK_TITLES: dict = {
 #: plain lowercase identifier with no '_', ',' or '|' and never
 #: '<another map>_...': it is a records class-key field and file-name part,
 #: a checkpoint's comma-listed meta and the seed-lap glob `seed_<map>_`.
-TRACK_ORDER = ("arena", "linden", "kestrel", "ashdown", "open", "skidpad", "dragstrip")
-#: The race CIRCUITS: closed, 12 m, dressed with the circuit theme, lapped
+TRACK_ORDER = ("arena", "linden", "kestrel", "ashdown", "fairfield", "open", "skidpad",
+               "dragstrip")
+#: The race CIRCUITS: closed, 12 m (the oval 16), dressed with the circuit theme, lapped
 #: with records and medals. `Track.closed` does not say this (the open map's
 #: perimeter and the skidpad close too).
-CIRCUITS = ("arena", "linden", "kestrel", "ashdown")
+CIRCUITS = ("arena", "linden", "kestrel", "ashdown", "fairfield")
 
 
 def make_track(name: str, radius: float = 50.0, cw: bool = False,
@@ -1065,6 +1150,8 @@ def make_track(name: str, radius: float = 50.0, cw: bool = False,
         return make_kestrel(surfaces=surfaces)
     if name == "ashdown":
         return make_ashdown(surfaces=surfaces)
+    if name == "fairfield":
+        return make_fairfield(surfaces=surfaces)
     return make_arena(surfaces=surfaces)
 
 
@@ -1082,13 +1169,19 @@ _ARENA_CENTRES = [(382.471, 129.419), (383.351, 210.808), (266.682, 256.506),
                   (124.768, 232.307), (99.265, 116.348), (67.523, 37.498),
                   (213.204, -45.581)]
 
-# the three circuits' lengths, pasted as fixtures (a changed shape must be
+# the newer circuits' lengths, pasted as fixtures (a changed shape must be
 # a deliberate edit here too: it makes the medal table stale)
-_CIRCUIT_LENGTHS = {"linden": 1110.4021, "kestrel": 1913.3440, "ashdown": 1390.0362}
-_CIRCUIT_CW = {"linden": False, "kestrel": False, "ashdown": True}
+_CIRCUIT_LENGTHS = {"linden": 1110.4021, "kestrel": 1913.3440, "ashdown": 1390.0362,
+                    "fairfield": 1902.4778}
+_CIRCUIT_CW = {"linden": False, "kestrel": False, "ashdown": True, "fairfield": False}
+#: the oval's own width and radius band (task 46: "the oval" says why);
+#: every other circuit is 12 m wide with R 30..130 m
+_CIRCUIT_WIDTH = {"fairfield": FAIRFIELD_WIDTH}
+_CIRCUIT_R_MAX = {"fairfield": FAIRFIELD_R}
 #: centrelines this far apart wherever they are > 90 m apart in s: the width
 #: plus two scenery.DRESS_MAX (24 m) run-off bands, so no two stretches'
-#: dressing meets (the arena, drawn before the rule, has 65.55)
+#: dressing meets (the arena, drawn before the rule, has 65.55). For the 12 m
+#: circuits; a wider one (the oval) adds its extra width
 CLEARANCE_MIN = 60.0
 
 
@@ -1113,8 +1206,9 @@ def _min_separation(tr: Track, gap_s: float = 90.0) -> float:
 
 
 def _circuit_checks(rep, verbose: bool) -> None:
-    """V1-V4 for the three newer circuits, plus the rules their comment
-    lists (grid zone, sector lines, radii, patches on the centreline)."""
+    """V1-V4 for the newer circuits, plus the rules their comment lists
+    (grid zone, sector lines, radii, patches on the centreline); the oval
+    to its own width and radius band, and closed by symmetry (task 46)."""
     segs_of = {"arena": CIRCUIT_ARENA_SEGS, "linden": CIRCUIT_LINDEN_SEGS,
                "kestrel": CIRCUIT_KESTREL_SEGS, "ashdown": CIRCUIT_ASHDOWN_SEGS}
     worst = 0.0
@@ -1125,7 +1219,17 @@ def _circuit_checks(rep, verbose: bool) -> None:
     rep("closure re-solved", worst < 1e-6,
         f"solve_closure reproduces every circuit's two stored straights to "
         f"{worst:.1e} m ({', '.join(CLOSURE_FREE)})")
-    for name in ("linden", "kestrel", "ashdown"):
+    #  the oval has nothing to solve (parallel straights: det = 0): two equal
+    #  straights either side of two equal half-turns, the pit straight split
+    #  in two halves at the line
+    fs = CIRCUIT_FAIRFIELD_SEGS
+    sym = (len(fs) == 5 and [g.kind for g in fs] == ["S", "A", "S", "A", "S"]
+           and fs[0].length + fs[4].length == fs[2].length
+           and fs[1] == fs[3] and fs[1].turn_deg == 180.0)
+    rep("fairfield closes by symmetry", sym and "fairfield" not in CLOSURE_FREE,
+        f"straights {fs[0].length:g} + {fs[4].length:g} and {fs[2].length:g} m, two "
+        f"R{fs[1].radius:g} x {fs[1].turn_deg:g} deg; not in CLOSURE_FREE")
+    for name in CIRCUITS[1:]:
         if verbose:
             print(f"circuit  {name} ({TRACK_TITLES[name]})")
         tr = make_track(name)
@@ -1133,7 +1237,8 @@ def _circuit_checks(rep, verbose: bool) -> None:
         gap = float(np.hypot(*(tr.xy[-1] - tr.xy[0])))
         turn = sum(sg.turn_deg for sg in tr.segs)
         rep(f"{name} closure", gap < 1e-4 and abs(abs(turn) - 360.0) < 1e-6
-            and (turn < 0.0) == _CIRCUIT_CW[name] and tr.closed and tr.width == 12.0,
+            and (turn < 0.0) == _CIRCUIT_CW[name] and tr.closed
+            and tr.width == _CIRCUIT_WIDTH.get(name, 12.0),
             f"|xy[-1]-xy[0]| = {gap:.1e} m, sum(turn_deg) = {turn:+.1f} "
             f"({'clockwise' if turn < 0 else 'counter-clockwise'}), width {tr.width:.0f}")
         rep(f"{name} length", abs(tr.length - _CIRCUIT_LENGTHS[name]) < 0.01,
@@ -1151,15 +1256,17 @@ def _circuit_checks(rep, verbose: bool) -> None:
         rep(f"{name} round trip", dsm < 1e-3 and dnm < 1e-3,
             f"500 random (s, |n| <= {hw:.0f}): max |ds| {dsm:.1e} m, max |dn| {dnm:.1e} m")
         dmin = _min_separation(tr)
-        rep(f"{name} clearance", dmin >= CLEARANCE_MIN,
-            f"min separation = {dmin:.2f} m (>= {CLEARANCE_MIN:.0f}: width + 2 x 24 m run-off)")
+        c_min = CLEARANCE_MIN + (tr.width - 12.0)
+        rep(f"{name} clearance", dmin >= c_min,
+            f"min separation = {dmin:.2f} m (>= {c_min:.0f}: width + 2 x 24 m run-off)")
         x0, y0, p0 = start_pose(tr)
         radii = [sg.radius for sg in tr.segs if sg.kind == "A"]
+        r_hi = _CIRCUIT_R_MAX.get(name, 130.0)
         rep(f"{name} start and radii",
             abs(x0 - tr.origin[0]) < 1e-9 and abs(y0 - tr.origin[1]) < 1e-9
-            and abs(p0 - tr.heading0) < 1e-12 and 30.0 <= min(radii) and max(radii) <= 130.0,
+            and abs(p0 - tr.heading0) < 1e-12 and 30.0 <= min(radii) and max(radii) <= r_hi,
             f"start ({x0:.3f}, {y0:.3f}) heading {math.degrees(p0):.1f} deg; "
-            f"R {min(radii):.0f}..{max(radii):.0f} m (band 30..130)")
+            f"R {min(radii):.0f}..{max(radii):.0f} m (band 30..{r_hi:.0f})")
         sec = list(tr.sector_s)
         on_straight = all(abs(_eval(tr, v + d)[3]) == 0.0 for v in sec for d in (-2.0, 0.0, 2.0))
         rep(f"{name} sector lines", len(sec) == 3 and sec[0] == 0.0 and sec == sorted(sec)
@@ -1383,7 +1490,7 @@ def self_check(verbose: bool = True) -> bool:
         f"y {poly[:, 1].min():.1f}..{poly[:, 1].max():.1f}")
 
     if verbose:
-        print("extra  the circuits (Linden, Kestrel, Ashdown)")
+        print("extra  the circuits (Linden, Kestrel, Ashdown, Fairfield)")
     _circuit_checks(rep, verbose)
     rep("make_track by name", all(make_track(n).name == n for n in TRACK_ORDER),
         ", ".join(TRACK_ORDER))

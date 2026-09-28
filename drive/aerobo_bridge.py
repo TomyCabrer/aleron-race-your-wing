@@ -74,7 +74,9 @@ from .aero.polar import RHO as CARSIM_RHO, NU as CARSIM_NU
 #  ENVIRONMENT                                                                 #
 # =========================================================================== #
 REPO = Path(__file__).resolve().parents[1]
-AEROBO_ROOT = REPO / "aerobo"
+#: a packaged build points this at a writable copy of the vendored tree
+#: (launch_game.py): AeroBO writes its caches under its own `results/`
+AEROBO_ROOT = Path(os.environ.get("CARSIM_AEROBO_ROOT") or REPO / "aerobo")
 AEROBO_SRC = AEROBO_ROOT / "src"
 #: the warm library-screen checkpoint the vendored tree carries (it is not in
 #: AeroBO's git: results/ is ignored there) and where AeroBO reads it from --
@@ -82,7 +84,8 @@ AEROBO_SRC = AEROBO_ROOT / "src"
 SEED = AEROBO_ROOT / "seed" / "airfoil_screen_checkpoint.json"
 RESULTS = AEROBO_ROOT / "results"
 #: run records carsim keeps (runs/ is already ignored)
-RUNS = REPO / "runs" / "aerobo"
+RUNS = (Path("runs") / "aerobo" if getattr(sys, "frozen", False)
+        else REPO / "runs" / "aerobo")   # packaged: the per-user runs/ (drive/userdata.py)
 #: the commit the vendored tree and every captured fixture name
 AEROBO_COMMIT = "3f1b07d"
 
@@ -146,7 +149,7 @@ def xfoil_ok() -> bool:
 #: why a section run is refused without XFOIL -- one sentence, shown beside
 #: the button that would have launched it
 XFOIL_REFUSAL = ("shape optimisation needs XFOIL (every candidate is a live viscous sweep); "
-                 "it is not installed here or CARSIM_NO_XFOIL is set -- the library screen "
+                 "it is not installed here (or is switched off) -- the library screen "
                  "still works, at the cached library point")
 
 _BO = {}
@@ -324,6 +327,14 @@ def family_name(p: FamilyParams) -> str:
         src += repr(("free", tuple(p.free), "pylons", bool(p.pylons)))
     key = hashlib.sha1(src.encode()).hexdigest()[:8]
     return f"carsim {p.role} · {p.base} #{key}"
+
+
+def shown_family(name) -> str:
+    """A registered family name as the player reads it (Steam prep): without
+    the registry's "carsim " prefix. The prefix stays in the REGISTERED name,
+    which saved runs, the fixtures and AeroBO's caches all carry."""
+    n = str(name or "")
+    return n[len("carsim "):] if n.startswith("carsim ") else n
 
 
 _SUBCLASSES: dict = {}
@@ -547,6 +558,14 @@ def car_key(car=None) -> str:
     return car if isinstance(car, str) else str(getattr(car, "name", "") or "corsa")
 
 
+def car_tag(car=None) -> str:
+    """A car as a player reads it on the pages: its short tag ('Civetta',
+    'Courier', `prerace.car_label`), never the key the models carry."""
+    from .prerace import car_label
+    k = car_key(car)
+    return car_label(k) or k
+
+
 def car_deck(car=None):
     """`deck(x)`: the height of the car's top surface under a top wing at
     station x -- the surface the top slot's height band is measured from
@@ -595,7 +614,7 @@ def limit_words(role: str, car=None, h: float | None = None, unlimited: bool = F
         why = f"{lim:.2f} m (1.2 x the {b.width:.3f} m body width)"
     mode = (f"Unlimited: up to {_bodies.UNLIMITED_FACTOR:g}x, a run past it is filed apart"
             if unlimited else "Real")
-    return f"{car_key(car)}: span <= {why} · {mode}"
+    return f"{car_tag(car)}: span <= {why} · {mode}"
 
 
 def over_limits(build, lib, car=None) -> list:
@@ -2063,7 +2082,7 @@ from .aero import mission as _ms                        # noqa: E402
 CAR = _ms.CAR
 #: what the lap objective says about its own model (shown on Wing type)
 LAP_NOTE = ("WingLab's point-mass lap (cartrack) on carsim's {circuit} geometry with the "
-            "Corsa's mass, power and CdA; carsim's own two-track lap on Results is a "
+            "Civetta's mass, power and CdA; carsim's own two-track lap on Results is a "
             "different model and will not match to the tenth")
 
 
@@ -3534,14 +3553,15 @@ def _self_check(verbose: bool = True, slow: bool = False) -> bool:
 
     # -- B27: task 41, the car's limits (fast, no XFOIL) -------------------------- #
     def b27():
-        #  every per-car number is drive/bodies.py's, for each of the five cars
+        #  every per-car number is drive/bodies.py's, for each car in the game
         #  at its default slots: the flank's span row IS its limit at h (the
         #  lower tip at its own ground clearance) cut to AR >= 3, the top's
         #  span row 1.2 x its width, its deck and ride band the slot's
         #  (bodies.top_h_band), and Unlimited opens only the ceilings, 3x
         from types import SimpleNamespace as NS
         bad, rows = [], []
-        for ck in ("corsa", "mx5", "540i", "express", "bus"):
+        import cars as _cars_b
+        for ck in _cars_b.CAR_ORDER:
             d = _bodies.slot_defaults(ck)
             (fx, fh), (tx, th, _ti) = d["flank"], d["top"]
             bld = NS(slot=lambda k, _s={"left": NS(x=fx, h=fh), "top": NS(x=tx, h=th)}: _s[k])

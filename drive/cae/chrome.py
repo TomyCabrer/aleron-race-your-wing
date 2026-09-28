@@ -1290,7 +1290,7 @@ _MOCK_FRESH = dict(
     props=[("group", "Mission"), ("state", "not stated", T.WARN)],
     tabs=[("m.operating", "Operating point"), ("m.design", "Design point"), ("m.search", "Search & budget")],
     tab="m.operating",
-    log=[("12:00:00", "carsim garage — state the mission, then the sections, then the wing. Budgets follow WingLab's "
+    log=[("12:00:00", "Garage — state the mission, then the sections, then the wing. Budgets follow WingLab's "
                       "measured law (1 Mission ▸ Search & budget). Keys: TAB tree/tabs/work · ENTER do it · F5 run · "
                       "ESC stop/back · F1 all keys", "info"),
          ("12:00:04", "circuit set to arena — the mission has to be stated again", "info"),

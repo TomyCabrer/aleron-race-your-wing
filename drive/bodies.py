@@ -90,6 +90,14 @@ CAR_STYLE_REF = {
     #  expressions so they are the same floats and the map is the identity.
     'bus': dict(length=11.950, width=2.550, height=3.120, ovh_f=2.705,
                 L=5.845, t=0.5 * (2.100 + 1.840), a=(1.0 - 0.36) * 5.845),
+    #  task 46: the Ford Escort RS1800, the Mk2 two-door saloon in Group 4
+    #  trim: length 3.978, width 1.700 over the Group 4 arches, height 1.384,
+    #  wheelbase 2.407 m published (tech-racingcars, "Escort Mk II RS group
+    #  4"); the 0.700 m front overhang est. t and a are cars.ESCORT_RS1800's
+    #  own (tracks est there, 50 % front), the same expressions, so the map
+    #  is the identity.
+    'rally': dict(length=3.978, width=1.700, height=1.384, ovh_f=0.700,
+                  L=2.407, t=0.5 * (1.380 + 1.400), a=(1.0 - 0.50) * 2.407),
 }
 
 #: Cross-sections down each shell: (x, z_floor, z_belt, z_top, half_w,
@@ -183,13 +191,43 @@ _STYLE_SHELL3 = {
         (-5.36, 0.30, 1.02, 2.94, 1.275, 1.23),    # rear roof edge
         (-5.504, 0.36, 1.00, 2.86, 1.230, 1.14),   # rear face: the engine bay
     ), ('nose', 'win', 'win', 'win', 'win', 'win', 'win', 'tail')),
+    #  the Escort (task 46): the Mk2's boxy three-box two-door, drawn to its
+    #  published 3.978 x 1.700 x 1.384 m -- an upright front with the grille
+    #  and lamps just over the bumper, a long FLAT bonnet, a fairly upright
+    #  screen, a short flat-topped roof over the two long doors and the rear
+    #  quarter glass, a near-upright rear window, and a flat boot with a
+    #  square-cut tail. The Group 4 arches are the 0.850 half-width over the
+    #  wheels (the standard car is 1.607 wide: its cabin, 0.800 here, sits
+    #  inside them). Rally ride height: 0.19 m under the floor, the lowest
+    #  a flank panel's tip may come. Kinds as the saloon's, so the glass and
+    #  the pillars paint the same way.
+    'rally': ((
+        (1.9035, 0.28, 0.58, 0.64, 0.72, 0.56),    # bumper face (chrome, est)
+        (1.84, 0.21, 0.74, 0.80, 0.80, 0.64),      # grille top: the upright front
+        (1.20, 0.19, 0.80, 0.86, 0.850, 0.70),     # over the front wheels: the arches
+        (0.55, 0.19, 0.86, 0.90, 0.800, 0.72),     # scuttle: the screen's foot
+        (0.02, 0.19, 0.89, 1.34, 0.800, 0.64),     # A-pillar top
+        (-0.60, 0.19, 0.90, 1.384, 0.800, 0.64),   # roof: the B-pillar (a long door)
+        (-1.06, 0.19, 0.91, 1.36, 0.800, 0.63),    # C-pillar top
+        (-1.40, 0.19, 0.92, 0.98, 0.850, 0.72),    # rear glass base: the rear arches
+        (-1.98, 0.21, 0.94, 0.99, 0.820, 0.74),    # boot lid rear edge
+        (-2.04, 0.25, 0.64, 0.70, 0.800, 0.72),    # boot face foot
+        (-2.0745, 0.27, 0.56, 0.62, 0.760, 0.68),  # bumper face
+    ), ('nose', 'bonnet', 'bonnet', 'screen', 'roof', 'roof', 'rglass', 'deck',
+        'tail', 'bumper')),
 }
 
 #: which body each car in `cars.CARS` wears, by KEY. A key not listed here
 #: (a custom CarSpec, a test stand-in) is matched on its NAME, and anything
-#: unknown draws as the hatch, which is the study's own car.
-STYLE_OF = {"corsa": "hatch", "mx5": "roadster", "540i": "saloon",
-            "express": "van", "bus": "bus"}
+#: unknown draws as the hatch, which is the study's own car. Task 46: the
+#: MX-5 ('mx5') and the Citaro ('bus') are retired (`cars.RETIRED`), so
+#: their KEYS draw as the Corsa -- the car `cars.get` gives an old save that
+#: names them. Their shells ('roadster', 'bus') stay above, reached only by
+#: a CarSpec with that name (the physics self-checks' retired specs).
+STYLE_OF = {"corsa": "hatch", "rally": "rally", "540i": "saloon",
+            "express": "van"}
+#: the retired keys (cars.RETIRED): the hatch, as `cars.get` resolves them
+RETIRED_KEYS = ("mx5", "bus")
 
 
 def _spec(car):
@@ -212,16 +250,23 @@ def style_of(car=None) -> str:
     if isinstance(car, str):
         if car in STYLE_OF:
             return STYLE_OF[car]
+        if car in RETIRED_KEYS:
+            return 'hatch'
         spec = _spec(car)
         name = spec.name if spec is not None else car
     else:
         name = getattr(car, 'name', '')
     name = str(name or '').lower()
+    #  the shown names (cars.py: the fictional Halcón, Nordwerk, Rivière
+    #  Courier) first; the old real ones stay matched for a spec made before
+    if 'halcón' in name or 'halcon' in name or 'escort' in name or 'rally' in name.split():
+        return 'rally'
     if 'mx-5' in name or 'mx5' in name or 'roadster' in name:
         return 'roadster'
-    if 'bmw' in name or '540' in name or 'saloon' in name or 'sedan' in name:
+    if ('nordwerk' in name or 'bmw' in name or '540' in name or 'saloon' in name
+            or 'sedan' in name):
         return 'saloon'
-    if 'express' in name or 'van' in name.split():
+    if 'courier' in name or 'express' in name or 'van' in name.split():
         return 'van'
     if 'citaro' in name or 'bus' in name.split():
         return 'bus'
@@ -359,6 +404,11 @@ SLOT_TABLE = {
     'saloon':   dict(top_x_max=0.55, flank=(0.97, 0.90), top=(-0.90, 1.55, 6.0)),
     'van':      dict(top_x_max=-0.70, flank=(0.97, 1.05), top=(-1.70, 1.95, 6.0)),
     'bus':      dict(top_x_max=5.60, flank=(3.00, 1.60), top=(-4.50, 3.30, 6.0)),
+    #  task 46: the Escort's flank at the stock cars' station and height, its
+    #  top wing on the boot lid, standing just over the roof line behind the
+    #  rear window (a works car's wing would bolt to the boot); the top slot
+    #  may go forward over the roof
+    'rally':    dict(top_x_max=0.40, flank=(0.97, 0.90), top=(-1.72, 1.40, 6.0)),
 }
 
 
@@ -572,8 +622,8 @@ def self_check(verbose: bool = True) -> bool:
     same = all(flank_h_band(k) == (0.40, 1.20) and top_x_band(k)[1] == 0.55
                and top_h_band(k)[1] == 1.85
                and slot_defaults(k) == {"flank": (0.97, 0.90), "top": (-0.90, 1.55, 6.0)}
-               for k in ("corsa", "mx5", "540i"))
-    rep("the three stock cars keep the garage's slot bands and defaults", same,
+               for k in _cars.STOCK_CARS)
+    rep("the stock cars keep the garage's slot bands and defaults", same,
         "flank h 0.40-1.20, top x <= 0.55, top h <= 1.85, slots (0.97, 0.90) / (-0.90, 1.55, 6)")
     #  every band EDGE of the three stock cars, to the bit, against the
     #  garage's pre-task-41 formulas written out from its old constants
@@ -589,7 +639,7 @@ def self_check(verbose: bool = True) -> bool:
         return z + 0.06 + 0.08               # deck_z(t.x) + TOP_STOW_GAP + 0.08
     xs_top = (old_rear + 0.15, -1.80, -1.60, -1.45, -0.90, -0.30, 0.0, 0.30, 0.55)
     edges_bad = []
-    for k in ("corsa", "mx5", "540i"):
+    for k in _cars.STOCK_CARS:
         for c in (0.30, 0.45, 0.60):
             if flank_x_band(k, c) != (old_rear + 0.5 * c, old_front - 0.5 * c):
                 edges_bad.append(f"{k} flank x c{c}")
@@ -605,19 +655,18 @@ def self_check(verbose: bool = True) -> bool:
         (f"flank x ({old_rear + 0.225:+.4f}, {old_front - 0.225:+.4f}) at 0.45 m chord, "
          f"top x ({old_rear + 0.15:+.4f}, 0.55), top h floor {old_top_lo(old_rear + 0.15):.4f} "
          f"at the tail .. {old_top_lo(-0.90):.4f} at -0.90, ceiling 1.85; "
-         f"corsa / mx5 / 540i x {len(xs_top)} stations")
+         f"{' / '.join(_cars.STOCK_CARS)} x {len(xs_top)} stations")
         if not edges_bad else str(edges_bad))
     #  ... while each stock car's span LIMIT is still its own body's
+    #  (task 46: the Corsa and the 540i; their flanks share a 0.15 m floor)
     rep("the stock cars' span limits stay per car",
-        len({span_limit("top", k) for k in ("corsa", "mx5", "540i")}) == 3
-        and span_limit("flank", "mx5", 0.90) != span_limit("flank", "corsa", 0.90),
-        f"top {span_limit('top', 'corsa'):.3f} / {span_limit('top', 'mx5'):.3f} / "
-        f"{span_limit('top', '540i'):.3f} m")
+        len({span_limit("top", k) for k in _cars.STOCK_CARS}) == len(_cars.STOCK_CARS),
+        " / ".join(f"top {span_limit('top', k):.3f}" for k in _cars.STOCK_CARS) + " m")
 
     #  2. the owner's two rules, on every body
     rows = []
     bad = []
-    for key in ("corsa", "mx5", "540i", "express", "bus"):
+    for key in _cars.CAR_ORDER:
         b = body(key)
         h_lo, h_hi = flank_h_band(key)
         f_max = span_limit("flank", key, h_hi)
@@ -632,13 +681,16 @@ def self_check(verbose: bool = True) -> bool:
         not bad, ("; ".join(rows)) if not bad else str(bad))
     rep("the Corsa's top limit is 1.2 x 1.646 m", abs(span_limit("top", "corsa") - 1.9752) < 1e-9,
         f"{span_limit('top', 'corsa'):.4f} m")
-    rep("the bus's top limit is 1.2 x 2.550 m", abs(span_limit("top", "bus") - 3.06) < 1e-9,
-        f"{span_limit('top', 'bus'):.4f} m")
+    rep("the rally car's top limit is 1.2 x 1.700 m, its flank floor its 0.19 m ride height",
+        abs(span_limit("top", "rally") - 2.04) < 1e-9 and body("rally").ground == 0.19
+        and abs(span_limit("flank", "rally", 0.90) - 1.42) < 1e-9,
+        f"top {span_limit('top', 'rally'):.4f} m, flank {span_limit('flank', 'rally', 0.90):.4f} m "
+        f"at h 0.90")
 
     #  3. Unlimited fits inside the wing module's sanity clamp on every car,
     #  so an unlimited wing saved and reloaded keeps its span
     worst = {}
-    for key in ("corsa", "mx5", "540i", "express", "bus"):
+    for key in _cars.CAR_ORDER:
         for role in ("flank", "top"):
             h = flank_h_band(key)[1] if role == "flank" else top_h_band(key)[1]
             s = span_ceiling(role, key, h, unlimited=True)
@@ -651,7 +703,7 @@ def self_check(verbose: bool = True) -> bool:
               f"top span {worst['top'][0]:.2f} / area {worst['top'][1]:.2f} "
               f"(clamp {CLAMP_HI['flank']['span']}/{CLAMP_HI['flank']['area']}, "
               f"{CLAMP_HI['top']['span']}/{CLAMP_HI['top']['area']})")
-    top_h = max(top_h_band(k)[1] for k in ("corsa", "mx5", "540i", "express", "bus"))
+    top_h = max(top_h_band(k)[1] for k in _cars.CAR_ORDER)
     rep("every car's top-wing height fits inside the ride clamp",
         top_h <= CLAMP_HI["top"]["ride_h"] + 1e-9, f"{top_h:.2f} <= {CLAMP_HI['top']['ride_h']}")
 
@@ -674,25 +726,29 @@ def self_check(verbose: bool = True) -> bool:
         [d["slot"] for d in o] == ["left"], limits_text(o))
     js["slots"]["left"]["h"] = 0.90
     js["slots"]["top"]["wing"] = "t"
+    _L.wings["t"] = _W(2.00)
     o_c = [d["slot"] for d in over_limits(js, _L, "corsa")]
-    o_b = [d["slot"] for d in over_limits(js, _L, "bus")]
-    #  (on the bus the same 1.50 m flanks at h 0.90 ARE past its limit: its
-    #  underbody is 0.28 m up, so 2 (0.90 - 0.28) = 1.24 m)
-    rep("the car decides: a 2.50 m top wing is Unlimited on a Corsa, not on a bus",
-        o_c == ["top"] and o_b == ["left", "right"], f"corsa {o_c}, bus {o_b}")
+    o_b = [d["slot"] for d in over_limits(js, _L, "rally")]
+    #  (on the rally car the same 1.50 m flanks at h 0.90 ARE past its limit:
+    #  its underbody is 0.19 m up, so 2 (0.90 - 0.19) = 1.42 m; task 46, the
+    #  bus's old role)
+    rep("the car decides: a 2.00 m top wing is Unlimited on a Corsa, not on the rally car",
+        o_c == ["top"] and o_b == ["left", "right"], f"corsa {o_c}, rally {o_b}")
     js["slots"]["top"]["wing"] = "gone"
     rep("a wing the library does not hold is skipped", over_limits(js, _L, "corsa") == [], "")
-    #  judged AS FITTED (review of task 41, findings 0 and 6): a bus build's
-    #  4.40 m flank at h 2.50 is driven on a Corsa at its h ceiling 1.20,
-    #  where the limit is 2.10 m -- raw, it would have read legal (2 x 2.35)
-    _L.wings["b"] = _W(4.40)
-    jb = {"mirror": True, "slots": {"left": {"wing": "b", "h": 2.50},
-                                    "right": {"wing": "b", "h": 2.50},
-                                    "top": {"wing": "", "h": 3.30}}}
+    #  judged AS FITTED (review of task 41, findings 0 and 6): an Express
+    #  build's 2.60 m flank at h 1.50 is driven on a Corsa at its h ceiling
+    #  1.20, where the limit is 2.10 m -- raw, it would have read legal
+    #  (2 x 1.35). (Task 46: the Express, the tallest car left, in the bus's
+    #  old role.)
+    _L.wings["b"] = _W(2.60)
+    jb = {"mirror": True, "slots": {"left": {"wing": "b", "h": 1.50},
+                                    "right": {"wing": "b", "h": 1.50},
+                                    "top": {"wing": "", "h": 1.95}}}
     ob = over_limits(jb, _L, "corsa")
     rep("a flank is judged at its height fitted into the car's band",
         [(d["slot"], round(d["limit"], 6)) for d in ob] == [("left", 2.1), ("right", 2.1)]
-        and over_limits(jb, _L, "bus") == [], limits_text(ob))
+        and over_limits(jb, _L, "express") == [], limits_text(ob))
     #  the mirror lock, as the clamp applies it: the right slot IS the left
     jm = {"mirror": True, "slots": {"left": {"wing": "x", "h": 0.90},
                                     "right": {"wing": "b", "h": 0.90}, "top": {}}}
@@ -715,6 +771,19 @@ def self_check(verbose: bool = True) -> bool:
     agree = all(style_of(k) == style_of(_cars.CARS[k]) for k in _cars.CARS)
     rep("style by key == style by name for every registered car", agree,
         str({k: style_of(k) for k in _cars.CARS}))
+    #  task 46: a retired KEY (an old save's 'mx5' / 'bus') is the Corsa, as
+    #  `cars.get` makes it, body and limits alike; the retired SPECS still
+    #  find their own shells by name (the physics self-checks draw nothing,
+    #  but a spec must never pick up another car's body)
+    ret = all(style_of(k) == "hatch" and body(k).width == body("corsa").width
+              and span_limit("top", k) == span_limit("top", "corsa")
+              and k not in STYLE_OF for k in RETIRED_KEYS)
+    rep("a retired car's key draws and limits as the Corsa; its spec keeps its shell",
+        ret and set(RETIRED_KEYS) == set(_cars.RETIRED)
+        and style_of(_cars.RETIRED["mx5"]) == "roadster"
+        and style_of(_cars.RETIRED["bus"]) == "bus"
+        and set(STYLE_OF) == set(_cars.CAR_ORDER),
+        f"{RETIRED_KEYS} -> {[style_of(k) for k in RETIRED_KEYS]}; STYLE_OF {sorted(STYLE_OF)}")
     return ok
 
 

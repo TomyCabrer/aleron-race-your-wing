@@ -104,8 +104,18 @@ SIG_A_MIN = 0.10     # m   load values. MANDATORY - unfloored sigma_alpha is
                      #     sits in the DENOMINATOR of the relaxation ODE gain.
 TWO_OVER_PI = 0.6366197723675814
 
-_TIR_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                         "tyre_data", "TNO_car205_60R15.tir")
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_TIR_PATH = os.path.join(_REPO, "tyre_data", "TNO_car205_60R15.tir")
+
+
+def _tir_abspath(path) -> str:
+    """A .tir path as an absolute one: a relative path (cars.py's
+    "tyre_data/...", telemetry's default) is the repo's, not the working
+    directory's -- a packaged build runs with its working directory in the
+    player's saves folder (drive/userdata.py). From a checkout run at the repo
+    root this is exactly os.path.abspath."""
+    path = str(path)
+    return path if os.path.isabs(path) else os.path.normpath(os.path.join(_REPO, path))
 
 # The 13 camber-EVEN shift terms. Zeroing these is the symmetrisation.
 # QSX1 is in the list for completeness; it only feeds Mx, which is not returned.
@@ -142,7 +152,7 @@ def load_tir(path):
     import re
     pat = re.compile(r"\s*([A-Za-z_0-9]+)\s*=\s*(-?[\d.eE+-]+)\s*$")
     p = {}
-    with open(path, errors="replace") as fh:
+    with open(_tir_abspath(path), errors="replace") as fh:
         for line in fh:
             line = line.split("$")[0]          # $ is the .tir comment marker
             m = pat.match(line)
@@ -490,7 +500,7 @@ def tyre_for(tir_path=None, R0=0.2915, width=0.175, lfzo=1.0):
     lfzo = float(lfzo)
     if not (lfzo > 0.0):
         raise ValueError(f"tyre load scale must be positive, got {lfzo!r}")
-    key = (os.path.abspath(str(tir_path)) if tir_path else _TIR_PATH,
+    key = (_tir_abspath(tir_path) if tir_path else _TIR_PATH,
            float(R0), float(width))
     if lfzo != 1.0:
         key = key + (lfzo,)

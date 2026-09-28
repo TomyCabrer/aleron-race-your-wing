@@ -912,7 +912,7 @@ class HudData:
     # RL RR; None = not known (then all four read as the on_track flag says).
     # The contact points themselves are task 27's `wheels_xy` (below).
     surf4: tuple | None = None
-    #: which car ('corsa' | 'mx5' | '540i', cars.CAR_ORDER; '' = unknown): the
+    #: which car ('corsa' | 'rally' | '540i' | 'express', cars.CAR_ORDER; '' = unknown): the
     #: sound picks its engine by it (drive/audio.py), not by the display name,
     #: which is due to change to fictional names before release
     car_key: str = ''
@@ -1446,7 +1446,18 @@ C_CAR_STYLE = {'hatch': C_CAR, 'roadster': (176, 34, 42), 'saloon': (64, 92, 138
                #  (paint.py's docstring); the render self-check's paint row
                #  re-measures them. The white is the WARM one: a cool
                #  (232, 234, 238) is the HUD text.
-               'van': (226, 226, 220), 'bus': (22, 128, 132)}
+               'van': (226, 226, 220), 'bus': (22, 128, 132),
+               #  task 46: the rally Escort in the palette's red -- the
+               #  works cars' white is the Express's fleet white (every
+               #  car's factory colour is its own), and the red is free
+               #  since the MX-5 ('roadster', kept above for a retired
+               #  spec) left the game. Its white stripes are C_LIVERY3.
+               'rally': (176, 34, 42)}
+#: the rally car's livery (task 46): the twin stripes down its bonnet, roof
+#: and boot, and the door number panels. The palette's
+#: 'white', so it was checked at every tone like any paint; it does not
+#: follow the Paint setting (a livery is decals, not paint)
+C_LIVERY3 = (226, 226, 220)
 
 
 # --- materials: what the chase shader does with a polygon (_MAT3 rows) ----
@@ -1519,7 +1530,7 @@ def car_style(car=None) -> str:
     the car; any unknown car (a custom CarSpec, a test stand-in) draws as the
     hatch, which is the study's own car.
 
-    `car` may also be a `cars.py` KEY ('corsa' / 'mx5' / '540i'), which is
+    `car` may also be a `cars.py` KEY ('corsa' / 'rally' / '540i'), which is
     what the session holds (Settings.car, the Paint setting's per-car dict):
     a str has no `.name`, so before this it silently drew as the hatch, and a
     factory MX-5's swatch came out Corsa yellow. A key is looked up in the
@@ -1983,14 +1994,16 @@ def car_mesh3(geom=None):
         S.add(hb, C_LAMP_TAIL, M_TAIL, parents=glass, level=3, glow=False,
               inside=(xs + 0.3, 0.0, zs - 0.2))
         exhausts = (-0.46,)
-    elif g.style == 'saloon':
+    elif g.style in ('saloon', 'rally'):
         # wide lamps across the boot face's outer thirds, the plate between
+        # (task 46: the Mk2 Escort's tail is the same three-box layout, its
+        # one pipe under the right-hand corner)
         for (i, j, par) in _LAMP_EDGES3:
             band_decal('tail', i, j, 0.00, 0.98, 0.06, 0.58, C_LAMP_TAIL, M_TAIL, par, glow=True)
             band_decal('tail', i, j, 0.62, 0.96, 0.12, 0.52, C_LAMP_REV_OFF, M_REV, par, level=2)
         band_decal('tail', RP_SHOULDER, 14 - RP_SHOULDER, 0.27, 0.73, 0.40, 0.78,
                    C_PLATE3, M_PLATE, _CENTRE3)
-        exhausts = (-0.50, 0.50)
+        exhausts = (-0.50, 0.50) if g.style == 'saloon' else (-0.50,)
     elif g.style == 'van':
         # the Express's rear face IS its two doors (bodies.py: the last
         # station is the whole face, so the tail cap is one flat panel):
@@ -2137,6 +2150,16 @@ def car_mesh3(geom=None):
         cap_decal('front', rect(-0.26, 0.26, zb_n + 0.13, zb_n + 0.24), C_PLATE3, M_PLATE)
         cap_decal('front', rect(-0.42 * sn[4] / 0.70, 0.42 * sn[4] / 0.70, zb_n + 0.26,
                                 min(sn[2] - 0.02, zb_n + 0.33)), C_TRIM3, M_TRIM)
+        if g.style == 'rally':
+            # task 46: the rally car's pod of four spot lamps across the
+            # bumper, either side of the plate: a black bezel, the lens in it
+            t8 = np.linspace(0.0, 2.0 * math.pi, 9)[:-1]
+            zc_ = zb_n + 0.18
+            for yc_ in (-0.58, -0.37, 0.37, 0.58):
+                cap_decal('front', [(yc_ + 0.075 * math.cos(t_), zc_ + 0.075 * math.sin(t_))
+                                    for t_ in t8], C_TRIM3, M_TRIM, level=2)
+                cap_decal('front', [(yc_ + 0.056 * math.cos(t_), zc_ + 0.056 * math.sin(t_))
+                                    for t_ in t8], C_HEAD3, M_HEAD, level=3)
 
     # --- the sides: B-pillars, mirrors -----------------------------------
     if 'roof' in kb and g.style != 'van':
@@ -2178,6 +2201,24 @@ def car_mesh3(geom=None):
         x_m = g.stations[ksc][0] - 0.06
         z_m = float(np.interp(x_m, g._xs, np.array([s[2] for s in g.stations][::-1]))) + 0.03
         mirror(x_m, z_m, g.half_w_at(x_m))
+    if g.style == 'rally':
+        # task 46: the livery. A white door panel (a rally car's number
+        # plate) each side, and the twin stripes down the bonnet, the roof
+        # and the boot lid -- on the painted bands only, never over the
+        # glass. (A waist stripe nose to tail cost 20 polygons, past the
+        # mesh's budget: the self-check holds every car to 120 over the
+        # plain body.)
+        for sgn in (-1.0, 1.0):
+            side_decal(0.40, -0.22, 0.44, 0.60, sgn, C_LIVERY3, M_PAINT)
+        for k in range(len(rings) - 1):
+            if kinds[k] not in ('bonnet', 'roof', 'deck'):
+                continue
+            ra, rb = rings[k], rings[k + 1]
+            inside = 0.5 * (ra[1:].mean(axis=0) + rb[1:].mean(axis=0))
+            for (i, j, u0, u1) in ((RP_SHOULDER, RP_CROWN, 0.50, 0.82),
+                                   (RP_CROWN, 14 - RP_SHOULDER, 0.18, 0.50)):
+                v = _lift3(_band_quad3(ra, rb, i, j, u0, u1, 0.0, 1.0), inside)
+                S.add(v, C_LIVERY3, M_PAINT, parents=(q[(k, i)],), level=1)
 
     # --- arches and wheels ------------------------------------------------
     arch_of = []
@@ -2196,6 +2237,18 @@ def car_mesh3(geom=None):
                              parents=[q[(kk, j)] for j in jj], level=1))
     for i in range(4):
         _wheel3(S, i, g, arch_of[i])
+    if g.style == 'rally':
+        # task 46: a mud flap behind each wheel, from the arch to 5 cm off
+        # the road, as wide as the tyre -- both faces, a thin sheet
+        for i, (wx, wy) in enumerate(g.wheel_xy):
+            side = 1.0 if wy > 0 else -1.0
+            xf_ = wx - (g.wheel_r + 0.07)
+            ya_ = side * (g.hub_y[i] - 0.5 * g.wheel_w - 0.010)
+            yb_ = side * (g.hub_y[i] + 0.5 * g.wheel_w + 0.005)
+            flap = np.array([(xf_, ya_, 0.05), (xf_, yb_, 0.05), (xf_, yb_, 0.34),
+                             (xf_, ya_, 0.34)])
+            for sgn in (1.0, -1.0):
+                S.add(flap, C_TRIM3, M_TRIM, inside=(xf_ + sgn, 0.5 * (ya_ + yb_), 0.20))
     return S.polys
 
 
@@ -2375,11 +2428,18 @@ def wing_mesh3(aux, geom=None):
             rings.append(np.array(pts))
         polys += _loft3(rings, col)
         if mount == 'pylon':                   # two struts to the sill
+            # task 46: each lands on the body at its height (`_side_land3`,
+            # garage.side_land's rule on this view's section): level where
+            # the body has a side there, braced to its top edge where not
             for dz in (-pf * 0.5 * span, pf * 0.5 * span):
                 z = h_w + dz
-                polys += _box3(xw - 0.015, xw + 0.015,
-                               min(side * hw, yc), max(side * hw, yc),
-                               z - 0.012, z + 0.012, C_STRUT3)
+                y_b, z_b = _side_land3(g, xw, z)
+                if abs(z_b - z) < 1e-9:
+                    polys += _box3(xw - 0.015, xw + 0.015,
+                                   min(side * y_b, yc), max(side * y_b, yc),
+                                   z - 0.012, z + 0.012, C_STRUT3)
+                else:
+                    polys += _beam3((xw, side * y_b, z_b), (xw, yc, z), 0.015, 0.012, C_STRUT3)
         if plate > 0.0 or mount == 'endplate':
             # an endplate MOUNT is what carries the panel, so its plates run
             # all the way back to the body (along their lean) instead of
@@ -2414,10 +2474,19 @@ def wing_mesh3(aux, geom=None):
             top_at = _deck_top3(g, xw)
             z_bot = float(np.interp(xw, [s_[0] for s_ in g.stations][::-1],
                                     [s_[1] for s_ in g.stations][::-1]))
+            # task 46: a tip device (a fence, not a carrying plate) is fixed
+            # to the tip section and turns with its incidence (garage.
+            # wing_polys, the same rule)
+            stand, cdir = (0.0, -side, 0.0), None
+            if not carried:
+                th_t = side * inc
+                cdir = (math.cos(th_t), math.sin(th_t), 0.0)
+                stand = (side * math.sin(th_t), -side * math.cos(th_t), 0.0)
             for sgn in (-1.0, 1.0):
                 root = (xw, yc, h_w + sgn * 0.5 * span)
-                polys += _loft3(_bl.plate_rings(root, (0.0, 0.0, sgn), (0.0, -side, 0.0), st, 0.012,
-                                                None if br is not None else wall), col)
+                polys += _loft3(_bl.plate_rings(root, (0.0, 0.0, sgn), stand, st, 0.012,
+                                                None if br is not None else wall,
+                                                chord_dir=cdir), col)
                 if br is not None:
                     polys += _loft3(_bl.plate_rings(root, (0.0, 0.0, sgn), (0.0, -side, 0.0), br,
                                                     0.012, wall), C_STRUT3)
@@ -2477,13 +2546,31 @@ def wing_mesh3(aux, geom=None):
                 st = _bl.plate_stations(h_d, cant, blend, shape, c_tip, scale, slope, back)
                 reached = h_d < cap - 1e-9
             wall = (2, lambda p_: _deck_top3(g, p_[0])(p_[1])) if reached else None
+            # task 46: a tip device turns with the tip section (the flank's rule)
+            stand, cdir = (0.0, 0.0, -1.0), None
+            if t_mount != 'endplate':
+                cdir, stand = (ca, 0.0, -sa), (-sa, 0.0, -ca)
             for sgn in (-1.0, 1.0):
                 root = (xt, sgn * (b2 + 0.008), zc)
-                polys += _loft3(_bl.plate_rings(root, (0.0, sgn, 0.0), (0.0, 0.0, -1.0), st, 0.012,
-                                                None if br is not None else wall), col)
+                polys += _loft3(_bl.plate_rings(root, (0.0, sgn, 0.0), stand, st, 0.012,
+                                                None if br is not None else wall,
+                                                chord_dir=cdir), col)
                 if br is not None:
                     polys += _loft3(_bl.plate_rings(root, (0.0, sgn, 0.0), (0.0, 0.0, -1.0), br,
                                                     0.012, wall), C_STRUT3)
+                if t_mount == 'endplate' and wall is not None:
+                    # task 46: plates set down BESIDE a narrower body (at its
+                    # crease, `_deck_top3` past the side) get a bracket in
+                    # to the side (garage.wing_polys, the same rule)
+                    foot = _bl.plate_foot(root, (0.0, sgn, 0.0), (0.0, 0.0, -1.0),
+                                          br if br is not None else st)
+                    w_x = g.half_w_at(xt)
+                    if abs(foot[1]) > w_x + 0.01:
+                        cw = 0.5 * max(_bl.BRACKET_CHORD_FRAC * float(st["c"][-1]),
+                                       _bl.BRACKET_CHORD_MIN)
+                        z_cr = _deck_top3(g, xt)(w_x + 1.0)
+                        polys += _box3(xt - cw, xt + cw, min(sgn * w_x, foot[1]),
+                                       max(sgn * w_x, foot[1]), z_cr - 0.012, z_cr, C_STRUT3)
         if t_mount == 'pylon':
             # swan necks from the deck, behind the trailing edge, over onto
             # the PRESSURE surface (the world-up side of the inverted wing)
@@ -2517,6 +2604,42 @@ def _deck_top3(g, x: float):
     ys = (0.0, ROOF_SHOULDER3 * wr, wr, w - TUMBLE3, w)
     zs = (ztop + c, ztop + 0.7 * c, ztop, zbelt, zcr)
     return lambda y: float(np.interp(abs(y), ys, zs))
+
+
+def _side_land3(g, x: float, z: float) -> tuple:
+    """Where a flank strut meets the drawn body at station x, height z, as
+    (|y|, z): `_ring3`'s side read at that height -- the floor corner, the
+    sill top, the crease, the belt, the roof edge. Above the top there it
+    braces down to the roof edge (a bonnet's shoulder), below the floor up
+    to the floor corner. Task 46: garage.side_land on this view's section."""
+    st = np.array([s_[:6] for s_ in g.stations], float)[::-1]    # x ascending
+    _x, zb, zbelt, ztop, w, wr = (float(np.interp(x, st[:, 0], st[:, k])) for k in range(6))
+    zs = zb + SILL_H3
+    zcr = zs + CREASE3 * max(zbelt - zs, 0.0)
+    zz = np.maximum.accumulate(np.array([zb, zs, zcr, zbelt, ztop]) + np.arange(5) * 1e-7)
+    yy = (0.92 * w, w - 0.012, w, w - TUMBLE3, wr)
+    if z > zz[-1]:
+        # the nearer top corner: a bonnet's wing edge (the belt), else the roof edge
+        wb = w - TUMBLE3
+        return ((wb, float(zz[3])) if (z - zz[3]) ** 2 < (z - zz[-1]) ** 2 + (wb - wr) ** 2
+                else (wr, float(zz[-1])))
+    if z < zb:
+        return 0.92 * w, zb
+    return float(np.interp(z, zz, yy)), float(z)
+
+
+def _beam3(p0, p1, hw_x: float, ht: float, col):
+    """A straight strut, `2 hw_x` along x and `2 ht` across, p0 -> p1 in the
+    y-z plane (garage._beam)."""
+    p0, p1 = np.asarray(p0, float), np.asarray(p1, float)
+    d = p1 - p0
+    d = d / max(float(np.linalg.norm(d)), 1e-12)
+    ex = np.array([1.0, 0.0, 0.0])
+    n = np.cross(ex, d)
+    n = n / max(float(np.linalg.norm(n)), 1e-12)
+    rings = [np.array([p + hw_x * ex + ht * n, p - hw_x * ex + ht * n, p - hw_x * ex - ht * n,
+                       p + hw_x * ex - ht * n, p + hw_x * ex + ht * n]) for p in (p0, p1)]
+    return _loft3(rings, col)
 
 
 class Mesh:
@@ -2730,7 +2853,8 @@ class Renderer:
 
         W, H = int(cfg.size[0]), int(cfg.size[1])
         self.screen = pygame.display.set_mode((W, H))
-        pygame.display.set_caption('Alerón: Race Your Wing')
+        from . import branding
+        pygame.display.set_caption(branding.caption())
         self.W, self.H = W, H
         self.ui = min(W / 1280.0, H / 800.0)
 
@@ -4011,6 +4135,15 @@ class Renderer:
             k_s, k_r = kb['screen'], kb['rglass']
             shapes.append(('glass', outline(k_s, k_r + 1, lambda s_: 0.80 * s_[4])))
             shapes.append(('roof', outline(k_s + 1, k_r, lambda s_: 0.95 * s_[5], -0.02, 0.02)))
+        if g.style == 'rally':
+            # task 46: the livery's twin stripes, on the bonnet, the roof and
+            # the boot lid (the chase mesh's), between the glass
+            k_s, k_r = kb['screen'], kb['rglass']
+            for x0s, x1s in ((st[0][0] - 0.02, st[k_s][0]), (st[k_s + 1][0], st[k_r][0]),
+                             (st[k_r + 1][0], st[-1][0] + 0.02)):
+                for y0s, y1s in ((0.10, 0.26), (-0.26, -0.10)):
+                    shapes.append(('stripe', np.array([(x0s, y0s), (x0s, y1s),
+                                                       (x1s, y1s), (x1s, y0s)])))
         if g.style == 'bus':          # the mesh's "rabbit ears", ahead of the face
             x_m, w_m, s_ = g.x_front + 0.30, st[0][4], 2.2
         else:
@@ -4040,7 +4173,8 @@ class Renderer:
         cols = {'body': tone[0.80], 'upper': tone[1.0],
                 'glass': (44, 54, 68), 'roof': tone[1.10],
                 'cockpit': C_INTERIOR3, 'seat': C_SEAT3,
-                'mirror': tone[0.72], 'head': C_HEAD3, 'pod': tone[0.80]}
+                'mirror': tone[0.72], 'head': C_HEAD3, 'pod': tone[0.80],
+                'stripe': C_LIVERY3}
         if g.style == 'bus':
             cols['mirror'] = C_TRIM3      # black housings, as the chase mesh's
         pc = self._plan_cache = (g.key, shapes, block, cuts, cols)
@@ -4092,7 +4226,8 @@ class Renderer:
         brake = float(getattr(ctl, 'brake', 0.0) or 0.0) if ctl is not None else 0.0
         rev = int(getattr(aux, 'gear', 0) or 0) < 0
         c_tail = C_LAMP_REV_ON if rev else (C_LAMP_BRAKE if brake > 0.05 else C_LAMP_TAIL)
-        for name in ('upper', 'glass', 'roof', 'pod', 'cockpit', 'seat', 'mirror', 'head', 'tail'):
+        for name in ('upper', 'glass', 'roof', 'stripe', 'pod', 'cockpit', 'seat', 'mirror',
+                     'head', 'tail'):
             col = c_tail if name == 'tail' else cols.get(name)
             for q_ in pts.get(name, ()):
                 pygame.draw.polygon(sc, col, q_)
@@ -6413,7 +6548,7 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     long_.wing_mode, long_.air_brake, long_.top_deploy = wm_long, True, 1.0
     long_.F_wing, long_.D_wing, long_.F_top, long_.D_top = -1234.5, 999.0, 1234.0, 456.0
     long_.wing_left_name, long_.wing_top_name = 'Gurney flap wide chord', 'Swan-neck top'
-    long_.car_name, long_.mass_kg = 'Opel Corsa C 1.2', 1243.0
+    long_.car_name, long_.mass_kg = 'Rivière Courier 1.4', 1243.0
     slow_ = _demo_hud(V=3.0)
     slow_.util_f, slow_.util_r = 0.3, 0.2
     hud_txt, outside = {}, []
@@ -6641,11 +6776,12 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     #  the speed panel: 'km/h' right beside the big number, centred on its
     #  digits, the m/s on the 'full' HUD only, a line under the unit; the
     #  shift cue (the red rpm, the blinking LEDs, LIMIT) never in AUTO, and
-    #  LIMIT in a manual only at the cut, never at the bus's 80 km/h
-    #  governor (1650 of its 2500 rpm, on_limiter all the same): _rev_cue
+    #  LIMIT in a manual only at the cut, never at a governor (the retired
+    #  bus's 80 km/h, 1650 of its 2500 rpm, on_limiter all the same; task 46
+    #  keeps the rule on its spec): _rev_cue
     import cars as _cars_s
     cut_, shf_ = rev_marks()[:2]                 # the Corsa's 6200 / 5900
-    bcut_, bshf_ = rev_marks(_cars_s.get('bus'))[:2]
+    bcut_, bshf_ = rev_marks(_cars_s.RETIRED['bus'])[:2]
     cue_auto = [_rev_cue('AUTO', n_, shf_, cut_, True) for n_ in (6150.0, 6200.0)]
     cue_man = _rev_cue('MAN', 6180.0, shf_, cut_, True)
     cue_cl = _rev_cue('MAN+CL', 5000.0, shf_, cut_, False)
@@ -6967,37 +7103,38 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
         f'{_GG_STATS["recomputes"]} recomputes in {_GG_STATS["calls"]} calls')
     # task 41: the envelope's lateral limit is each new car's own. max_ay_car
     # on the Corsa's CarSpec IS qss.max_ay (with a wing force too); a stock
-    # car keeps the qss curve itself; the Express and the bus, at their own
-    # tyre grip (CarSpec.mu_scale, what HudData.mu_scale_car carries on dry
-    # tarmac), draw their own -- near C1's ramp-steer 0.80 / 0.67 g
+    # car keeps the qss curve itself; the Express and (task 46) the rally
+    # car, at their own tyre grip (CarSpec.mu_scale, what HudData.mu_scale_car
+    # carries on dry tarmac), draw their own -- near C1's ramp-steer 0.80 g
+    # and the rally car's 0.95
     import cars as _cars_g
     was_g = _CAR
     d_corsa = max(abs(max_ay_car(_cars_g.get('corsa'), V_, k_, 0.97, 0.90, 1.0)
                       - qss.max_ay(V_, k=k_, x_w=0.97, h_w=0.90, mu_scale=1.0))
                   for V_ in (10.0, 30.0) for k_ in (0.0, 1.5))
     env = {}
-    for key_ in ('corsa', 'mx5', 'express', 'bus'):
+    for key_ in ('corsa', '540i', 'express', 'rally'):
         c_g = _cars_g.get(key_)
         set_car(c_g)
-        mu_g = 1.0 if key_ in ('corsa', 'mx5') else float(c_g.mu_scale)
+        mu_g = 1.0 if key_ in _cars_g.STOCK_CARS else float(c_g.mu_scale)
         env[key_] = float(gg_envelope(20.0, mu_scale=mu_g)[:, 0].max())
     set_car(was_g)
     ay_q = qss.max_ay(20.0, k=0.0, x_w=X_W, h_w=H_W, mu_scale=1.0) / G
-    # task 41: the rev bar and shift lights on each car's own range; the
-    # stock three exactly n_cut / n_cut - 300 / 1000; the bus's 1650 rpm
-    # cruise green, no LED lit
+    # task 41: the rev bar and shift lights on each car's own range; every
+    # petrol exactly n_cut / n_cut - 300 / 1000 (the rally car's 9000 /
+    # 8700); the retired bus's 1650 rpm cruise green, no LED lit (its spec)
     marks = {k_: rev_marks(_cars_g.get(k_)) for k_ in _cars_g.CAR_ORDER}
     stock_m = all(marks[k_] == (float(_cars_g.get(k_).n_cut),
                                 float(_cars_g.get(k_).n_cut) - (RPM_REDLINE - RPM_SHIFT_LIGHT),
-                                SHIFT_SPAN) for k_ in ('corsa', 'mx5', '540i', 'express'))
-    rb, sb, pb = marks['bus']
+                                SHIFT_SPAN) for k_ in _cars_g.CAR_ORDER)
+    rb, sb, pb = rev_marks(_cars_g.RETIRED['bus'])
     rep('HUD revs: each car\'s own cut, shift point and amber span',
         stock_m and 1650.0 < sb - pb and sb < rb,
         ', '.join(f'{k_} {v_[0]:.0f}/{v_[1]:.0f}/{v_[2]:.0f}' for k_, v_ in marks.items())
         + f' rpm (cut / shift / span); the bus\'s 1650 cruise under its amber at {sb - pb:.0f}')
     rep('gg envelope: each new car draws its own limit, the stock cars the study\'s',
-        d_corsa < 1e-12 and env['corsa'] == ay_q and env['mx5'] == ay_q
-        and 0.60 < env['bus'] < 0.75 and 0.75 < env['express'] < 0.86,
+        d_corsa < 1e-12 and env['corsa'] == ay_q and env['540i'] == ay_q
+        and 0.88 < env['rally'] < 1.05 and 0.75 < env['express'] < 0.86,
         f'max_ay_car(Corsa) - qss.max_ay {d_corsa:.1e}; at 20 m/s ' + ', '.join(
             f'{k_} {v_:.3f} g' for k_, v_ in env.items()))
 
@@ -7333,6 +7470,15 @@ def self_check(verbose: bool = True, screenshot_dir: str = 'runs') -> bool:
     return ok_all
 
 
+def _chord4(pts) -> float:
+    """A plate ring's chord from its 4 corners: its leading pair's centre to
+    its trailing pair's (task 46: a tip device turns with the tip section,
+    so its chord is no longer the corners' x extent)."""
+    q = np.asarray(pts, float)
+    q = q[np.argsort(q[:, 0])]
+    return float(np.linalg.norm(q[2:].mean(axis=0) - q[:2].mean(axis=0)))
+
+
 def _mount_polys3(aux, mount: str, geom=None) -> dict:
     """The mounts, measured off the mesh: how many strut polygons the top wing
     (`strut`) and the flank panels (`f_strut`) put in the flow and where
@@ -7376,7 +7522,11 @@ def _mount_polys3(aux, mount: str, geom=None) -> dict:
                st_y=[float(np.mean(np.abs(np.vstack(p_)[:, 1]))) for p_ in st_y.values()],
                st_z=[])
     if f_v:                                 # the left panel's two struts: below / above
-        fz = np.vstack(f_v)[:, 2]
+        #  at the PANEL's end (task 46: a strut with no side level with it
+        #  braces to the body's top edge, so its body end is elsewhere)
+        fv = np.vstack(f_v)
+        fv = fv[np.abs(fv[:, 1]) >= np.abs(fv[:, 1]).max() - 0.015]   # a brace's end ring leans
+        fz = fv[:, 2]
         h_w = float(getattr(aux, 'h_w', H_W) or H_W)
         out['st_z'] = [float(fz[fz < h_w].mean()), float(fz[fz > h_w].mean())]
     if pl:
@@ -7384,7 +7534,7 @@ def _mount_polys3(aux, mount: str, geom=None) -> dict:
         o = np.argsort(np.hypot(u[:, 1] - (b2 + 0.008), u[:, 2] - zc))
         near, far = u[o[:4]], u[o[-4:]]
         out.update(root=near.mean(axis=0), far=far.mean(axis=0), foot=far,
-                   c_root=float(np.ptp(near[:, 0])), c_far=float(np.ptp(far[:, 0])))
+                   c_root=_chord4(near), c_far=_chord4(far))
     return out
 
 
@@ -7499,16 +7649,26 @@ def _mount_checks(aux) -> list:
     put()
     aux.dev_plate = 0.10
     zc = g.deck_z(xt) + TOP_STOW_GAP + TOP_RISE * 1.0
+    #  the old boxes, turned with the wing's incidence about the tip's
+    #  mid-chord (task 46: a tip device turns with its tip section)
+    inc_ = math.radians(float(getattr(aux, 'inc_deg', 0.0) or 0.0))
+    a_ = inc_ if inc_ else math.radians(6.0)
+    ca_, sa_ = math.cos(a_), math.sin(a_)
     old = []
     for sgn in (-1.0, 1.0):
         yq = sgn * (b2 + 0.008)
-        old += _box3(xt - 0.65 * ct, xt + 0.65 * ct, yq - 0.006, yq + 0.006,
-                     zc - 0.12 - 0.02, zc + 0.03, C_WING_ON)
+        for t_ in (-0.03, 0.12 + 0.02):
+            for u_ in (-0.65 * ct, 0.65 * ct):
+                for dy_ in (-0.006, 0.006):
+                    old.append((xt + u_ * ca_ - t_ * sa_, yq + dy_, zc - u_ * sa_ - t_ * ca_))
     new = [p_ for p_ in wing_mesh3(aux, g) if tuple(p_[1]) == C_WING_ON
            and abs(float(np.mean(np.asarray(p_[0])[:, 0])) - xt) < 0.5
            and abs(float(np.mean(np.asarray(p_[0])[:, 1]))) > b2 + 1e-3]
-    same = ({tuple(np.round(q_, 9)) for v_, _c in new for q_ in v_}
-            == {tuple(np.round(q_, 9)) for v_, _c in old for q_ in v_})
+    got_ = np.unique(np.round(np.vstack([np.asarray(v_) for v_, _c in new]), 9), axis=0) \
+        if new else np.zeros((0, 3))
+    old_ = np.unique(np.round(np.array(old), 9), axis=0)
+    same = (len(got_) == len(old_) and all(np.min(np.linalg.norm(old_ - q_, axis=1)) < 1e-9
+                                           for q_ in got_))
     out.append(('chase: a HudData without the new rows draws the top plates exactly as '
                 'before (and the flank struts at +-0.28 of the span)',
                 same and len(new) == 12
@@ -7604,6 +7764,36 @@ def _body_half_w3(mesh, g, x: float) -> float:
             t = (x - v[ok, 0]) / dxv[ok]
             y = v[ok, 1] + t * (w[ok, 1] - v[ok, 1])
             best = max(best, float(np.abs(y).max()))
+    return best
+
+
+def _body_section3(mesh, g, x: float) -> list:
+    """The drawn body sliced by the plane x = const: its outline as (y, z)
+    segments, one per body polygon the plane crosses (`_body_half_w3`'s
+    slice, kept whole)."""
+    segs = []
+    for i in _body_polys3(mesh, g).tolist():
+        v = mesh.verts[mesh.starts[i]:mesh.starts[i] + mesh.counts[i]]
+        if v[:, 0].min() > x or v[:, 0].max() < x or np.ptp(v[:, 0]) < 1e-9:
+            continue
+        w = np.roll(v, -1, axis=0)
+        dxv = w[:, 0] - v[:, 0]
+        ok = ((v[:, 0] - x) * (w[:, 0] - x) <= 0.0) & (np.abs(dxv) > 1e-12)
+        if ok.sum() >= 2:
+            t = (x - v[ok, 0]) / dxv[ok]
+            p = np.column_stack([np.abs(v[ok, 1] + t * (w[ok, 1] - v[ok, 1])),
+                                 v[ok, 2] + t * (w[ok, 2] - v[ok, 2])])
+            segs.append((p[0], p[1]))
+    return segs
+
+
+def _seg_dist(segs, y: float, z: float) -> float:
+    """The distance from (|y|, z) to the nearest of `segs`."""
+    q, best = np.array([abs(y), z]), 9.0
+    for a, b in segs:
+        d = b - a
+        t = float(np.clip(np.dot(q - a, d) / max(float(np.dot(d, d)), 1e-18), 0.0, 1.0))
+        best = min(best, float(np.linalg.norm(q - (a + t * d))))
     return best
 
 
@@ -7725,8 +7915,8 @@ def _car_checks(screenshot_dir: str = 'runs') -> list:
         aux_w.dev_left = aux_w.dev_right = True
         aux_w.wing_side, aux_w.wing_deploy = 0, 0.0
         aux_w.top_on, aux_w.top_deploy, aux_w.top_plate = True, 0.0, 0.0
-        want_style = {'corsa': 'hatch', 'mx5': 'roadster', '540i': 'saloon',
-                      'express': 'van', 'bus': 'bus'}      # task 41
+        want_style = {'corsa': 'hatch', 'rally': 'rally', '540i': 'saloon',
+                      'express': 'van'}                    # task 41, task 46
         n_old = 138                               # the pre-style body + wheels
         for key in _cars.CAR_ORDER:
             car = _cars.get(key)
@@ -7739,7 +7929,11 @@ def _car_checks(screenshot_dir: str = 'runs') -> list:
                 v = np.asarray(verts)
                 if tuple(col) == C_STRUT3 and len(v) == 4 and np.ptp(v[:, 1]) > 0.1 \
                         and abs(v[:, 0].mean() - xw) < 0.05:
-                    y_in.append(float(np.abs(v[:, 1]).min()))      # a flank strut
+                    # a flank strut: its BODY end, the face's two corners
+                    # nearest the car (task 46: level with a side, or braced
+                    # to the body's top edge where there is none)
+                    q_ = v[np.argsort(np.abs(v[:, 1]))[:2]]
+                    y_in.append((float(np.abs(q_[:, 1]).mean()), float(q_[:, 2].mean())))
                 if tuple(col) == C_STRUT3 and len(v) == 4 and np.ptp(v[:, 2]) > 0.02 \
                         and abs(v[:, 0].mean() - float(aux_w.top_x)) < 0.3 \
                         and np.abs(v[:, 1]).max() < 0.5 * float(aux_w.top_span):
@@ -7747,11 +7941,13 @@ def _car_checks(screenshot_dir: str = 'runs') -> list:
             # measured against the DRAWN body, not the half_w_at / deck_z the
             # wings are placed with (that comparison is 0 by construction):
             # the body mesh sliced at the strut's station, and the body's top
-            # surface straight under each pylon. A strut may not stand off the
-            # side or cut into it by more than 1 cm; a pylon foot may sit up
+            # surface straight under each pylon. A strut's body end may not
+            # stand off the drawn section by more than 2 cm (its corners are
+            # 1.2 cm off its line); a pylon foot may sit up
             # to 3 cm into the roof's crown but never float above it.
             side_w = _body_half_w3(mesh, g_, xw)
-            e_flank = max(abs(yv - side_w) for yv in y_in) if y_in else 9.0
+            sec_ = _body_section3(mesh, g_, xw)
+            e_flank = max(_seg_dist(sec_, yv, zv) for yv, zv in y_in) if y_in else 9.0
             e_deck, z_top = 9.0, 0.0
             if py_:
                 e_deck = 0.0
@@ -7770,7 +7966,7 @@ def _car_checks(screenshot_dir: str = 'runs') -> list:
                     z_top = _body_top_z3(mesh, g_, xf_, yf_)
                     gap = zf_ - z_top
                     e_deck = max(e_deck, 0.0 if -0.03 <= gap <= 0.005 else abs(gap))
-            ok_k = (g_.style == want_style[key] and e_flank < 0.01 and e_deck < 1e-9
+            ok_k = (g_.style == want_style[key] and e_flank < 0.02 and e_deck < 1e-9
                     and len(mesh.starts) <= n_old + 120
                     and abs(g_.wheel_xy[0][0] - car.a) < 1e-9
                     and abs(g_.wheel_xy[2][0] + car.b) < 1e-9)
@@ -7787,11 +7983,14 @@ def _car_checks(screenshot_dir: str = 'runs') -> list:
         #      rear doors have a window each; the bus's doors are all on the
         #      RIGHT (y < 0), its panes on both sides, its mirrors reach past
         #      the body; both have glowing tail lamps and reverse lenses, and
-        #      both build a plan-view car and a 15-polygon ghost
+        #      both build a plan-view car and a 15-polygon ghost. Task 46:
+        #      the rally Escort -- a roof over glazed doors, its four spot
+        #      lamps across the bumper, four mud flaps and its livery stripes
+        #      -- and the retired bus's drawing on its spec (never a player's)
         rows_n, ok_n = [], True
         rp_ = Renderer(ViewConfig(mode='car_up'), tr, headless=True)
-        for key in ('express', 'bus'):
-            set_car(_cars.get(key))
+        for key in ('express', 'rally', 'bus'):
+            set_car(_cars.get(key) if key in _cars.CARS else _cars.RETIRED[key])
             g_ = car_geom()
             mesh = Mesh(car_mesh3(g_))
             C_ = mesh.centroids
@@ -7811,6 +8010,22 @@ def _car_checks(screenshot_dir: str = 'runs') -> list:
                 ok_c = ok_c and n_blind == 0 and n_rear == 4
                 rows_n.append(f'express: {n_blind} side glass behind the cab, {n_rear} rear-door '
                               f'glass polys')
+            elif key == 'rally':
+                n_spot = int(((mesh.mat == M_HEAD) & (C_[:, 0] > g_.x_front - 0.03)
+                              & (mesh.level == 3)).sum())
+                x_fl = np.array([wx_ - (g_.wheel_r + 0.07) for wx_, _wy in g_.wheel_xy])
+                near_fl = np.abs(C_[:, 0][:, None] - x_fl[None, :]).min(axis=1) < 0.005
+                n_flap = int((body_ & (mesh.mat == M_TRIM) & near_fl
+                              & (np.abs(C_[:, 2] - 0.195) < 0.01)).sum())
+                n_liv = int((mesh.colours == np.array(C_LIVERY3, dtype=np.float64)).all(axis=1).sum())
+                side_gl = int((side_ & glass_ | (body_ & glass_ & (np.abs(C_[:, 1]) > 0.6)
+                                                 & (C_[:, 2] > 0.9))).sum())
+                ok_c = (ok_c and n_spot == 4 and n_flap == 8 and n_liv >= 12
+                        and abs(g_.height - 1.384) < 1e-9 and side_gl > 0
+                        and 'stripe' in names)
+                rows_n.append(f'rally: roof {g_.height:.3f} m, {side_gl} side-glass polys, '
+                              f'{n_spot} spot lamps, {n_flap} mud-flap faces, {n_liv} livery '
+                              f'polys')
             else:
                 door_ = side_ & (mesh.mat == M_TRIM) & (C_[:, 2] < 1.02)
                 d_r, d_l = int((door_ & (C_[:, 1] < 0)).sum()), int((door_ & (C_[:, 1] > 0)).sum())
@@ -7824,8 +8039,9 @@ def _car_checks(screenshot_dir: str = 'runs') -> list:
             rows_n[-1] += f', lamps {lamps[0]} glow / {lamps[1]} reverse, ghost {n_ghost} polys'
             ok_n &= ok_c
         set_car(was)
-        out.append(('car: the van and the bus read as themselves (blind box, doors on the '
-                    'right, lamps, plan, ghost)', ok_n, '; '.join(rows_n)))
+        out.append(('car: the van, the rally car and the (retired) bus read as themselves '
+                    '(blind box; roof, spots, flaps, livery; doors on the right; lamps, plan, '
+                    'ghost)', ok_n, '; '.join(rows_n)))
 
         # ---- every car from behind -------------------------------------------
         shots = []
@@ -7911,7 +8127,7 @@ def _car_checks(screenshot_dir: str = 'runs') -> list:
                  for ax_, ay_ in ((0.0, 0.0), (-13.0, 9.0), (6.0, -14.0))]
         cam_ = Chase3D(1280, 800)
         n_same = n_all = 0
-        for key in ('corsa', 'mx5', '540i'):
+        for key in ('corsa', 'rally', '540i'):   # (task 46: the rally car is 1.384 m)
             g_ = CarGeom(_cars.get(key))
             for V_, z_, ax_, ay_ in sweep:
                 n_all += 1
@@ -7929,7 +8145,7 @@ def _car_checks(screenshot_dir: str = 'runs') -> list:
             """(k, the eye's least height over the roof, its least gap behind
             the tail) over the sweep, and each pose's tail-top and tail-foot
             pixels."""
-            g_ = CarGeom(_cars.get(key))
+            g_ = CarGeom(_cars.get(key) if key in _cars.CARS else _cars.RETIRED[key])
             above = behind = math.inf
             pxs = []
             for V_, z_, ax_, ay_ in sweep:

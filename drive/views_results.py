@@ -21,6 +21,7 @@ are the run it continues until the new one lands.
 
 from __future__ import annotations
 
+import json
 import math
 
 import numpy as np
@@ -39,19 +40,37 @@ LIVE_HINT = ("A run is flying: the numbers below are the run it continues, and t
 MARGIN_HELP = ("WingLab's signed margins, each normalised by its own limit — ≥ 0 is met. Feasible "
                "means every one of them is. Their names are the family's own "
                "(api.constraint_labels_of), in the order the engine reports them.")
-LAW_HELP = ("carsim's car does not run WingLab's lattice at 1 kHz: it flies an affine law SAMPLED "
+BOX_HELP = ("Every design variable of the winner against the box THIS run searched, read off its "
+            "record (WingLab's bounds: the family's own box with the run's bands in it) — never the "
+            "Design box as it stands now, which may have moved since.\n\n"
+            "Amber value and bar: the winner sits within 2 % of its own box edge — there the BOX set "
+            "that variable, not the physics. Blue low / high: this run's own band for the row, not "
+            "WingLab's; “set by” names whose band it was, in the Design box's words. A fixed row was not searched: it flew at the "
+            "value it was held at.")
+BOX_NONE = "This record carries no design box, so these values cannot be placed inside one."
+SET_BY_HELP = (vw.BOX_HEAD_HELP["source"] + "\n\n“car's span limit” / “car's area limit” "
+               "(“Unlimited ceiling” in Unlimited): the winner rides the most this car lets the row open to — "
+               "whoever typed or released the band, the Design box cannot open it further, so that "
+               "limit is what bound it.\n\n“box changed”: the Design box no longer holds the "
+               "band this run searched, so who set it is not said — the numbers are still the run's.")
+LIMIT_HELP = ("The most this car lets the span and area rows open to (drive/bodies.py): its physical "
+              "limit in Real mode — Settings ▸ Wing limits: Unlimited allows 3 ×, and a run past the "
+              "limit is filed apart and never official. The Design box clips a typed band to it.")
+BOX_KEY = ("Amber value and bar: the winner sits within 2 % of its own box edge — there the box set "
+           "that variable, not the physics. Blue low / high: this run's own band, not WingLab's.")
+LAW_HELP = ("The game's car does not run WingLab's lattice at 1 kHz: it flies an affine law SAMPLED "
             "from WingLab's own evaluator at the winning design — an incidence sweep, the lift "
             "slope from ±0.5°, the stall clamps at WingLab's own refusal edges, the drag a "
             "quadratic fitted through the design point. At the design incidence the game's "
             "½ρV²S·CZ is WingLab's force to rounding.")
-LAP_HELP = ("carsim's quasi-steady model of the job with this wing in its slot, against the same "
+LAP_HELP = ("The game's quasi-steady model of the job with this wing in its slot, against the same "
             "car with the slot empty: the circuit's lap (a side wing's own circuit) or the "
             "stop's distance. A DIFFERENT model from WingLab's own "
             "(cartrack's point mass, which only the lap-time objective uses): the two will not "
             "agree to the tenth.")
 GEOMETRY_HELP = ("WingLab's design report of the winner (api.design_report): the lattice's own "
                  "stations. The chord is the free chord law's, exactly as the engine flew it.")
-MESH_HELP = ("The wing as the CAR draws it: carsim lofts the straight-taper equivalent of the "
+MESH_HELP = ("The wing as the CAR draws it: the game lofts the straight-taper equivalent of the "
              "chord law (root chord 2S / b(1 + taper)) — the free law's k1..k3 shape WingLab's "
              "physics, not this drawing (PLAN2 H6). The plates hang at their searched height.\n\n"
              "Drag it to turn it and see every side; the links under it jump to a view.")
@@ -155,9 +174,9 @@ def _report_state(ui, ctx, res) -> bool:
 # --------------------------------------------------------------------------- #
 def summary(ui, ctx) -> None:
     """AeroBO 22, in its order: the KPI row, the constraint margins, the
-    sections flown; then carsim's half -- the car's law and the game's
-    force against AeroBO's, carsim's own lap as a cross-check -- and the
-    run itself."""
+    winner in its box, the sections flown; then carsim's half -- the car's
+    law and the game's force against AeroBO's, carsim's own lap as a
+    cross-check -- and the run itself."""
     res = _open(ui, ctx)
     if res is None:
         return
@@ -166,6 +185,7 @@ def summary(ui, ctx) -> None:
     _tag_row(ui, wing)
     _kpis(ui, wing, sm)
     _margins(ui, sm)
+    _box_card(ui, ctx, wing)
     _sections(ui, ctx, wing)
     _law_card(ui, wing, sm)
     _lap_card(ui, ctx, res)
@@ -192,7 +212,7 @@ def _kpis(ui, wing, sm) -> None:
         tiles.append(dict(label="CZ / CD", value=f"{float(sm['efficiency']):.2f}"))
     if vc.finite(sm.get("lap_time_s")):
         tiles.append(dict(label="lap (WingLab)", value=f"{float(sm['lap_time_s']):.3f}", unit="s",
-                          tip="cartrack's point-mass lap of carsim's circuit (the objective)"))
+                          tip="cartrack's point-mass lap of the game's circuit (the objective)"))
     n, budget = sm.get("n_evals"), sm.get("budget")
     tiles.append(dict(label="evaluations", value=f"{n}/{budget}" if budget else str(n)))
     if vc.finite(sm.get("wall_s")):
@@ -218,6 +238,246 @@ def _margins(ui, sm) -> None:
                 ui.spacer()
                 ui.label(vc.num(g, "{:+.4f}"), css=12, family="mono")
         ui.hint("Feasible ⟺ every signed margin ≥ 0.")
+
+
+# --------------------------------------------------------------------------- #
+#  the winner in its box (AeroBO 22's "Best design in its box")               #
+# --------------------------------------------------------------------------- #
+#: an optimum this close to its own box edge, as a share of the row's width,
+#: RIDES it: the box set that variable, not the physics (WingLab's
+#: boundary-riding law -- AeroBO's `metrics.RIDING_TOL`, the same 2 %)
+RIDING_TOL = 0.02
+#: a searched row whose winner rides the most THIS car lets it open to
+#: (`op.size_caps`, task 41: its span limit, 3x it in Unlimited) is named for
+#: that ceiling, not for whoever typed or released its band: the Design box
+#: cannot open it further (`WingModel._under_cap`), so the car bound it
+CAP_WORDS = {"b_m": "car's span limit", "S_m2": "car's area limit"}
+UNLIMITED_CAP = "Unlimited ceiling"
+CAP_CHIPS = {*CAP_WORDS.values(), UNLIMITED_CAP}
+
+
+def _real(v):
+    """A finite float, or None for anything that is not a number (a bool, a
+    string, NaN): AeroBO's `metrics._number`."""
+    if isinstance(v, bool) or not isinstance(v, (int, float, np.integer, np.floating)):
+        return None
+    f = float(v)
+    return f if math.isfinite(f) else None
+
+
+def _same(a, b) -> bool:
+    return abs(float(a) - float(b)) <= 1e-9 * max(1.0, abs(float(a)), abs(float(b)))
+
+
+def box_rows(rec, tol: float = RIDING_TOL) -> list:
+    """AeroBO's `metrics.design_box` on a stored record: one row per design
+    variable, the winning value inside the box the run SEARCHED -- the
+    record's `bounds` (the family's box with the run's `bounds_overrides` in
+    it, in design-vector order), never the Design box as it stands now.
+
+    A row: `label`, `value`, `lo`, `hi`, `frac` (0 at the low bound, 1 at
+    the high), `riding` ("" / "low" / "high"), `outside`, `narrowed` (the row
+    is in the run's `bounds_overrides`: its box is not the family's own) and
+    `fixed` -- the value a FIXED row was held at, else None. AeroBO keeps a
+    pinned row in the vector with its box collapsed to [v, v]
+    (`RunResult.pinned`): it was never searched, so it has no frac and rides
+    nothing (a zero-width box can only be a pin: AeroBO refuses one as an
+    override). Anything missing stays None and nothing raises -- the card is
+    drawn every frame, old and hand-made records included."""
+    rec = rec if isinstance(rec, dict) else {}
+    cfg = rec.get("config") if isinstance(rec.get("config"), dict) else {}
+
+    def seq(v):
+        return list(v) if isinstance(v, (list, tuple, np.ndarray)) else []
+    labels, values, box = seq(rec.get("param_labels")), seq(rec.get("best_x")), seq(rec.get("bounds"))
+    ov = cfg.get("bounds_overrides") if isinstance(cfg.get("bounds_overrides"), dict) else {}
+    pins = next((p for p in (rec.get("pinned"), cfg.get("pinned")) if isinstance(p, dict)), {})
+    rows = []
+    for i, raw in enumerate(values):
+        label = str(labels[i]) if i < len(labels) else f"x{i}"
+        value = _real(raw)
+        pair = box[i] if i < len(box) else None
+        lo = hi = None
+        if isinstance(pair, (list, tuple, np.ndarray)) and len(pair) == 2:
+            lo, hi = _real(pair[0]), _real(pair[1])
+        pin = _real(pins.get(label))
+        if pin is None and lo is not None and lo == hi:
+            pin = lo
+        frac, riding, outside = None, "", False
+        if pin is not None:
+            outside = value is not None and not _same(value, pin)
+        elif value is not None and lo is not None and hi is not None and hi > lo:
+            frac = (value - lo) / (hi - lo)
+            outside = not 0.0 <= frac <= 1.0
+            riding = "low" if frac <= tol else ("high" if frac >= 1.0 - tol else "")
+        rows.append({"label": label, "value": value, "lo": lo, "hi": hi, "frac": frac,
+                     "riding": riding, "outside": outside, "fixed": pin,
+                     "narrowed": pin is None and label in ov})
+    return rows
+
+
+def at_cap(wing, r) -> str | None:
+    """The car's ceiling a searched row's winner rides the high edge of, in
+    words (`CAP_WORDS`), else None: the row's high bound IS this car's
+    `op.size_caps` for it -- a released row's own band is cut to it, a typed
+    one cannot pass it. The packaging rows carry it rounded to 1e-6."""
+    op = wing.session.op
+    cap = _real((op.size_caps or {}).get(r["label"]))
+    if (cap is None or r["fixed"] is not None or r["riding"] != "high" or r["hi"] is None
+            or abs(r["hi"] - cap) > 1e-6 * max(1.0, abs(cap))):
+        return None
+    return UNLIMITED_CAP if op.unlimited else CAP_WORDS.get(r["label"])
+
+
+def box_sources(wing, rows) -> dict | None:
+    """{label: who set its band} -- `WingModel.band_source`, the Design box's
+    words -- for the rows the box has NOT moved since this run: a searched
+    row whose band is still the record's, a fixed row still fixed at the
+    same value. band_source reads the box as it stands NOW, so a row it
+    could misname (retyped, released, fixed since, another car's packaging)
+    is left out and the card says "box changed" there. A winner riding the
+    car's ceiling names the ceiling (`at_cap`): whoever set that band, the
+    car is what bound it. None when the box cannot be read at all: then
+    nothing is said about who set what."""
+    try:
+        box, pins = wing.family_box(), wing.pinned()
+        out = {}
+        for r in rows:
+            lab = r["label"]
+            if r["fixed"] is not None:
+                same = lab in pins and _same(pins[lab], r["fixed"])
+            else:
+                band = box.get(lab)
+                same = (lab not in pins and band is not None and r["lo"] is not None
+                        and r["hi"] is not None and _same(band[0], r["lo"]) and _same(band[1], r["hi"]))
+            if same:
+                out[lab] = at_cap(wing, r) or wing.band_source(lab)
+        return out
+    except Exception:                                       # noqa: BLE001 -- a read-out, drawn every frame
+        return None
+
+
+def _sources(ctx, wing, rows) -> dict | None:
+    """`box_sources`, once per state of the record's rows and of the Design
+    box: `band_source` builds WingLab's problem again for every row (~13 ms a
+    frame), so the view pays it only when something it reads has moved --
+    the family and its flags, the bands sent, the sections (the plate's t/c
+    pin), the typed, fixed and released rows, the card, the slot's size and
+    ceilings, and which edge each winner rides (`at_cap`)."""
+    try:
+        op = wing.session.op
+        key = ("boxsrc", tuple((r["label"], r["lo"], r["hi"], r["fixed"], r["riding"]) for r in rows),
+               wing.family_name,
+               json.dumps([wing.physics_flags(), wing.bounds_overrides(), wing.sections(), wing.box,
+                           sorted(wing.fixed.items()), sorted(wing.released), wing.choices,
+                           op.size_rows, op.size_caps, op.unlimited], sort_keys=True, default=str))
+    except Exception:                                       # noqa: BLE001 -- a read-out, drawn every frame
+        return None
+    ok, src = vw.cached(ctx, key, lambda: box_sources(wing, rows))
+    return src if ok else None
+
+
+def _set_by(r, src) -> tuple:
+    """The "set by" cell: the Design box's source chip (the car's ceiling in
+    car packaging's colour), "box changed" where the box has moved since
+    the run, nothing when it cannot be read."""
+    if src is None:
+        return ("empty",)
+    who = src.get(r["label"])
+    if who is None:
+        return ("tag", "box changed", T.INK_FAINT)
+    if who == "fixed":
+        #  the player's own pin: the fix switch and the value typed are theirs
+        #  -- "fixed" is already the row's state tag
+        who = "user"
+    return ("tag", who, getattr(T, "ACCENT" if who in CAP_CHIPS else vw.SOURCE_COLOUR.get(who, "INK_FAINT")))
+
+
+def _box_cells(wing, r, src) -> list:
+    """One grid row: the name and its words, low / best / high, where the
+    winner sits, who set the band, the row's state."""
+    name = ("text2", r["label"], vw.row_words(wing, r["label"]), None)
+    faint = ("text", "—", T.INK_FAINT_TEXT)
+    if r["fixed"] is not None:
+        state = ("tag", "outside the box", T.BAD) if r["outside"] else ("tag", "fixed", T.INK_FAINT)
+        return [name, faint, ("text", vc.num(r["value"], "{:.6g}"), T.BAD if r["outside"] else None), faint,
+                ("text", f"fixed at {r['fixed']:.5g}", T.INK_FAINT_TEXT, "sans", T.NOTE_CSS),
+                _set_by(r, src), state]
+    edge = T.ACCENT if r["narrowed"] else T.INK_MUTED
+    hot = T.BAD if r["outside"] else (T.WARN if r["riding"] else None)
+    if r["frac"] is None:
+        bar = faint
+    else:
+        bar = ("range", r["frac"], hot or T.ACCENT,
+               f"{r['frac'] * 100:.1f} % of the way from {vc.num(r['lo'], '{:.5g}')} to "
+               f"{vc.num(r['hi'], '{:.5g}')}")
+    if r["outside"]:
+        state = ("tag", "outside the box", T.BAD)
+    elif r["riding"]:
+        state = ("tag", f"at the {r['riding']} bound", T.WARN)
+    else:
+        state = ("empty",)
+    return [name, ("text", vc.num(r["lo"], "{:.5g}"), edge), ("text", vc.num(r["value"], "{:.6g}"), hot),
+            ("text", vc.num(r["hi"], "{:.5g}"), edge), bar, _set_by(r, src), state]
+
+
+def _box_card(ui, ctx, wing) -> None:
+    """AeroBO's "Best design in its box" (`_design_box`): every design
+    variable of the winner against the box the run searched, read off the
+    record -- where the winner sits in the bands the player constrained,
+    and which limit it ran into: theirs, the car's, the slot's or WingLab's
+    own. A row that rides a bound names it, with the way back to the box."""
+    rows = box_rows(wing.record)
+    with ui.card("Best design in its box", help=BOX_HELP):
+        if not rows:
+            ui.hint("this run recorded no design vector")
+            return
+        if all(r["lo"] is None and r["fixed"] is None for r in rows):
+            #  an old or hand-made record: the values, and plainly that there
+            #  is nothing to compare them against
+            for r in rows:
+                ui.kv(r["label"], vc.num(r["value"], "{:.6g}"))
+            ui.hint(BOX_NONE)
+            return
+        src = _sources(ctx, wing, rows)
+        header = ["parameter", "low", "best", "high", "low → high", ("set by", SET_BY_HELP), ""]
+        ui.grid("rbox", [2.8, 0.7, 0.8, 0.7, 1.4, "auto", "auto"], header,
+                [_box_cells(wing, r, src) for r in rows], pitch=37, gap=(4, 10))
+        ui.hint(BOX_KEY, split=False)
+        moved = [r["label"] for r in rows if src is not None and r["label"] not in src]
+        if moved:
+            which = "every row" if len(moved) == len(rows) else ", ".join(moved)
+            ui.hint(f"The Design box has changed since this run ({which}): “box changed” rows show "
+                    f"the band the run searched, not the one the box holds now.", split=False,
+                    help="Who set a band is read off the Design box as it stands. Where it no longer "
+                         "holds the band this run searched — a band retyped, a row fixed or released, "
+                         "the plate's section changed in 2.8, another car's span limit — the card "
+                         "does not guess: run the wing again to see the new box.")
+        riding = [r for r in rows if r["riding"] and r["fixed"] is None]
+        if riding:
+            names = ", ".join(r["label"] + (f" ({src[r['label']]})" if src and r["label"] in src else "")
+                              for r in riding)
+            #  a row at the car's ceiling is not the player's to widen: the
+            #  Design box clips a band to it (`at_cap`) -- say so, and the limit
+            capped = [r["label"] for r in riding if src and src.get(r["label"]) in CAP_CHIPS]
+            free = [r["label"] for r in riding if r["label"] not in capped]
+            say = f"{len(riding)} of {len(rows)} variables ran into a bound: {names}."
+            if free:
+                #  a row not named (the box changed) may still be the car's limit
+                lim = "" if capped else "the car's span limit, "
+                say += (f" Widen {', '.join(free) if capped else 'those rows'} in the Design box and run "
+                        f"the wing again where the wider band is buildable — where the bound is {lim}the "
+                        f"slot's band or WingLab's own box, the bound IS the answer.")
+            if capped:
+                one = len(capped) == 1
+                who = " and ".join(capped) if free else ("It" if one else "They")
+                say += (f" {who} {'rides' if one else 'ride'} this car's ceiling: the Design box cannot "
+                        f"open {'it' if one else 'them'} past it, so on this car that bound IS the answer.")
+            ui.hint(say, "warn", split=False)
+            if capped:
+                ui.hint(f"Span limit — {vw.limit_line(wing)}", split=False, help=LIMIT_HELP)
+            with ui.row():
+                ui.link("res.box", "Open the design box", "crop_free", lambda: ctx.select("w", "w.box"))
 
 
 def _sections(ui, ctx, wing) -> None:
@@ -262,7 +522,7 @@ def _law_card(ui, wing, sm) -> None:
             same = vc.finite(a) and abs(float(g) - float(a)) <= 1e-6 * max(1.0, abs(float(a)))
             ui.kv(f"{fw} at the design speed", f"game {float(g):.3f} N · WingLab {vc.num(a, '{:.3f}')} N",
                   colour=T.GOOD if same else T.WARN,
-                  tip="the game's ½ρV²S·CZ(α) with carsim's ρ against WingLab's breakdown")
+                  tip="the game's ½ρV²S·CZ(α) with its own ρ against WingLab's breakdown")
         writes = [f"incidence {float(sm.get('inc_deg') or 0.0):+.2f}°"]
         if wing.role == "top":
             h = (wing.slot_updates or {}).get("h")
@@ -291,7 +551,7 @@ def _lap_card(ui, ctx, res) -> None:
            tuple(sorted((wing.slot_updates or {}).items())))
     ok, lap = vw.cached(ctx, key, res.car_lap)
     title = str((lap or {}).get("title") or "the lap") if ok else "the lap"
-    with ui.card(f"carsim's own check — {title}", help=LAP_HELP):
+    with ui.card(f"The game's own check — {title}", help=LAP_HELP):
         if not ok or not lap or lap.get("error"):
             ui.hint(f"the check does not close: {lap if not ok else lap.get('error', '')}", "warn")
             return
@@ -312,7 +572,7 @@ def _run_card(ui, ctx, wing) -> None:
     with ui.card("Run"):
         ui.kv("problem", vw.base_family(wing) if rec.get("problem_name") == wing.family_name
               else str(rec.get("problem_name")).split(" · ", 1)[-1].rsplit(" #", 1)[0],
-              tip=str(rec.get("problem_name")))
+              tip=am.bridge.shown_family(rec.get("problem_name")))
         ui.kv("optimiser", f"{rec.get('optimiser')} · budget {cfg.get('budget')} · seed {cfg.get('seed')}")
         ui.kv("spent as", vw.handoff_words(rec))
         n = int(rec.get("n_evals") or 0)
@@ -436,7 +696,7 @@ def _mesh_card(ui, ctx, wing) -> None:
     side, the links under it for the set views."""
     polys_fn = ctx.consts.get("wing_polys")
     spec = wing.spec if wing.spec is not None else _preview_spec(ctx, wing)
-    with ui.card("On the car (carsim's drawing)", help=MESH_HELP, pad=False):
+    with ui.card("On the car (the game's drawing)", help=MESH_HELP, pad=False):
         if polys_fn is None or spec is None:
             ui.hint("the car's drawing appears once the law is derived")
             return

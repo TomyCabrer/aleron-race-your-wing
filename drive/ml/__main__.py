@@ -129,7 +129,8 @@ def self_check(verbose: bool = True) -> bool:
     #  Wave 4 pointed this package at the whole library. Two things have to
     #  hold or a cross-car number is meaningless: the anchor's pure-pursuit
     #  feedforward must use the CAR's wheelbase (a fixed 2.491 m would give
-    #  the 540i 14 % too much and the MX-5 10 % too little), and the Corsa
+    #  the 540i 14 % too much and the MX-5 10 % too little -- the rally car,
+    #  task 46, 3 % too little), and the Corsa
     #  must be bit-for-bit unmoved by that change, because every committed
     #  checkpoint's quoted lap time is a Corsa number.
     import cars
@@ -138,13 +139,13 @@ def self_check(verbose: bool = True) -> bool:
     o_turn[3] = o_turn[4] = o_turn[5] = 50.0 / 40.0      # a real R = 40 m bend
     a_corsa = baseline_action(o_turn, LOCK_RAD, cars.get("corsa").L)
     a_dflt = baseline_action(o_turn, LOCK_RAD)
-    a_mx5 = baseline_action(o_turn, LOCK_RAD, cars.get("mx5").L)
+    a_mx5 = baseline_action(o_turn, LOCK_RAD, cars.get("540i").L)
     _rep("the anchor's feedforward follows the car's wheelbase",
          float(np.max(np.abs(a_corsa - a_dflt))) == 0.0
          and abs(a_mx5[0] - a_corsa[0]) > 1e-4,
          f"corsa == default to 0.0e+00 (L = {WHEELBASE:.3f} m); "
-         f"mx5 steer differs by {a_mx5[0] - a_corsa[0]:+.5f} of lock "
-         f"(L = {cars.get('mx5').L:.3f} m)")
+         f"540i steer differs by {a_mx5[0] - a_corsa[0]:+.5f} of lock "
+         f"(L = {cars.get('540i').L:.3f} m)")
     #  The arena, not the skidpad. Through wave 4a the Corsa-tuned anchor
     #  SPUN the MX-5 at 485.0 m and the 540i at 487.9 m -- both inside
     #  WET_T3 (s 455..585, mu 0.632), which this driver's speed plan cannot
@@ -152,15 +153,17 @@ def self_check(verbose: bool = True) -> bool:
     #  `driver_trim`'s margin fade closed that, so the check can now assert
     #  the thing that actually matters: one hand-written driver, three very
     #  different cars, a lap each, nobody off the road.
-    #  (task 41: all five -- the Express and the Citaro bus too. The bus's
-    #  standing arena lap is 79.8 s at DT_TRAIN, so the window is 85 s.)
+    #  (task 41: every car in the library -- the Express, and then the
+    #  Citaro bus, whose 79.8 s standing arena lap at DT_TRAIN set the 85 s
+    #  window; task 46: the bus and the MX-5 retired, the rally car in,
+    #  62.1 s)
     per_car = {k: rollout(p0, "arena", T=85.0, wing="plate",
                           car=cars.get(k)) for k in cars.CAR_ORDER}
     _rep("the anchor laps the arena in every car in the library",
          all(e.ended == "time" and e.laps >= 1 for e in per_car.values()),
          ", ".join(f"{k} {e.s_progress:.0f} m/{e.laps}L '{e.ended}'"
                    for k, e in per_car.items()))
-    #  The same driver on the three newer circuits, and here for TWO laps:
+    #  The same driver on the four newer circuits, and here for TWO laps:
     #  the first starts at 12 m/s, and the laps that matter -- medals.py's
     #  author runs, a race -- are flying ones. Two of the failures that
     #  reshaped these circuits came on lap 2 (the MX-5 into a wet R110 at the
@@ -169,12 +172,16 @@ def self_check(verbose: bool = True) -> bool:
     #  both. T is ~1.1x the slowest car's second crossing.
     from .evaluate import BOT_TEST_T, bot_test_T
     t_test = {}
-    for circ, T_c in (("linden", 145.0), ("kestrel", 186.0), ("ashdown", 160.0)):
+    #  (the oval, task 46: the Corsa's second crossing is its slowest stock
+    #  one, 124.1 s -- 540i 113.3, MX-5 115.3 -- so 137 s)
+    for circ, T_c in (("linden", 145.0), ("kestrel", 186.0), ("ashdown", 160.0),
+                      ("fairfield", 137.0)):
         per_c = {k: rollout(p0, circ, T=T_c, wing="plate", car=cars.get(k))
                  for k in cars.CAR_ORDER}
-        #  the two task-41 cars are held to "on the road for the whole
-        #  window, a lap done": the bus laps 15-25 % slower than the 540i,
-        #  and T_c is sized on the three stock cars' second crossing
+        #  the cars that bring their own numbers (the Express, the rally car)
+        #  are held to "on the road for the whole window, a lap done": T_c
+        #  was sized on the stock cars' second crossing (the retired bus
+        #  lapped 15-25 % slower than the 540i)
         _rep(f"the anchor laps {circ} in every car",
              all(e.ended == "time" and e.laps >= (2 if k in cars.STOCK_CARS else 1)
                  for k, e in per_c.items()),
@@ -197,7 +204,7 @@ def self_check(verbose: bool = True) -> bool:
     mus = {k: cars.get(k).mu_scale for k in cars.CAR_ORDER}
     vs = [e.v_mean for e in per_car.values()]
     _rep("each car drives as itself, with its own grip",
-         len(set(round(v, 6) for v in vs)) == len(per_car) and mus["mx5"] != 1.0,
+         len(set(round(v, 6) for v in vs)) == len(per_car) and mus["rally"] != 1.0,
          "v_mean " + ", ".join(f"{k} {e.v_mean:.3f}" for k, e in per_car.items())
          + "; mu_scale " + ", ".join(f"{k} {v:.2f}" for k, v in mus.items()))
 

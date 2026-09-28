@@ -311,14 +311,14 @@ def self_check(verbose: bool = True) -> bool:
         and any("being scored" in ln for ln in none))
     head = panel_lines(hist, 24, "arena|corsa|stock|patch", tg, pb=60.5)[:2]
     rep("the progress line in player words: the class by its titles, the clock as a note",
-        head[0] == "PROGRESS  Arena circuit · Opel Corsa C 1.2 · Stock · wet patches"
+        head[0] == "PROGRESS  Arena circuit · Aurel Civetta 1.2 · Stock · wet patches"
         and head[1].strip() == COARSE_NOTE
         and not any("|" in ln or "ms" in ln for ln in head), "\n".join(head))
     rep("a part with no title keeps its word; a 1 ms swarm needs no clock note",
         class_title("moon|kart|sport|all") == "moon · kart · Sport · wet everywhere"
         and class_title("odd") == "odd"
-        and panel_lines([], 24, "linden|mx5|tuned|none", dt_train=0.001)[:2]
-        == ["PROGRESS  Linden park · Mazda MX-5 1.8 · Tuned · dry",
+        and panel_lines([], 24, "linden|rally|tuned|none", dt_train=0.001)[:2]
+        == ["PROGRESS  Linden park · Halcón RS18 rally · Tuned · dry",
             "  (the first generation is being scored)"])
     rep("the best individual's lap counts even past the listed generations",
         best_lap(hist[-2:], dict(lap_best=57.5)) == 57.5)

@@ -60,7 +60,7 @@ SIDE_STOP_HINT = ("A side wing stops the car as the air brake: both panels out, 
                   "opens on WingLab's “side force + drag”, the one objective that grows with "
                   "drag. It has a job of its own: the top wing's job does not move it.")
 CAR_HINT = ("quasi-steady: corners at their steady speed, straights the acceleration profile "
-            "met by the braking profile — an OPTIMUM, not a prediction. This is carsim's lap; "
+            "met by the braking profile — an OPTIMUM, not a prediction. This is the game's lap; "
             "its mean speed is the design speed WingLab flies the wing at.")
 BRAKING = ("Braking uses tyre grip only: brakes are not modelled separately. A wing is compared "
            "against a wing under one assumption; the absolute time is not a claim about the real "
@@ -73,7 +73,7 @@ STATE_RESETS = ("Stating the mission again re-opens the design stages from the s
 LOCKED_LIVE = "a run is in progress — stop it to change the mission"
 NO_LAP = "this mission does not fly: {err}"
 
-AIR_HINT = ("carsim's air — ρ 1.2 kg/m³ and ν 1.5e-5 m²/s (aero/polar.py) — not WingLab's "
+AIR_HINT = ("The game's air — ρ 1.2 kg/m³ and ν 1.5e-5 m²/s (aero/polar.py) — not WingLab's "
             "sea-level 1.225, so the force WingLab reports IS the force the game applies: "
             "½·ρ·V²·S·CZ with the game's ρ.")
 V_TIP = ("where every coefficient of the wing is read, and the Reynolds number both sections "
@@ -302,7 +302,7 @@ def _car_card(ui, ctx) -> None:
         return (p.help or None) if p is not None else None
     job = mp.job()
     if job == ms.STOPPING:
-        with ui.card("The car as it stands  (carsim's stop)"):
+        with ui.card("The car as it stands  (the game's stop)"):
             if not _stop_ok(mp):
                 _no_lap(ui, mp)
                 return
@@ -314,7 +314,7 @@ def _car_card(ui, ctx) -> None:
                      dict(label="mean deceleration", value=f"{r.decel_mean / 9.81:.2f}", unit="g")])
             ui.hint(AIR_STOP_HINT if mp.mission().stop_flanks > 1 else STOP_HINT, help=BRAKING)
         return
-    with ui.card("The car as it stands  (carsim's lap)"):
+    with ui.card("The car as it stands  (the game's lap)"):
         if not _lap_ok(mp):
             _no_lap(ui, mp)
             return
@@ -343,7 +343,7 @@ def _ground_words(op) -> tuple:
     deck = float(op.deck)
     return (f"OFF — the image plane is pushed {deck:.0f} m away ({2.0 * deck:.0f} m from its "
             f"image), so no ground term reaches the panel",
-            f"the plate reaches {lo - deck:.2f}–{hi - deck:.2f} m to the car's side (carsim's "
+            f"the plate reaches {lo - deck:.2f}–{hi - deck:.2f} m to the car's side (the game's "
             f"side-wing standoff)")
 
 
@@ -360,7 +360,7 @@ def _family_card(ui, ctx) -> None:
         try:
             fam = w.family
             ui.kv("WingLab family", f"“{fam.base}”")
-            ui.kv("registered as", w.family_name)
+            ui.kv("registered as", am.bridge.shown_family(w.family_name))
         except Exception as exc:                        # noqa: BLE001
             ui.hint(f"the family could not be built: {exc}", "bad")
             return
@@ -375,7 +375,7 @@ def _family_card(ui, ctx) -> None:
         objs = w.objectives()
         ui.kv("objective", objs.get(w.choices["objective"], w.choices["objective"]))
         ui.hint("The slot family is WingLab's own problem with ONLY the ride band moved (and "
-                "carsim's air): at WingLab's own band it is bit-for-bit WingLab's family. 3 Wing ▸ "
+                "the game's air): at WingLab's own band it is bit-for-bit WingLab's family. 3 Wing ▸ "
                 "Wing type picks what carries the wing (the endplates or two pylons), free chord "
                 "law or straight, and the objective.")
 
@@ -558,14 +558,14 @@ def _where_card(ui, ctx, s) -> None:
                   "top wing 1.2 × the body's width; Settings ▸ Wing limits: Unlimited allows 3 ×")
         for lab, (lo, hi) in (op.size_rows or {}).items():
             unit = "m²" if lab.startswith("S") else "m"
-            ui.kv(f"{lab} row", f"{float(lo):.3f}–{float(hi):.3f} {unit}  (the {op.car}'s span "
+            ui.kv(f"{lab} row", f"{float(lo):.3f}–{float(hi):.3f} {unit}  (the {am.bridge.car_tag(op.car)}'s span "
                                 f"limit, cut to WingLab's AR ≥ 3)")
         if op.role == "top":
             ui.hint("The top wing searches its ride height inside the band and writes the winner "
                     "back to the slot, as it does the incidence.")
         else:
             ui.hint("A side wing stands off the car's side: its endplate is what reaches the "
-                    "body. With ground effect off, carsim's old body-image (the wall) is not "
+                    "body. With ground effect off, the game's old body-image (the wall) is not "
                     "modelled — the owner's choice. One chordwise panel is honest only above "
                     "AR 3 (WingLab's rule), so the side wing designs taller, narrower panels.")
 

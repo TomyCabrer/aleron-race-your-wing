@@ -5,7 +5,7 @@ Every module below is written against THIS file. Where a subsystem spec in
 `../specs/*.txt` disagrees with this file, THIS FILE WINS. The reconciliations
 are recorded at the bottom.
 
-Package root: `/Users/tolomeelsabio/Desktop/carsim`, package `drive/`.
+Package root: the repository root, package `drive/`.
 Run as `python3 -m drive.<module>`. `corsa_c.py`, `qss.py`, `crossover.py`,
 `ledger.py` live one level up and are importable because the package is run
 from the repo root.
@@ -39,8 +39,8 @@ from the repo root.
 | `drive/vehicle.py` | EOM, load transfer, roll, aero+wing, integrator | `tyre`, `powertrain`, `corsa_c`, `cars` |
 | `drive/track.py` | track geometry, projection, surfaces | numpy |
 | `drive/input.py` | keyboard/gamepad → `Controls` | pygame |
-| `drive/bodies.py` | task 41: the body SHELLS per style (hatch / roadster / saloon / van / bus; moved out of `render.py`), `style_of(car)`, `Body(car)` on the car's own axles (`x_front`, `x_rear`, `width`, `height`, `ground`, `deck_z`), each car's slot bands and default slots, and the owner's SPAN RULE: `span_limit` (flank `2 (h - ground)`, top `1.2 x width`), `span_ceiling` (x `UNLIMITED_FACTOR` 3 when Settings' Wing limits is Unlimited), `area_ceiling`, `over_limits(build, lib, car)` (computed per run, never stored). Read by `aero.wing`, `garage`, `records`, `challenges`, the drive, and `aerobo_bridge` (the AeroBO designer's per-car rows, task 43) | numpy; `cars` and `aero.wing` lazily. Never pygame |
-| `drive/render.py` | pygame drawing + HUD; the chase camera and the 3-D car (a body STYLE per fitted car: hatch / roadster / saloon / van / bus, generic shapes, the shells read from `bodies`); `look_config` / `Renderer.set_look` (the Graphics setting); `set_paint` / `Renderer.set_paint` / `factory_colour` (the Paint setting) | `track`, `qss`, pygame; `world`, `props`, `fx` inside `Renderer` (built when `ViewConfig.scenery` / `effects`) |
+| `drive/bodies.py` | task 41: the body SHELLS per style (hatch / rally / saloon / van in the game; roadster / bus kept for the retired specs, task 46; moved out of `render.py`), `style_of(car)`, `Body(car)` on the car's own axles (`x_front`, `x_rear`, `width`, `height`, `ground`, `deck_z`), each car's slot bands and default slots, and the owner's SPAN RULE: `span_limit` (flank `2 (h - ground)`, top `1.2 x width`), `span_ceiling` (x `UNLIMITED_FACTOR` 3 when Settings' Wing limits is Unlimited), `area_ceiling`, `over_limits(build, lib, car)` (computed per run, never stored). Read by `aero.wing`, `garage`, `records`, `challenges`, the drive, and `aerobo_bridge` (the AeroBO designer's per-car rows, task 43) | numpy; `cars` and `aero.wing` lazily. Never pygame |
+| `drive/render.py` | pygame drawing + HUD; the chase camera and the 3-D car (a body STYLE per fitted car: hatch / rally / saloon / van -- roadster / bus for the retired specs, task 46 -- generic shapes, the shells read from `bodies`); `look_config` / `Renderer.set_look` (the Graphics setting); `set_paint` / `Renderer.set_paint` / `factory_colour` (the Paint setting) | `track`, `qss`, pygame; `world`, `props`, `fx` inside `Renderer` (built when `ViewConfig.scenery` / `effects`) |
 | `drive/paint.py` | the player car's paint: `PAINT_ORDER`, `PAINT_LABELS`, `PAINTS` (name -> RGB; `factory` -> None, the car's own colour), `PAINT_DEFAULT`, `rgb(name)`. A fixed palette, every tone of it checked against the colours the self-checks count. Cosmetic: never in the class key, a ranking, a medal, a ghost, the CarSpec or the build JSON (a lap record's `settings` snapshot lists it, as it lists Graphics) | nothing (pure data); `race_grid`, `ghosts` in its self-check only. Never pygame |
 | `drive/scenery.py` | the ground beside the road, laid out from the track's own geometry (a generated track gets it too): verges, gravel traps (slow corners), painted run-off (fast ones), apex + exit kerbs, the racing line, paint (grid boxes at `race_grid`'s slots, sector bars, the dragstrip's lane / numerals), all within 24 m of the edge; `wheel_surfaces(track, pts, on_track4, mu4, scenery=)` -> per wheel `'tarmac' \| 'wet' \| 'kerb' \| 'grass' \| 'gravel'`, read off the SAME tables the drawing uses. Never read by the physics | `track`, numpy |
 | `drive/world.py` | the look's backdrop and ground: sky + a per-map panorama (clouds, ridges, a tree line; scrolled by the chase camera's VIEW heading), grass with mowing stripes, the dressing from `scenery`, detail ON the tarmac (rubber, repairs, water, inset lines, raised kerbs), the horizon haze; the chase view's track layers batched (one projection a layer). The SHARED look: `SUN_DIR`, `HAZE_RGB`, `haze_factor`, `hazed`, `HAZE_LAND` | numpy, pygame, `scenery`; `render` only lazily (it is handed the renderer) |
@@ -48,7 +48,7 @@ from the repo root.
 | `drive/fx.py` | the particles -- tyre smoke past the grip peak (a per-car onset), dust off the road, spray on wet -- in one fixed pool (`POOL_N`), and the chase view's surface-aware camera jolt; a consumer of `HudData` (`surf4`, `wheels_xy`, `car_key`), never an input | numpy, pygame, `world`; `render` only lazily |
 | `drive/telemetry.py` | CSV logging | csv |
 | `drive/plots.py` | matplotlib post-run plots (Agg) | matplotlib, numpy |
-| `drive/garage.py` | 3D garage: `CarBuild` (three wing slots) -> `VehicleConfig` kwargs and the fitted wings' mass; the MISSION page (`MissionPage`: circuit, surface, Search & budget, the slot's design speed) and the DESIGN page (`DesignPage`: `DESIGN_TREE` over one `aerobo_models.DesignSession` per slot, `sessions`; a mirrored right flank is the left one's) -- the page designs nothing itself (task 43's pivot): every stage is a view of the session's models, which call AeroBO's own engine. `_top_aero` / `_dev_aero` / `mission_aero` fly an AeroBO wing's STORED law (`WingSpec.aero`, re-derived when the slot has moved: `aerobo_models.law_stale` / `rederive`), never a re-analysis. Both pages are drawn and driven by `design_shell`. The navigator GATES by STAGE with AeroBO's rule (`DesignSession.state`): once the mission is stated 2 Airfoil, 2.8 Endplate and 3 Wing are open, 4 Results waits for a completed run, 2.8 is LOCKED on plain fences. Every page takes the MOUSE as well as the keyboard. Plus the airfoil and library pages | `corsa_c`, `cars`, `crossover`, `input`, `menu`, `garage_ui`, `bodies` (task 41), `cae` (`form`), `design_jobs`, `design_shell`, `aero`, `track` (`make_track`, for the mission's circuit), `vehicle` (the two aero dataclasses only), pygame; `aerobo_models` LAZILY (`_am()`, so importing the garage does not import AeroBO before it is needed). Never `aerobo` or `aerobo_bridge` directly |
+| `drive/garage.py` | 3D garage: `CarBuild` (three wing slots) -> `VehicleConfig` kwargs and the fitted wings' mass; the MISSION page (`MissionPage`: circuit, surface, Search & budget, the slot's design speed) and the DESIGN page (`DesignPage`: `DESIGN_TREE` over one `aerobo_models.DesignSession` per slot, `sessions`; a mirrored right flank is the left one's) -- the page designs nothing itself (task 43's pivot): every stage is a view of the session's models, which call AeroBO's own engine. `_top_aero` / `_dev_aero` / `mission_aero` fly an AeroBO wing's STORED law (`WingSpec.aero`, re-derived when the slot has moved: `aerobo_models.law_stale` / `rederive`), never a re-analysis. Both pages are drawn and driven by `design_shell`. The navigator GATES by STAGE with AeroBO's rule (`DesignSession.state`): once the mission is stated 2 Airfoil, 2.8 Endplate and 3 Wing are open, 4 Results waits for a completed run, 2.8 is LOCKED on plain fences. Every page takes the MOUSE as well as the keyboard. Plus the airfoil and library pages, and task 46's two card pages: SAVED WINGS (`SavedWingsPage`: every library wing's diagram, `wing_diagram`, and whether it fits the selected slot on this car, `wing_fit` -- the role, `bodies.span_limit` at the slot, x3 Unlimited: W's rule) and SAVED CARS (`SavedCarsPage`: every build's picture, GarageView's own `draw_scene` into an offscreen surface cached per build; another car's build ends the garage with 'car', `car_wanted` + `build_wanted`, drive._garage_car opening that car on that build). K saves the slot's wing (`prompt_wing`: a copy under a new name, `WingSpec.made_for` the car it is on). Another car's paint arrives from the drive (`Garage.paint_for`), never from `render` | `corsa_c`, `cars`, `crossover`, `input`, `menu`, `garage_ui`, `bodies` (task 41), `cae` (`form`), `design_jobs`, `design_shell`, `aero`, `track` (`make_track`, for the mission's circuit), `vehicle` (the two aero dataclasses only), pygame; `aerobo_models` LAZILY (`_am()`, so importing the garage does not import AeroBO before it is needed). Never `aerobo` or `aerobo_bridge` directly |
 | `drive/garage_ui.py` | widget kit for the garage pages (params, lists, plots, prompt) | pygame, numpy |
 | `drive/cae/` | the AeroBO-look widget kit (light CAE theme, D1/D2): `theme` (tokens, fonts, icons, text), `form` (`Form`, the ParamList-compatible object a shell view binds its controls to), `widgets` (`WorkUI`, the immediate-mode work area), `plot` (`Figure`), `chrome` (menu bar, tool bar, tree, properties, tabs, output log, status bar, toasts, dialogs). Pure UI: no physics, no file IO beyond its bundled fonts | pygame, numpy, `garage_ui` (`form` subclasses `ParamList`) |
 | `drive/design_jobs.py` | the live-run machinery (PLAN2 §6): `EngineJob` (one AeroBO call on ONE daemon worker thread, `runner(emit, stop)`; the frame drains its queue; `finish` and `on_finish` run on the main thread only), `ReplayRunner` (a captured run replayed through the same path, `pause_at` / `release`, the fixture's own stopped variant), the warnings router (an engine warning on the worker becomes an Output line), `RunManager` (one live run; `cancel` abandons a run and stays `busy` until its thread has ended), `Notices`, `JobInfo`, the chips (`RUNNING · k/N`, `terminal_tag`) and the log / status templates | the standard library only. Never pygame, numpy, `aero`, `aerobo` or `aerobo_bridge` |
@@ -59,11 +59,12 @@ from the repo root.
 | `drive/aerobo_bridge.py` | the ONLY importer of `aerobo`: `sys.path` / env set-up and the seed install; the carsim SLOT FAMILIES (AeroBO's car family re-instantiated as a subclass that moves only `RIDE_HEIGHT_BOUNDS_M`, the deck and carsim's air: top = ground effect on over the deck, flanks = the image plane 100 m off); the operating point (`OperatingPoint`, from the stated lap); V3's configuration builders (weights, gates, section conditions, shape kwargs, wing flags, searches from `api.recommended_search`); the job RUNNERS (`screen_runner`, `section_runner`, `wing_runner`, `score_runner`, `polar_runner`, `design_report_runner`, `law_runner`) and the resumes (`continue_section`, `continue_wing`); the law derived by sampling AeroBO's evaluator (`derive_law`) and the mapping onto carsim's `WingSpec` / `AirfoilSpec`; carsim's circuits as `cartrack.TrackSpec`; fixture capture (`--capture`); the engine smoke self-check. Task 41's per-car numbers, from `bodies` for the build's car and Settings' Wing limits: `car_deck`, `top_ride_band`, `flank_h`, `span_limit`, `size_rows` / `flank_size_rows(h, car, unlimited)`, `size_caps`, `over_limits`, `limit_words`; `OperatingPoint.car / unlimited / limit / size_caps` | `aerobo`, numpy, scipy (`qmc`, the self-check), `aero` (`xfoil`, `polar`, `wing`, `airfoil`, `mission`), `bodies`, `track`, `qss`; `vehicle` (`TopAero`) in its self-check. Never pygame, never `garage` |
 | `drive/aerobo_models.py` | the DESIGN page's models (PLAN2 §7): `DesignSession` (one per slot: `op`, `policy`, `af`, `ep`, `wing`, `results`, `state(stage)`; `car` / `unlimited` / `deck_z` read off the host -- the garage's `car` and `unlimited`, task 41 -- and `past_limit(span, keys)`), `SearchPolicy` (Mission > Search & budget: AeroBO's plan or own budgets), `SurfaceModel` (a section surface, main or the symmetric plate: screen, ranking, take, shape search, Keep going, polar), `WingModel` (Wing type, Design box, Solver, run, Keep going, verdict, law, fit, commit), `ResultsModel` (the design report, the summary, carsim's QSS lap as the cross-check); every engine call an `EngineJob` whose runner freezes its arguments at launch; `replaying()` / `use_fixtures()` switch every job to the captured fixtures (the checks) | `aerobo_bridge`, `design_jobs`, `garage_ui` (`Param`), `cae.form`, `aero.mission`, `track`, numpy; `garage` and `aero.library` only in its self-check. Never pygame |
 | `drive/data/aerobo_fixtures/` | twelve REAL engine runs captured by `python3 -m drive.aerobo_bridge --capture` (screens, section and wing searches with their stopped and continued variants, a lap-time wing run; 722 kB), replayed by the deterministic checks and the screenshot harness | -- |
-| `drive/aero/` | wing-design physics: sections, panel method, polars (XFOIL / estimate), vortex lattice, GP-BO, the library, and carsim's own three-step design procedure -- `mission.py` (the lap a wing is for), `screen.py` (the seven weighted criteria the library is ranked on), `section.py` (the aerofoil designed in 2-D against it), `wing.py` (the planform; `WingSpec.design` carries an AeroBO wing's provenance, and `clamp` leaves its rows alone), `blend.py` (how the wing and its end plates meet); the ask/tell steppers (`optimize.BOStepper`, `RandomStepper`). Since the pivot the DESIGN page calls none of `screen` / `section` / `optimize` (AeroBO's engine designs; PLAN2 §11 Q9 keeps them, self-checked, for a later clean-up); `library.analyse_wing` never re-analyses an AeroBO wing (its law is AeroBO's) | numpy, scipy, the `xfoil` binary if present; `mission.py` alone also imports `corsa_c` and `qss` |
+| `drive/aero/` | wing-design physics: sections, panel method, polars (XFOIL / estimate), vortex lattice, GP-BO, the library, and carsim's own three-step design procedure -- `mission.py` (the lap a wing is for), `screen.py` (the seven weighted criteria the library is ranked on), `section.py` (the aerofoil designed in 2-D against it), `wing.py` (the planform; `WingSpec.design` carries an AeroBO wing's provenance, and `clamp` leaves its rows alone; `WingSpec.made_for`, task 46, the car it was made on -- a label, "" on every older file), `blend.py` (how the wing and its end plates meet); the ask/tell steppers (`optimize.BOStepper`, `RandomStepper`). Since the pivot the DESIGN page calls none of `screen` / `section` / `optimize` (AeroBO's engine designs; PLAN2 §11 Q9 keeps them, self-checked, for a later clean-up); `library.analyse_wing` never re-analyses an AeroBO wing (its law is AeroBO's) | numpy, scipy, the `xfoil` binary if present; `mission.py` alone also imports `corsa_c` and `qss` |
 | `drive/menu.py` | pause / help menu overlay (ESC, OPTIONS); a row's colour swatch through `show(swatches={action: rgb})` (rows stay 2-tuples); pure UI | pygame only |
-| `drive/title.py` | task 44: the title screen an interactive launch opens on (`Title.run()` -> one of `ACTIONS`: drive / challenges / garage / tutorial / settings / quit); the menu column and the pause menu's command vocabulary from `input.BlendedInput` in menu mode; the live background -- `pick_scene` (a `track.CIRCUITS` map, 1..5 cars of distinct `cars.CAR_ORDER` types with a reference lap), `Scene` (the reference laps replayed as a train, re-spaced at each chase-camera cut every `CAM_SWITCH_S` s), `_SceneRenderer` (a `render.Renderer` whose car pass draws every scene car in its own body and paint, restoring `render`'s module car and paint); the panorama fallback (`world.build_panorama`). No physics, no player file | pygame, numpy, `render`, `menu`; `track`, `cars`, `bodies`, `records`, `medals`, `world`, `input` lazily. Never `drive.drive` |
+| `drive/title.py` | task 44: the title screen an interactive launch opens on (`Title.run()` -> one of `ACTIONS`: drive / challenges / leaderboards / garage / tutorial / settings / quit); the menu column and the pause menu's command vocabulary from `input.BlendedInput` in menu mode; the live background -- `pick_scene` (a `track.CIRCUITS` map, 1..5 cars of distinct `cars.CAR_ORDER` types with a reference lap), `Scene` (the reference laps replayed as a train, re-spaced at each chase-camera cut every `CAM_SWITCH_S` s), `_SceneRenderer` (a `render.Renderer` whose car pass draws every scene car in its own body and paint, restoring `render`'s module car and paint); the panorama fallback (`world.build_panorama`). No physics, no player file | pygame, numpy, `render`, `menu`; `track`, `cars`, `bodies`, `records`, `medals`, `world`, `input` lazily. Never `drive.drive` |
 | `drive/audio.py` | procedural car sound: `Synth` (numpy) + `CarSound` (one pygame.mixer channel, stereo when the mixer grants it; task 27's chime on channel 1); an engine PROFILE per car (`HudData.car_key`); a render-loop consumer of `HudData`, never an input | numpy, pygame; `scipy.signal` optional, imported off-frame by `warm_up` (its fast path uses scipy's private `_sigtools._linear_filter`, checked for exact equality with `lfilter` at import, else the public one); its self-check imports `render.frame_budget_verdict` lazily (the `garage` exception) |
 | `drive/records.py` | lap records: the class key `track\|car\|engine\|surface`, `RecordBook` (top 5 per class, `runs/records/<class>.json`, best sectors, best medal, `last_builds.json`), `LapRecorder` (the `Sim` hooks: controls log, 50 Hz trace, the lap's exact start state), `resimulate` (a lap re-driven from its log, bit for bit) | numpy; `vehicle`, `powertrain`, `cars`, `corsa_c` (dataclass registry only); `drive.drive` / `track` lazily inside `resimulate` and the self-check. Never pygame, never `drive.ml` |
+| `drive/leaderboard.py` | the leaderboards (task 47): one board per `track\|car\|wings` (records.LAP_TRACKS x cars.CAR_ORDER x the challenges' four configs; Stock engine and surface 'patch' only), `Boards` (`runs/leaderboard_local/<board>.json`: the best lap of each build -- "you" -- and of each trained bot -- "bots" --, top 10 each, merged on save), `why_not` / `session_board` (what counts: Stock, the default surface, a wing mode, real limits; `ENGINE_NOTE`), the pages' rows (`car_row`, `detail_sections`, `prerace_rows`, `RULES`) and the Wings setting's values (`WINGS_MODES`, FREE last). Pure: the `Sim` files the laps and owns the LEADERBOARDS page | `records`; `cars`, `track`, `challenges` lazily (words, self-check). Never pygame, never `drive.ml` |
 | `drive/prerace.py` | the pre-race (TIME TRIAL) page's content: `PreRace` rows and help sections from a `RecordBook`, the medal table and the library's builds; `wanted(opts, settings)` (never a script, headless, `--ml-drive`, offscreen, the dragstrip); the PICK page rows. Pure UI logic: the `Sim` owns the menu and dispatches | `records`; `medals` lazily. Never pygame |
 | `drive/medals.py` | medal times per class (plan D4): author = the best valid, spin-free, full lap a reference driver sets headless in the class's STOCK car (`LapDriver` at margins 0.90 / 0.80 / 0.70 / 0.60, the `drive.ml` anchor, every bundled checkpoint for that car + track; aids off and on), gold / silver / bronze = author x 1.02 / 1.06 / 1.12. Owns `drive/data/medals.json` (`--build`) and `drive/data/reference_laps.json` (the author laps' 20 Hz traces, task 22's reference ghost). `targets`, `medal_for`, `reference_trace`; staleness by a hash of the track definitions, car specs and engine modes | numpy, `records` at module level; `drive.drive`, `track`, `cars` lazily; `drive.ml` only in the build's workers. Never pygame |
 | `drive/ghosts.py` | the time trial's two ghosts (the class PB; the D2 slot: reference bot / none / your P2..P5), clocked from the line (`sim.t - LapTimer.t_lap_start`); the live delta `tau - t_pb(p)`, `p` the centreline progress counted from the crossing on the ribbon only (the race gap's trail approach); the sector flash (purple / green / red, none for a lap that cannot count) | numpy, `records`; `drive.drive._Replay` and `medals` lazily. Never pygame |
@@ -1002,18 +1003,20 @@ def on_tarmac(tr, x, y, n=None) -> bool          # ribbon OR a drivable area
 def start_pose(tr, offset_n=0.0) -> tuple[float,float,float]
 def point_at(tr, s, n=0.0) -> tuple[float,float]
 def make_arena(surfaces=True); make_linden(surfaces=True); make_kestrel(surfaces=True)
-def make_ashdown(surfaces=True); make_open(); make_skidpad(radius=50.0, cw=False); make_dragstrip()
+def make_ashdown(surfaces=True); make_fairfield(surfaces=True)
+def make_open(); make_skidpad(radius=50.0, cw=False); make_dragstrip()
 def make_track(name, radius=50.0, cw=False, surfaces=True) -> Track   # the one builder;
                                         # an unknown name builds the arena
 def solve_closure(segs, ia, ib, heading0=0.0) -> tuple[float,float]   # the two straights
                                         # that close a loop (self-check only)
-TRACKS = {'arena':..., 'linden':..., 'kestrel':..., 'ashdown':...,
+TRACKS = {'arena':..., 'linden':..., 'kestrel':..., 'ashdown':..., 'fairfield':...,
           'open':..., 'skidpad':..., 'dragstrip':...}
-TRACK_ORDER = ('arena', 'linden', 'kestrel', 'ashdown', 'open', 'skidpad', 'dragstrip')
-                                        # TAB / the Map setting cycle this
-CIRCUITS = ('arena', 'linden', 'kestrel', 'ashdown')         # the race circuits
+TRACK_ORDER = ('arena', 'linden', 'kestrel', 'ashdown', 'fairfield', 'open', 'skidpad',
+               'dragstrip')             # TAB / the Map setting cycle this
+CIRCUITS = ('arena', 'linden', 'kestrel', 'ashdown', 'fairfield')   # the race circuits
 TRACK_TITLES = {...}                                          # menu labels
 CLOSURE_FREE = {'arena': (0, 8), 'linden': (2, 6), 'kestrel': (10, 14), 'ashdown': (0, 12)}
+                                        # not the oval: it closes by symmetry
 ```
 `DS = 0.5 m` sampling, 8.0 m grid hash for projection with 3×3 → 5×5 → full
 argmin fallback. Literal geometry (segments, node coordinates, arc centres,
@@ -1033,6 +1036,21 @@ names, a checkpoint's comma-listed meta, the `seed_<map>_` glob).
 | `linden` | Linden park | CCW | 1110.4021 | 7, R 30..60 (T2 R30 hairpin) | 284 m back, 150 m pit | 0 / 370 / 690 | WET_T5 850..905 full; WET_T2_ENTRY 400..435, n -6..0 |
 | `kestrel` | Kestrel ring | CCW | 1913.3440 | 7, R 55..100 | 390 m pit, 320 m back | 0 / 610 / 1140 | WET_T2 466..544 full; WET_T4_ENTRY 830..870, n -6..0 |
 | `ashdown` | Ashdown circuit | CW (sum -360) | 1390.0362 | 6 right + 1 left, R 30..120 | 211 m pit, 200 and 190 m | 0 / 505 / 930 | WET_T5 830..886 full; WET_T4_ENTRY 495..530, n 0..6 |
+| `fairfield` | Fairfield oval (task 46) | CCW, **16 m wide** | 1902.4778 | 2, R 150 x 180 deg | 480 m pit (split at the line), 480 m back | 0 / 730 / 1170 | DAMP_T2 1320..1440 full (mu x 0.80); WET_T1_ENTRY 195..238, n -8..0 |
+
+The oval breaks three of the rules below on purpose, and the self-check holds
+it to its own numbers (`_CIRCUIT_WIDTH`, `_CIRCUIT_R_MAX`): it closes by
+SYMMETRY (parallel straights make `solve_closure` singular; two equal
+straights and two equal half-turns need nothing solved), its bends are R150
+(the owner's "very big curves"), and it is 16 m wide -- the ML anchor's
+lateral barrier is in the road's normalised width, and on a 12 m road the
+540i drifted out of the 14 s bend at u * beta and was steered to full lock at
+the barrier's knee (both dry cells lost at 12 m; 16, 18, 20 m lap). Its bend patch
+is damp, not standing water: a 0.632 patch in a 33 m/s bend lost 1-3 of 12
+cells wherever it went. Its clearance minimum grows by the extra width
+(64 m). `props` reads a corner of 150 deg or more (`TURN_HALF_DEG`) as slow
+and real whatever its radius, so the oval's bends get brake boards, tyre
+walls and a stand like any hairpin; no other map's layout changes.
 
 What a circuit must satisfy, and `self_check` measures on each: closure < 1e-4 m
 and |sum(turn_deg)| = 360; the stored straights re-solve to 1e-6 m; the V3
@@ -1516,9 +1534,9 @@ guarded by `CARSIM_HEADLESS`).
 
 CLI:
 ```
-python3 -m drive.drive [--track arena|linden|kestrel|ashdown|open|skidpad|dragstrip]
+python3 -m drive.drive [--track arena|linden|kestrel|ashdown|fairfield|open|skidpad|dragstrip]
   [--radius 50] [--cw]
-  [--car corsa|mx5|540i] [--ballast 0..300] [--ballast-at nose|seat|floor|boot]
+  [--car corsa|rally|540i|express] [--ballast 0..300] [--ballast-at nose|seat|floor|boot]
   [--wet none|patch|all] [--wing off|fin|plate] [--wing-x 0.97] [--wing-h 0.90]
   [--dt 0.001] [--fps 60] [--size 1280x800] [--camera car_up|world_up|chase]
   [--headless] [--render off|offscreen|window] [--script NAME] [--duration 60]
@@ -1528,9 +1546,9 @@ python3 -m drive.drive [--track arena|linden|kestrel|ashdown|open|skidpad|dragst
   [--sound off|low|mid|high] [--wing-inc 0.0] [--dev-flank outer|inner]
   [--garage] [--build NAME]
   [--ml-drive CHECKPOINT] [--seed-lap] [--race anchor|best|CHECKPOINT]
-  [--race-car own|same|corsa|mx5|540i]
+  [--race-car own|same|corsa|rally|540i|express]
   [--swarm N] [--swarm-seed none|latest|FILE] [--swarm-gens G] [--swarm-T S]
-  [--swarm-name NAME] [--swarm-resume STATE] [--swarm-car same|corsa|mx5|540i]
+  [--swarm-name NAME] [--swarm-resume STATE] [--swarm-car same|corsa|rally|540i|express]
   [--swarm-fast] [--swarm-save ask|always|never]
 ```
 `--script drive_probe` is the one scripted entry that deliberately switches
@@ -1600,8 +1618,8 @@ live-patched. `_opts_car(opts)` resolves the scripted/headless car and returns
 exactly as it always did; `_build` gained `car=None` and `mu_scale=None` (the
 car's own `mu_scale`, an explicit value still winning, which is what the wet
 rigs pass).
-Defaults `ENGINE_DEFAULT = 'sport'` (`ENGINE_SCALE` stock 1.0 / tuned 1.5 /
-sport 2.0) and `SOUND_DEFAULT = 'mid'` (`SOUND_VOLUME` 0 / 0.3 / 0.6 / 1.0).
+Defaults `ENGINE_DEFAULT = 'stock'` (tasks 47-48; per car in `Settings.engines`, TC
+per car in `Settings.tcs`; `ENGINE_SCALE` stock 1.0 / tuned 1.5 / sport 2.0) and `SOUND_DEFAULT = 'mid'` (`SOUND_VOLUME` 0 / 0.3 / 0.6 / 1.0).
 The ESC menu has two pages: PAUSED (Resume / Settings / Reset to sector /
 Full reset / Garage / Quit) and SETTINGS (one row per setting with its value —
 Map, Engine, Gearbox, ABS, TC, Steer aid, Surface, Camera, Sound — then
@@ -1732,7 +1750,8 @@ The page's *Test* (`Sim.start_bot_test`) is the one bot path NOT stepped in
 lockstep with the session: bot 1 alone in each `RACE_BOT_CARS` entry, built by
 `Sim._race_car`, driven by `drive.ml.evaluate.bot_lap` (the `lap_time`
 rollout at `DT_EVAL` for `bot_test_T(track, T)` s -- `BOT_TEST_T` on the arena
-and any shorter lap, pro rata on a longer one: Ashdown 167 s, Kestrel 230 s;
+and any shorter lap, pro rata on a longer one: Ashdown 167 s, Kestrel 230 s, the
+Fairfield oval 228 s;
 whatever the page and terminal print as the Test's length must come from the
 same function -- the session's Track, the global wet
 folded into `mu_scale`) in a `multiprocessing` pool of its own, collected by
@@ -1946,7 +1965,7 @@ ONLY TOP's in, the reference's and a player's alike).
 
 **The race grid and the swarm panel** (task 26). `RACE_GRID_MAX =
 race_grid.GRID_MAX` (5) slots, `RACE_GRID` / `C_RIVALS` from `race_grid`;
-`RACE_BOT_CARS = ('own', 'same', corsa, mx5, 540i)`, default `'own'`:
+`RACE_BOT_CARS = ('own', 'same') + cars.CAR_ORDER` (task 46: corsa, rally, 540i, express), default `'own'`:
 `Sim._race_car(name, meta)` rebuilds the bot's bred car from its checkpoint's
 `meta['bred']` (`race_grid.own_car`, the library on `Sim.garage_lib`), or an
 old checkpoint's `meta['car']` + `meta['wing']`; `start_race` and
@@ -2383,8 +2402,9 @@ Round 2 (31 fixes) and round 3 (the owner's four answers). `.handoff/45-player-a
   (400 m, 0.35 L) out, so the pose is inside the last sector. `gear` is the first the
   automatic holds at V0 on full throttle. `s0` per map (V45 pins them): arena 1106.2 m
   (case 3: out of the R = 35 m T6 hairpin, 143 m to the line, 30 m of straight to T7
-  in 3 s at 10 m/s = 36 km/h), linden 1060.4, kestrel 1843.3, ashdown 1330.5 (case 1:
-  50 / 70 / 59.5 m out at 22 m/s), open 1492.7 (case 2: 150 m out, 18.8 m/s), skidpad
+  in 3 s at 10 m/s = 36 km/h), linden 1060.4, kestrel 1843.3, ashdown 1330.5, fairfield
+  1662.5 (case 1: 50 / 70 / 59.5 / 240 m out at 22 m/s), open 1492.7 (case 2: 150 m out,
+  18.8 m/s), skidpad
   267.0 (case 4: 47 m back). The pose before this rule put the arena's car 16 m before
   that hairpin: holding UP was the gravel in 2 s (the round-3 review).
 
@@ -2467,6 +2487,81 @@ Round 2 (31 fixes) and round 3 (the owner's four answers). `.handoff/45-player-a
   `'plate'` (the bigger ready-made side wing). A drive step started in a new session or a
   resumed tutorial starts from its own start (`Tutorial.tick`'s `fresh`); the circle's
   roll-in before the first crossing is not judged.
+
+### Tasks 47-48 (leaderboards; the BMW) -- interface additions
+
+* **Leaderboards (task 47)**: `drive/leaderboard.py` (§1). `Settings.race_wings`
+  (`leaderboard.WINGS_MODES`: the challenges' four configs + `free`, default `free`)
+  is a RESTART_KEY; `_drive_design(opts, design, lib, car, wings=)` drives
+  `challenges.config_build` for a config (a challenge's own config wins; a tutorial
+  passes None) and sets `opts.wings_applied`; `Sim.race_wings` is it for the session
+  and `Sim._wing_config()` is the challenge's config or it (G limited by `g_modes`,
+  `_challenge_wings` at the start). `Sim._boards()` is a player session's `Boards`
+  beside the progress file; `_board_lap(res)` files a valid recorded lap,
+  `_bot_board_key` / `_bot_board_lap` a trained bot's (race: `Rival.on_lap(t)` for a
+  timer-valid lap that went round with no respawn; Test: `_bot_test['boards']`).
+  `race_grid.own_car(..., config=)` puts a bot's bred build in the race's mode.
+  Pages: `_menu_page == "leaderboards"` (`TITLE_PAGES`, `TITLE_BACK['leaderboards'] =
+  'lb_back'`), the pause row `boards`, `PreRace.wings` / `PreRace.board_rows`
+  (`set:pr_mode`). `ENGINE_DEFAULT` is `stock`.
+* **The BMW (task 48)**: `Settings.engines` {car: engine} -- each car its own Engine
+  (`engine_of`, `take_car_engine` on a car change: the loop, `_garage_car`,
+  `_board_race`, `apply_cli --car`; `cycle('engine')` records it). A file from
+  before loads its one engine as the Corsa's (`load_note` when the car on the road
+  changes). `CarSpec.tc_slip` (None = `TC_SLIP_RESTORE` / `TC_SLIP_CUT`, the same
+  floats: every car without it is bit-for-bit) is read by `Vehicle._tc`: the 540i
+  sets (0.06, 0.12). This is a physics-path change for the 540i with TC ON only;
+  every TC-off number and every rig is untouched. `CarSpec.aid_own`: the steer aid's
+  own calibration (`input.aid_for_car`) without the rest of `own_aids` (the scripted
+  drivers keep the Corsa's); the 540i sets it. Neither field is in
+  `PHYSICS_DEFAULTS`. `_tc_note`: a car with `tc_slip` driven with TC off says so once
+  a launch. The medals table and the 540i's challenge references were re-measured.
+### Task 46 (the rally car; the MX-5 and the bus retired) -- interface additions
+
+The owner: "I don't want the buss to big not very useful or the roofless car
+too short. Instead add a rally car."
+
+* **`cars.CAR_ORDER = corsa, rally, 540i, express`**; `CARS` / `CAR_TITLES` the
+  same four. `cars.RETIRED = {mx5: MX5_NB, bus: CITARO_O530}`: NOT in `CARS`, read
+  only by the physics self-checks (`vehicle` T41a-c / T45, `powertrain` t41 /
+  t45, `input`'s per-car aid, `race_grid`'s too-big-for-a-box rule,
+  `challenges`' governor rule, `render`'s rev cue / bus drawing, `cars`' own
+  gearing and tyre rows); nothing player-facing reads it. `cars.get('mx5' |
+  'bus')` is the Corsa, as any unknown name. `STOCK_CARS = corsa, 540i`.
+* **`ESCORT_RS1800`** (`rally`): Ford Escort RS1800 Mk2, Group 4 tarmac trim,
+  ~1979; RWD, 980 kg, L 2.407, 50 % front, BDA 1975 cc 180 kW @ 8500 (est) /
+  217 N.m @ 6750 (published), cut 9000, ZF close-ratio 2.30 / 1.80 / 1.38 /
+  1.14 / 1.00 x 4.90, 195/50R15, `mu_scale` 1.10 (CALIBRATION). Task-41 fields:
+  `own_aids`, `rev_scaled`, `brk_valve='scaled'` (a tarmac bias, 63 % front
+  below the knee, front locks first). Sources on its lines in `cars.py`.
+* **`cars.build_car_key(tag)`**: "" and a `CARS` key as they are, any other
+  string the Corsa's. `CarBuild.from_json`, `records.build_car` and
+  `aero.library.Library.load` read a build's car tag through it: a build made
+  for a retired car loads as a Corsa build. `Settings.clamp` already drops a
+  retired `car` / `paint` / `car_build` entry.
+* **`bodies`**: style `'rally'` (`CAR_STYLE_REF`, `_STYLE_SHELL3`, `SLOT_TABLE`:
+  flank (0.97, 0.90), top (-1.72, 1.40, 6) on the boot, `top_x_max` 0.40);
+  `STYLE_OF` has the four keys; `RETIRED_KEYS` (mx5, bus) draw as the hatch; the
+  retired SPECS find their shells by name. Rally limits: ground 0.19, flank
+  1.42 m at h 0.90 / 2.02 at 1.20, top 2.040 m.
+* **Presentation**: `render.C_CAR_STYLE['rally']` (176, 34, 42), `C_LIVERY3` (the
+  stripes / door panels, not painted by the Paint setting), `car_mesh3`'s rally
+  details (spot lamps, mud flaps, livery), the plan view's `'stripe'` shapes;
+  `garage._body_mesh` stripes cut into the roof quads (`_striped_half`);
+  `audio.PROFILES['rally']` (a BDA: idle 1200 / cut 9000, `idle_hi` 2600) --
+  the 'mx5' / 'bus' profiles are removed; `fx.SLIP_ALPHA0_CAR['rally']` 12.1 deg
+  (the ramp-steer rig: 11.82 at 40 m/s wing off); `prerace.CAR_SHORT['rally']`
+  'Escort'; `drive.SWARM_T_SLOW_LAPS` the Express only.
+* **Data**: `drive/data/challenges/refs.json` re-measured: 128 combos (8 x 4 cars
+  x 4 configs), all ok. `drive/data/medals.json` NOT rebuilt here: it has no
+  `rally` class (the medals self-check names it) until `python3 -m
+  drive.medals --build`; its `mx5` / `bus` entries are ignored as unknown keys.
+  A class with no entry has no medals at runtime (`targets` None), and the
+  title screen leaves out a car with no reference lap.
+* `drive/ml/checkpoints/mx5_arena_plate.json` is kept; `race_grid.own_car` finds
+  no car of its own for it (its bred car is retired) and it drives the
+  session's car, as the built-in driver does. `ml.evaluate.TRANSFER_CARS =
+  corsa, 540i`.
 
 ## 9. Reconciliations (where the subsystem specs disagreed)
 

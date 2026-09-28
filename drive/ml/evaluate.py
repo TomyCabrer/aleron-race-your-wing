@@ -4,7 +4,7 @@
     python3 -m drive.ml.evaluate <ckpt> --plot runs/ml_learning.png
     python3 -m drive.ml.evaluate <ckpt> --wing off --track open
     python3 -m drive.ml.evaluate <ckpt> --transfer
-    python3 -m drive.ml.evaluate <ckpt> --car mx5
+    python3 -m drive.ml.evaluate <ckpt> --car 540i
     python3 -m drive.ml.evaluate --car-matrix          (no checkpoint needed)
 
 Every number printed here is measured at `env.DT_EVAL = 1 ms`, the contract's
@@ -39,10 +39,13 @@ TRANSFER_WINGS = ("plate", "off", "fin")
 #: owner's original one -- task 9 said "teach the CARS how to drive the aero",
 #: plural -- and the three in the library are genuinely different machines:
 #: 1010 kg FWD 55 kW, 1140 kg RWD 109 kW, 1780 kg RWD 210 kW.
-TRANSFER_CARS = ("corsa", "mx5", "540i")
-#: (task 41: the Express and the Citaro bus are not in the matrix -- they have
-#: no bred checkpoint of their own yet, and a matrix row is a car's OWN best
-#: policy. `--car express|bus` measures any checkpoint on them.)
+TRANSFER_CARS = ("corsa", "540i")
+#: (task 41: the Express is not in the matrix -- it has no bred checkpoint
+#: of its own yet, and a matrix row is a car's OWN best policy; nor, task 46,
+#: the rally car. `--car express|rally` measures any checkpoint on them. The
+#: MX-5, the matrix's third car, is retired from the game (`cars.RETIRED`):
+#: its checkpoint stays in drive/ml/checkpoints and races as a bot in
+#: YOUR car, but a matrix row on a car the game no longer has is not kept.)
 
 #: Where the per-car checkpoints live, keyed by the car they trained on. The
 #: `corsa` entry is the arena specialist, because the matrix is measured on the
@@ -50,7 +53,6 @@ TRANSFER_CARS = ("corsa", "mx5", "540i")
 #: comparing a specialist against two generalists.
 CAR_CKPTS = {
     "corsa": "drive/ml/checkpoints/arena_plate.json",
-    "mx5": "drive/ml/checkpoints/mx5_arena_plate.json",
     "540i": "drive/ml/checkpoints/540i_arena_plate.json",
 }
 
@@ -234,7 +236,7 @@ def bot_test_T(tr=None, T=None) -> float:
 
 def bot_test_scale(car) -> float:
     """Task 41: how much longer than the arena budget a car's Test runs. A
-    car that brings its own numbers (`own_aids`: the Express, the bus) and
+    car that brings its own numbers (`own_aids`: the Express, the rally car) and
     corners below the Corsa gets T x sqrt(ay_Corsa / ay_car) -- lap time goes
     as 1 / sqrt(a_y) on a grip-limited lap -- from `baseline._ay_peak` at
     the car's own grip scale; never less than 1, and exactly 1 on every
@@ -615,7 +617,7 @@ def main(argv=None) -> int:
     ap.add_argument("--only-transfer", action="store_true",
                     help="the transfer grid and nothing else")
     ap.add_argument("--car", default=None,
-                    help="cars.py key to MEASURE on: corsa | mx5 | 540i | express | bus")
+                    help="cars.py key to MEASURE on: corsa | rally | 540i | express")
     ap.add_argument("--car-matrix", action="store_true",
                     help="the cross-car matrix: every (trained-on car x "
                          "evaluated-on car) cell, baseline vs learned")

@@ -67,7 +67,7 @@ class CarSpec:
     the grip calibration and the provenance strings.
     """
 
-    name: str = "Opel Corsa C 1.2 16V (2003)"
+    name: str = "Aurel Civetta 1.2 16V (2003)"
 
     # --- mass and geometry ---------------------------------------------
     m: float = 1010.0
@@ -262,6 +262,23 @@ class CarSpec:
     #: (input.py's steer aid, drive.py's PathFollower). False on the three
     #: stock cars, whose aided and scripted laps are frozen numbers.
     own_aids: bool = False
+    #: task 48 (the owner: "fix the bmw. just by giving it thrust it spins
+    #: arround and it is very difficult to control in general"). Two AID
+    #: calibrations a car may bring without the rest of `own_aids` -- the
+    #: scripted drivers keep the Corsa's, and every TC-off number is the car's
+    #: own physics, untouched:
+    #:   `tc_slip` -- the traction control's (restore, cut) slip on the driven
+    #:   axle; None = vehicle.py's TC_SLIP_RESTORE / TC_SLIP_CUT (0.12 / 0.20,
+    #:   the Corsa FRONT axle's traction peak). A rear axle held at 0.12 has
+    #:   lost 40-50 % of its cornering force, so a 440 N.m saloon spun with TC
+    #:   ON when power went on in a wet corner (measured: R 40 m, beta 31 deg).
+    #:   `aid_own` -- the steer aid (input.py: the keyboard's and the pad's
+    #:   soft lock) reads this car's wheelbase, grip and measured understeer
+    #:   instead of the Corsa's. On the Corsa's numbers the 540i's soft lock
+    #:   gave 77-84 % of the lock its limit needs (the Corsa's own: 115 %), so
+    #:   it pushed wide and was turned with the throttle.
+    tc_slip: tuple | None = None
+    aid_own: bool = False
 
     # --- derived (identical to CorsaC) --------------------------------------
     @property
@@ -290,17 +307,24 @@ class CarSpec:
         return CarSpec(**d)
 
 
+#: the fields that are words on screen, not the car (task 49): left out
+#: of the Corsa identity check and of the medal table's inputs hash
+DISPLAY_FIELDS = ("name",)
+
+
 def _from_corsa() -> CarSpec:
     """The Corsa C, copied off `corsa_c.CorsaC()` rather than retyped.
 
     Retyping 30 numbers into a second file is exactly how a default drifts.
     Every shared field is read from the dataclass that owns it, so the only
     way `CORSA_C` can differ from `CorsaC()` is if a field is added to one
-    and not the other -- which `self_check` catches.
+    and not the other -- which `self_check` catches. The display name is
+    the exception (task 49): the game shows its own fictional car name
+    (`CarSpec`'s default), not the study's.
     """
     c = CorsaC()
     shared = {f.name for f in fields(CarSpec)} & {f.name for f in fields(CorsaC)}
-    return CarSpec(**{k: getattr(c, k) for k in shared})
+    return CarSpec(**{k: getattr(c, k) for k in shared if k not in DISPLAY_FIELDS})
 
 
 CORSA_C = _from_corsa()
@@ -430,7 +454,7 @@ MX5_NB = CarSpec(
 #  because it is the only car here whose top speed is set by a LIMITER
 #  rather than by its own drag -- see self_check.
 E39_540I = CarSpec(
-    name="BMW 540i (E39, 1998)",
+    name="Nordwerk N540 (1998)",
 
     # Claimed kerb 1705 kg (carfolio, 2002 540i); + 75 kg driver for the EU
     # convention. Wikipedia gives 1500-1845 kg across the whole E39 range.
@@ -522,6 +546,11 @@ E39_540I = CarSpec(
                             # reasoning and the same caveat as the MX-5's.
     drive_layout="rwd",
     vmax_by="limiter",      # the 250 km/h electronic limiter (see Vmax)
+    #  task 48: its own TC slip targets and steer-aid calibration. Every
+    #  TC-OFF number is the car's as before; TC-on scripted runs (the medals'
+    #  aids-on laps, the challenge references) move and were re-measured
+    tc_slip=(0.06, 0.12),   # the rear held below its peak: DSC-like
+    aid_own=True,
     tyre_note="235/45R17 geometry on the study's coefficients; +8 % mu_scale",
     source="Wikipedia (E39), carfolio bmw-540i-96305, auto-data.net; inertias/CG est",
 )
@@ -549,7 +578,7 @@ E39_540I = CarSpec(
 #  4000; car.info's Swedish register gives the 1997 Express Van 1.4 M5 as
 #  55 kW / 75 hp. Three of four say 55 kW, so 55 kW, with Wikipedia's rpm.
 EXPRESS_14 = CarSpec(
-    name="Renault Express 1.4 (E7J, 1995)",
+    name="Rivière Courier 1.4 (1995)",
 
     # "Poids a vide" 840 kg for the 1994-1997 1.4 RT (autotitre.com), taken
     # as the DIN kerb (fluids and fuel in); + 75 kg driver for the EU
@@ -802,6 +831,160 @@ CITARO_O530 = CarSpec(
 
 
 # ======================================================================= #
+#  Ford Escort RS1800 (Mk2), Group 4 tarmac trim, ~1979 -- the rally car   #
+# ======================================================================= #
+#  Task 46, the owner: "I don't want the buss to big not very useful or the
+#  roofless car too short. Instead add a rally car." The Boreham works
+#  Escort of the Mikkola / Waldegard / Vatanen years in TARMAC trim (the
+#  Tour de Corse / Sanremo set-up: low on its bumps, a close-ratio box and a
+#  soft tarmac compound), not the gravel car. Rear-driven on a live axle, as
+#  it was -- and the one layout this driveline has for it (`LAYOUTS`: 'awd'
+#  is refused, and the Escort never had it).
+#
+#  THE SOURCES ARE THIN AND SAY SO. A works rally car is not a homologated
+#  road car with a data sheet: every one was built to its event. The one
+#  sheet reached that covers the Group 4 car as a whole is tech-racingcars
+#  ("Ford Escort Mk II RS group 4 (1975)", wikidot): 1840 or 1975 cc,
+#  240-265 HP @ 8000 rpm, 22.1 kgm (217 N.m) @ 6750, 980-1040 kg, 3.978 x
+#  1.700 (Group 4 arches; 1.607 standard) x 1.384 m, wheelbase 2.407 m,
+#  tracks 1314.5 / 1333.5 mm (the standard car's), ZF 5S18/3, final drives
+#  3.09-5.83, discs 279-300 mm front / 244-292 mm rear, 13 or 15 in rims.
+#  Its power pair does NOT close as a curve: 250 hp at 8000 rpm is 220 N.m,
+#  over the 217 N.m peak it quotes at 6750, so the power is placed at 8500
+#  (below: est) where 180 kW needs 202 N.m, 93 % of the peak -- the BDG's
+#  own shape (it was quoted at "261 bhp at 9000" in full race trim).
+ESCORT_RS1800 = CarSpec(
+    name="Halcón RS18 (Group 4 tarmac, 1979)",
+
+    # 980-1040 kg (tech-racingcars, Group 4); the light end is a tarmac car
+    # at its homologation minimum, read here as the car with fluids, fuel for
+    # a stage and its driver -- this project's EU convention. est +/-40 kg.
+    m=980.0,
+    wdist_f=0.50,           # est +/-0.02  the BDA set back behind the front
+                            # axle line, the battery, the spare and the tank in
+                            # the boot: a works car ran near 50:50 (the road
+                            # Mk2 is ~53 % front). At 0.52 its open diff spun
+                            # the inside rear long enough in 2nd to hold the
+                            # automatic on the limiter (vehicle T45a)
+    L=2.407,                # m  published (tech-racingcars: 94.75 in)
+    t_f=1.380,              # m  est +/-0.03  the standard car's 1.3145 (tech-
+    t_r=1.400,              # m  est +/-0.03  racingcars) spaced out to fill the
+                            #    Group 4 arches (1.700 m against 1.607) on
+                            #    wide, low-offset wheels
+    h_cg=0.50,              # est +/-0.04  h/H = 0.36 of the 1.384 m roof: a low
+                            # engine, a stripped shell, at rally ride height
+
+    # DI = Izz/(m*a*b) = 0.80, the same dynamic index the other cars use
+    Izz=1136.0,             # est  band 1000-1250
+    Ixx=251.0,              # est  the Corsa's 267 scaled by sprung mass and
+                            # track^2
+    Iyy=1136.0,             # est
+    m_s=855.0,              # est  kg sprung
+    m_us_f=50.0,            # est  struts, alloy wheels, 300 mm discs
+    m_us_r=75.0,            # est  the Atlas live axle, its leaf springs' share,
+                            # wheels, discs
+
+    tyre="195/50R15 on 7Jx15 (tarmac compound)",  # published fitment (tech-
+                            # racingcars: "175/70 HR 13, 195/50-R15"); the
+                            # compound is what mu_scale carries
+    r_roll=0.2794,          # m  0.288 OD radius x 0.97
+
+    Cd=0.45,                # est  band 0.42-0.50: the Mk2 saloon's boxy shape
+                            # with the Group 4 arches
+    A=1.906,                # est +/-0.06  = 0.81 x 1.700 width x 1.384 height
+    CdA=0.858,              # = Cd * A. NOT validated by Vmax and it cannot
+                            # be: the top speed is the gearing's (below)
+    Crr=0.013,              # est  a soft, wide competition tyre
+
+    # ZF 5-speed, direct top, dog-leg first: the close ratios sold today as
+    # the "FIA Historic Group 4 spec" S5-18/3 (Gartrac: 2.3 / 1.8 / 1.38 /
+    # 1.14 / 1.0). tech-racingcars lists a wider 3.874 / 2.398 / 1.763 /
+    # 1.259 / 1.000 set for the same box -- the gravel / road set; a tarmac
+    # car ran the close one, and the BDA's 6750-9000 rpm band wants it.
+    gear=(2.30, 1.80, 1.38, 1.14, 1.00),
+    gear_rev=3.50,          # est  not in either source
+    finaldrive=4.90,        # est  one of the Atlas axle's 3.09-5.83 ratios
+                            # (tech-racingcars); a fast tarmac event's choice:
+                            # 193 km/h at the cut in 5th
+    eta_drive=0.88,         # est  RWD manual: propshaft + hypoid, no CV pair
+    P_max=180e3,            # W  @ 8500 rpm  est: inside the sheet's 240-265 HP
+                            #    (177-195 kW), at the rpm the curve closes (see
+                            #    the header)
+    T_max=217.0,            # Nm @ 6750 rpm  published (tech-racingcars, 22.1 kgm)
+    n_peak_torque=6750.0,   # rpm, published (tech-racingcars)
+    n_peak_power=8500.0,    # rpm  est band 8000-9000 (the sheet 8000, "261 bhp
+                            #    at 9000" in race trim)
+    n_idle=1200.0,          # est band 1000-1400: race cams do not idle low
+    n_cut=9000.0,           # est band 8800-9500, the works BDA's 9000
+    displacement=1.975e-3,  # m^3  1975 cc, published (tech-racingcars)
+    Vmax=53.75,             # m/s  193.5 km/h: NOT published -- the GEARING limit,
+                            #    5th (direct) x 4.90 at the 9000 rpm cut. A
+                            #    rally car's top speed is its axle ratio's.
+    steer_ratio=13.0,       # est +/-1.5  a quick competition rack
+    steer_turns=2.5,        # est +/-0.2  -> 34.6 deg at the road wheel: the
+                            #    lock a rally car keeps for hairpins
+
+    # --- suspension: EVERY VALUE HERE IS AN ESTIMATE. MacPherson struts in
+    #  front, the Atlas live axle on leaf springs behind (the Mk2's own
+    #  layout), sprung and damped for tarmac: about twice the Corsa's rates.
+    k_wheel_f=40.0e3,       # est  band 32-48 kN/m
+    k_wheel_r=30.0e3,       # est  band 24-36 kN/m
+    k_tyre=220e3,           # est
+    h_rc_f=0.100,           # est  strut, at rally ride height
+    h_rc_r=0.300,           # est  a live axle's roll centre, near its locating
+                            # links' height
+    Kphi_f=664.8, Kphi_r=513.1,          # springs only, 0.5*k_wheel*t^2
+    #  + a 22 mm front bar (est) on the Corsa-calibrated d^4*t^2 constant
+    #  (the MX-5's and the 540i's method); no rear bar on the leaves.
+    Kphi_tot=1360.2,        # 664.8 + 513.1 springs + 182.3 bar -> ~1.9 deg/g
+    rollsteer_r=0.0,        # a live axle does not roll-steer like a twist beam
+    rollcamber_r=0.0,       # a rigid axle's wheels stay square to the road
+
+    #  vented 300 mm discs in front and 265 mm discs behind: two of the sheet's
+    #  options (279/292/300 front, 244/254/265/292 rear). Calipers est: an
+    #  opposed four-pot in front, its two 41 mm pistons a side read as one
+    #  58 mm piston by brake_coeffs' single-piston formula; a two-pot behind
+    #  sized for a TARMAC bias -- 63 % of the torque in front below the
+    #  valve's knee, where a road car runs ~75 -- behind the adjustable
+    #  proportioning valve a rally car carries in its rear line ('scaled':
+    #  the valve with its knee at this car's own full-pedal pressure, 18 bar),
+    #  so the front axle still locks first (45.7 against 51.1 bar). With a
+    #  road car's split (a 38 mm rear, 73 % front) it ploughed wide whenever
+    #  it braked inside a fast corner: the ML anchor left the arena's T5 on
+    #  its damp exit (s 1020 m) on every run; at 47-49 mm it laps all four
+    #  circuits.
+    brk_front_d=0.300,
+    brk_rear_d=0.265,
+    brk_rear_disc=True,
+    brk_piston_d=0.0580,    # m  est
+    brk_wc_d=0.0480,        # m  est, rear caliper piston (band 0.047-0.049)
+    brk_valve="scaled",     # est  an adjustable bias valve (see above)
+    tyre_file=TYRE_REF,
+    tyre_R0=0.2880,         # 0.1905 rim radius + 0.195 * 0.50 section
+    tyre_width=0.195,
+    tyre_aspect=0.50,
+    tyre_rim_r=0.1905,
+    mu_scale=1.10,          # est  a soft tarmac rally compound against the
+                            # Corsa's 175/65R14 touring tyre: past the MX-5's
+                            # summer tyre (1.05) and the 540i's (1.08), short of
+                            # a slick. CALIBRATION, not measured data.
+    drive_layout="rwd",
+    #  task-41 fields (with `brk_valve` above): its own aids (no frozen aided
+    #  lap to protect: the steer aid and the scripted drivers read ITS
+    #  wheelbase, grip and lock), and the rev range scaled to a 9000 rpm
+    #  engine -- the Corsa's absolute 2200 rpm brake-downshift line and 120 rpm
+    #  limiter band on a BDA would downshift into nothing and fade over a
+    #  sliver of its range
+    own_aids=True,
+    rev_scaled=True,
+    tyre_note="195/50R15 geometry on the study's coefficients; +10 % mu_scale "
+              "(a tarmac compound)",
+    source="tech-racingcars (Escort Mk II RS group 4), Gartrac ZF S5-18/3; "
+           "power rpm/gearing/suspension/brakes/inertias/CG est",
+)
+
+
+# ======================================================================= #
 #  ADDED MASS -- ballast, passengers, and the wings the garage fitted      #
 # ======================================================================= #
 #  A mass slider that scales `m` and leaves the rest of the parameter set
@@ -950,25 +1133,42 @@ def with_masses(car: CarSpec, masses=()) -> CarSpec:
 # ======================================================================= #
 CARS = {
     "corsa": CORSA_C,
-    "mx5": MX5_NB,
+    "rally": ESCORT_RS1800,
     "540i": E39_540I,
     "express": EXPRESS_14,
-    "bus": CITARO_O530,
 }
 #: cycle order for the CLI and the Settings page; the Corsa is first and default
-CAR_ORDER = ("corsa", "mx5", "540i", "express", "bus")
+CAR_ORDER = ("corsa", "rally", "540i", "express")
 CAR_DEFAULT = "corsa"
+#: the names the player sees (task 49: fictional makes and models; the
+#: KEYS stay, so settings, saves, records and medals are untouched)
 CAR_TITLES = {
-    "corsa": "Opel Corsa C 1.2",
-    "mx5": "Mazda MX-5 1.8",
-    "540i": "BMW 540i",
-    "express": "Renault Express 1.4",
-    "bus": "Mercedes Citaro bus",
+    "corsa": "Aurel Civetta 1.2",
+    "rally": "Halcón RS18 rally",       # short enough for every row
+    "540i": "Nordwerk N540",
+    "express": "Rivière Courier 1.4",
 }
-#: the three cars whose physics is frozen (every acceptance number, medal
-#: and checkpoint was measured on them): `self_check` asserts they set none
-#: of the task-41 physics fields
-STOCK_CARS = ("corsa", "mx5", "540i")
+#: RETIRED from the game (task 46, the owner: "I don't want the buss to big
+#: not very useful or the roofless car too short"). The MX-5 and the Citaro
+#: are no longer drivable, listed or offered anywhere a player looks: they
+#: are NOT in `CARS`, so `get("mx5")` / `get("bus")` -- an old settings
+#: file, a build, a record or a bot checkpoint that names one -- fall back
+#: to the Corsa like any unknown name. They are KEPT here, with their
+#: sources, for the physics self-checks only: the bus is the one car that
+#: exercises the task-41 fields a car does not need (load-scaled truck
+#: tyres, air brakes, a governor, big wheel and engine inertias) and the
+#: MX-5 a stock rear-driven path, so `drive.vehicle`, `drive.powertrain`
+#: and `drive.input` still drive them from here. Nothing player-facing may
+#: read this dict.
+RETIRED = {
+    "mx5": MX5_NB,
+    "bus": CITARO_O530,
+}
+#: the cars whose physics is frozen (every acceptance number, medal and
+#: checkpoint was measured on them): `self_check` asserts they set none of
+#: the task-41 physics fields. Task 46: the Corsa and the 540i (the MX-5,
+#: the third, is retired)
+STOCK_CARS = ("corsa", "540i")
 #: the task-41 fields and the value each takes when a car does not use it
 PHYSICS_DEFAULTS = dict(tyre_lfzo_f=1.0, tyre_lfzo_r=1.0, roll_dist_f=None,
                         eps_f=None, I_eng=None, I_wf=None, I_wr=None,
@@ -987,6 +1187,18 @@ def car_name(name: str | None = None) -> str:
     return CAR_TITLES.get(str(name or CAR_DEFAULT), CAR_TITLES[CAR_DEFAULT])
 
 
+def build_car_key(tag) -> str:
+    """A saved build's car tag as the game reads it (task 46): "" (a build
+    for ANY car, every one saved before task 41) and a key in `CARS` as they
+    are; any other string -- a retired car's ('mx5', 'bus'), a hand-edited
+    one -- is the Corsa's, the car `get` gives that name, so a build made
+    for a retired car loads as a Corsa build instead of as another car's
+    that nobody can drive. A tag that is not a string is ""."""
+    if not isinstance(tag, str) or tag == "":
+        return ""
+    return tag if tag in CARS else CAR_DEFAULT
+
+
 # ======================================================================= #
 def self_check(verbose: bool = True) -> bool:
     """The Corsa identity, then corsa_c.py's own two cross-checks per car."""
@@ -1000,11 +1212,13 @@ def self_check(verbose: bool = True) -> bool:
 
     # --- 1. the default is the Corsa, field for field ---------------------
     c = CorsaC()
-    shared = sorted({f.name for f in fields(CarSpec)} & {f.name for f in fields(CorsaC)})
+    shared = sorted(({f.name for f in fields(CarSpec)} & {f.name for f in fields(CorsaC)})
+                    - set(DISPLAY_FIELDS))
     bad = [k for k in shared if getattr(CORSA_C, k) != getattr(c, k)]
-    rep("CORSA_C is corsa_c.CorsaC() on every shared field",
-        not bad, f"{len(shared)} fields compared with ==, {len(bad)} differ"
-                 + (f": {bad}" if bad else ""))
+    rep("CORSA_C is corsa_c.CorsaC() on every shared field but its display name",
+        not bad and CORSA_C.name == CarSpec().name,
+        f"{len(shared)} fields compared with ==, {len(bad)} differ"
+        + (f": {bad}" if bad else "") + f"; shown as '{CORSA_C.name}'")
     missing = sorted({f.name for f in fields(CorsaC)} - {f.name for f in fields(CarSpec)})
     rep("CarSpec is a superset of CorsaC", not missing,
         f"CorsaC fields absent from CarSpec: {missing or 'none'}")
@@ -1015,13 +1229,22 @@ def self_check(verbose: bool = True) -> bool:
     rep("the default name resolves to the Corsa",
         get() is CORSA_C and get(None) is CORSA_C and get("nonsense") is CORSA_C
         and CAR_ORDER[0] == CAR_DEFAULT, f"CAR_ORDER {CAR_ORDER}")
+    #  task 49: what a player reads names no real make or model
+    real = ("opel", "corsa", "ford", "escort", "rs1800", "bmw", "e39", "renault",
+            "express", "e7j", "mk2")
+    shown = [CAR_TITLES[k] for k in CAR_ORDER] + [CARS[k].name for k in CAR_ORDER]
+    hits = [s_ for s_ in shown if any(w in s_.lower() for w in real)]
+    rep("the car names on screen are fictional", not hits,
+        ", ".join(hits) if hits else " / ".join(CAR_TITLES[k] for k in CAR_ORDER))
 
     # --- 2. corsa_c.self_check's two cross-checks, on every car -----------
     #  Any parameter set that fails these is wrong -- corsa_c.py's own words.
     if verbose:
         print("\n  gearing and top-speed power balance (corsa_c.self_check, per car)")
-    for key in CAR_ORDER:
-        car = CARS[key]
+    #  task 46: the retired cars too -- the physics self-checks still drive
+    #  them, so their numbers must still close (tagged "(retired)")
+    every = [(k, CARS[k]) for k in CAR_ORDER] + list(RETIRED.items())
+    for key, car in every:
         ratio = car.gear[-1] * car.finaldrive
         kmh_per_1000 = (1000.0 / ratio) * 2 * 3.141592653589793 * car.r_roll * 60 / 1000
         rpm_at_vmax = car.Vmax * 3.6 / kmh_per_1000 * 1000
@@ -1057,7 +1280,8 @@ def self_check(verbose: bool = True) -> bool:
         # drag-limited cars must balance; the other two must have a SURPLUS
         # (if they did not, the quoted Vmax would be unreachable)
         pwr_ok = (0.98 <= surplus <= 1.06) if mech == "drag" else (surplus > 1.0)
-        rep(f"{key:6s} gearing + power balance", gear_ok and pwr_ok,
+        rep(f"{key:6s} gearing + power balance" + (" (retired)" if key in RETIRED else ""),
+            gear_ok and pwr_ok,
             f"{kmh_per_1000:5.1f} km/h/1000rpm in top, {rpm_at_vmax:5.0f} rpm at Vmax; "
             f"{kW_need:5.1f} kW needed vs {kW_have:5.1f} kW available "
             f"(x{surplus:.2f}); top speed is {mech.upper()}-limited "
@@ -1075,8 +1299,7 @@ def self_check(verbose: bool = True) -> bool:
         TyreModel = None
     if TyreModel is not None:
         from drive.tyre import tyre_for
-        for key in CAR_ORDER:
-            car = CARS[key]
+        for key, car in every:
             try:
                 t = TyreModel(car.tyre_file, R0=car.tyre_R0, width=car.tyre_width)
                 fz = 4000.0
@@ -1135,18 +1358,30 @@ def self_check(verbose: bool = True) -> bool:
             "car145_70R13 gives identical Fx/Fy/Mz to TNO_car205_60R15 -- "
             "which is why mu_scale, not a different file, carries grip")
 
-    # --- 3b. the stock three do not touch the task-41 physics fields ----
+    # --- 3b. the stock cars do not touch the task-41 physics fields ------
     #  CONTRACT section 2 ("do not rescale LFZO") and every frozen number
-    #  hold on the Corsa, the MX-5 and the 540i because each of them leaves
-    #  every one of these at its "as before" default, and their Vehicle
-    #  gets the unscaled file tyre -- the Corsa's is the singleton itself.
+    #  hold on the Corsa and the 540i because each of them leaves every one
+    #  of these at its "as before" default, and their Vehicle gets the
+    #  unscaled file tyre -- the Corsa's is the singleton itself.
     set_ = {k: [f for f, v in PHYSICS_DEFAULTS.items() if getattr(CARS[k], f) != v]
             for k in STOCK_CARS}
-    rep("the three stock cars leave every task-41 physics field at its default",
+    rep("the stock cars leave every task-41 physics field at its default",
         not any(set_.values()), str(set_) if any(set_.values()) else
-        f"{len(PHYSICS_DEFAULTS)} fields x {STOCK_CARS}; the two new cars set "
-        + ", ".join(f"{k}: {sum(getattr(CARS[k], f) != v for f, v in PHYSICS_DEFAULTS.items())}"
-                    for k in CAR_ORDER if k not in STOCK_CARS))
+        f"{len(PHYSICS_DEFAULTS)} fields x {STOCK_CARS}; the others set "
+        + ", ".join(f"{k}: {sum(getattr(c_, f) != v for f, v in PHYSICS_DEFAULTS.items())}"
+                    for k, c_ in every if k not in STOCK_CARS))
+    #  task 46: the retired cars are out of the game and resolve like any
+    #  unknown name -- an old save naming one opens the Corsa
+    rep("the retired cars are out of the registry and fall back to the Corsa",
+        not (set(RETIRED) & set(CARS)) and not (set(RETIRED) & set(CAR_ORDER))
+        and not (set(RETIRED) & set(CAR_TITLES)) and set(STOCK_CARS) <= set(CAR_ORDER)
+        and all(get(k) is CORSA_C and car_name(k) == CAR_TITLES[CAR_DEFAULT] for k in RETIRED)
+        and set(CARS) == set(CAR_ORDER) == set(CAR_TITLES)
+        and all(build_car_key(k) == CAR_DEFAULT for k in RETIRED)
+        and build_car_key("") == "" and build_car_key(7) == ""
+        and all(build_car_key(k) == k for k in CAR_ORDER),
+        f"retired {tuple(RETIRED)} (their builds load as {CAR_DEFAULT} builds); "
+        f"CAR_ORDER {CAR_ORDER}; STOCK_CARS {STOCK_CARS}")
     try:
         from drive.vehicle import Vehicle
         from drive.tyre import CORSA_TYRE as _CT
@@ -1209,8 +1444,7 @@ def self_check(verbose: bool = True) -> bool:
     if verbose:
         print(f"\n  {'car':24s} {'m':>6s} {'L':>6s} {'%f':>5s} {'kW':>5s} "
               f"{'Nm':>5s} {'CdA':>5s} {'mu':>5s} {'eng':>5s} {'drv':>4s} {'gears':>6s}")
-        for key in CAR_ORDER:
-            c2 = CARS[key]
+        for key, c2 in every:
             print(f"  {c2.name[:24]:24s} {c2.m:6.0f} {c2.L:6.3f} {100 * c2.wdist_f:5.0f} "
                   f"{c2.P_max / 1e3:5.0f} {c2.T_max:5.0f} {c2.CdA:5.2f} {c2.mu_scale:5.2f} {c2.engine_scale:5.2f} "
                   f"{c2.drive_layout:>4s} {len(c2.gear):6d}")

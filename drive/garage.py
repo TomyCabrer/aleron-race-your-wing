@@ -135,8 +135,9 @@ BUILTIN_WING_SHOWN = {
 }
 #  The two DESIGN pages are walked in order -- mission, then the navigator --
 #  and the order is enforced, not suggested (`Garage.open_section`). 'airfoil'
-#  and 'library' are not steps: they browse what already exists.
-PAGES = ("car", "mission", "section", "airfoil", "library")
+#  and 'library' are not steps: they browse what already exists; so do task
+#  46's two card pages, 'wings' (SAVED WINGS, L) and 'cars' (SAVED CARS, G).
+PAGES = ("car", "mission", "section", "airfoil", "library", "wings", "cars")
 #  the two DESIGN pages, in order. 'section' is the navigator over everything
 #  downstream of the mission -- airfoil, end plate, wing and results -- so the
 #  old separate wing page is a GROUP of it now, not a page. Both are drawn
@@ -154,18 +155,22 @@ RUN_BUDGET_S = 0.010
 # buttons in pairs), and no text is longer than HELP_TEXT_MAX, so none wraps
 # beside the menu's widest row (`_check_menu_fits` lays out the worst of
 # them). T's 'on brake+steer' is the top wing's 'active' mode, as the car
-# panel says it ('deploys  brake + steer (active)').
+# panel says it ('deploys  brake + steer (active)'). Task 46: K (save the
+# slot's wing) took a row, so M and T share one -- a row more and the help
+# beside the menu ran into its footer at 1280x720 with a pad
+# (`_check_menu_fits`) -- and L / G are the two card pages (SHIFT+L the
+# library as a list, named on those pages' bars).
 GARAGE_HELP_KB = [
     ("mouse drag / wheel", "orbit / zoom  (C: reset camera)"),
     ("1 / 2 / 3, TAB", "select slot: left / right / top"),
     ("LEFT/RIGHT, UP/DOWN", "station x, height h; SHIFT: 1 cm"),
     ("[ / ]", "incidence -1 / +1 deg"),
     ("W / SHIFT+W", "next / previous library wing"),
-    ("M", "mirror left <-> right"),
-    ("T", "top wing: fixed / on brake+steer"),
+    ("M / T", "mirror sides / top wing's mode"),
     ("SPACE", "deploy preview (0.45 s actuator)"),
     ("D", "design a wing (mission first)"),
-    ("A / L", "airfoil / wing + build library"),
+    ("A / L / G", "airfoils / saved wings / cars"),
+    ("K / SHIFT+K", "save the slot's wing / as new"),
     ("S / SHIFT+S", "save the build / as a new name"),
     ("B / SHIFT+B", "next / previous build (this car)"),
     ("F", "make it the car's default build"),
@@ -459,6 +464,32 @@ def _fit_car(build, car):
     return getattr(build, "car", "") or None
 
 
+#: task 46: how far inside the tail a top wing's structure stands at the least
+TOP_FOOT_MARGIN = 0.02
+
+
+def top_x_floor(car, spec: "WingSpec | None") -> float:
+    """The rearmost station a top wing may take on `car` so that what holds
+    it stands ON the car (task 46, the owner: "Make it so that the wing
+    placed both pylons (or in endplate pylons case the endplate) are both
+    connected to a physical part of the car"): its swan necks' feet, a
+    gap and a pylon's width behind the trailing edge (`aero.wing.
+    pylon_rings`), or its carrying plates' chord, TOP_FOOT_MARGIN inside
+    the tail. At the band's old floor, 0.15 m inside the tail, a 0.30 m
+    wing's pylons stood 6 cm behind the car, in the air. A wing with no
+    mount ('none') keeps the band."""
+    from .aero.wing import PYLON_TE_GAP, PYLON_W, plate_chord_scale
+    x_rear = bodies.body(car).x_rear
+    if spec is None or spec.mount not in ("pylon", "endplate"):
+        return -1e9
+    if spec.mount == "pylon":
+        back = 0.5 * float(spec.chord) + PYLON_TE_GAP + PYLON_W
+    else:                          # the plates' own chord, at the tip (their widest)
+        back = 0.5 * float(spec.chord) * max(1.0, plate_chord_scale(
+            "top", spec.plate_chord_ratio, bool(spec.plate_chord_follows)))
+    return x_rear + back + TOP_FOOT_MARGIN
+
+
 def top_h_band(car, x: float) -> tuple[float, float]:
     """The top wing's height band at station x on `car`: clear of THAT car's
     deck by the stowed gap + 0.08 m, up to 0.41 m over its roof
@@ -483,7 +514,7 @@ class CarBuild:
     draws. A build whose flanks carry the SAME published panel and no top
     wing maps onto the closed-form path exactly (that is the study's car)."""
 
-    name: str = "my corsa"        # = default_build_name("corsa")
+    name: str = "my civetta"      # = default_build_name("corsa")
     left: Slot = field(default_factory=lambda: Slot("", 0.97, 0.90, 0.0))
     right: Slot = field(default_factory=lambda: Slot("", 0.97, 0.90, 0.0))
     top: Slot = field(default_factory=lambda: Slot("", -0.90, 1.55, 6.0, "active"))
@@ -522,6 +553,8 @@ class CarBuild:
             s.mode = "active"
         t = self.top
         x_lo, x_hi = bodies.top_x_band(car)
+        if lib is not None and t.wing in lib.wings:
+            x_lo = min(max(x_lo, top_x_floor(car, lib.wings[t.wing])), x_hi)
         t.x = min(max(t.x, x_lo), x_hi)
         t_lo, t_hi = top_h_band(car, t.x)
         t.h = min(max(t.h, t_lo), t_hi)
@@ -767,8 +800,10 @@ class CarBuild:
                 return default
 
         base = cls()
-        car = d.get("car", "")
-        car = car if isinstance(car, str) else ""       # a hand-edited tag: any car
+        import cars as _cars
+        #  a hand-edited tag that is not a string: any car; a retired car's
+        #  ('mx5', 'bus', task 46): the Corsa's (`cars.build_car_key`)
+        car = _cars.build_car_key(d.get("car", ""))
         return cls(name=str(d.get("name", default_build_name(car or "corsa"))),
                    left=_slot("left", base.left),
                    right=_slot("right", base.right), top=_slot("top", base.top),
@@ -805,10 +840,13 @@ class CarBuild:
 
 
 def default_build_name(car: str = "corsa") -> str:
-    """A new build's name on `car` (task 41): 'my corsa', 'my mx5', 'my bus'
-    -- the key, not the title, so the Corsa's is the name every build had
-    before and a name stays short enough for a list row."""
-    return f"my {car or 'corsa'}"
+    """A new build's name on `car` (task 41): 'my civetta', 'my halcón',
+    'my n540', 'my courier' -- the car's shown short tag
+    (`prerace.car_label`), lower case, short enough for a list row. Before
+    the fictional names it was the KEY ('my corsa'); an old save's build so
+    called keeps that name, as any name the player chose."""
+    from .prerace import car_label
+    return f"my {(car_label(car or 'corsa') or 'car').lower()}"
 
 
 def other_car_name(build: "CarBuild", car: str, lib: "Library | None" = None) -> bool:
@@ -824,7 +862,11 @@ def other_car_name(build: "CarBuild", car: str, lib: "Library | None" = None) ->
     if not car or name == default_build_name(car):
         return False
     import cars as _cars
-    if name not in {default_build_name(k) for k in set(bodies.STYLE_OF) | set(_cars.CARS)}:
+    keys = set(bodies.STYLE_OF) | set(_cars.CARS)
+    #  task 49: the new-build names from before the fictional names ('my
+    #  corsa', 'my express': the KEY) still count as a new-build name, so an
+    #  old save's first-launch build is renamed to this car's, not shown
+    if name not in {default_build_name(k) for k in keys} | {f"my {k}" for k in keys}:
         return False
     held = lib.builds.get(name) if lib is not None else None
     if isinstance(held, dict):
@@ -1024,6 +1066,9 @@ _SIDE_GLASS_MAX_BAND = {"van": 4}
 #: a wheel's radius when `cars.py` does not carry the car yet (est: the
 #: Express's 145R13 / 155R13 van tyre, a Citaro's 275/70R22.5)
 _WHEEL_R_EST = {"van": 0.285, "bus": 0.4815}
+#: the rally Escort's livery stripes on the preview (task 46): render's
+#: C_LIVERY3, the palette's white
+C_LIVERY = (226, 226, 220)
 
 
 def _ring_body(st):
@@ -1060,6 +1105,13 @@ def _body_mesh(paint, dark, car) -> list:
         for j in range(N_RING):
             k = (j + 1) % N_RING
             quad = np.array([a[j], a[k], c[k], c[j]])
+            if j in (3, 4) and b.style == "rally" and kind in _LIVERY_KINDS:
+                #  task 46: the rally car's twin white stripes, cut INTO the
+                #  roof quads (a decal laid over them lost the painter's
+                #  sort on the near side): each half of the top split at
+                #  |y| 0.26 and 0.10, the middle strip the livery
+                polys += _striped_half(a[j], a[k], c[j], c[k], paint, inside)
+                continue
             if j in (3, 4):                              # roof
                 col = (C_GLASS if kind in _ROOF_GLASS
                        else (C_UNDER if kind == "cockpit" else paint))
@@ -1087,6 +1139,10 @@ def _body_mesh(paint, dark, car) -> list:
     for wx, wy in wheels:
         side = 1.0 if wy > 0 else -1.0
         yc = side * (abs(wy) + 0.0305)                   # the Corsa's 0.745 over its 0.7145
+        if b.style == "rally":
+            #  task 46: out in the Group 4 arches, flush with them, as the
+            #  chase car draws it (render.CarGeom.hub_y); every other car as before
+            yc = side * max(abs(wy) + 0.0305, b.half_w_at(wx) - 0.5 * W + 0.010)
         centre = np.array([wx, yc, R])
         ts = np.linspace(0.0, 2 * math.pi, 15)[:-1]
         outer = np.array([(wx + R * math.cos(t), yc + side * 0.5 * W, R + R * math.sin(t))
@@ -1105,6 +1161,32 @@ def _body_mesh(paint, dark, car) -> list:
         rim[:, 1] += side * 0.003
         polys.append((_orient(rim, centre), C_RIM, "wheel"))
     return polys
+
+
+#: the bands the rally car's stripes run down (the painted top: never glass)
+_LIVERY_KINDS = ("bonnet", "roof", "deck")
+_LIVERY_Y = (0.10, 0.26)          # m  each stripe's inner and outer edge, |y|
+
+
+def _striped_half(p0, p1, q0, q1, paint, inside) -> list:
+    """One half of a band's top (ring points p0 -> p1 on the band's front
+    ring, q0 -> q1 on its rear one; one end at the crown y = 0, the other at
+    the roof edge) as three quads: paint, the white stripe between |y|
+    _LIVERY_Y, paint. The cuts are placed on each ring's own edge by |y|,
+    so a band whose roof narrows keeps the stripe straight (task 46)."""
+    def at(a_, b_, y_):
+        t = (y_ - abs(a_[1])) / (abs(b_[1]) - abs(a_[1]))
+        return a_ + (b_ - a_) * min(max(t, 0.0), 1.0)
+    lo, hi = _LIVERY_Y
+    fp = [p0] + sorted((at(p0, p1, y_) for y_ in (lo, hi)),
+                       key=lambda v: abs(v[1]) if abs(p0[1]) < abs(p1[1]) else -abs(v[1])) + [p1]
+    fq = [q0] + sorted((at(q0, q1, y_) for y_ in (lo, hi)),
+                       key=lambda v: abs(v[1]) if abs(q0[1]) < abs(q1[1]) else -abs(v[1])) + [q1]
+    out = []
+    for n in range(3):
+        quad = np.array([fp[n], fp[n + 1], fq[n + 1], fq[n]])
+        out.append((_orient(quad, inside), C_LIVERY if n == 1 else paint, "body"))
+    return out
 
 
 class PreviewGeo:
@@ -1330,10 +1412,9 @@ def wing_polys(spec: "WingSpec | None", key: str, slot: Slot, deploy: float,
             rings.append(np.array(pts))
         polys += _loft(rings, col, "wingsel" if selected else "wing")
         if mount == "pylon":                       # two struts to the car side
+            #  task 46: each lands on the body at its height (`side_land`)
             for dz in (-pf * 0.5 * span, pf * 0.5 * span):
-                z = slot.h + dz
-                polys += _box(slot.x - 0.015, slot.x + 0.015, min(s * half_w, yc), max(s * half_w, yc),
-                              z - 0.012, z + 0.012, C_STRUT)
+                polys += _flank_strut(geo, slot.x, yc, slot.h + dz, s, C_STRUT)
         if plate > 0.0 or carried:
             #  a fence crosses the tip (half each side, as carsim has always
             #  drawn it) when sharp; blended it grows out of the tip towards
@@ -1358,15 +1439,27 @@ def wing_polys(spec: "WingSpec | None", key: str, slot: Slot, deploy: float,
                 reached = h_d < cap - 1e-9
             #  set down on the side only where it got there (a lean too
             #  shallow to reach is drawn falling short, not bent onto it)
-            wall = (1, lambda p_: s * half_w) if reached else None
+            #  (task 46: on the side the body has at that corner's station --
+            #  narrower at the nose and the tail than its widest line; a foot
+            #  above the belt is stayed down onto it below)
+            wall = ((1, lambda p_: s * side_land(geo, p_[0], min(p_[2], _section_at(geo, p_[0])[2]))[0])
+                    if reached else None)
             #  a carrying plate whose foot is past the drawn side -- above
             #  its belt (a bonnet's edge at the front wheels) or below its
             #  bottom -- is stayed onto it (`blend.side_stay`)
             top_at, z_bot = _deck_top(geo, slot.x), _body_bottom(geo, slot.x)
+            #  task 46: a tip device (a fence, not a carrying plate) is fixed
+            #  to the tip section, so it turns with the section's incidence
+            #  and twist -- along x it left the turned section half off it
+            stand, cdir = (0.0, -s, 0.0), None
+            if not carried:
+                th_t = s * math.radians(slot.inc_deg + twist)
+                cdir = (math.cos(th_t), math.sin(th_t), 0.0)
+                stand = (s * math.sin(th_t), -s * math.cos(th_t), 0.0)
             for sgn in (-1.0, 1.0):
                 root = (slot.x, yc, slot.h + sgn * 0.5 * span)
-                rg = bl.plate_rings(root, (0.0, 0.0, sgn), (0.0, -s, 0.0), st, 0.012,
-                                    None if br is not None else wall)
+                rg = bl.plate_rings(root, (0.0, 0.0, sgn), stand, st, 0.012,
+                                    None if br is not None else wall, chord_dir=cdir)
                 polys += _loft(rg, col, "plate")          # the wing's own colour
                 if br is not None:
                     polys += _loft(bl.plate_rings(root, (0.0, 0.0, sgn), (0.0, -s, 0.0), br,
@@ -1374,11 +1467,15 @@ def wing_polys(spec: "WingSpec | None", key: str, slot: Slot, deploy: float,
                 if carried:
                     foot = bl.plate_foot(root, (0.0, 0.0, sgn), (0.0, -s, 0.0),
                                          br if br is not None else st)
-                    stay = bl.side_stay(foot[2], top_at(foot[1]), z_bot)
+                    #  (task 46: where the wall set the foot down, at this
+                    #  station's side, not the widest line)
+                    fy = (s * side_land(geo, slot.x, min(foot[2], _section_at(geo, slot.x)[2]))[0]
+                          if wall is not None else foot[1])
+                    stay = bl.side_stay(foot[2], top_at(fy), z_bot)
                     if stay is not None:
                         cw = 0.5 * max(bl.BRACKET_CHORD_FRAC * float(st["c"][-1]),
                                        bl.BRACKET_CHORD_MIN)
-                        polys += _box(slot.x - cw, slot.x + cw, foot[1] - 0.006, foot[1] + 0.006,
+                        polys += _box(slot.x - cw, slot.x + cw, fy - 0.006, fy + 0.006,
                                       stay[0], stay[1], C_STRUT, "bracket")
     else:
         deck = (geo.deck_z if geo is not None else deck_z)(slot.x)
@@ -1424,14 +1521,33 @@ def wing_polys(spec: "WingSpec | None", key: str, slot: Slot, deploy: float,
                 st = bl.plate_stations(h_d, cant, blend, shape, c_tip, scale, slope, back)
                 reached = h_d < fold - 1e-9
             wall = (2, lambda p_: _deck_top(geo, p_[0])(p_[1])) if reached else None
+            #  task 46: a tip device turns with the tip section (the flank's rule)
+            stand, cdir = (0.0, 0.0, -1.0), None
+            if not carried:
+                a_t = ang + math.radians(twist) * deploy
+                cdir = (math.cos(a_t), 0.0, -math.sin(a_t))
+                stand = (-math.sin(a_t), 0.0, -math.cos(a_t))
             for sgn in (-1.0, 1.0):
                 root = (slot.x, sgn * (0.5 * span + 0.008), z_tip)
-                rg = bl.plate_rings(root, (0.0, sgn, 0.0), (0.0, 0.0, -1.0), st, 0.012,
-                                    None if br is not None else wall)
+                rg = bl.plate_rings(root, (0.0, sgn, 0.0), stand, st, 0.012,
+                                    None if br is not None else wall, chord_dir=cdir)
                 polys += _loft(rg, col, "plate")
                 if br is not None:
                     polys += _loft(bl.plate_rings(root, (0.0, sgn, 0.0), (0.0, 0.0, -1.0), br,
                                                   0.012, wall), C_STRUT, "bracket")
+                if carried and wall is not None:
+                    #  task 46: a wing wider than the body sets its plates
+                    #  down BESIDE it, at the belt (`_deck_top` past the
+                    #  side): a bracket runs in from the foot to the side
+                    foot = bl.plate_foot(root, (0.0, sgn, 0.0), (0.0, 0.0, -1.0),
+                                         br if br is not None else st)
+                    _zb, _kn, zbelt, _zt, w_x, _wr = _section_at(geo, slot.x)
+                    if abs(foot[1]) > w_x + 0.01:
+                        cw = 0.5 * max(bl.BRACKET_CHORD_FRAC * float(st["c"][-1]),
+                                       bl.BRACKET_CHORD_MIN)
+                        polys += _box(slot.x - cw, slot.x + cw, min(sgn * w_x, foot[1]),
+                                      max(sgn * w_x, foot[1]), zbelt - 0.012, zbelt,
+                                      C_STRUT, "sidebracket")
         if mount == "pylon":
             #  swan necks: the section at the pylon's station, its PRESSURE
             #  surface (the world-up side of the inverted wing) for the neck
@@ -1477,6 +1593,170 @@ def _body_bottom(geo, x: float) -> float:
     return float(np.interp(x, st[:, 0], st[:, 1]))
 
 
+def _section_at(geo, x: float) -> tuple:
+    """The drawn body's cross-section at station x: (zb, knee, zbelt, ztop,
+    w, wr) -- `_ring` (the Corsa) / `_ring_body` (a lofted shell) read
+    between stations: the floor corner at 0.92 w, the side upright at w
+    from the sill's knee to the belt, the glass in to the roof edge wr."""
+    corsa = geo is None or geo.corsa
+    rows = STATIONS if corsa else bodies.body(geo.car).stations
+    st = np.array([r[:6] for r in rows], float)[::-1]      # x ascending
+    _x, zb, zbelt, ztop, w, wr = (float(np.interp(x, st[:, 0], st[:, k])) for k in range(6))
+    knee = zb + 0.28 if corsa else min(zb + 0.28, zb + 0.5 * (zbelt - zb))
+    return zb, min(knee, zbelt - 1e-6), zbelt, max(ztop, zbelt + 1e-6), w, wr
+
+
+def side_land(geo, x: float, z: float) -> tuple[float, float]:
+    """Where a flank strut meets the drawn body at station x, height z, as
+    (|y|, z) -- task 46 (the owner, 2026-09-28: "when pushing the wing
+    forward it sometimes is floating in the air. Make it so that ... both
+    pylons ... are both connected to a physical part of the car"). Level
+    with a side, the side at that height: the upright flank, the sill's
+    tuck below the knee, the glass (tumblehome) above the belt. Above the
+    body's top there (over a bonnet, past a tail) the strut braces down to
+    its top edge; below its floor, up to the floor corner. A strut drawn to
+    the widest half-width at every height ended in mid-air beside the glass
+    and over the bonnet."""
+    zb, knee, zbelt, ztop, w, wr = _section_at(geo, x)
+    if z > ztop:
+        #  the nearer of the two top corners: a bonnet's wing edge (the belt
+        #  at w), else the roof edge
+        return (w, zbelt) if (z - zbelt) ** 2 < (z - ztop) ** 2 + (w - wr) ** 2 else (wr, ztop)
+    if z < zb:
+        return 0.92 * w, zb
+    return float(np.interp(z, (zb, knee, zbelt, ztop), (0.92 * w, w, w, wr))), float(z)
+
+
+def _beam(p0, p1, hw_x: float, ht: float, col, kind="strut") -> list:
+    """A straight strut of `2 hw_x` along x and `2 ht` across, from p0 to
+    p1 in the y-z plane (a flank strut's brace, a plate's side bracket)."""
+    p0, p1 = np.asarray(p0, float), np.asarray(p1, float)
+    d = p1 - p0
+    d = d / max(float(np.linalg.norm(d)), 1e-12)
+    ex = np.array([1.0, 0.0, 0.0])
+    n = np.cross(ex, d)
+    n = n / max(float(np.linalg.norm(n)), 1e-12)
+    rings = []
+    for p in (p0, p1):
+        rings.append(np.array([p + hw_x * ex + ht * n, p - hw_x * ex + ht * n,
+                               p - hw_x * ex - ht * n, p + hw_x * ex - ht * n,
+                               p + hw_x * ex + ht * n]))
+    return _loft(rings, col, kind)
+
+
+def _flank_strut(geo, x: float, y_wing: float, z: float, s: float, col) -> list:
+    """One flank pylon strut from the wing (at |y_wing|, height z) to the
+    body (`side_land`): the level box it always was where the body has a
+    side at that height, a brace to the body's top edge (or floor) where it
+    has none."""
+    y_b, z_b = side_land(geo, x, z)
+    if abs(z_b - z) < 1e-9:
+        return _box(x - 0.015, x + 0.015, min(s * y_b, y_wing), max(s * y_b, y_wing),
+                    z - 0.012, z + 0.012, col)
+    return _beam((x, s * y_b, z_b), (x, y_wing, z), 0.015, 0.012, col)
+
+
+def _hull2(p: np.ndarray) -> np.ndarray:
+    """The convex hull of 2-D points, counter-clockwise (monotone chain)."""
+    p = np.unique(np.round(np.asarray(p, float), 12), axis=0)
+    if len(p) < 3:
+        return p
+
+    def half(pts):
+        h = []
+        for q in pts:
+            while len(h) >= 2 and ((h[-1][0] - h[-2][0]) * (q[1] - h[-2][1])
+                                   - (h[-1][1] - h[-2][1]) * (q[0] - h[-2][0])) <= 0.0:
+                h.pop()
+            h.append(q)
+        return h
+    lo, hi = half(p), half(p[::-1])
+    return np.array(lo[:-1] + hi[:-1])
+
+
+def tip_cover(polys, role: str) -> float:
+    """The share of a wing's +tip section (its outermost ring along the span)
+    that lies on its tip device: the plate's drawn vertices near the tip,
+    seen along the span, as a convex outline (task 46's check: the plate
+    along x left a turned section half off it)."""
+    ax = 2 if role == "flank" else 1
+    wv = np.vstack([np.asarray(v, float) for v, _c, k in polys if k in ("wing", "wingsel")])
+    tip = wv[np.abs(wv[:, ax] - wv[:, ax].max()) < 1e-9]
+    pl = [np.asarray(v, float) for v, _c, k in polys if k == "plate"]
+    if not pl:
+        return 0.0
+    pv = np.vstack(pl)
+    pv = pv[np.abs(pv[:, ax] - wv[:, ax].max()) < 0.03]
+    keep = [k for k in range(3) if k != ax]
+    hull = _hull2(pv[:, keep])
+    if len(hull) < 3:
+        return 0.0
+    inside = 0
+    e = np.roll(hull, -1, axis=0) - hull
+    el = np.maximum(np.hypot(e[:, 0], e[:, 1]), 1e-12)
+    for q in tip[:, keep]:
+        #  signed distance inside each edge; 1 mm of slack: a plate that
+        #  follows the chord ends exactly AT the tip's leading and trailing edges
+        c = (e[:, 0] * (q[1] - hull[:, 1]) - e[:, 1] * (q[0] - hull[:, 0])) / el
+        inside += int(np.all(c >= -1e-3))
+    return inside / max(len(tip), 1)
+
+
+def tip_turn_error(polys, role: str) -> float:
+    """Degrees between a wing's +tip chord line (its tip section's two
+    farthest points) and its plate's first ring there (the plate vertices
+    level with the tip along the span): 0 when a blended tip device grows
+    out of the tip section as it is turned."""
+    ax = 2 if role == "flank" else 1
+    wv = np.vstack([np.asarray(v, float) for v, _c, k in polys if k in ("wing", "wingsel")])
+    tip = wv[np.abs(wv[:, ax] - wv[:, ax].max()) < 1e-9]
+    pv = np.vstack([np.asarray(v, float) for v, _c, k in polys if k == "plate"])
+    ring = pv[np.abs(pv[:, ax] - wv[:, ax].max()) < 0.009]
+    if len(ring) < 2 or len(tip) < 2:
+        return 90.0
+
+    def along(q):
+        d = np.linalg.norm(q[:, None, :] - q[None, :, :], axis=2)
+        i, j = np.unravel_index(int(np.argmax(d)), d.shape)
+        u = q[j] - q[i]
+        u[ax] = 0.0
+        return u / max(float(np.linalg.norm(u)), 1e-12)
+    r_ = ring - ring.mean(axis=0)          # the ring's long axis: its corners
+    r_[:, ax] = 0.0                         # sit either side of it by the thickness
+    u_r = np.linalg.svd(r_, full_matrices=False)[2][0]
+    c = abs(float(np.dot(along(tip), u_r)))
+    return math.degrees(math.acos(min(1.0, c)))
+
+
+def _mesh_section(mesh: "Batch", x: float) -> list:
+    """The car mesh sliced by the plane x = const: (|y|, z) segments."""
+    segs = []
+    for i in range(len(mesh.starts)):
+        if mesh.kinds[i] != "body":
+            continue
+        v = mesh.verts[mesh.starts[i]:mesh.starts[i] + mesh.counts[i]]
+        if v[:, 0].min() > x or v[:, 0].max() < x or np.ptp(v[:, 0]) < 1e-9:
+            continue
+        w = np.roll(v, -1, axis=0)
+        dx = w[:, 0] - v[:, 0]
+        ok = ((v[:, 0] - x) * (w[:, 0] - x) <= 0.0) & (np.abs(dx) > 1e-12)
+        if ok.sum() >= 2:
+            t = (x - v[ok, 0]) / dx[ok]
+            q = np.column_stack([np.abs(v[ok, 1] + t * (w[ok, 1] - v[ok, 1])),
+                                 v[ok, 2] + t * (w[ok, 2] - v[ok, 2])])
+            segs.append((q[0], q[1]))
+    return segs
+
+
+def _seg_dist2(segs, y: float, z: float) -> float:
+    q, best = np.array([abs(y), z]), 9.0
+    for a, b in segs:
+        d = b - a
+        t = float(np.clip(np.dot(q - a, d) / max(float(np.dot(d, d)), 1e-18), 0.0, 1.0))
+        best = min(best, float(np.linalg.norm(q - (a + t * d))))
+    return best
+
+
 def _wing_drawing_checks(lib=None, view=None, screenshot_dir: str = "") -> list:
     """The mount and the plates AS DRAWN (the owner, 2026-09-25: "Carried by
     endplate still produces inboard pylons"), measured off `wing_polys`'
@@ -1504,16 +1784,25 @@ def _wing_drawing_checks(lib=None, view=None, screenshot_dir: str = "") -> list:
     def parts(spec, key, deploy=1.0):
         out = {"strut": [], "plate": [], "wing": [], "wingsel": [], "bracket": []}
         for v, _c, kd in wing_polys(spec, key, top_slot if key == "top" else fl_slot, deploy, lib):
-            out[kd].append(np.asarray(v, float))
+            out.setdefault(kd, []).append(np.asarray(v, float))
         return out
 
-    def plate_ends(polys, sgn, zc=1.55):
+    def plate_ends(polys, sgn, zc=1.55, turned=False):
         """(root ring, far ring) of a top wing's plate on the `sgn` side, as
         (centre, chord): the 4 corners nearest its junction (0.708 m out, at
         the wing's height `zc`) and the 4 farthest, across the span."""
         v = np.vstack([p for p in polys if np.mean(p[:, 1]) * sgn > 0])
         v = np.unique(np.round(v, 9), axis=0)
         o = np.argsort(np.hypot(v[:, 1] - sgn * 0.708, v[:, 2] - zc))
+        if turned:
+            #  task 46: a tip device turns with the tip section by the wing's
+            #  6 deg, so its rings are measured in its own frame: turned
+            #  back about the junction first, then read as before
+            a_ = math.radians(top_slot.inc_deg)
+            dx_, dz_ = v[:, 0] - top_slot.x, v[:, 2] - zc
+            v = np.column_stack([top_slot.x + dx_ * math.cos(a_) - dz_ * math.sin(a_), v[:, 1],
+                                 zc + dx_ * math.sin(a_) + dz_ * math.cos(a_)])
+            o = np.argsort(np.hypot(v[:, 1] - sgn * 0.708, v[:, 2] - zc))
         near, far = v[o[:4]], v[o[-4:]]
         return ((near.mean(axis=0), float(np.ptp(near[:, 0]))),
                 (far.mean(axis=0), float(np.ptp(far[:, 0]))))
@@ -1527,7 +1816,14 @@ def _wing_drawing_checks(lib=None, view=None, screenshot_dir: str = "") -> list:
         if m == "pylon":
             yv = np.vstack(pt["strut"])[:, 1]
             st_y = [float(yv[yv > 0].mean()), float(-yv[yv < 0].mean())]
-            st_z = sorted(float(np.mean(p[:, 2])) for p in pf_["strut"][::6])
+            #  each strut's height at the PANEL's end (task 46: one with no
+            #  side level with it braces down to the body's top edge)
+            st_z = []
+            for i_ in range(0, len(pf_["strut"]), 6):
+                sv = np.vstack(pf_["strut"][i_:i_ + 6])
+                sv = sv[np.abs(sv[:, 1]) >= np.abs(sv[:, 1]).max() - 0.015]   # a brace's end ring leans
+                st_z.append(float(sv[:, 2].mean()))
+            st_z.sort()
     y_want, z_want = 0.35 * 0.70, 0.35 * 0.39
     rep("wing drawing: pylons / struts ONLY under a pylon mount, at +-pylon_frac of the "
         "semi-span; an endplate mount and 'none' draw none",
@@ -1611,22 +1907,31 @@ def _wing_drawing_checks(lib=None, view=None, screenshot_dir: str = "") -> list:
                         beside.append((abs(y_) - w_, z_ - zw_))
             fl = parts(spec_of("flank", mount="endplate", **kw), "left", dep)
             fy = np.vstack(fl["plate"])[:, 1]
+            #  (task 46: a flank plate's foot is on the side at its own
+            #  station and height -- the nose narrows, and low down the
+            #  sill tucks in to 0.92 of the widest line)
             ok_r &= (all(abs(g_) < 0.02 for g_ in gaps)
                      and all(dy_ > 0.0 and abs(dz_) < 1e-9 for dy_, dz_ in beside)
                      and len(gaps) + len(beside) == 8
-                     and abs(float(fy.min()) - CAR_HALF_W) < 1e-9)
+                     and 0.88 * CAR_HALF_W <= float(fy.min()) <= CAR_HALF_W + 1e-9)
             what = ("upright" if not kw else "lean 70 + blend") + f" b {span_:.2f} dep {dep:.0f}"
             msg_r.append(what + (f": on the body to {max(abs(g_) for g_ in gaps):.3f} m" if gaps else "")
                          + (f": beside it at its waist, {max(d_[0] for d_ in beside):.2f} m out"
                             if beside else ""))
-    msg_r.append(f"flank plates to y {CAR_HALF_W:.3f} (the car's side) in every case")
+    msg_r.append(f"flank plates to the car's side (y {CAR_HALF_W:.3f}, its sill's tuck lower down) in every case")
     fence = np.vstack(parts(spec_of("top", mount="pylon"), "top")["plate"])
     f_low = top_slot.h - float(fence[:, 2].min())
+    #  task 46: the fence turns with the tip section, so its leading corner
+    #  hangs lowest: its height's cos plus its half chord's sin at the 6 deg
+    from .aero.wing import plate_chord_scale
+    a6 = math.radians(top_slot.inc_deg)
+    f_want = 0.12 * math.cos(a6) + 0.5 * 0.30 * plate_chord_scale("top", 0.0, False) * math.sin(a6)
     rep("wing drawing: an endplate mount's plates run to the body (top: onto the roof or "
         "down its shoulder, measured on the drawn car; a lean that throws them past its "
         "side stands them beside it at its waist) and the car's side (flank), deployed "
-        "and stowed; a pylon wing's fences hang their own height",
-        ok_r and abs(f_low - 0.12) < 1e-9, "; ".join(msg_r) + f"; pylon fence {f_low:.3f} m")
+        "and stowed; a pylon wing's fences hang their own height (turned with the tip)",
+        ok_r and abs(f_low - f_want) < 1e-9,
+        "; ".join(msg_r) + f"; pylon fence {f_low:.3f} m (0.12 m turned 6 deg: {f_want:.3f})")
 
     #  a FENCE (pylons carry the wing) longer than its gap to the roof stops
     #  on the roof instead of passing through it; stowed it folds away
@@ -1645,8 +1950,8 @@ def _wing_drawing_checks(lib=None, view=None, screenshot_dir: str = "") -> list:
     # -- 4. the LEAN throws the far end outboard by h cos(cant) -------------
     def far_dy(**kw):
         pp = parts(spec_of("top", mount="pylon", **kw), "top")["plate"]
-        _r, (f_, _fc) = plate_ends(pp, 1.0)
-        _r2, (f2, _fc2) = plate_ends(pp, -1.0)
+        _r, (f_, _fc) = plate_ends(pp, 1.0, turned=True)
+        _r2, (f2, _fc2) = plate_ends(pp, -1.0, turned=True)
         return float(f_[1]) - (0.70 + 0.008), -float(f2[1]) - (0.70 + 0.008)
     d90, d70 = far_dy(), far_dy(plate_cant_deg=70.0)
     d70b = far_dy(plate_cant_deg=70.0, plate_blend=0.4, plate_shape="spiral")
@@ -1664,10 +1969,10 @@ def _wing_drawing_checks(lib=None, view=None, screenshot_dir: str = "") -> list:
     c_tip = 0.30 * 0.6
     pp = parts(spec_of("top", mount="pylon", taper=0.6, plate_cant_deg=70.0,
                        plate_chord_follows=True), "top")["plate"]
-    (_r, c_root), (_f, c_far) = plate_ends(pp, 1.0)
+    (_r, c_root), (_f, c_far) = plate_ends(pp, 1.0, turned=True)
     c_want = c_tip - 0.30 * 0.4 * 0.12 / 0.70
     pp0 = parts(spec_of("top", mount="pylon", taper=0.6, plate_cant_deg=70.0), "top")["plate"]
-    (_r0, c_root0), (_f0, c_far0) = plate_ends(pp0, 1.0)
+    (_r0, c_root0), (_f0, c_far0) = plate_ends(pp0, 1.0, turned=True)
     rep("wing drawing: a pylon wing's tip device that FOLLOWS the chord continues the "
         "wing's taper down the plate (from the tip chord); one that does not holds 1.3 x",
         abs(c_root - c_tip) < 1e-9 and abs(c_far - c_want) < 1e-9 and c_far < c_root
@@ -1694,7 +1999,7 @@ def _wing_drawing_checks(lib=None, view=None, screenshot_dir: str = "") -> list:
                     ("blended", dict(plate_blend=0.5, plate_shape="spiral"))):
         pp = parts(spec_of("top", mount="pylon", pylon_frac=0.35, taper=0.6,
                            plate_chord_follows=True, **kw), "top")["plate"]
-        tips[tag] = (len(pp), plate_ends(pp, 1.0) if pp else None)
+        tips[tag] = (len(pp), plate_ends(pp, 1.0, turned=True) if pp else None)
     (_rv, _cv), (fv, cfv) = tips["vertical"][1]
     (_rc, _cc), (fc, cfc) = tips["canted"][1]
     (_rb, crb), (fb, cfb) = tips["blended"][1]
@@ -1714,6 +2019,11 @@ def _wing_drawing_checks(lib=None, view=None, screenshot_dir: str = "") -> list:
     # -- 6. a wing with the defaults draws exactly its old boxes ------------
     def corners(polys):
         return {tuple(np.round(p_, 9)) for v in polys for p_ in v}
+
+    def same(a, b):                # the same corners, to 1e-9 m (a turned set's
+        ua = np.unique(np.round(np.vstack(a), 9), axis=0)   # last bits differ)
+        ub = np.unique(np.round(np.vstack(b), 9), axis=0)
+        return len(ua) == len(ub) and all(np.min(np.linalg.norm(ub - q_, axis=1)) < 1e-9 for q_ in ua)
     ok_d = True
     for dep in (0.0, 0.6, 1.0):
         sp = spec_of("top", taper=0.7)
@@ -1724,8 +2034,14 @@ def _wing_drawing_checks(lib=None, view=None, screenshot_dir: str = "") -> list:
             old += [v for v, _c, _k in _box(-0.90 - 0.65 * 0.21, -0.90 + 0.65 * 0.21, y - 0.006,
                                              y + 0.006, zc - 0.12 * dep - 0.02 * (1 - dep),
                                              zc + 0.03, C_PLATE, "plate")]
+        #  task 46: ...turned with the tip section, the wing's 6 deg x deploy,
+        #  about the tip's mid-chord -- the section's own rotation
+        a_ = math.radians(6.0) * dep
+        ca_, sa_ = math.cos(a_), math.sin(a_)
+        old = [np.array([(-0.90 + (p_[0] + 0.90) * ca_ + (p_[2] - zc) * sa_, p_[1],
+                          zc - (p_[0] + 0.90) * sa_ + (p_[2] - zc) * ca_) for p_ in v]) for v in old]
         new = parts(sp, "top", dep)["plate"]
-        ok_d &= len(new) == 12 and corners(new) == corners(old)
+        ok_d &= len(new) == 12 and same(new, old)
         sf = spec_of("flank", taper=0.8)
         yc = CAR_HALF_W + DEV_OUT0 + DEV_OUT1 * dep
         old = []
@@ -1733,16 +2049,23 @@ def _wing_drawing_checks(lib=None, view=None, screenshot_dir: str = "") -> list:
             z = 0.90 + sgn * 0.39
             old += [v for v, _c, _k in _box(0.97 - 0.6 * 0.36, 0.97 + 0.6 * 0.36, yc - 0.06, yc + 0.06,
                                              z - 0.006, z + 0.006, C_PLATE, "plate")]
-        for dz_ in (-0.28 * 0.78, 0.28 * 0.78):
-            old += [v for v, _c, _k in _box(0.955, 0.985, CAR_HALF_W, yc, 0.90 + dz_ - 0.012,
-                                             0.90 + dz_ + 0.012, C_STRUT)]
+        #  the lower strut is the old box (the side is there at its height);
+        #  the upper one, over the bonnet's edge, braces down onto it (task 46)
+        dz_ = 0.28 * 0.78
+        old += [v for v, _c, _k in _box(0.955, 0.985, CAR_HALF_W, yc, 0.90 - dz_ - 0.012,
+                                         0.90 - dz_ + 0.012, C_STRUT)]
+        up_b = side_land(None, 0.97, 0.90 + dz_)
+        ok_d &= up_b[1] < 0.90 + dz_ - 0.1
+        old += [v for v, _c, _k in _beam((0.97, up_b[0], up_b[1]), (0.97, yc, 0.90 + dz_),
+                                         0.015, 0.012, C_STRUT)]
         pf_ = parts(sf, "left", dep)
         ok_d &= len(pf_["plate"]) + len(pf_["strut"]) == 24 \
-            and corners(pf_["plate"] + pf_["strut"]) == corners(old)
+            and same(pf_["plate"] + pf_["strut"], old)
     rep("wing drawing: a wing with the default mount rows draws its plates (and a flank "
         "panel its struts) exactly as before, deployed, half-way and stowed",
-        ok_d, "top plates 1.3 x tip chord, flank plates 1.2 x across the tip, struts at "
-              "+-0.28 of the span; only the top wing's pylons became swan necks")
+        ok_d, "top plates 1.3 x tip chord (turned with the tip, task 46), flank plates 1.2 x "
+              "across the tip, struts at +-0.28 of the span (the upper one braced onto the "
+              "bonnet's edge); only the top wing's pylons became swan necks")
 
     # -- 7. polygon counts stay bounded (the game draws these every frame) --
     heavy = dict(mount="pylon", pylon_frac=0.35, taper=0.6, plate_cant_deg=70.0,
@@ -1811,7 +2134,10 @@ def _wing_drawing_checks(lib=None, view=None, screenshot_dir: str = "") -> list:
         if abs(wy - (CAR_HALF_W + want)) > 0.03:
             bad.append(f"deploy {dep:g}: the wing stands {wy - CAR_HALF_W:.3f} m off the side "
                        f"(want {want:.3f})")
-        if abs(py.min() - CAR_HALF_W) > 0.01 or py.max() > CAR_HALF_W + want + 0.03:
+        #  (task 46: a foot is set down on the side at its own height -- low
+        #  down, the sill's tuck to 0.92 of the widest line)
+        if not (0.92 * CAR_HALF_W - 0.01 <= py.min() <= CAR_HALF_W + 0.01) \
+                or py.max() > CAR_HALF_W + want + 0.03:
             bad.append(f"deploy {dep:g}: the plates run {py.min() - CAR_HALF_W:.3f}.."
                        f"{py.max() - CAR_HALF_W:.3f} m off the side")
         if cols["plate"] != cols["wing"]:
@@ -1832,6 +2158,82 @@ def _wing_drawing_checks(lib=None, view=None, screenshot_dir: str = "") -> list:
         f"WingLab wing {stow:.3f} m off the side stowed, 0.25 deployed, plate feet on the side, "
         f"one stay down to the belt at {belt:.3f} m; pylon {slide[0]:.2f} -> {slide[1]:.2f} m, "
         f"carsim endplates {slide[2]:.3f} -> {slide[3]:.2f} m")
+
+    # -- 7d. task 46: a tip device caps its tip, struts and pylons stand on
+    #  the car (the owner, 2026-09-28: "Wing tip not connected properly to
+    #  wing in pylon"; "when pushing the wing forward it sometimes is floating
+    #  in the air")
+    bad46 = []
+    for role, key, slot_ in (("flank", "left", Slot("f", 0.97, 0.90, 12.0)),
+                             ("top", "top", Slot("t", -0.90, 1.55, 12.0, "active"))):
+        for tw_ in (0.0, 3.0):
+            for dev in ({}, dict(plate_cant_deg=75.0), dict(plate_blend=0.5, plate_shape="spiral")):
+                sp = spec_of(role, mount="pylon", pylon_frac=0.35, taper=0.6, twist_deg=tw_,
+                             plate_chord_follows=True, plate_h=0.10, design={"engine": "aerobo"},
+                             **dev)
+                pw = wing_polys(sp, key, slot_, 1.0, lib)
+                if "plate_blend" in dev:
+                    #  a blend grows out of the wing, tangent to it: its first
+                    #  ring lies along the tip's own chord line
+                    err = tip_turn_error(pw, role)
+                    if err > 0.5:
+                        bad46.append(f"{role} twist {tw_:g} blended: its root {err:.1f} deg off "
+                                     f"the tip chord")
+                    continue
+                cov = tip_cover(pw, role)
+                if cov < 1.0:
+                    bad46.append(f"{role} twist {tw_:g} {dev or 'vertical'}: {100 * cov:.0f} % of "
+                                 f"the tip section on its plate")
+    rep("wing drawing (task 46): a pylon wing's tip device caps its whole tip section, "
+        "turned with the wing's incidence and twist (vertical, canted, blended; 12 deg)",
+        not bad46, "; ".join(bad46) if bad46 else "every tip-section point on its plate, 12 cases")
+    #  every flank strut's body end is ON the drawn body -- the mesh sliced at
+    #  its station -- over the whole slot band, on the Corsa and the Express
+    worst, n_st, braced = 0.0, 0, 0
+    for car_ in ("corsa", "express"):
+        geo_ = PreviewGeo(car_)
+        mesh_ = Batch(build_car_mesh(car=car_))
+        x_lo_, x_hi_ = bodies.flank_x_band(car_, 0.45)
+        h_lo_, h_hi_ = bodies.flank_h_band(car_)
+        sp = spec_of("flank", mount="pylon", pylon_frac=0.56)
+        for x_ in np.linspace(x_lo_, x_hi_, 7):
+            sec_ = _mesh_section(mesh_, float(x_))
+            for h_ in np.linspace(h_lo_, h_hi_, 5):
+                sv = [np.asarray(v, float) for v, _c, kd in
+                      wing_polys(sp, "left", Slot("f", float(x_), float(h_), 0.0), 1.0, lib, geo=geo_)
+                      if kd == "strut"]
+                for i_ in range(0, len(sv), 6):
+                    q_ = np.vstack(sv[i_:i_ + 6])
+                    end = q_[np.abs(q_[:, 1]) <= np.abs(q_[:, 1]).min() + 0.015]
+                    y_, z_ = float(np.abs(end[:, 1]).mean()), float(end[:, 2].mean())
+                    worst = max(worst, _seg_dist2(sec_, y_, z_))
+                    n_st += 1
+                    braced += int(np.ptp(q_[:, 2]) > 0.03)
+    rep("wing drawing (task 46): every side-wing strut lands ON the drawn body -- level "
+        "where it has a side there, braced to its top edge (a bonnet, a tail) where not",
+        worst < 0.02 and braced > 0,
+        f"{n_st} struts over both slot bands (Corsa, Express): body end at most "
+        f"{worst * 1000:.1f} mm off the drawn section; {braced} braced")
+    #  the top wing held where what carries it stands on the car
+    rows46 = []
+    ok46 = True
+    for car_ in ("corsa", "express"):
+        for m_ in ("pylon", "endplate"):
+            lib_t = type("L", (), {})()
+            sp = spec_of("top", mount=m_, pylon_frac=0.56, chord=0.40)
+            lib_t.wings = {"t46": sp}
+            b_ = CarBuild.for_car(car_)
+            b_.top.wing, b_.top.x = "t46", -99.0
+            b_.clamp(lib_t, car_)
+            geo_ = PreviewGeo(car_)
+            pv = [np.asarray(v, float) for v, _c, kd in
+                  wing_polys(sp, "top", b_.top, 1.0, lib, geo=geo_) if kd in ("strut", "plate")]
+            x_min = float(np.vstack(pv)[:, 0].min())
+            ok46 &= x_min >= geo_.x_rear - 1e-9 and abs(b_.top.x - top_x_floor(car_, sp)) < 1e-12
+            rows46.append(f"{car_} {m_}: x {b_.top.x:+.3f}, rearmost part {x_min - geo_.x_rear:+.3f} m "
+                          f"inside the tail")
+    rep("wing drawing (task 46): the top wing goes no further back than where its pylons' "
+        "feet (or its endplates) stand on the car", ok46, "; ".join(rows46))
 
     # -- 8. the pictures ----------------------------------------------------
     if view is not None and screenshot_dir:
@@ -2474,19 +2876,21 @@ class GarageView:
         u = self.ui
         r = self._panel((12, 690, 1256, 98))
         x, y = r.x + 10 * u, r.y + 6 * u
+        #  task 46: L / G are the SAVED WINGS / SAVED CARS card pages, K saves
+        #  the selected slot's wing under a name (the pad: OPTIONS' rows)
         lines = [
             ("GARAGE  -  wings: side (both sides, mirrored), top.  1 2 3 select, arrows place, W wing, "
-             "D design, A airfoils, L library", C_TEXT),
+             "D design, A airfoils, L saved wings, G saved cars", C_TEXT),
             ("mouse drag orbit | wheel zoom | LEFT/RIGHT x | UP/DOWN h | [ ] incidence | M mirror | "
              "T top mode | SPACE deploy | V forces | R R reset (U undo) | C camera", C_TEXT_DIM),
-            ("ENTER drive  |  S save build  B next build  F car default  |  "
+            ("ENTER drive  |  S save build  K save wing  B next build  F car default  |  "
              "ESC: change car, wing tutorial, controls, main menu, quit", C_TEXT_DIM),
         ]
         if pad_name:
             lines[2] = (f"PS5 {pad_name}:  L-stick move | R-stick orbit | L1/R1 incidence | "
                         "TRIANGLE slot | SQUARE wing | CIRCLE deploy | L3 design | CROSS drive | "
                         "OPTIONS menu, builds", C_OK)
-            lines.append(("ENTER drive  |  S save build  B next build  F car default  |  "
+            lines.append(("ENTER drive  |  S save build  K save wing  B next build  F car default  |  "
                           "ESC: change car, wing tutorial, controls, main menu, quit", C_TEXT_DIM))
         else:
             #  the drive's words (input.MENU_NO_PAD, task 45)
@@ -2908,6 +3312,796 @@ class LibraryPage:
                   "ESC back", x, y + 16, 12, C_TEXT_DIM)
         if self.g.hint and self.g.hint_alpha() > 0.0:        # gone after HINT_S (task 45)
             text.blit(screen, self.g.hint[:90], x, y + 34, 12, ui.C_KEY)
+
+
+# =========================================================================== #
+#  SAVED WINGS AND SAVED CARS: the two card pages (task 46)                    #
+# =========================================================================== #
+#  The owner (2026-09-28): "There should be a way to save the wings (same as
+#  saving cars) to test them on different cars. (Can only be fitted in cars
+#  they fit). Make it easy to see the list of wings (a small diagram)" and
+#  "I want there in the garage or similar to see the different saved cars."
+#
+#  SAVED WINGS (L on the car page): every wing in the library as a card --
+#  the player's own first, then the built-ins -- with a small diagram drawn
+#  from its WingSpec (the planform and a front view, in the wing colour), its
+#  name, role, span, area and the car it was made on, and whether it FITS the
+#  selected slot of the car in the garage (`wing_fit`: the slot's role, and
+#  this car's span limit at the slot, the rule W holds). One that does not is
+#  drawn dimmed with the reason in red, and ENTER on it says what would make
+#  it fit. SAVED CARS (G): every saved build as a card with a small picture
+#  of its car carrying its wings -- the car page's own GarageView drawing into
+#  an offscreen surface, cached per build. The text library (`LibraryPage`,
+#  SHIFT+L) stays for its numbers. K on the car page saves the selected
+#  slot's wing under a name the player types (`Garage.prompt_wing`).
+
+#: spans up to this many metres share ONE scale on the wing cards, so a
+#: 0.63 m and a 1.88 m side wing look their sizes (and chords up to ~0.85 m:
+#: the plan view is 56 % of the diagram's height); a longer or deeper wing
+#: (a bus's) is fitted to its card. Each plan view carries a scale bar.
+DIAG_M_MAX = 2.2
+#: the plan view's share of the diagram's height (the front view the rest)
+DIAG_PLAN_SHARE = 0.56
+#: the section thickness the front view gives a wing, over its chord (a
+#: diagram: the car page lofts the real section)
+DIAG_TC = 0.12
+#: the pylons' colour in a diagram (C_STRUT is drawn on the lit car; on the
+#: dark card it would all but vanish)
+C_DIAG_STRUT = (150, 154, 162)
+#: the SAVED CARS pictures drawn in one frame at most (each 5-15 ms): the
+#: page opens at once and its cards fill in over the next few frames
+PICTURES_PER_FRAME = 2
+#: the pictures' camera: its distance over the car page's own, its pitch,
+#: and how much higher than the page's it looks (so a top wing is in the
+#: frame): the car and its wings fill the card, wheels to wing tips
+PICTURE_ZOOM = 0.68
+PICTURE_PITCH_DEG = 15.0
+PICTURE_LIFT = 1.25
+
+
+def car_long(car) -> str:
+    """A car as a reason names it (task 46): the first two words of its title
+    -- 'Opel Corsa', 'Renault Express', 'Mercedes Citaro' -- for a key
+    `cars.py` carries, else the key itself."""
+    import cars as _cars
+    t = _cars.CAR_TITLES.get(car or "corsa")
+    return " ".join(str(t).split()[:2]) if t else str(car or "car")
+
+
+def _known_car(car) -> bool:
+    """Is `car` a car the player can pick now (`cars.CAR_ORDER`, the menu's
+    Change car list)? A build tagged with a car taken out of the game is
+    offered as an any-car build (loaded on this car), never a change of car
+    the drive would refuse."""
+    import cars as _cars
+    return bool(car) and car in _cars.CAR_ORDER and car in _cars.CARS
+
+
+def wing_fit(spec: "WingSpec", key: str, build: "CarBuild", car=None,
+             unlimited: bool = False) -> tuple:
+    """Does library wing `spec` fit slot `key` of `build` on `car`? Task 46:
+    (fits, why, limit, past).
+
+      * its ROLE must be the slot's: a top wing goes in the top slot only;
+      * its SPAN must be within THIS car's span limit at the slot -- a side
+        wing's lower tip at the car's ground clearance for the slot's
+        height, a top wing 1.2 x the body's width (`bodies.span_limit`,
+        with `over_limits`' tolerance) -- the rule W and the library page
+        hold in Real mode; under Settings > Wing limits: Unlimited within
+        `bodies.UNLIMITED_FACTOR` (3x) of it, the designer's span ceiling.
+
+    `why` is the refusal a player reads ('too wide for the Opel Corsa:
+    1.88 m, the limit here is 1.50 m', 'a top wing: select the top slot'),
+    "" when it fits; `limit` the slot's REAL limit (None on a role
+    mismatch); `past` a wing that fits only because of Unlimited, whose runs
+    then count as UNLIMITED."""
+    role = SLOT_ROLE[key]
+    if spec.role != role:
+        return (False, ("a top wing: select the top slot" if spec.role == "top"
+                        else "a side wing: select a side slot"), None, False)
+    lim = bodies.span_limit(role, car, build.slot(key).h)
+    cap = lim * (bodies.UNLIMITED_FACTOR if unlimited else 1.0)
+    span = float(spec.span)
+    if span > cap + bodies.LIMIT_TOL:
+        return (False, (f"too wide for the {car_long(car)}"
+                        + (" even in Unlimited" if unlimited else "")
+                        + f": {span:.2f} m, the limit here is {cap:.2f} m"), lim, False)
+    return True, "", lim, span > lim + bodies.LIMIT_TOL
+
+
+def fit_height(spec: "WingSpec", car=None, unlimited: bool = False) -> float | None:
+    """The lowest side-slot height at which side wing `spec` is within `car`'s
+    span limit (a side wing's limit grows with its height: 2 (h - ground),
+    x3 in Unlimited), when a slot of the car can go that high; else None --
+    and None for a top wing, whose limit is the car's width wherever it is
+    mounted. What ENTER on a wing too wide for the slot suggests (task 46)."""
+    if spec.role != "flank":
+        return None
+    k = bodies.UNLIMITED_FACTOR if unlimited else 1.0
+    h = bodies.body(car).ground + 0.5 * float(spec.span) / k
+    return h if h <= bodies.flank_h_band(car)[1] + 1e-9 else None
+
+
+def wing_origin(lib: "Library", name: str) -> tuple[str, str]:
+    """Where library wing `name` comes from, for its card (task 46): (a car
+    key, how). 'made' -- the wing records the car it was made on
+    (`WingSpec.made_for`); 'used' -- it records none (saved before task 46)
+    but the saved builds carrying it are all one car's, so it is shown as
+    that car's (the owner's 1.88 m WingLab side wing rides in 'my express
+    (autosave)'); ('', 'built') a built-in, every car's; ('', '') nothing
+    says."""
+    w = lib.wings.get(name)
+    if w is None:
+        return "", ""
+    if w.builtin:
+        return "", "built"
+    if w.made_for:
+        return w.made_for, "made"
+    cars_ = set()
+    for js in lib.builds.values():
+        if not isinstance(js, dict):
+            continue
+        sl = js.get("slots") if isinstance(js.get("slots"), dict) else {}
+        if any(isinstance(v, dict) and v.get("wing") == name for v in sl.values()):
+            c = js.get("car", "")
+            cars_.add(c if isinstance(c, str) else "")
+    cars_.discard("")
+    return (next(iter(cars_)), "used") if len(cars_) == 1 else ("", "")
+
+
+def origin_text(lib: "Library", name: str) -> str:
+    """`wing_origin` in a player's words: 'made on the Express', 'used on
+    the Express', 'built in: on every car', 'car not recorded'."""
+    from .prerace import car_label
+    car, how = wing_origin(lib, name)
+    if how == "built":
+        return "built in: on every car"
+    if how == "made":
+        return f"made on the {car_label(car)}"
+    if how == "used":
+        return f"used on the {car_label(car)}"
+    return "car not recorded"
+
+
+def wing_order(lib: "Library") -> list:
+    """The SAVED WINGS page's order (task 46): the player's own wings first,
+    then the built-ins, each group by name."""
+    ws = lib.wings
+    return sorted(ws, key=lambda n: (bool(ws[n].builtin), n.lower(), n))
+
+
+def _shade(col, k: float) -> tuple:
+    """`col` taken toward the panel colour: `k` 1 is itself, 0 the panel."""
+    return tuple(int(round(C_HUD_BG[i] + (col[i] - C_HUD_BG[i]) * k)) for i in range(3))
+
+
+def wing_diagram(screen, rect, spec: "WingSpec", text: "ui.Text", u: float = 1.0,
+                 dim: bool = False) -> dict:
+    """The small diagram of `spec` in `rect` (task 46): two views stacked.
+
+    PLAN   the planform, span across and chord down (the leading edge up),
+           drawn round the mid-chord line as the car page lofts it: the root
+           chord at the centre, `taper` of it at the tips; the tip devices
+           as bars across the tips (their chord); a 1 m bar top right.
+    FRONT  the wing seen end on, span across: its section (DIAG_TC of the
+           local chord) on top, the tip devices / endplates at their height
+           (`plate_h_flown`) leaning by `plate_cant_deg`, and the MOUNT down
+           to the body -- the car's side for a side wing, the deck for a top
+           wing: two pylons at +-`pylon_frac` of the semi-span, or the
+           endplates themselves running to it (a WingLab plate that stops
+           short of the body bracketed on, as the car page draws it).
+
+    ONE scale for both views: DIAG_M_MAX metres across the box, a longer or
+    deeper wing fitted to it; the gap down to the body is clipped to the box
+    (a diagram, not a drawing to scale). In the wing colour -- C_PANEL_ON,
+    the plates C_PLATE -- shaded toward the panel when `dim` (a wing that
+    does not fit). Returns what it drew: px per metre, the two views' rects,
+    the span and body line in px, and the plates and pylons drawn."""
+    from .aero.wing import TOP_PYLON_L
+    r = pygame.Rect(rect)
+    k = 0.40 if dim else 1.0
+    c_wing, c_plate = _shade(C_PANEL_ON, k), _shade(C_PLATE, k)
+    c_fill = _shade(C_PANEL_ON, 0.45 * k)
+    c_strut, c_body = _shade(C_DIAG_STRUT, k), _shade(C_TEXT_DIM, 0.55 * k + 0.1)
+    c_lab = _shade(C_TEXT_DIM, 0.8 * k + 0.2)
+    lab, pad = int(12 * u), int(6 * u)
+    hp = int((r.h - int(4 * u)) * DIAG_PLAN_SHARE)
+    plan = pygame.Rect(r.x, r.y, r.w, hp)
+    front = pygame.Rect(r.x, plan.bottom + int(4 * u), r.w, r.bottom - plan.bottom - int(4 * u))
+    for box in (plan, front):
+        pygame.draw.rect(screen, _shade(C_BG, 1.0), box)
+    wmax = r.w - 2 * pad
+    b, c = max(float(spec.span), 1e-3), max(float(spec.chord), 1e-3)
+    lam = min(max(float(spec.taper), 0.0), 2.0)
+    s = min(wmax / DIAG_M_MAX, wmax / b, (plan.h - lab - pad) / (c * max(1.0, lam)))
+    cx, hb = r.centerx, 0.5 * b * s
+    out = dict(px_per_m=s, plan=plan, front=front, span_px=2.0 * hb, plates=0, pylons=0)
+    # --- plan ---------------------------------------------------------------
+    text.blit(screen, "plan", plan.x + pad, plan.y + 2, 10, c_lab)
+    #  the scale bar: half a metre, as long as that is legible (a bus wing's
+    #  card is drawn smaller: a metre, or two)
+    bar_m = next((m_ for m_ in (0.5, 1.0, 2.0) if m_ * s >= 16 * u), 5.0)
+    bar = bar_m * s
+    by, bx1 = plan.y + int(7 * u), plan.right - pad
+    pygame.draw.line(screen, c_lab, (int(bx1 - bar), by), (bx1, by), 1)
+    for xx in (bx1 - bar, bx1):
+        pygame.draw.line(screen, c_lab, (int(xx), by - 3), (int(xx), by + 3), 1)
+    text.blit(screen, f"{bar_m:g} m", bx1 - bar - 5, plan.y + 2, 10, c_lab, right=True)
+    out["bar_m"] = bar_m
+    cy = plan.y + lab + (plan.h - lab) // 2
+    cr, ct = 0.5 * c * s, 0.5 * c * lam * s
+    poly = [(cx - hb, cy - ct), (cx, cy - cr), (cx + hb, cy - ct),
+            (cx + hb, cy + ct), (cx, cy + cr), (cx - hb, cy + ct)]
+    pygame.draw.polygon(screen, c_fill, poly)
+    pygame.draw.polygon(screen, c_wing, poly, max(1, int(round(1.5 * u))))
+    ph = float(spec.plate_h_flown)
+    if ph > 0.0:
+        ratio = float(spec.plate_chord_ratio) or 1.3
+        pc = 0.5 * c * lam * ratio * s
+        for sg in (-1.0, 1.0):
+            x = cx + sg * hb
+            pygame.draw.line(screen, c_plate, (int(x), int(cy - pc)), (int(x), int(cy + pc)),
+                             max(2, int(round(3 * u))))
+    # --- front ----------------------------------------------------------------
+    flank = spec.role == "flank"
+    text.blit(screen, "front, car side below" if flank else "front, deck below",
+              front.x + pad, front.y + 2, 10, c_lab)
+    cant = math.radians(min(max(float(spec.plate_cant_deg), 5.0), 90.0))
+    carried = spec.mount == "endplate"
+    if flank:
+        gap_m = flank_out(spec, 1.0)
+    else:
+        gap_m = max(ph * math.sin(cant), 0.10) if carried else TOP_PYLON_L
+    t_r = max(2.0, DIAG_TC * c * s)
+    t_t = max(2.0, DIAG_TC * c * lam * s)
+    wy = front.y + lab + int(3 * u) + 0.5 * t_r
+    body_y = min(wy + gap_m * s, front.bottom - int(6 * u))
+    out["body_y"] = body_y
+    x0, x1 = front.x + pad, front.right - pad
+    pygame.draw.line(screen, c_body, (x0, int(body_y)), (x1, int(body_y)), 1)
+    step = max(5, int(7 * u))
+    for hx in range(x0 + step, x1, step):
+        pygame.draw.line(screen, c_body, (hx, int(body_y) + 1), (hx - int(4 * u), int(body_y) + int(4 * u)), 1)
+    if spec.mount == "pylon":
+        for sg in (-1.0, 1.0):
+            xp = int(cx + sg * float(spec.pylon_frac) * hb)
+            pygame.draw.line(screen, c_strut, (xp, int(wy)), (xp, int(body_y)), max(2, int(round(2 * u))))
+            out["pylons"] += 1
+    reach = max(body_y - wy, 0.0)
+    to_body = reach / max(math.sin(cant), 0.2)
+    L = to_body if (carried and spec.engine != "aerobo") else min(ph * s, to_body)
+    if ph > 0.0 or carried:
+        for sg in (-1.0, 1.0):
+            xa = cx + sg * hb
+            xb, yb = xa + sg * math.cos(cant) * L, wy + math.sin(cant) * L
+            if L >= 1.0:
+                pygame.draw.line(screen, c_plate, (int(xa), int(wy)), (int(xb), int(yb)),
+                                 max(2, int(round(3 * u))))
+                out["plates"] += 1
+            if carried and yb < body_y - 1.0:         # a WingLab plate short of the body
+                pygame.draw.line(screen, c_strut, (int(xb), int(yb)), (int(xb), int(body_y)), 1)
+    wpoly = [(cx - hb, wy - 0.5 * t_t), (cx, wy - 0.5 * t_r), (cx + hb, wy - 0.5 * t_t),
+             (cx + hb, wy + 0.5 * t_t), (cx, wy + 0.5 * t_r), (cx - hb, wy + 0.5 * t_t)]
+    pygame.draw.polygon(screen, c_wing, wpoly)
+    return out
+
+
+def _wrap_lines(text: "ui.Text", s: str, px: float, size: int, n_max: int) -> list:
+    """`s` broken at its spaces into the lines that fit `px` at `size`, at
+    most `n_max` of them (the last cut with '...' when it has to be)."""
+    lines = ui._wrap_px(text, s, int(px), size) or [""]
+    #  a unit never stands alone: '1.05' / 'm' is '1.05 m' on the next line
+    for i in range(1, len(lines)):
+        prev = lines[i - 1].split(" ")
+        if len(lines[i]) <= 3 and " " not in lines[i] and len(prev) > 1:
+            lines[i - 1], lines[i] = " ".join(prev[:-1]), f"{prev[-1]} {lines[i]}"
+    if len(lines) > n_max:
+        lines = lines[:n_max - 1] + [" ".join(lines[n_max - 1:])]
+    out = []
+    for ln in lines:
+        if text.width(ln, size) > px:
+            while ln and text.width(ln + "...", size) > px:
+                ln = ln[:-1]
+            ln = ln.rstrip() + "..."
+        out.append(ln)
+    return out
+
+
+def _cut(text: "ui.Text", s: str, px: float, size: int, bold: bool = False) -> str:
+    """`s` cut to `px` at `size`, ending '...' when it had to be."""
+    if text.width(s, size, bold) <= px:
+        return s
+    while s and text.width(s + "...", size, bold) > px:
+        s = s[:-1]
+    return s.rstrip() + "..."
+
+
+class _CardGrid:
+    """A page of cards in rows of `cols`, with a cursor (task 46): the SAVED
+    WINGS and SAVED CARS pages. LEFT / RIGHT step a card, UP / DOWN a row
+    (`nav`, `nav_row`); the view scrolls by whole rows to keep the cursor in
+    sight. The mouse as a list's: a click selects the card under it, a click
+    on the selected card is its ENTER (`click` -> 'activate'), the wheel
+    steps a row. `names` are the cards' keys (library names)."""
+
+    def __init__(self, cols: int = 3):
+        self.cols = cols
+        self.names: list = []
+        self.idx = 0
+        self.top = 0                   # the first row in view
+        self._rect = None              # the cards' area, as last drawn
+        self._hits: list = []          # [(index, rect)] as last drawn
+        self.rows_vis = 1
+
+    def set_names(self, names, keep=None) -> None:
+        """The cards, the cursor kept on `keep` (default the card it is on)
+        when that is still there, else on the same place in the list."""
+        was = self.current() if keep is None else keep
+        self.names = list(names)
+        if was in self.names:
+            self.idx = self.names.index(was)
+        self.idx = max(0, min(self.idx, len(self.names) - 1)) if self.names else 0
+
+    def current(self):
+        if not self.names:
+            return None
+        self.idx = max(0, min(self.idx, len(self.names) - 1))
+        return self.names[self.idx]
+
+    def nav(self, d: int) -> None:
+        if self.names:
+            self.idx = (self.idx + d) % len(self.names)
+
+    def nav_row(self, d: int) -> None:
+        """A row up / down; off the last row's end, onto its last card."""
+        if not self.names:
+            return
+        j = self.idx + d * self.cols
+        if 0 <= j < len(self.names):
+            self.idx = j
+        elif d > 0 and self.idx // self.cols < (len(self.names) - 1) // self.cols:
+            self.idx = len(self.names) - 1
+
+    def hit(self, pos) -> int:
+        if pos is None:
+            return -1
+        for i, rr in self._hits:
+            if rr.collidepoint(pos):
+                return i
+        return -1
+
+    def click(self, pos) -> str:
+        i = self.hit(pos)
+        if i < 0:
+            return ""
+        if i == self.idx:
+            return "activate"
+        self.idx = i
+        return "select"
+
+    def wheel(self, dy: int) -> None:
+        self.nav_row(-1 if dy > 0 else 1)
+
+    def layout(self, area, card_h: int, gap: int) -> list:
+        """[(index, rect)] of the cards in view in `area`, the view scrolled
+        to the cursor's row. Kept for `hit` and the self-check."""
+        area = pygame.Rect(area)
+        self.rows_vis = max(1, (area.h + gap) // (card_h + gap))
+        n_rows = (len(self.names) + self.cols - 1) // self.cols
+        row = self.idx // self.cols
+        if row < self.top:
+            self.top = row
+        elif row >= self.top + self.rows_vis:
+            self.top = row - self.rows_vis + 1
+        self.top = max(0, min(self.top, max(0, n_rows - self.rows_vis)))
+        cw = (area.w - gap * (self.cols - 1)) // self.cols
+        out = []
+        for i in range(self.top * self.cols,
+                       min(len(self.names), (self.top + self.rows_vis) * self.cols)):
+            rr, cc = divmod(i, self.cols)
+            out.append((i, pygame.Rect(area.x + cc * (cw + gap),
+                                       area.y + (rr - self.top) * (card_h + gap), cw, card_h)))
+        self._rect, self._hits = area, out
+        return out
+
+    def _card_bg(self, screen, r, sel: bool, hover: bool) -> None:
+        """A card's panel: the selected one lit, with the accent border."""
+        ui.panel(screen, r, alpha=235 if sel else 200, border=True)
+        if sel:
+            pygame.draw.rect(screen, C_SEL_BG_CARD, r.inflate(-2, -2))
+            pygame.draw.rect(screen, ui.C_ACCENT, r, 2)
+        elif hover:
+            pygame.draw.rect(screen, ui.C_GRID, r.inflate(-2, -2))
+
+    def more_text(self) -> str:
+        """Where the view is, when the cards do not all fit: 'cards 4-15 of
+        17 ^v' -- ^ / v when there are more above / below -- ("" when every
+        card is in view). The page's key bar shows it at its right, in the
+        240 px its title leaves for a status (the cards fill their area to
+        the pixel: a mark over it would cover a card)."""
+        n = len(self.names)
+        first = self.top * self.cols
+        last = min(n, (self.top + self.rows_vis) * self.cols)
+        if first == 0 and last >= n:
+            return ""
+        return (f"cards {first + 1}-{last} of {n} " + ("^" if first else "")
+                + ("v" if last < n else "") + "  (wheel)")
+
+
+#: a selected card's fill (a shade over the list's selection colour: the
+#: diagram's own dark boxes stand out on it)
+C_SEL_BG_CARD = (36, 40, 48)
+
+
+class SavedWingsPage(_CardGrid):
+    """SAVED WINGS (task 46): every library wing as a card with its diagram
+    (`wing_diagram`), for the selected slot of the car in the garage. The
+    header says which slot and car the cards are judged for, with the slot
+    chips a click (or 1 / 2 / 3) changes. `drawn` keeps what the last frame
+    drew: [(name, fits, why, rect)] -- the self-check reads it."""
+
+    CARD_H = 148
+    DIAG_W = 148
+
+    def __init__(self, g: "Garage"):
+        super().__init__(3)
+        self.g, self.lib = g, g.lib
+        self.drawn: list = []
+        self.chips: list = []          # [(slot key, rect)] the header's slot chips
+        self.refresh()
+
+    def refresh(self, keep=None) -> None:
+        self.set_names(wing_order(self.lib), keep)
+
+    def fit(self, name: str) -> tuple:
+        """`wing_fit` of wing `name` for the garage's selected slot and car."""
+        g = self.g
+        return wing_fit(self.lib.wings[name], g.sel, g.build, g.car, g.unlimited)
+
+    def chip_hit(self, pos) -> str:
+        for key, rr in self.chips:
+            if pos is not None and rr.collidepoint(pos):
+                return key
+        return ""
+
+    def draw(self, screen, text: ui.Text, u: float) -> None:
+        R = lambda x, y, w, h: pygame.Rect(int(x * u), int(y * u), int(w * u), int(h * u))  # noqa: E731
+        g = self.g
+        self.set_names(wing_order(self.lib))      # a WingLab commit, a delete: the library now
+        #  the header: what the cards are judged for, and the slot chips
+        hr = ui.panel(screen, R(12, 12, 1256, 40))
+        mine = sum(1 for n in self.names if not self.lib.wings[n].builtin)
+        x = hr.x + int(12 * u)
+        x += text.blit(screen, "SAVED WINGS", x, hr.y + int(11 * u), 16, ui.C_SECTION, bold=True)
+        x += text.blit(screen, f"   {mine} yours, {len(self.names) - mine} built in", x,
+                       hr.y + int(13 * u), 12, C_TEXT_DIM) + int(24 * u)
+        slot = g.build.slot(g.sel)
+        role = SLOT_ROLE[g.sel]
+        lim = bodies.span_limit(role, g.car, slot.h)
+        where = (f"for the {car_long(g.car)}'s " + ("top slot" if role == "top" else
+                                                    f"side slot at h {slot.h:.2f} m")
+                 + f": span limit {lim:.2f} m"
+                 + (f" (x{bodies.UNLIMITED_FACTOR:.0f} Unlimited)" if g.unlimited else ""))
+        self.chips = []
+        cx = hr.right - int(12 * u)
+        for key in reversed(SLOTS):
+            lbl = f"{SLOTS.index(key) + 1} {key}"
+            w_ = text.width(lbl, 12) + int(16 * u)
+            rr = pygame.Rect(cx - w_, hr.y + int(8 * u), w_, int(24 * u))
+            on = key == g.sel
+            pygame.draw.rect(screen, C_SEL_BG_CARD if on else C_HUD_BG, rr)
+            pygame.draw.rect(screen, ui.C_ACCENT if on else ui.C_BORDER, rr, 2 if on else 1)
+            text.blit(screen, lbl, rr.centerx, rr.y + int(5 * u), 12,
+                      C_TEXT if on else C_TEXT_DIM, centre=True)
+            self.chips.insert(0, (key, rr))
+            cx = rr.x - int(6 * u)
+        cx -= text.blit(screen, "slot", cx - int(4 * u), hr.y + int(13 * u), 12, C_TEXT_DIM,
+                        right=True) + int(20 * u)
+        where = _cut(text, where, cx - x, 12)
+        text.blit(screen, where, x, hr.y + int(13 * u), 12, C_TEXT)
+        #  the cards
+        area = R(12, 60, 1256, 622)
+        cards = self.layout(area, int(self.CARD_H * u), int(8 * u))
+        hover = self.hit(pygame.mouse.get_pos())
+        self.drawn = []
+        if not self.names:
+            text.blit(screen, "(no wings: D designs one)", area.x + 12, area.y + 12, 14, C_TEXT_DIM)
+        for i, rr in cards:
+            self._card(screen, text, u, self.names[i], rr, i == self.idx, i == hover)
+
+    def _card(self, screen, text, u, name, r, sel, hover) -> None:
+        g, w = self.g, self.lib.wings[name]
+        fits, why, lim, past = self.fit(name)
+        self._card_bg(screen, r, sel, hover)
+        dg = pygame.Rect(r.x + int(8 * u), r.y + int(8 * u), int(self.DIAG_W * u),
+                         r.h - int(16 * u))
+        wing_diagram(screen, dg, w, text, u, dim=not fits)
+        x = dg.right + int(10 * u)
+        wmax = r.right - int(10 * u) - x
+        y = r.y + int(7 * u)
+        c_main = C_TEXT if fits else C_TEXT_DIM
+        c_sub = C_TEXT_DIM if fits else _shade(C_TEXT_DIM, 0.75)
+        shown = wing_shown(name, self.lib)[0]
+        in_slot = g.build.slot(g.sel).wing == name
+        on_car = in_slot or any(g.build.slot(k).wing == name for k in SLOTS)
+        tag = "in this slot" if in_slot else ("on the car" if on_car else "")
+        tag_w = text.width(tag, 11) + int(8 * u) if tag else 0
+        text.blit(screen, _cut(text, shown, wmax - tag_w, 14, bold=True), x, y, 14, c_main,
+                  bold=True)
+        if tag:
+            text.blit(screen, tag, r.right - int(10 * u), y + int(2 * u), 11, ui.C_ACCENT, right=True)
+        y += int(21 * u)
+        role = "side wing" if w.role == "flank" else "top wing"
+        area = float(w.legacy.get("S", w.S)) if w.legacy else float(w.S)
+        ph = w.plate_h_flown
+        if w.mount == "endplate":
+            mount = f"endplates {ph:.2f} m carry it"
+        else:
+            mount = (f"plates {ph:.2f} m, " if ph > 0.0 else "no plates, ") + (
+                "pylons" if w.mount == "pylon" else "no mount")
+        rows = [(f"{role}  {'built in' if w.builtin else 'yours'}", c_sub),
+                (f"span {w.span:.2f} m  area {area:.2f} m2", c_main),
+                (origin_text(self.lib, name), c_sub),
+                (mount, c_sub)]
+        if fits and past:
+            status, c_st = (f"fits in Unlimited: past the {lim:.2f} m limit (runs UNLIMITED)",
+                            C_PANEL_ON)
+        elif fits:
+            status, c_st = ("fits (fitted now)" if in_slot else
+                            f"fits the {'top' if w.role == 'top' else 'side'} slot: ENTER"), C_OK
+        else:
+            status, c_st = why, C_WARN
+        if text.width(status, 12) > wmax and ": " in status:
+            #  too long for a line: broken where it breaks, what and then the
+            #  numbers ('too wide for the Opel Corsa:' / '1.88 m, the limit ...')
+            a_, b_ = status.split(": ", 1)
+            st_lines = (_wrap_lines(text, a_ + ":", wmax, 12, 2)
+                        + _wrap_lines(text, b_, wmax, 12, 2))[:3]
+        else:
+            st_lines = _wrap_lines(text, status, wmax, 12, 3)
+        lh = int(15 * u)
+        y_st = r.bottom - int(7 * u) - len(st_lines) * lh
+        for s_, c_ in rows:
+            if y + int(15 * u) > y_st:
+                break                               # the reason goes first
+            text.blit(screen, _cut(text, s_, wmax, 12), x, y, 12, c_)
+            y += int(16 * u)
+        for j, ln in enumerate(st_lines):
+            text.blit(screen, ln, x, y_st + j * lh, 12, c_st)
+        self.drawn.append((name, fits, why, r))
+
+
+class SavedCarsPage(_CardGrid):
+    """SAVED CARS (task 46): every saved build as a card with a picture of
+    its car carrying its wings -- GarageView's own `draw_scene` into a small
+    offscreen surface, cached per build and redrawn only when the build, the
+    wings it names, the car's paint or the card's size change (and dropped
+    on a save, a rename or a delete: `invalidate`), at most
+    PICTURES_PER_FRAME new pictures a frame. Its order is the library page's
+    (`prerace.pick_order`: this car's builds, the any-car ones, then every
+    other car's). `drawn`: [(name, status, rect)] as the last frame drew."""
+
+    CARD_H = 300
+    PIC_H = 164
+
+    def __init__(self, g: "Garage"):
+        super().__init__(3)
+        self.g, self.lib = g, g.lib
+        self._pics: dict = {}          # name -> (signature, Surface)
+        self._views: dict = {}         # (car, size) -> GarageView on its own surface
+        self.drawn: list = []
+        self.rendered = 0              # pictures drawn by the last frame (the check reads it)
+        self.refresh()
+
+    def refresh(self, keep=None) -> None:
+        from .prerace import pick_order
+        self.set_names(pick_order(self.lib.builds, self.g.car), keep)
+
+    def invalidate(self, name: str | None = None) -> None:
+        """Drop the picture of build `name` (every picture when None)."""
+        if name is None:
+            self._pics.clear()
+        else:
+            self._pics.pop(name, None)
+
+    def car_of(self, name: str) -> str:
+        """The car build `name` belongs to: its tag when the game has that
+        car, else ("" -- an any-car build, or a car taken out) this one's."""
+        js = self.lib.builds.get(name)
+        c = js.get("car", "") if isinstance(js, dict) else ""
+        c = c if isinstance(c, str) else ""
+        return c if _known_car(c) else ""
+
+    def _paint(self, car: str):
+        """The colour `car` is drawn in: the car page's own preview paint for
+        the car in the garage; for another, the drive's Paint setting for it
+        resolved (`Garage.paint_for`, which the drive hands in -- the garage
+        never imports `render`, CONTRACT section 1); the stock C_PAINT in a
+        bare garage, as its preview."""
+        if car == self.g.car:
+            return self.g.view.paint
+        rgb = None
+        pf = getattr(self.g, "paint_for", None)
+        if callable(pf):
+            try:
+                rgb = pf(car)
+            except Exception:                      # noqa: BLE001 -- a picture's colour
+                rgb = None
+        return tuple(int(c) for c in (rgb or C_PAINT))
+
+    def _signature(self, name: str, js: dict, car: str, size) -> str:
+        """What the picture depends on: the build, the geometry of the wings
+        it names, the car, its paint and the size."""
+        geo = {}
+        for k in SLOTS:
+            sl = (js.get("slots") or {}).get(k) if isinstance(js.get("slots"), dict) else None
+            w = self.lib.wings.get(sl.get("wing")) if isinstance(sl, dict) else None
+            if w is not None:
+                geo[k] = (w.name, w.role, w.airfoil, w.span, w.chord, w.taper, w.twist_deg,
+                          w.plate_h, w.mount, w.pylon_frac, w.plate_cant_deg, w.plate_blend,
+                          w.plate_shape, w.plate_chord_ratio, w.plate_chord_follows, w.engine,
+                          w.ride_h)
+        return json.dumps([js, geo, car, list(self._paint(car)), list(size)], sort_keys=True,
+                          default=str)
+
+    def picture(self, name: str, size, budget: list):
+        """Build `name`'s picture at `size` (w, h): the cached one when it is
+        current, else drawn now while `budget[0]` lasts (None when it is not
+        drawn yet -- the card shows a placeholder this frame)."""
+        js = self.lib.builds.get(name)
+        if not isinstance(js, dict):
+            return None
+        car = self.car_of(name) or self.g.car
+        sig = self._signature(name, js, car, size)
+        held = self._pics.get(name)
+        if held is not None and held[0] == sig:
+            return held[1]
+        if budget[0] <= 0:
+            return held[1] if held is not None else None
+        budget[0] -= 1
+        try:
+            surf = self._render(js, car, size)
+        except Exception as exc:                   # noqa: BLE001 -- a picture never stops the page
+            print(f"garage: no picture of '{name}' ({type(exc).__name__}: {exc})")
+            surf = pygame.Surface(size)
+            surf.fill(C_BG)
+        self._pics[name] = (sig, surf)
+        self.rendered += 1
+        return surf
+
+    def _render(self, js: dict, car: str, size) -> "pygame.Surface":
+        key = (car, tuple(size))
+        view = self._views.get(key)
+        if view is None:
+            view = GarageView(pygame.Surface(size), car)
+            self._views[key] = view
+        view.set_paint(self._paint(car))
+        cam = Orbit(*size)
+        cam.fit(view.geo)
+        cam.dist *= PICTURE_ZOOM
+        cam.pitch = math.radians(PICTURE_PITCH_DEG)
+        cam.target = np.array(cam.target0) * np.array([1.0, 1.0, PICTURE_LIFT])
+        b = CarBuild.from_json(js)
+        b.clamp(self.lib, car)                   # drawn fitted to its car, as it is driven
+        view.draw_scene(b, self.lib, cam, 1.0, "")
+        return view.screen.copy()
+
+    def status(self, name: str) -> tuple:
+        """What ENTER does with build `name` here, and its colour: load it
+        (this car's, an any-car one), change to its car and load it (another
+        car's, in the drive's garage), or why not (a bare garage, a
+        challenge's car)."""
+        from .prerace import car_label
+        g = self.g
+        c = self.car_of(name)
+        if not c or c == g.car:
+            return "ENTER: load it", C_OK
+        if g.settings is not None and not g.car_fixed:
+            return f"ENTER: change to the {car_label(c)} and load it", C_PANEL_ON
+        if g.car_fixed:
+            return f"the {car_label(c)}'s build: this challenge drives the {car_label(g.car)}", C_TEXT_DIM
+        return f"the {car_label(c)}'s build: change car from the drive's garage", C_TEXT_DIM
+
+    def draw(self, screen, text: ui.Text, u: float) -> None:
+        from .prerace import car_label
+        R = lambda x, y, w, h: pygame.Rect(int(x * u), int(y * u), int(w * u), int(h * u))  # noqa: E731
+        g = self.g
+        from .prerace import pick_order
+        self.set_names(pick_order(self.lib.builds, g.car))
+        hr = ui.panel(screen, R(12, 12, 1256, 40))
+        x = hr.x + int(12 * u)
+        x += text.blit(screen, "SAVED CARS", x, hr.y + int(11 * u), 16, ui.C_SECTION, bold=True)
+        own = sum(1 for n in self.names if self.car_of(n) in ("", g.car))
+        text.blit(screen, f"   {len(self.names)} builds: {own} for the {car_label(g.car)}, "
+                  f"{len(self.names) - own} for other cars", x, hr.y + int(13 * u), 12, C_TEXT_DIM)
+        text.blit(screen, _cut(text, f"now in the garage: the {car_long(g.car)}, '{g.build.name}'",
+                               int(560 * u), 12),
+                  hr.right - int(12 * u), hr.y + int(13 * u), 12, C_TEXT, right=True)
+        area = R(12, 60, 1256, 622)
+        cards = self.layout(area, int(self.CARD_H * u), int(8 * u))
+        hover = self.hit(pygame.mouse.get_pos())
+        self.drawn, self.rendered = [], 0
+        budget = [PICTURES_PER_FRAME]
+        if not self.names:
+            text.blit(screen, "(no saved cars yet: S saves the car in the garage)", area.x + 12,
+                      area.y + 12, 14, C_TEXT_DIM)
+        #  the selected card's picture first, so the one being looked at is
+        #  never the one waiting
+        order = sorted(cards, key=lambda ir: ir[0] != self.idx)
+        self._now = g.saved_as()               # the library build the car in hand is
+        pics = {}
+        for i, rr in order:
+            size = (rr.w - int(16 * u), int(self.PIC_H * u))
+            pics[i] = self.picture(self.names[i], size, budget)
+        for i, rr in cards:
+            self._card(screen, text, u, self.names[i], rr, i == self.idx, i == hover, pics.get(i))
+
+    def _card(self, screen, text, u, name, r, sel, hover, pic) -> None:
+        from .prerace import car_label
+        g = self.g
+        self._card_bg(screen, r, sel, hover)
+        pr = pygame.Rect(r.x + int(8 * u), r.y + int(8 * u), r.w - int(16 * u), int(self.PIC_H * u))
+        if pic is not None:
+            screen.blit(pic, pr.topleft)
+        else:
+            pygame.draw.rect(screen, C_BG, pr)
+            text.blit(screen, "drawing ...", pr.centerx, pr.centery - 7, 12, C_TEXT_DIM, centre=True)
+        pygame.draw.rect(screen, ui.C_BORDER, pr, 1)
+        js = self.lib.builds.get(name) or {}
+        b = CarBuild.from_json(js)
+        c = self.car_of(name)
+        x, y = r.x + int(10 * u), pr.bottom + int(8 * u)
+        wmax = r.w - int(20 * u)
+        st = g.settings
+        dflt = ""
+        if st is not None and hasattr(st, "build_of"):
+            try:
+                dflt = st.build_of(c or g.car)
+            except Exception:                      # noqa: BLE001
+                dflt = ""
+        tag = "(default)" if dflt == name else ""
+        now = getattr(self, "_now", None) == name
+        tag = (tag + ("  " if tag else "") + "in the garage now") if now else tag
+        tag_w = text.width(tag, 11) + int(8 * u) if tag else 0
+        text.blit(screen, _cut(text, name, wmax - tag_w, 14, bold=True), x, y, 14, C_TEXT, bold=True)
+        if tag:
+            text.blit(screen, tag, r.right - int(10 * u), y + int(2 * u), 11,
+                      C_OK if dflt == name else ui.C_ACCENT, right=True)
+        y += int(21 * u)
+        import cars as _cars
+        if c:
+            whose = _cars.CAR_TITLES.get(c, c) + ("  (this car)" if c == g.car else "")
+        else:
+            raw = js.get("car", "") if isinstance(js.get("car", ""), str) else ""
+            whose = (f"any car ({raw} is not in the game now)" if raw else
+                     "any car (saved before builds knew their car)")
+        text.blit(screen, _cut(text, whose, wmax, 12), x, y, 12, C_OK if c == g.car else C_TEXT_DIM)
+        y += int(17 * u)
+        wl = [("side" if b.mirror else "left", b.left.wing)]
+        if not b.mirror:
+            wl.append(("right", b.right.wing))
+        wl.append(("top", b.top.wing))
+        for lbl, wn in wl:
+            shown = wing_shown(wn, self.lib)[0] if wn else "none"
+            if wn and wn not in self.lib.wings:
+                shown = f"{wn} (not in the library)"
+            text.blit(screen, _cut(text, f"{lbl:<6s}{shown}", wmax, 12), x, y, 12,
+                      C_TEXT if wn else C_TEXT_DIM)
+            y += int(15 * u)
+        status, c_st = self.status(name)
+        try:
+            over = bodies.over_limits(js, self.lib, c or g.car)
+        except Exception:                          # noqa: BLE001 -- a tag is never worth a crash
+            over = []
+        lines = _wrap_lines(text, status, wmax, 12, 2)
+        if over:
+            lines = lines[:1] + [_cut(text, "UNLIMITED: " + bodies.limits_text(over), wmax, 12)]
+        lh = int(15 * u)
+        y_st = r.bottom - int(7 * u) - len(lines) * lh
+        for j, ln in enumerate(lines):
+            text.blit(screen, ln, x, y_st + j * lh, 12,
+                      C_WARN if (over and j == len(lines) - 1) else c_st)
+        self.drawn.append((name, status, r))
 
 
 # =========================================================================== #
@@ -3721,12 +4915,26 @@ class Garage:
         #: the car is not the player's to change here (a challenge's car)
         self.car_wanted: str | None = None
         self.car_fixed = False
+        #: task 46: with `car_wanted`, the saved build the drive opens that car
+        #: with (the SAVED CARS page's ENTER on another car's build); None --
+        #: the menu's Change car -- opens it with its own default
+        self.build_wanted: str | None = None
+        #: an action a page asked the loop for outside a key's return (SAVED
+        #: CARS' change of car, from a click or the pad too): `frame` hands it on
+        self._pending_action: str | None = None
+        #: the card pages' hint lines as the last frame drew them (the check)
+        self.saved_hint_drawn: list = []
+        #: task 46: car key -> the RGB the drive's Paint setting draws it in
+        #: (SAVED CARS' pictures of other cars); the drive sets it, None in a
+        #: bare garage (the stock colour)
+        self.paint_for = None
         if not pygame.get_init():
             pygame.init()
         if not pygame.font.get_init():
             pygame.font.init()
         self.screen = pygame.display.set_mode(size)
-        pygame.display.set_caption("Alerón - garage")
+        from . import branding
+        pygame.display.set_caption(branding.caption("garage"))
         self.lib = lib or library()
         if isinstance(build, WingDesign):
             build = CarBuild.from_json(asdict(build))
@@ -3802,6 +5010,9 @@ class Garage:
         self.mission_page = MissionPage(self)
         self.af_page = AirfoilPage(self)
         self.lib_page = LibraryPage(self)
+        #  task 46: the two card pages, SAVED WINGS (L) and SAVED CARS (G)
+        self.wings_page = SavedWingsPage(self)
+        self.cars_page = SavedCarsPage(self)
         self.prompt = ui.TextPrompt()
         self._prompt_kind = ""
         self._af_return = "car"
@@ -3890,11 +5101,18 @@ class Garage:
         from .prerace import car_label
         car_row = ([(f"Change car  (now: {car_label(self.car)})", "cars")]
                    if self.settings is not None and not self.car_fixed else [])
+        #  task 46: the two card pages took the text library's row and
+        #  'Load a build ...' (Saved cars loads them; SHIFT+L still opens the
+        #  text list), and the selected slot's wing is saved from here too --
+        #  the pad's K (its prompt offers a free name, CROSS takes it)
+        what = "top" if self.sel == "top" else "side"
         items = ([("Resume", "resume")] + car_row
                  + [(f"Design a wing for the {self.sel} slot", "design")]
                  + tut_rows
                  + [("Airfoil library", "airfoils"),
-                    ("Wing & build library", "library")]
+                    ("Saved wings", "saved_wings"),
+                    ("Saved cars", "saved_cars"),
+                    (f"Save the {what} wing as ...", "wing_save")]
                  + self._build_rows()
                  + [(self._row_label("defaults"), "defaults"),
                     #  (no 'Reset camera' row since Change car came: C here and on
@@ -3979,12 +5197,13 @@ class Garage:
         #  tutorial's three rows the list scrolls, its 'v 16 more' goes beside
         #  the widest row, and the help beside them wrapped and ran past the
         #  footer at 1280x720, 1440x900 and 1600x900 (`_check_menu_fits`)
+        #  Task 46: 'Load a build ...' is the menu's Saved cars row now (its
+        #  action `build_load` still opens that page, for an old caller)
         from .prerace import car_label
         n, dflt = self.build.name, self.default_name()
         return [(f"Save build  '{_menu_name(n)}'" + ("" if self._own_build(n) else "  (asks a name)"),
                  "build_save"),
                 ("Save build as a new name ...", "build_save_as"),
-                ("Load a build ...  (the library's builds)", "build_load"),
                 (f"Set as {car_label(self.car)} default  (now: {_menu_name(dflt) or 'none'})",
                  "build_default")]
 
@@ -4084,13 +5303,17 @@ class Garage:
             self.open_airfoils()
         elif action == "library":
             self.open_library()
+        elif action == "saved_wings":                 # task 46
+            self.open_saved("wings")
+        elif action in ("saved_cars", "build_load"):
+            self.open_saved("cars")
+        elif action == "wing_save":
+            #  a free name: a pad can only take the name offered (CROSS)
+            self.prompt_wing(as_new=True)
         elif action == "build_save":
             self.save_build()
         elif action == "build_save_as":
             self.save_build(as_new=True)
-        elif action == "build_load":
-            self.open_library()
-            self.lib_page.focus = "builds"
         elif action == "build_default":
             self.make_default()
         elif action in ("wt_start", "wt_resume", "wt_first"):
@@ -4315,6 +5538,26 @@ class Garage:
         self.lib_page.refresh()
         self.page = "library"
 
+    def open_saved(self, which: str = "wings") -> None:
+        """Task 46: SAVED WINGS ('wings': L, the menu's Saved wings) or SAVED
+        CARS ('cars': G, the menu's Saved cars), the cursor on the wing in the
+        selected slot / the build in hand when they are in the list. ESC
+        comes back to the car page, TAB goes across to the other."""
+        if which == "cars":
+            self.cars_page.refresh(keep=self.saved_as())
+        else:
+            self.wings_page.refresh(keep=self.build.slot(self.sel).wing or None)
+        self.page = "cars" if which == "cars" else "wings"
+
+    def _saved_changed(self, name: str | None = None) -> None:
+        """A wing or build was saved, renamed or deleted (task 46): the card
+        pages list again, and SAVED CARS' picture of `name` (every one when
+        None: a wing changed, and any build may carry it) is drawn afresh.
+        The text library refreshes itself where it always did."""
+        self.wings_page.refresh()
+        self.cars_page.refresh()
+        self.cars_page.invalidate(name)
+
     def close_page(self) -> None:
         """ESC steps BACK through the design pages rather than dropping
         straight to the car: the chain is the procedure, and walking out of
@@ -4400,19 +5643,112 @@ class Garage:
                          self.lib.unique_name("builds", base) if as_new else base,
                          hint=self.PROMPT_HINT)
 
-    def prompt_rename_build(self) -> None:
-        """R on the library's BUILDS list (task 41): rename the build under
-        the cursor (`Library.rename`)."""
-        it = self.lib_page.builds.current()
-        if not it or it[0] not in self.lib.builds:
+    def prompt_wing(self, as_new: bool = False) -> None:
+        """K / SHIFT+K on the car page, the menu's 'Save the side wing as ...'
+        (task 46): the name prompt for saving the SELECTED slot's wing as a
+        wing of the player's own -- the owner's "save the wings (same as
+        saving cars) to test them on different cars". It opens on the wing's
+        own name for a wing of the player's (ENTER keeps it: saved in place,
+        the car it is on recorded when it had none) and on a FREE name for a
+        built-in or with `as_new` (SHIFT+K), so ENTER alone -- a pad's CROSS
+        -- saves a new wing beside it. A slot with no wing is refused, and so
+        are the study's two published panels ('fin', 'plate'): a copy of one
+        under another name would no longer be the published closed form
+        (`CarBuild.cfg_kwargs` knows them by name) -- they are on every car
+        already."""
+        key = self.sel
+        what = "top wing" if key == "top" else "side wing"
+        w = self.lib.wings.get(self.build.slot(key).wing)
+        if w is None:
+            self.hint = f"no {what} in the {key} slot to save: W puts one in, D designs one"
+            return
+        shown = wing_shown(w.name, self.lib)[0]
+        if w.legacy:
+            self.hint = (f"the {shown} is built in (the study's published panel): it is on "
+                         "every car already - nothing to save")
+            return
+        base = f"my {shown.lower()}" if w.builtin else w.name
+        self._prompt_kind = "wing"
+        self._wing_from = (key, w.name)
+        free = as_new or w.builtin
+        if free:
+            #  the first free name after the wing's own STEM: a second copy of
+            #  'my side-2' is offered 'my side-3', not 'my side-2-2'
+            import re
+            base = self.lib.unique_name("wings", re.sub(r"-\d+$", "", base) or base)
+        self.prompt.show((f"save the {what} as a NEW wing" if free else
+                          f"save the {what} as (ENTER keeps its name)"),
+                         base, hint=self.PROMPT_HINT)
+
+    def _save_wing(self, name: str) -> bool:
+        """The wing prompt's ENTER (task 46): the slot's wing saved as the
+        user wing `name` -- a copy of its WingSpec (its design and its aero
+        law kept, `builtin` off) recording the car it is on now
+        (`WingSpec.made_for`). The wing's OWN name saves it in place (only
+        the car recorded, when it had none); a name another wing's file
+        holds is never written over (saved beside it, '-2', as a build's
+        name is) -- a wing is named by the builds that carry it. The slot
+        (both sides, mirrored) then carries the saved wing, as S makes the
+        car in hand the saved build. False, with the hint, when nothing
+        was saved."""
+        from .prerace import car_label
+        key, src_name = getattr(self, "_wing_from", (self.sel, ""))
+        src = self.lib.wings.get(src_name)
+        what = "top wing" if key == "top" else "side wing"
+        if src is None:
+            self.hint = f"'{src_name}' is no longer in the library"
+            return False
+        name = str(name or "").strip()[:32]
+        if not name:
+            return False
+        if name == src.name and not src.builtin:
+            if src.made_for:
+                self.hint = (f"wing '{name}' is saved (made on the {car_label(src.made_for)}; "
+                             "nothing changed)")
+                return True
+            src.made_for = self.car
+            try:
+                self.lib.save_wing(src)
+            except (OSError, ValueError) as exc:
+                src.made_for = ""
+                self.hint = _could_not_save(exc)
+                return False
+            self._saved_changed()
+            self.hint = f"wing '{name}' saved (made on the {car_label(self.car)})"
+            return True
+        new = self.lib.unique_name("wings", name)
+        copy = src.copy(name=new, builtin=False, made_for=self.car)
+        try:
+            self.lib.save_wing(copy)
+        except (OSError, ValueError) as exc:
+            self.hint = _could_not_save(exc)
+            return False
+        slot = self.build.slot(key)
+        if slot.wing == src.name:
+            slot.wing = new
+            self.build.sync_mirror(key)
+            self.build.clamp(self.lib, self.car)
+        self._saved_changed()
+        self.hint = ((f"'{name}' is taken - " if new != name else "")
+                     + f"the {what} saved as '{new}' (made on the {car_label(self.car)}), "
+                       f"now in the {key} slot; L lists it")
+        return True
+
+    def prompt_rename_build(self, name: str | None = None) -> None:
+        """R on the library's BUILDS list (task 41) -- or on a SAVED CARS
+        card, `name` (task 46): rename that build (`Library.rename`)."""
+        if name is None:
+            it = self.lib_page.builds.current()
+            name = it[0] if it else None
+        if not name or name not in self.lib.builds:
             self.hint = "no build here to rename"
             return
-        if self.lib.builds[it[0]].get("builtin"):
+        if self.lib.builds[name].get("builtin"):
             self.hint = "built-in builds cannot be renamed"
             return
         self._prompt_kind = "rename_build"
-        self._rename_from = it[0]
-        self.prompt.show(f"rename the build '{it[0]}'", it[0], hint=self.PROMPT_HINT)
+        self._rename_from = name
+        self.prompt.show(f"rename the build '{name}'", name, hint=self.PROMPT_HINT)
 
     def _prompt_done(self, value: str) -> None:
         kind = self._prompt_kind
@@ -4463,6 +5799,8 @@ class Garage:
                          else f"{why} - saved as '{new}'")
         elif kind == "rename_build":
             self._rename_build(getattr(self, "_rename_from", ""), value)
+        elif kind == "wing":                         # task 46: K / SHIFT+K
+            self._save_wing(value)
 
     # -- slot editing (car page) ---------------------------------------------
     def _past_limit(self, key: str, spec: "WingSpec", h: float | None = None) -> float | None:
@@ -4609,7 +5947,14 @@ class Garage:
         slot.x += dx
         slot.h += dh
         slot.inc_deg += dinc
+        want_x = slot.x
         self.build.clamp(self.lib, self.car)
+        if self.sel == "top" and dx < 0.0 and slot.x > want_x + 1e-9:
+            #  task 46: held where its pylons / plates still stand on the car
+            w = self.lib.wings.get(slot.wing)
+            if w is not None and abs(slot.x - top_x_floor(self.car, w)) < 1e-9:
+                self.hint = ("top wing: its " + ("pylons" if w.mount == "pylon" else "endplates")
+                             + " must stand on the car - it goes no further back")
         if dh < 0.0:
             self._h_stop(self.sel, h_old)
         self.build.sync_mirror(self.sel)
@@ -4752,19 +6097,28 @@ class Garage:
         if e["square"]:
             if self.page == "airfoil":
                 self.af_page.request_xfoil()
-            elif self.page == "library":
+            elif self.page in ("library", "cars"):
                 self._save_build_quick()
+            elif self.page == "wings":                 # task 46: the slot's wing, named
+                self.prompt_wing()
         if e["r1"] and self.page == "library":         # task 41: the car's default
             lp = self.lib_page
             if lp.focus == "builds" and lp.builds.current():
                 self.make_default(lp.builds.current()[0])
             else:
                 self.hint = "R1 makes a BUILD the car's default: TRIANGLE to the builds"
+        elif e["r1"] and self.page == "cars":          # task 46: its car's default
+            self._make_default_saved(self.cars_page.current())
+        if self.page == "wings" and (e["r1"] or e["l1"]):
+            #  task 46: the slot the cards are judged for, next / previous
+            self._select(SLOTS[(SLOTS.index(self.sel) + (1 if e["r1"] else -1)) % 3])
         if e["triangle"]:
             if self.page == "library":
                 self.lib_page.focus = "builds" if self.lib_page.focus == "wings" else "wings"
             elif self.page == "airfoil":
                 self.af_page.focus = "params" if self.af_page.focus == "list" else "list"
+            elif self.page in ("wings", "cars"):       # task 46: across to the other
+                self.open_saved("cars" if self.page == "wings" else "wings")
         if e["options"]:
             self._menu_open()
         return None
@@ -4779,12 +6133,16 @@ class Garage:
                 self.af_page.params.nav(d)
         elif self.page == "library":
             (self.lib_page.wings if self.lib_page.focus == "wings" else self.lib_page.builds).nav(d)
+        elif self.page in ("wings", "cars"):          # task 46: UP / DOWN a row of cards
+            (self.wings_page if self.page == "wings" else self.cars_page).nav_row(d)
 
     def _page_adjust(self, d: int, fine: bool) -> None:
         if self.page == "airfoil" and self.af_page.focus == "params":
             self.af_page.params.adjust(d, fine)
         elif self.page == "airfoil":
             self.af_page.list.nav(d)
+        elif self.page in ("wings", "cars"):          # task 46: LEFT / RIGHT a card
+            (self.wings_page if self.page == "wings" else self.cars_page).nav(d)
 
     def _page_activate(self) -> None:
         #  (ENTER on the mission page states the mission through the shell:
@@ -4799,6 +6157,10 @@ class Garage:
                 self.af_page.params.activate()
         elif self.page == "library":
             self._library_select()
+        elif self.page == "wings":                    # task 46
+            self._fit_saved_wing(self.wings_page.current())
+        elif self.page == "cars":
+            self._saved_car_select(self.cars_page.current())
 
     # -- THE MOUSE ---------------------------------------------------------------
     #  Every page is driven by the keyboard OR the mouse, and the mouse does
@@ -4814,14 +6176,21 @@ class Garage:
             return [(self.af_page.list, "list"), (self.af_page.params, "params")]
         if self.page == "library":
             return [(self.lib_page.wings, "wings"), (self.lib_page.builds, "builds")]
+        if self.page == "wings":
+            return [(self.wings_page, "wings")]
+        if self.page == "cars":
+            return [(self.cars_page, "cars")]
         return []
 
     def _page_click(self, pos, fine: bool) -> None:
+        if self.page == "wings" and self.wings_page.chip_hit(pos):
+            self._select(self.wings_page.chip_hit(pos))     # task 46: a slot chip
+            return
         for w, focus in self._page_widgets():
             if w.hit(pos) < 0:
                 continue
             self._set_focus(focus)
-            if isinstance(w, ui.ListBox):
+            if isinstance(w, (ui.ListBox, _CardGrid)):
                 if w.click(pos) == "activate":
                     self._page_activate()
                 return
@@ -4834,6 +6203,11 @@ class Garage:
             return
 
     def _page_wheel(self, dy: int) -> None:
+        if self.page in ("wings", "cars"):
+            #  task 46: the wheel scrolls the cards wherever it is (a gap
+            #  between two cards, the header)
+            (self.wings_page if self.page == "wings" else self.cars_page).wheel(dy)
+            return
         pos = pygame.mouse.get_pos()
         for w, focus in self._page_widgets():
             if w.hit(pos) < 0:
@@ -4895,6 +6269,140 @@ class Garage:
                 return
             self._load_build(it[0])
             self.page = "car"
+
+    # -- the SAVED WINGS / SAVED CARS pages (task 46) --------------------------
+    def _fit_saved_wing(self, name: str | None) -> bool:
+        """ENTER on a SAVED WINGS card: the wing into the selected slot (both
+        sides, mirrored) when it FITS (`wing_fit`: the slot's role, this car's
+        span limit at the slot, x3 in Unlimited), and back to the car page to
+        see it on the car. One that does not fit stays out, and the hint says
+        why and what would make it fit: the slot a top / side wing wants, the
+        height a side wing fits from on this car (its limit grows with the
+        height), Settings > Wing limits: Unlimited."""
+        w = self.lib.wings.get(name) if name else None
+        if w is None:
+            self.hint = "no wing here"
+            return False
+        shown = wing_shown(w.name, self.lib)[0]
+        fits, why, _lim, _past = wing_fit(w, self.sel, self.build, self.car, self.unlimited)
+        if not fits:
+            more = ""
+            if w.role == SLOT_ROLE[self.sel]:
+                h = fit_height(w, self.car, self.unlimited)
+                if h is not None:
+                    more = f" - it fits from h {h:.2f} m (UP on the car page)"
+                if not self.unlimited:
+                    more += ("; " if more else " - ") + "Settings > Wing limits: Unlimited allows it"
+            else:
+                more = " (1 / 2 / 3, or R1)" if self.pad is not None else " (1 / 2 / 3)"
+            self.hint = f"'{shown}' is {why}{more}" if why.startswith("a ") else f"'{shown}': {why}{more}"
+            return False
+        was = self._limits_past()
+        slot = self.build.slot(self.sel)
+        slot.wing = w.name
+        self.build.sync_mirror(self.sel)
+        self.build.clamp(self.lib, self.car)
+        cross = self._limit_cross(was)                  # as W says it (task 45)
+        self.hint = f"{self.sel}: {shown}" + (f", {cross[1]}" if cross else "")
+        self.page = "car"
+        return True
+
+    def _saved_car_select(self, name: str | None) -> str:
+        """ENTER on a SAVED CARS card (task 46). A build of THIS car -- or an
+        any-car one -- is loaded (`_load_build`, as the library's BUILDS list
+        loads it) and the car page shows it: 'load'. Another car's build, in
+        the drive's garage (Settings, not a challenge's car): the garage ends
+        with 'car' (`_pending_action`), `car_wanted` its car and
+        `build_wanted` the build, and the drive opens the garage on that car
+        with that build (drive._garage_car): 'car'. In a bare garage, or on a
+        challenge's car, it only says whose it is: ''."""
+        from .prerace import car_label
+        if not name or name not in self.lib.builds:
+            self.hint = "no build here"
+            return ""
+        c = self.cars_page.car_of(name)
+        if not c or c == self.car:
+            self._load_build(name)
+            self.page = "car"
+            return "load"
+        if self.settings is None or self.car_fixed:
+            self.hint = (f"'{name}' is the {car_label(c)}'s build: "
+                         + (f"this challenge drives the {car_label(self.car)}" if self.car_fixed
+                            else "change car from the drive's garage to load it"))
+            return ""
+        self._leave_runs()
+        self.car_wanted, self.build_wanted = c, name
+        self.hint = f"to the {car_label(c)}, with '{name}'"
+        self._pending_action = "car"
+        return "car"
+
+    def _make_default_saved(self, name: str | None) -> None:
+        """D (pad R1) on a SAVED CARS card (task 46): the build becomes ITS
+        car's default -- this car's for one of this car or an any-car one
+        (`make_default`), else that other car's (Settings.car_build[its
+        car]), as the drive's Settings > Default would make it there."""
+        from .prerace import car_label
+        if not name or name not in self.lib.builds:
+            self.hint = "no build here"
+            return
+        c = self.cars_page.car_of(name)
+        if not c or c == self.car:
+            self.make_default(name)
+            return
+        if self.settings is None:
+            self.hint = "no drive settings here: set a car's default from the drive's garage"
+            return
+        if self._set_default(name, car=c):
+            self.hint = f"'{name}' is the {car_label(c)}'s default build"
+            self.lib_page.refresh()
+
+    def _delete_saved(self, kind: str, name: str | None) -> bool:
+        """DEL on a library item (the text library's lists, task 45; the card
+        pages, task 46): `kind` 'wings' / 'builds', the item `name`. The
+        first DEL only arms it and says what goes (and when it is a car's
+        default, or on the car now); a second DEL on the same item, within
+        ARM_S, deletes it. True when it went."""
+        from .prerace import car_label
+        if kind == "wings":
+            if not name or name not in self.lib.wings:
+                return False
+            if self.lib.wings[name].builtin:
+                self.hint = "built-in wings cannot be deleted"
+                return False
+            fitted = any(self.build.slot(k).wing == name for k in SLOTS)
+            if not self._confirm(f"del:wings:{name}",
+                                 f"DEL again: delete wing {name}"
+                                 + (" (on the car now: it comes off)" if fitted else ""),
+                                 (pygame.K_DELETE,)):
+                return False
+            self.lib.delete("wings", name)
+            self.build.clamp(self.lib, self.car)
+            self.hint = f"deleted wing '{name}'"
+            self._saved_changed()
+            return True
+        if not name or name not in self.lib.builds:
+            return False
+        cb = getattr(self.settings, "car_build", None)
+        of = [c for c, n in cb.items() if n == name] if isinstance(cb, dict) else []
+        if not self._confirm(f"del:builds:{name}",
+                             f"DEL again: delete build {name}"
+                             + (f" (the {', '.join(car_label(c) for c in of)}'s default)"
+                                if of else ""),
+                             (pygame.K_DELETE,)):
+            return False
+        self.lib.delete("builds", name)
+        self.hint = f"deleted build '{name}'"
+        #  a car whose default it was has none now (task 41): said here,
+        #  rather than found out the next time that car is chosen
+        cb = getattr(self.settings, "car_build", None)
+        gone = [c for c, n in cb.items() if n == name] if isinstance(cb, dict) else []
+        if gone:
+            self.settings.car_build = {c: n for c, n in cb.items() if n != name}
+            self.settings.save()
+            self.hint += (f" - it was the {', '.join(car_label(c) for c in gone)}'s "
+                          f"default: none now")
+        self._saved_changed(name)
+        return True
 
     # -- builds: save, switch, the car's own default (task 41) ---------------
     #  The owner: "There has to be an easy way to save and change the wing
@@ -5030,6 +6538,7 @@ class Garage:
             self.hint = _could_not_save(exc)
             return False
         self.lib_page.refresh()
+        self._saved_changed(name)            # task 46: its picture is drawn afresh
         return True
 
     def save_build(self, as_new: bool = False) -> None:
@@ -5101,18 +6610,20 @@ class Garage:
         self.hint = f"build {j + 1}/{len(names)}: '{names[j]}'" + (
             "  (default)" if names[j] == self.default_name() else "") + tail
 
-    def _set_default(self, name: str) -> bool:
-        """Settings.car_build[this car] = `name`, saved. False with a hint
-        when there is no Settings (a bare garage) or the file did not save."""
+    def _set_default(self, name: str, car: str | None = None) -> bool:
+        """Settings.car_build[this car] = `name`, saved -- or `car`'s (task
+        46: SAVED CARS' D on another car's build). False with a hint when
+        there is no Settings (a bare garage) or the file did not save."""
         st = self.settings
         if st is None or not hasattr(st, "car_build"):
             self.hint = "no drive settings here: set a car's default from the drive's garage"
             return False
+        car = car or self.car
         cb = dict(st.car_build) if isinstance(st.car_build, dict) else {}
         if name:
-            cb[self.car] = name
+            cb[car] = name
         else:
-            cb.pop(self.car, None)
+            cb.pop(car, None)
         st.car_build = cb
         st.save()
         if getattr(st, "save_note", ""):
@@ -5173,6 +6684,8 @@ class Garage:
             st.car_build = {c: (got if n == old else n) for c, n in cb.items()}
             st.save()
         self.lib_page.refresh(keep=got)
+        self._saved_changed(old)             # task 46: the cards, under the new name
+        self.cars_page.set_names(self.cars_page.names, keep=got)
         self.hint = f"build '{old}' renamed '{got}'" + (
             f" (still the default of {len(moved)} car{'s' if len(moved) > 1 else ''})" if moved else "")
 
@@ -5186,47 +6699,12 @@ class Garage:
         """DEL on the library page: the wing or build under the cursor. Task
         45: the first DEL only arms it and says what goes (and when it is a
         car's default, or on the car now); a second DEL on the same item,
-        within ARM_S, deletes it."""
-        from .prerace import car_label
+        within ARM_S, deletes it (`_delete_saved`, which the card pages of
+        task 46 share)."""
         lp = self.lib_page
-        if lp.focus == "wings":
-            it = lp.wings.current()
-            if it and it[0] in self.lib.wings:
-                if self.lib.wings[it[0]].builtin:
-                    self.hint = "built-in wings cannot be deleted"
-                    return
-                fitted = any(self.build.slot(k).wing == it[0] for k in SLOTS)
-                if not self._confirm(f"del:wings:{it[0]}",
-                                     f"DEL again: delete wing {it[0]}"
-                                     + (" (on the car now: it comes off)" if fitted else ""),
-                                     (pygame.K_DELETE,)):
-                    return
-                self.lib.delete("wings", it[0])
-                self.build.clamp(self.lib, self.car)
-                self.hint = f"deleted wing '{it[0]}'"
-        else:
-            it = lp.builds.current()
-            if it and it[0] in self.lib.builds:
-                cb = getattr(self.settings, "car_build", None)
-                of = [c for c, n in cb.items() if n == it[0]] if isinstance(cb, dict) else []
-                if not self._confirm(f"del:builds:{it[0]}",
-                                     f"DEL again: delete build {it[0]}"
-                                     + (f" (the {', '.join(car_label(c) for c in of)}'s default)"
-                                        if of else ""),
-                                     (pygame.K_DELETE,)):
-                    return
-                self.lib.delete("builds", it[0])
-                self.hint = f"deleted build '{it[0]}'"
-                #  a car whose default it was has none now (task 41): said
-                #  here, rather than found out the next time that car is chosen
-                cb = getattr(self.settings, "car_build", None)
-                gone = [c for c, n in cb.items() if n == it[0]] if isinstance(cb, dict) else []
-                if gone:
-                    self.settings.car_build = {c: n for c, n in cb.items() if n != it[0]}
-                    self.settings.save()
-                    self.hint += (f" - it was the {', '.join(car_label(c) for c in gone)}'s "
-                                  f"default: none now")
-        lp.refresh()
+        it = lp.wings.current() if lp.focus == "wings" else lp.builds.current()
+        if self._delete_saved("wings" if lp.focus == "wings" else "builds", it[0] if it else None):
+            lp.refresh()
 
     # -- keyboard / mouse -----------------------------------------------------
     def _handle(self, ev) -> str | None:
@@ -5371,7 +6849,15 @@ class Garage:
         elif k == pygame.K_a:
             self.open_airfoils()
         elif k == pygame.K_l:
-            self.open_library()
+            #  task 46: L the SAVED WINGS cards, SHIFT+L the text library
+            if fine:
+                self.open_library()
+            else:
+                self.open_saved("wings")
+        elif k == pygame.K_g:
+            self.open_saved("cars")                   # task 46: SAVED CARS
+        elif k == pygame.K_k:
+            self.prompt_wing(as_new=fine)             # task 46: save the slot's wing
         #  task 41: the car's builds, one key each. D (the obvious "default")
         #  is the designer's, so the default is F -- the player's Favourite
         elif k == pygame.K_s:
@@ -5443,6 +6929,10 @@ class Garage:
                 self.lib_page.focus = "builds" if self.lib_page.focus == "wings" else "wings"
             elif self.page == "airfoil":
                 self.af_page.focus = "params" if self.af_page.focus == "list" else "list"
+            elif self.page in ("wings", "cars"):     # task 46: across to the other
+                self.open_saved("cars" if self.page == "wings" else "wings")
+        elif self.page in ("wings", "cars"):
+            self._saved_page_key(k, fine)
         elif self.page == "airfoil":
             if k == pygame.K_x:
                 self.af_page.request_xfoil()
@@ -5467,6 +6957,44 @@ class Garage:
                 else:
                     self.hint = "R renames a BUILD (TAB to the builds); a wing: N in its designer"
         return None
+
+    def _saved_page_key(self, k, fine: bool) -> None:
+        """The SAVED WINGS / SAVED CARS pages' own keys (task 46; the arrows,
+        ENTER, TAB and ESC are every list page's)."""
+        if k == pygame.K_l and fine:
+            self.open_library()                       # the text library
+            return
+        if k == pygame.K_DELETE:                      # never BACKSPACE (the garage key)
+            if self.page == "wings":
+                self._delete_saved("wings", self.wings_page.current())
+            else:
+                self._delete_saved("builds", self.cars_page.current())
+            return
+        if self.page == "wings":
+            wp = self.wings_page
+            if k in (pygame.K_1, pygame.K_2, pygame.K_3):
+                self._select(SLOTS[(pygame.K_1, pygame.K_2, pygame.K_3).index(k)])
+            elif k == pygame.K_g:
+                self.open_saved("cars")
+            elif k == pygame.K_k:
+                self.prompt_wing(as_new=fine)
+            elif k == pygame.K_n:
+                self._new_wing()
+            elif k == pygame.K_r:
+                self.hint = ("a wing is not renamed (builds carry it by name): K on the car "
+                             "page saves it under a new one")
+            elif k == pygame.K_d:
+                self.hint = "D makes a BUILD a car's default: TAB to the saved cars"
+            return
+        cp = self.cars_page
+        if k == pygame.K_s:
+            self.prompt_build(as_new=fine)
+        elif k == pygame.K_d:
+            self._make_default_saved(cp.current())
+        elif k == pygame.K_r:
+            self.prompt_rename_build(cp.current())
+        elif k == pygame.K_l:
+            self.open_saved("wings")
 
     # -- drawing ------------------------------------------------------------------
     def _draw_page(self) -> None:
@@ -5505,6 +7033,24 @@ class Garage:
                 pad_h = [("stick", "section"), ("SQUARE", "XFOIL"), ("TRIANGLE", "list/weights"),
                          ("CIRCLE", "back"), ("CIRCLE then L3", "design a wing to use one")] \
                     if pad_name else None
+        elif self.page == "wings":
+            #  task 46: SAVED WINGS
+            self.wings_page.draw(self.screen, self.text, u)
+            hints = [("CLICK / ARROWS", "a wing"), ("ENTER", "fit it"), ("1 2 3", "slot"),
+                     ("K", "save the slot's wing"), ("TAB", "saved cars"), ("N", "new wing"),
+                     ("DEL twice", "delete"), ("SHIFT+L", "as a list"), ("ESC", "back")]
+            pad_h = [("stick", "a wing"), ("CROSS", "fit it"), ("L1 / R1", "slot"),
+                     ("SQUARE", "save the slot's wing"), ("TRIANGLE", "saved cars"),
+                     ("CIRCLE", "back")] if pad_name else None
+        elif self.page == "cars":
+            #  task 46: SAVED CARS
+            self.cars_page.draw(self.screen, self.text, u)
+            hints = [("CLICK / ARROWS", "a car"), ("ENTER", "load it"), ("S", "save this car"),
+                     ("D", "its car's default"), ("R", "rename"), ("DEL twice", "delete"),
+                     ("TAB", "saved wings"), ("SHIFT+L", "as a list"), ("ESC", "back")]
+            pad_h = [("stick", "a car"), ("CROSS", "load it"), ("SQUARE", "save this car"),
+                     ("R1", "its car's default"), ("TRIANGLE", "saved wings"),
+                     ("CIRCLE", "back")] if pad_name else None
         else:
             self.lib_page.draw(self.screen, self.text, u)
             hints = [("UP/DOWN", "item"), ("TAB", "wings / builds"), ("ENTER", "use / load"),
@@ -5513,11 +7059,29 @@ class Garage:
             pad_h = [("stick", "item"), ("TRIANGLE", "wings/builds"), ("CROSS", "use / load"),
                      ("SQUARE", "save build"), ("R1", "car default"),
                      ("CIRCLE", "back")] if pad_name else None
-        title = {"airfoil": "AIRFOIL LIBRARY", "library": "WING & BUILD LIBRARY"}[self.page]
+        title = {"airfoil": "AIRFOIL LIBRARY", "library": "WING & BUILD LIBRARY",
+                 "wings": "SAVED WINGS", "cars": "SAVED CARS"}[self.page]
         r = ui.key_hint_bar(self.screen, self.text, (int(12 * u), int(690 * u), int(1256 * u), int(98 * u)),
                             hints, pad_h, title=f"{title}   {self.build.summary(self.lib)[:100]}")
         if help_:
             self.text.blit(self.screen, help_[:150], r.x + 10, r.bottom - 20, 12, ui.C_KEY)
+        if self.page in ("wings", "cars"):
+            #  task 46: where the cards' view is, when they do not all fit
+            mt = (self.wings_page if self.page == "wings" else self.cars_page).more_text()
+            if mt:
+                self.text.blit(self.screen, mt, r.right - 10, r.y + 8, 12, C_TEXT_DIM, right=True)
+        #  task 46: the card pages' notes -- a refusal with its reason, a fit,
+        #  a change of car -- on the bar's last lines (two at most, wrapped
+        #  to the bar), gone after HINT_S as everywhere else
+        self.saved_hint_drawn = []
+        if self.page in ("wings", "cars") and self.hint and self.hint_alpha() > 0.0:
+            #  under the bar's rows (`key_hint_bar`: the title at +6, a row
+            #  each 17 px from +24)
+            y0 = r.y + (60 if pad_h else 43)
+            lines = _wrap_lines(self.text, self.hint, r.w - 20, 12, 2)
+            for j, ln in enumerate(lines):
+                self.text.blit(self.screen, ln, r.x + 10, y0 + j * 14, 12, C_PANEL_ON)
+            self.saved_hint_drawn = lines
         #  task 45: the airfoil page's own notes -- ENTER with no wing being
         #  designed, a polar queued -- were written to the hint and drawn
         #  nowhere on it; a line of the bar above the row help, gone after
@@ -5553,6 +7117,9 @@ class Garage:
         a = self._poll_pad(dt)
         if a and not action:
             action = a
+        if self._pending_action and not action:
+            #  task 46: SAVED CARS' change of car, from a key, a click or the pad
+            action, self._pending_action = self._pending_action, None
         if action == "drive" and self._t_alive < 0.35:
             action = None                  # a key / button carried in from the drive
         if action == "drive" and self.page != "car":
@@ -5696,24 +7263,25 @@ def _check_builds(g: "Garage", lib: Library, key, rep) -> bool:
         asked and "fresh one" in lib.builds and as_new and not g.prompt.open
         and "fresh one-2" not in lib.builds, g.hint)
     #  another car's build is never written over, by S or by its typed name
-    bus_js = dict(CarBuild(name="bus wings", car="bus").to_json())
+    #  (task 46: the Express's, in the retired bus's role)
+    bus_js = dict(CarBuild(name="big van", car="express").to_json())
     lib.save_build(bus_js)
     lib.save_build(dict(CarBuild(name="old any").to_json(), car=""))
-    g.build.name = "bus wings"
+    g.build.name = "big van"
     key(pygame.K_s)
     prompted = g.prompt.open
-    typed("bus wings")
+    typed("big van")
     chk("another car's build is saved BESIDE, never over (S asks; the typed name gets -2)",
-        prompted and lib.builds["bus wings"] == bus_js and g.build.name == "bus wings-2"
-        and lib.builds["bus wings-2"]["car"] == "corsa", g.hint)
+        prompted and lib.builds["big van"] == bus_js and g.build.name == "big van-2"
+        and lib.builds["big van-2"]["car"] == "corsa", g.hint)
     #  an any-car build that is ANOTHER car's default is not this car's to
     #  write over (review of task 41, finding 12): S asks and saves beside
     #  it, SQUARE's quick save takes a free name; it keeps its content and
-    #  stays any-car, so the MX-5 still opens with it unchanged
+    #  stays any-car, so the rally car still opens with it unchanged
     shared = dict(CarBuild(name="shared any").to_json(), car="")
     lib.save_build(shared)
     st0, g.settings = g.settings, _FakeSettings()
-    g.settings.car_build = {"mx5": "shared any"}
+    g.settings.car_build = {"rally": "shared any"}
     g._load_build("shared any")
     g.build.left.inc_deg += 2.0
     g.build.sync_mirror("left")
@@ -5727,19 +7295,19 @@ def _check_builds(g: "Garage", lib: Library, key, rep) -> bool:
     g.build.sync_mirror("left")
     g._save_build_quick()
     chk("another car's any-car default is saved beside, never over (S asks, SQUARE a free name)",
-        asked_sh and beside and "MX-5's default" in hint_sh and g.build.name == "shared any-3"
+        asked_sh and beside and "Halcón's default" in hint_sh and g.build.name == "shared any-3"
         and lib.builds["shared any"] == shared, f"{hint_sh}; then {g.hint}")
     g.settings = st0
     for n_ in ("shared any", "shared any-2", "shared any-3"):
         lib.delete("builds", n_)
-    #  the library page: this car's builds, the any-car ones, then the bus's
+    #  the library page: this car's builds, the any-car ones, then the van's
     g.lib_page.refresh()
     order = [it[0] for it in g.lib_page.builds.items]
     tags = {it[0]: it[2] for it in g.lib_page.builds.items}
     chk("the library lists this car's builds, then any-car, then other cars' (tagged, dim)",
-        order == ["bus wings-2", "fresh one", "test-car", "old any", "bus wings"]
-        and tags["bus wings"] == "Citaro" and tags["old any"] == "any car"
-        and g.lib_page.other == {"bus wings"}, f"{order} {tags}")
+        order == ["big van-2", "fresh one", "test-car", "old any", "big van"]
+        and tags["big van"] == "Courier" and tags["old any"] == "any car"
+        and g.lib_page.other == {"big van"}, f"{order} {tags}")
     #  B / SHIFT+B: this car's own and the any-car ones, in that order, in place
     g._load_build("test-car")
     seen = []
@@ -5750,7 +7318,7 @@ def _check_builds(g: "Garage", lib: Library, key, rep) -> bool:
     back = g.build.name
     chk("B steps this car's saved builds in the library's order (never another car's); "
         "SHIFT+B steps back",
-        seen == ["old any", "bus wings-2", "fresh one", "test-car"] and back == "fresh one",
+        seen == ["old any", "big van-2", "fresh one", "test-car"] and back == "fresh one",
         f"{seen} then {back}")
     g.build.top.inc_deg += 2.0                        # an unsaved change
     key(pygame.K_b)
@@ -5792,7 +7360,7 @@ def _check_builds(g: "Garage", lib: Library, key, rep) -> bool:
              == ("Fresh Two", "Fresh Two") and lb_["arena|corsa"]["name"] == "test-car")
     tap(pygame.K_DELETE)
     del_1 = ("Fresh Two" in lib.builds and st.build_of("corsa") == "Fresh Two"
-             and g.hint == "DEL again: delete build Fresh Two (the Corsa's default)")
+             and g.hint == "DEL again: delete build Fresh Two (the Civetta's default)")
     tap(pygame.K_DELETE)
     chk("library D makes the build under the cursor the default; R renames it (the default "
         "and the per-map memory follow); DEL asks (naming the default), DEL again deletes it "
@@ -5836,11 +7404,20 @@ def _check_builds(g: "Garage", lib: Library, key, rep) -> bool:
     acts = [a for _, a in g.menu.items]
     rows = dict((a, lbl) for lbl, a in g.menu.items)
     g.menu.hide()
+    #  task 46: 'Load a build ...' is the Saved cars row now (its old action
+    #  still opens that page), beside Saved wings and the slot's Save wing
+    g._menu_action("saved_cars")
+    on_cars = g.page == "cars"
+    g.page = "car"
     g._menu_action("build_load")
-    chk("the pause menu has Save / Save as / Load / Make default (showing the default)",
-        {"build_save", "build_save_as", "build_load", "build_default"} <= set(acts)
-        and "(now: old any)" in rows["build_default"] and g.page == "library"
-        and g.lib_page.focus == "builds", rows.get("build_default", ""))
+    chk("the pause menu has Save / Save as / Saved cars (the loads) / Make default (showing "
+        "the default), Saved wings and Save the side wing",
+        {"build_save", "build_save_as", "saved_cars", "saved_wings", "wing_save",
+         "build_default"} <= set(acts) and "build_load" not in acts
+        and "(now: old any)" in rows["build_default"] and on_cars and g.page == "cars"
+        and rows["saved_cars"] == "Saved cars" and rows["saved_wings"] == "Saved wings"
+        and rows["wing_save"] == f"Save the {'top' if g.sel == 'top' else 'side'} wing as ...",
+        rows.get("build_default", ""))
     g.page = "car"
     g.settings = None
     return ok
@@ -5972,7 +7549,7 @@ def _check_hints(g: "Garage", rep) -> bool:
     g.page, g._armed = "car", None
     g.lib.poll = lambda: []             # no solver result may land in between
     try:
-        short = "'Fast Wings' is the Corsa's default build"
+        short = "'Fast Wings' is the Civetta's default build"
         long_ = ("left: the panel's lower tip is at the ground clearance (h 0.58 m for 0.88 m)"
                  " - Settings > Wing limits: Unlimited goes lower")
         drawn = {}
@@ -6193,7 +7770,7 @@ def _check_menu_fits(lib: Library, pad, rep) -> bool:
                 and wraps == 0 and foot[0].top - low >= 16
                 and (m.sections[-1][0] == "PS5 DUALSENSE") == with_pad
                 and (not name or ("'" + shown + "'" in rows["build_save"]
-                                  and rows["build_default"].startswith("Set as Express default")
+                                  and rows["build_default"].startswith("Set as Courier default")
                                   and "(now: " + shown + ")" in rows["build_default"]))
                 and (not tutor or "wt_skip" in rows)
                 and (not done or ("wt_start" in rows and "cars" in rows)))
@@ -6213,17 +7790,17 @@ def _check_menu_fits(lib: Library, pad, rep) -> bool:
     #  task 45 (round 3): the sizes it did not fit at, the wing tutorial on
     #  and a 10-character name, whole, in the build rows
     for size in ((1280, 720), (1440, 900), (1600, 900)):
-        got = [lay(size, with_pad, "my express", True) for with_pad in (False, True)]
+        got = [lay(size, with_pad, "my courier", True) for with_pad in (False, True)]
         fits = all(f_ for f_, _ in got)
         ok = ok and fits
         rep(f"the garage menu fits at {size[0]}x{size[1]} with margin, the wing tutorial on "
-            "and 'my express' on the Express: keyboard; keyboard + pad", fits,
+            "and 'my courier' on the Courier: keyboard; keyboard + pad", fits,
             "; ".join(d_ for _, d_ in got))
     #  Change car (review 1): the drive's garage (Settings: its row) of a
     #  player who has FINISHED the wing tutorial -- that row the widest -- at
     #  every size, keyboard and pad
     for size in ((1280, 800), (1280, 720), (1440, 900), (1600, 900)):
-        got = [lay(size, with_pad, "my express", False, done=True) for with_pad in (False, True)]
+        got = [lay(size, with_pad, "my courier", False, done=True) for with_pad in (False, True)]
         fits = all(f_ for f_, _ in got)
         ok = ok and fits
         rep(f"the garage menu fits at {size[0]}x{size[1]} with margin, Change car's row and a "
@@ -6237,6 +7814,493 @@ def _check_menu_fits(lib: Library, pad, rep) -> bool:
         "rows is cut to MENU_NAME_MAX ('my express' whole)", short,
         f"longest help text {longest} (max {HELP_TEXT_MAX}); {len(GARAGE_HELP_KB)} keyboard + "
         f"{len(GARAGE_HELP_PAD)} pad rows; '{_menu_name(long_name)}'")
+    return ok
+
+
+class _Settings46:
+    """What task 46's rows read of the drive's Settings: the per-car
+    defaults, the wing limits, the paint names and a save() that counts."""
+
+    def __init__(self, limits: str = "real"):
+        self.car_build, self.saves, self.save_note = {}, 0, ""
+        self.wing_limits = limits
+
+    def build_of(self, car=None):
+        return self.car_build.get(car or "corsa", "")
+
+    def save(self):
+        self.saves += 1
+
+
+def _check_saved(g0: "Garage", lib0: Library, rep, screenshot_dir: str = "") -> bool:
+    """Task 46, on a library of its own beside `lib0`'s (the owner's shapes:
+    a 1.88 m WingLab-style side wing made for the Express, a 0.80 m one of
+    the player's, 'my corsa' and 'my express (autosave)'):
+
+      * `WingSpec.made_for`: an old file decodes "", the tag survives a
+        round trip, a copy keeps it;
+      * K / SHIFT+K / the menu row: refused on an empty slot and on the
+        published panels; in place on its own name (the car recorded once);
+        a new name a copy (design and aero kept, not built in, made on this
+        car) the slot then carries, mirrored; a taken name saved beside;
+        a built-in's copy offered 'my ...'; the pad's CROSS takes the name;
+      * `wing_fit`: the role, this car's limit at the slot (the rule W
+        holds, wing for wing), x3 in Unlimited; the reasons in words;
+      * SAVED WINGS: L opens it, the player's own first, each card's fit as
+        `wing_fit` says, dimmed with its reason; ENTER fits one that fits
+        (and goes to the car page), refuses one that does not with the
+        reason and what would fit it; 1 / 2 / 3 and a slot chip change the
+        slot; the mouse (a click selects, a second fits); DEL twice; TAB;
+        the diagram's scale, plates, pylons and dimming; the page's budget;
+      * SAVED CARS: G opens it, pictures drawn a few a frame, cached (the
+        same surface next frame), drawn afresh after a save / rename /
+        delete; ENTER loads this car's build, asks the drive for another
+        car's (car_wanted + build_wanted, 'car' out of the frame), refuses
+        in a bare garage or on a challenge's car; D sets ITS car's default;
+        R renames; the drive's `_garage_car` opens the car on that build."""
+    import copy as _copy
+    import shutil
+    ok = True
+
+    def chk(tag, passed, msg=""):
+        nonlocal ok
+        ok = ok and bool(passed)
+        rep(tag, passed, msg)
+
+    root = os.path.join(os.path.dirname(lib0.root.rstrip(os.sep)), "library46")
+    shutil.rmtree(root, ignore_errors=True)
+    lib = Library(root, use_xfoil=False)
+    base = lib.wings["flank-e423"]
+    big = base.copy(name="big side", builtin=False, span=1.88, chord=0.70, taper=0.62,
+                    notes="a WingLab-sized side wing", design={"engine": "carsim-test"})
+    big.aero = dict(base.aero)
+    lib.save_wing(big)
+    mine = base.copy(name="my side", builtin=False, made_for="corsa")
+    lib.save_wing(mine)
+    carried = base.copy(name="carried side", builtin=False, span=0.64, chord=0.25, mount="endplate",
+                        plate_h=0.45, plate_cant_deg=70.0)
+    lib.save_wing(carried)
+    js_c = CarBuild.for_car("corsa")
+    js_c.name, js_c.car = "my corsa", "corsa"
+    js_c.left.wing = "flank-e423"
+    js_c.sync_mirror("left")
+    js_c.top.wing = "rear-s1223"
+    lib.save_build(js_c.to_json())
+    js_e = CarBuild.for_car("express")
+    js_e.name, js_e.car = "my express (autosave)", "express"
+    js_e.left.wing = "big side"
+    js_e.sync_mirror("left")
+    lib.save_build(js_e.to_json())
+
+    # --- the WingSpec's new label ---------------------------------------------
+    from .aero.wing import WingSpec as _WS
+    old = {k: v for k, v in big.to_json().items() if k != "made_for"}
+    tagged = big.copy(made_for="express")
+    chk("WingSpec.made_for: an old wing file decodes as '' (not recorded), the tag survives a "
+        "round trip and a copy, a non-string tag reads ''",
+        _WS.from_json(old).made_for == "" and _WS.from_json(tagged.to_json()).made_for == "express"
+        and tagged.copy(name="x").made_for == "express"
+        and _WS.from_json(dict(old, made_for=7)).made_for == ""
+        and set(_WS.from_json(old).to_json()) == set(old) | {"made_for"}
+        and _WS.from_json(old).to_json() == dict(_WS.from_json(tagged.to_json()).to_json(),
+                                                 made_for=""),
+        f"{_WS.from_json(tagged.to_json()).made_for!r}")
+    chk("a wing's origin: recorded ('made on the Civetta'), else the one car whose builds carry it "
+        "('used on the Courier'), a built-in's 'on every car', else 'not recorded'",
+        origin_text(lib, "my side") == "made on the Civetta"
+        and origin_text(lib, "big side") == "used on the Courier"
+        and origin_text(lib, "plate") == "built in: on every car"
+        and origin_text(lib, "carried side") == "car not recorded",
+        f"{origin_text(lib, 'big side')!r}")
+
+    # --- fits, and the reasons -------------------------------------------------
+    real = _Settings46("real")
+    g = Garage((1280, 800), CarBuild.for_car("corsa"), headless=True, lib=lib, car="corsa",
+               settings=real)
+    g.records_root = os.path.join(root, "records")      # a rename's per-map memory: here
+    b90 = g.build                                  # the Corsa's side slot at h 0.90
+    f_big = wing_fit(big, "left", b90, "corsa")
+    f_top = wing_fit(lib.wings["rear-s1223"], "left", b90, "corsa")
+    f_side = wing_fit(mine, "top", b90, "corsa")
+    f_unl = wing_fit(big, "left", b90, "corsa", unlimited=True)
+    huge = big.copy(name="huge", span=5.0)
+    f_huge = wing_fit(huge, "left", b90, "corsa", unlimited=True)
+    exp = CarBuild.for_car("express")
+    f_exp = wing_fit(big.copy(span=1.70), "left", exp, "express")
+    chk("wing_fit: a 1.88 m side wing is too wide for the Corsa's side slot at h 0.90 (in words), "
+        "fits in Unlimited (past: its runs UNLIMITED), a 5 m one not even then; a top wing "
+        "wants the top slot and a side wing a side slot; a 1.70 m one fits the Express",
+        f_big[:2] == (False, "too wide for the Aurel Civetta: 1.88 m, the limit here is 1.50 m")
+        and f_top[:2] == (False, "a top wing: select the top slot")
+        and f_side[:2] == (False, "a side wing: select a side slot")
+        and f_unl[0] and f_unl[3] and not f_huge[0] and "even in Unlimited" in f_huge[1]
+        and "4.50 m" in f_huge[1] and f_exp[0] and not f_exp[3]
+        and abs(fit_height(big, "corsa") - 1.09) < 1e-9 and fit_height(huge, "corsa") is None,
+        f"{f_big[1]!r}; {f_huge[1]!r}")
+    same = []
+    for h in (0.55, 0.75, 0.90, 1.05, 1.20):
+        g.build.left.h = h
+        for n, w in lib.wings.items():
+            if w.role == "flank":
+                same.append(wing_fit(w, "left", g.build, "corsa")[0]
+                            == (g._past_limit("left", w) is None))
+    chk("wing_fit holds W's rule in Real mode: wing for wing and height for height, it fits "
+        "exactly when W's span limit lets it in", all(same) and len(same) >= 25,
+        f"{sum(same)}/{len(same)} agree")
+    g.build.left.h = 0.90
+    g.build.sync_mirror("left")
+
+    # --- K: save the slot's wing --------------------------------------------
+    def keyd(k, mod=0, ch=""):
+        return g._handle(pygame.event.Event(pygame.KEYDOWN, key=k, mod=mod, unicode=ch))
+
+    def typed(text):
+        g.prompt.value, g.prompt.selected = "", False
+        for ch_ in text:
+            keyd(ord(ch_) if ch_.isalnum() else pygame.K_SPACE, 0, ch_)
+        keyd(pygame.K_RETURN, 0, "\r")
+
+    g.page, g.sel = "car", "left"
+    keyd(pygame.K_k)
+    empty = (not g.prompt.open, g.hint)
+    g.build.left.wing = "plate"
+    g.build.sync_mirror("left")
+    keyd(pygame.K_k)
+    legacy = (not g.prompt.open, g.hint)
+    g.build.left.wing = "flank-e423"
+    g.build.sync_mirror("left")
+    keyd(pygame.K_k)
+    offered = g.prompt.value
+    keyd(pygame.K_RETURN, 0, "\r")
+    bi = lib.wings.get("my low-drag side wing")
+    chk("K: refused on an empty slot and on the published panels (on every car already); on a "
+        "built-in it offers a free 'my ...' name, and ENTER saves a copy there",
+        empty[0] and "no side wing in the left slot" in empty[1] and legacy[0]
+        and "published panel" in legacy[1] and offered == "my low-drag side wing"
+        and bi is not None and not bi.builtin and bi.made_for == "corsa"
+        and g.build.left.wing == g.build.right.wing == "my low-drag side wing",
+        f"{empty[1]!r}; {legacy[1]!r}; offered {offered!r}")
+    g.build.left.wing = "big side"
+    g.build.sync_mirror("left")
+    g.build.left.h = 1.15                      # (the Express build's height: it fits there)
+    g.build.sync_mirror("left")
+    keyd(pygame.K_k)
+    own_name = g.prompt.value
+    keyd(pygame.K_RETURN, 0, "\r")
+    in_place = lib.wings["big side"].made_for == "corsa" and "big side" in g.hint
+    keyd(pygame.K_k)
+    keyd(pygame.K_RETURN, 0, "\r")
+    again = lib.wings["big side"].made_for == "corsa" and "nothing changed" in g.hint
+    lib.wings["big side"].made_for = "express"          # as WingLab would have stamped it
+    lib.save_wing(lib.wings["big side"])
+    g.sel = "right"
+    keyd(pygame.K_k, pygame.KMOD_SHIFT)
+    free = g.prompt.value
+    typed("express wing")
+    cp = lib.wings.get("express wing")
+    back = Library(root, use_xfoil=False).wings.get("express wing")
+    chk("K on a wing of the player's: its own name, ENTER saves it in place (the car recorded once, "
+        "then 'nothing changed'); SHIFT+K a free name; a typed one a COPY -- not built in, "
+        "design and aero kept, made on this car -- the slot carries, both sides mirrored; "
+        "it is on disk",
+        own_name == "big side" and in_place and again and free == "big side-2"
+        and cp is not None and not cp.builtin and cp.made_for == "corsa"
+        and cp.design == big.design and cp.aero == big.aero and abs(cp.span - 1.88) < 1e-12
+        and g.build.left.wing == g.build.right.wing == "express wing"
+        and back is not None and back.made_for == "corsa" and back.design == big.design,
+        g.hint)
+    keyd(pygame.K_k, pygame.KMOD_SHIFT)
+    typed("my side")                                # another wing holds it
+    taken = (lib.wings["my side"].span == mine.span and "my side-2" in lib.wings
+             and "'my side' is taken" in g.hint and g.build.left.wing == "my side-2")
+    g._menu_open()
+    rows = dict((a, lbl) for lbl, a in g.menu.items)
+    g.menu.idx = [a for _, a in g.menu.items].index("wing_save")
+    g._menu_action(g.menu.handle("select"))
+    pad_name = g.prompt.value
+
+    class _Pad:
+        name, layout = "DualSense Wireless Controller", "ps"
+
+        def __init__(self):
+            self.held = set()
+
+        def pressed(self, n):
+            return n in self.held
+
+        def stick(self, which="left"):
+            return (0.0, 0.0)
+
+    g.pad = _Pad()
+    g._pad_seeded, g._pad_prev = True, {}
+    g.pad.held.add("cross")
+    g._poll_pad(1 / 60)
+    g.pad = None
+    chk("a name another wing holds is never written over (saved beside it); the menu's 'Save the "
+        "side wing as ...' opens the prompt on a free name and a pad's CROSS saves it",
+        taken and rows.get("wing_save") == "Save the side wing as ..." and pad_name == "my side-3"
+        and "my side-3" in lib.wings and not g.prompt.open and g.build.left.wing == "my side-3",
+        f"{g.hint!r}")
+
+    # --- SAVED WINGS -------------------------------------------------------------
+    g.build.left.wing = "flank-e423"
+    g.build.left.h = 0.90
+    g.build.sync_mirror("left")
+    g.sel = "left"
+    keyd(pygame.K_l)
+    wp = g.wings_page
+    g.frame(1.0 / 60.0)
+    order = list(wp.names)
+    own = [n for n in order if not lib.wings[n].builtin]
+    drawn = {n: (f_, w_) for n, f_, w_, _ in wp.drawn}
+    agree = all(drawn[n] == wing_fit(lib.wings[n], "left", g.build, "corsa")[:2] for n in drawn)
+    chk("L opens SAVED WINGS on the side slot: the player's own wings first, then the built-ins; "
+        "each card drawn fits as wing_fit says (the 1.88 m wing and the top wings dimmed, their "
+        "reasons in words)",
+        g.page == "wings" and order[:len(own)] == sorted(own, key=str.lower)
+        and all(lib.wings[n].builtin for n in order[len(own):])
+        and agree and drawn["big side"][0] is False
+        and drawn["rear-s1223"] == (False, "a top wing: select the top slot")
+        and drawn["flank-e423"][0] is True and wp.current() == "flank-e423",
+        f"{len(order)} cards, {len(drawn)} drawn")
+    if screenshot_dir:
+        pygame.image.save(g.screen, os.path.join(screenshot_dir, "garage_saved_wings.png"))
+    wp.set_names(wp.names, keep="big side")
+    keyd(pygame.K_RETURN)
+    refused = (g.page == "wings" and g.build.left.wing == "flank-e423"
+               and "too wide for the Aurel Civetta: 1.88 m, the limit here is 1.50 m" in g.hint
+               and "fits from h 1.09 m" in g.hint and "Unlimited" in g.hint)
+    g.frame(1.0 / 60.0)
+    shown_hint = list(g.saved_hint_drawn)
+    wp.set_names(wp.names, keep="rear-s1223")
+    keyd(pygame.K_RETURN)
+    wrong = g.page == "wings" and "select the top slot" in g.hint
+    keyd(pygame.K_3)
+    top_now = g.sel == "top" and wing_fit(lib.wings["rear-s1223"], "top", g.build, "corsa")[0]
+    keyd(pygame.K_RETURN)
+    fitted_top = g.page == "car" and g.build.top.wing == "rear-s1223"
+    chk("ENTER on a wing too wide for the slot fits nothing and says why and what would fit it "
+        "(the height, Unlimited) on the page's bar; on a top wing with a side slot selected: "
+        "the top slot; 3 selects it and ENTER fits it, back on the car page",
+        refused and bool(shown_hint) and "too wide" in shown_hint[0] and wrong and top_now
+        and fitted_top, f"{g.hint!r}")
+    keyd(pygame.K_l)
+    g.sel = "left"
+    g.frame(1.0 / 60.0)
+    i_my = wp.names.index("my side")
+    rect = dict((i, r_) for i, r_ in wp._hits)[i_my]
+    g._page_click(rect.center, False)
+    sel1 = wp.current() == "my side" and g.page == "wings"
+    g._page_click(rect.center, False)
+    clicked = g.page == "car" and g.build.left.wing == g.build.right.wing == "my side"
+    keyd(pygame.K_l)
+    g.frame(1.0 / 60.0)
+    chip = dict(wp.chips)["top"]
+    g._page_click(chip.center, False)
+    chip_ok = g.sel == "top"
+    g.sel = "left"
+    i0 = wp.idx
+    keyd(pygame.K_RIGHT)
+    keyd(pygame.K_DOWN)
+    nav_ok = wp.idx == min(i0 + 1 + wp.cols, len(wp.names) - 1)
+    i1 = wp.idx
+    keyd(pygame.K_TAB)
+    tab_ok = g.page == "cars"
+    keyd(pygame.K_TAB)
+    tab_ok = tab_ok and g.page == "wings"
+    chk("SAVED WINGS takes the mouse: a click selects a card, a second click fits it (both sides, "
+        "the car page); a slot chip selects the slot; RIGHT / DOWN a card / a row; TAB goes "
+        "across to SAVED CARS and back",
+        sel1 and clicked and chip_ok and nav_ok and tab_ok, f"idx {i0} -> {i1}")
+
+    def tap(k, mod=0):
+        keyd(k, mod)
+        g._handle(pygame.event.Event(pygame.KEYUP, key=k, mod=mod))
+
+    wp.set_names(wp.names, keep="plate")
+    tap(pygame.K_DELETE)
+    bi_del = "plate" in lib.wings and "cannot be deleted" in g.hint
+    wp.set_names(wp.names, keep="carried side")
+    tap(pygame.K_DELETE)
+    armed = "carried side" in lib.wings and "DEL again" in g.hint
+    tap(pygame.K_DELETE)
+    gone = "carried side" not in lib.wings and "carried side" not in wp.names
+    chk("SAVED WINGS: DEL twice deletes a wing of the player's (the first only arms it); a "
+        "built-in is kept", bi_del and armed and gone, g.hint)
+    #  more wings than a page holds: the bar says where the view is, and the
+    #  wheel (anywhere on the page) scrolls it a row at a time
+    extra = [f"spare {i}" for i in range(8)]
+    for n_ in extra:
+        lib.wings[n_] = mine.copy(name=n_)             # in memory: nothing to clean up
+    wp.set_names(wp.names, keep=wp.names[0])
+    g.frame(1.0 / 60.0)
+    m0 = wp.more_text()
+    top0 = wp.top
+    for _ in range(wp.rows_vis + 1):
+        g._page_wheel(-1)
+    g.frame(1.0 / 60.0)
+    m1 = wp.more_text()
+    chk("SAVED WINGS with more wings than fit: the bar says which cards are in view, and the "
+        "wheel scrolls a row at a time (the cursor with it)",
+        m0.startswith("cards 1-12 of ") and m0.endswith("v  (wheel)") and top0 == 0
+        and wp.top >= 1 and "^" in m1, f"{m0!r} -> {m1!r}")
+    for n_ in extra:
+        lib.wings.pop(n_, None)
+    wp.refresh()
+
+    # --- the diagram ------------------------------------------------------------
+    surf = pygame.Surface((200, 140))
+    box = (4, 4, 148, 132)
+    surf.fill(C_HUD_BG)
+    d_small = wing_diagram(surf, box, mine, g.text, 1.0)
+    lit = pygame.surfarray.array3d(surf).astype(int)
+    surf.fill(C_HUD_BG)
+    d_big = wing_diagram(surf, box, big, g.text, 1.0)
+    surf.fill(C_HUD_BG)
+    d_car = wing_diagram(surf, box, carried, g.text, 1.0)
+    surf.fill(C_HUD_BG)
+    d_dim = wing_diagram(surf, box, mine, g.text, 1.0, dim=True)
+    dim = pygame.surfarray.array3d(surf).astype(int)
+    d_bus = wing_diagram(surf, box, huge, g.text, 1.0)
+    orange = lambda a: int(((abs(a - np.array(C_PANEL_ON)) < 12).all(axis=2)).sum())  # noqa: E731
+    chk("the diagram: one scale for spans up to DIAG_M_MAX (a 1.88 m wing drawn 2.35 x a 0.80 m one), a "
+        "5 m one fitted to its card; plates drawn at the tips, two pylons on a pylon mount and "
+        "none on an endplate one; dimmed it has none of the wing colour",
+        abs(d_small["px_per_m"] - d_big["px_per_m"]) < 1e-9
+        and abs(d_big["span_px"] / d_small["span_px"] - 1.88 / 0.80) < 1e-9
+        and d_bus["span_px"] <= 148 - 12 + 1e-9 and d_bus["bar_m"] >= 1.0
+        and d_small["plates"] == 2 and d_small["pylons"] == 2
+        and d_car["pylons"] == 0 and d_car["plates"] == 2
+        and d_small["plan"].bottom <= d_small["front"].top
+        and d_small["front"].top < d_small["body_y"] <= d_small["front"].bottom
+        and orange(lit) > 60 and orange(dim) == 0,
+        f"{d_small['px_per_m']:.1f} px/m; wing-colour px {orange(lit)} lit, {orange(dim)} dimmed")
+    t0 = time.perf_counter()
+    for _ in range(6):
+        g.frame(1.0 / 60.0)
+    ms_w = (time.perf_counter() - t0) * 1e3 / 6
+    chk("SAVED WINGS frame budget", *_budget(ms_w, 40.0))
+
+    # --- SAVED CARS -----------------------------------------------------------------
+    g.page = "car"
+    keyd(pygame.K_g)
+    cp_ = g.cars_page
+    g.frame(1.0 / 60.0)
+    first = cp_.rendered
+    for _ in range(6):
+        g.frame(1.0 / 60.0)
+    pics = {n: cp_._pics[n][1] for n in cp_._pics}
+    g.frame(1.0 / 60.0)
+    cached = cp_.rendered == 0 and all(cp_._pics[n][1] is pics[n] for n in pics)
+    from .prerace import pick_order
+    chk("G opens SAVED CARS: every build as a card in the library's order (this car's first), "
+        "a picture each, PICTURES_PER_FRAME a frame at most, then cached (the same surface "
+        "the next frame, nothing drawn again)",
+        g.page == "cars" and cp_.names == pick_order(lib.builds, "corsa")
+        and cp_.names[0] == "my corsa" and 0 < first <= PICTURES_PER_FRAME
+        and set(pics) == set(cp_.names) and cached,
+        f"{cp_.names}, {first} the first frame")
+    if screenshot_dir:
+        pygame.image.save(g.screen, os.path.join(screenshot_dir, "garage_saved_cars.png"))
+    px = pygame.surfarray.array3d(pics["my corsa"]).astype(int)
+    r_, g_, b_ = px[..., 0], px[..., 1], px[..., 2]
+    body = int(((r_ - b_ > 50) & (g_ - b_ > 45) & (r_ - g_ < 40)).sum())     # the yellow paint
+    wingpx = int(((r_ - g_ > 55) & (g_ - b_ > 25) & (r_ > 130)).sum())       # the wings' orange
+    pic_ok = body > 1500 and wingpx > 60
+    status = dict((n, s_) for n, s_, _ in cp_.drawn)
+    chk("each picture is the car in its paint carrying its wings; each card says what ENTER "
+        "does: load this car's, change to the Courier for its build",
+        pic_ok and status["my corsa"] == "ENTER: load it"
+        and status["my express (autosave)"] == "ENTER: change to the Courier and load it",
+        f"{body} body px, {wingpx} wing px; {status}")
+    #  save: the build's picture drawn afresh; rename: under its new name; delete: gone
+    g.build = CarBuild.from_json(lib.builds["my corsa"])
+    g.build.left.inc_deg += 3.0
+    held = cp_._pics["my corsa"][1]
+    g.save_build()
+    for _ in range(3):
+        g.frame(1.0 / 60.0)
+    redrawn = cp_._pics["my corsa"][1] is not held
+    cp_.set_names(cp_.names, keep="my corsa")
+    keyd(pygame.K_r)
+    typed("corsa wet")
+    ren = ("corsa wet" in lib.builds and "my corsa" not in lib.builds
+           and "my corsa" not in cp_._pics and cp_.current() == "corsa wet")
+    for _ in range(3):
+        g.frame(1.0 / 60.0)
+    ren = ren and "corsa wet" in cp_._pics
+    chk("SAVED CARS: a save draws the build's picture afresh, R renames it (the card and its "
+        "picture under the new name)", redrawn and ren, g.hint)
+    #  ENTER: this car's build loads; another car's: a bare garage says whose it is, the
+    #  drive's garage asks for its car and build, a challenge's car refuses
+    g.page = "cars"
+    cp_.set_names(cp_.names, keep="corsa wet")
+    keyd(pygame.K_RETURN)
+    loaded = g.page == "car" and g.build.name == "corsa wet"
+    gb = Garage((1280, 800), CarBuild.for_car("corsa"), headless=True, lib=lib, car="corsa")
+    gb.open_saved("cars")
+    gb.cars_page.set_names(gb.cars_page.names, keep="my express (autosave)")
+    gb._page_activate()
+    bare = (gb.car_wanted is None and gb._pending_action is None and gb.page == "cars"
+            and "the Courier's build" in gb.hint)
+    g.settings = _Settings46("real")
+    g.open_saved("cars")
+    cp_.set_names(cp_.names, keep="my express (autosave)")
+    g.car_fixed = True
+    keyd(pygame.K_RETURN)
+    fixed = g._pending_action is None and "this challenge drives the Civetta" in g.hint
+    g.car_fixed = False
+    keyd(pygame.K_RETURN)
+    act = g.frame(1.0 / 60.0)
+    asked = (act == "car" and g.car_wanted == "express"
+             and g.build_wanted == "my express (autosave)")
+    chk("SAVED CARS ENTER: this car's build loads (the car page); another car's asks the drive "
+        "for its car AND that build ('car' out of the frame); a bare garage and a challenge's "
+        "car only say whose it is", loaded and bare and fixed and asked,
+        f"{act} {g.car_wanted}/{g.build_wanted}; bare: {gb.hint!r}")
+    g.car_wanted = g.build_wanted = None
+    g.page = "cars"
+    cp_.set_names(cp_.names, keep="my express (autosave)")
+    keyd(pygame.K_d)
+    d_other = g.settings.car_build == {"express": "my express (autosave)"} and "Courier" in g.hint
+    cp_.set_names(cp_.names, keep="corsa wet")
+    keyd(pygame.K_d)
+    d_own = g.settings.build_of("corsa") == "corsa wet"
+    g.frame(1.0 / 60.0)
+    tags = [n for n, _s, _r in cp_.drawn]
+    tap(pygame.K_DELETE)
+    tap(pygame.K_DELETE)
+    deleted = ("corsa wet" not in lib.builds and "corsa wet" not in cp_._pics
+               and g.settings.build_of("corsa") == "" and "none now" in g.hint)
+    chk("SAVED CARS: D makes the build ITS car's default (the Express's for an Express build); "
+        "DEL twice deletes it, its picture and the default that named it",
+        d_other and d_own and deleted and tags, g.hint)
+    #  the drive's side: _garage_car opens the car on the chosen build (task 46), the
+    #  menu's Change car (no build) as before
+    import contextlib
+    import io
+    import sys
+    from . import drive as _drv
+    from types import SimpleNamespace as _NS
+    #  (take_car_engine: task 48's Settings step, the car's own Engine)
+    st = _NS(car="corsa", track="arena", car_build={}, build_of=lambda c=None: "", save=lambda: None,
+             take_car_engine=lambda: False)
+    hand = CarBuild.for_car("corsa")
+    with contextlib.redirect_stdout(io.StringIO()):
+        d_, seen_ = _drv._garage_car(sys.modules[__name__], lib, hand, "express", st,
+                                     _NS(challenge=None), "corsa", build="my express (autosave)")
+    st2 = _NS(car="corsa", track="arena", car_build={}, build_of=lambda c=None: "", save=lambda: None,
+              take_car_engine=lambda: False)
+    with contextlib.redirect_stdout(io.StringIO()):
+        d2_, _s2 = _drv._garage_car(sys.modules[__name__], lib, hand, "express", st2,
+                                    _NS(challenge=None, garage_hint=""), "corsa")
+    chk("the drive's _garage_car opens the picked car ON the build the Saved cars page chose "
+        "(and says so); without one, as the menu's Change car always did",
+        seen_ == "express" and st.car == "express" and d_.name == "my express (autosave)"
+        and d_.left.wing == "big side" and d2_.name != "my express (autosave)",
+        f"{d_.name!r} / {d2_.name!r}")
+    g.settings = None
+    shutil.rmtree(root, ignore_errors=True)
     return ok
 
 
@@ -6260,11 +8324,13 @@ def _check_car_panel(g: "Garage", lib: Library, rep) -> bool:
     names = {"ahead of the front wheels", "at the front wheels", "between the wheels",
              "at the rear wheels", "behind the rear wheels"}
     seen = {station_label(x_, c) for c in _cars.CARS for x_ in xs}
-    mx5, bus = station_label(-1.01, "mx5"), station_label(1.5, "bus")
-    chk("the station label reads each car's own axles: the MX-5's x -1.01 has no door, "
-        "the Citaro's x 1.5 is between the wheels, five plain names on every car",
-        "door" not in mx5 and bus == "between the wheels" and seen == names,
-        f"MX-5 {mx5!r}; Citaro {bus!r}; Corsa x +0.97 {station_label(0.97)!r}")
+    mx5, bus = station_label(-1.01, "rally"), station_label(1.5, "express")
+    chk("the station label reads each car's own axles: the two-door rally car's x -1.01 has "
+        "no door (its rear wheels), the Express's x 1.5 is ahead of its front wheels, five "
+        "plain names on every car",
+        "door" not in mx5 and mx5 == "at the rear wheels" and bus == "ahead of the front wheels"
+        and seen == names,
+        f"rally {mx5!r}; Express {bus!r}; Corsa x +0.97 {station_label(0.97)!r}")
     pct = re.compile(r"(-?\d+)%")
     bad, ends = [], set()
     for c in _cars.CARS:
@@ -6515,21 +8581,25 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     #  before (no "car") and a hand-edited non-string tag read as "" (any car);
     #  a new car's empty build is `CarBuild()` on its own slots, named for it
     tagged = b.copy()
-    tagged.car = "mx5"
+    tagged.car = "rally"
     old_js = {k: v for k, v in b.to_json().items() if k != "car"}
     stock_new = {k: v for k, v in new_build("corsa").to_json().items() if k != "car"}
     rep("the build's car: round trip, old files any-car, a bad tag any-car; new builds "
         "named and tagged for their car",
-        CarBuild.from_json(tagged.to_json()).car == "mx5"
+        CarBuild.from_json(tagged.to_json()).car == "rally"
         and CarBuild.from_json(tagged.to_json()).to_json() == tagged.to_json()
         and CarBuild.from_json(old_js).car == "" and CarBuild.from_json(dict(old_js, car=7)).car == ""
+        #  task 46: a build made for a retired car loads as a Corsa build
+        and CarBuild.from_json(dict(old_js, car="mx5")).car == "corsa"
+        and CarBuild.from_json(dict(old_js, car="bus")).car == "corsa"
         and tagged.to_json()["version"] == 2
-        and default_build_name("corsa") == CarBuild().name == "my corsa"
-        and default_build_name("bus") == "my bus"
+        and default_build_name("corsa") == CarBuild().name == "my civetta"
+        and default_build_name("rally") == "my halcón"
         and stock_new == {k: v for k, v in CarBuild().to_json().items() if k != "car"}
-        and new_build("bus").car == "bus" and new_build("bus").name == "my bus"
-        and not new_build("bus").left.wing and new_build("bus").left.h > CarBuild().left.h,
-        f"bus flank h {new_build('bus').left.h:.2f} m")
+        and new_build("express").car == "express" and new_build("express").name == "my courier"
+        and not new_build("express").left.wing
+        and new_build("express").left.h > CarBuild().left.h,
+        f"Express flank h {new_build('express').left.h:.2f} m")
     with open(path, "w") as f:
         json.dump(asdict(d), f)
     up = CarBuild.load(path)
@@ -6639,10 +8709,11 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     rep("ENTER -> drive", key(pygame.K_RETURN) == "drive", "")
 
     # --- task 41: the car the garage is given -------------------------------
-    #  its slot bands: the three stock cars share the garage's pre-41 bands
-    #  (review of task 41, finding 4: the MX-5 clamps exactly as the Corsa),
+    #  its slot bands: the stock cars share the garage's pre-41 bands
+    #  (review of task 41, finding 4: the 540i clamps exactly as the Corsa),
     #  while a synthetic 12 m bus (a CarSpec-like stand-in: bodies reads its
-    #  axles and its style from its name) keeps slots a Corsa would clamp
+    #  axles and its style from its name -- the retired Citaro's shell)
+    #  keeps slots a Corsa would clamp
     from types import SimpleNamespace as _NS
     tall = _NS(name="test bus", L=5.845, wdist_f=1.0 - 3.741 / 5.845, t_f=2.110, t_r=2.110)
 
@@ -6652,11 +8723,12 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
         cb.clamp(lib, car)
         return (round(cb.left.x, 4), round(cb.left.h, 4), round(cb.top.x, 4), round(cb.top.h, 4))
     f_c, f_m = fitted("corsa", 1.65, 0.90, -0.90, 1.10), fitted("mx5", 1.65, 0.90, -0.90, 1.10)
-    f_5 = fitted("540i", 1.65, 0.90, -0.90, 1.10)
+    f_5 = fitted("540i", 1.65, 0.90, -0.90, 1.10)       # (task 46: 'mx5', a retired key,
+    #                                                      is the Corsa itself)
     f_cb, f_b = fitted("corsa", 3.00, 1.60, -4.50, 3.30), fitted(tall, 3.00, 1.60, -4.50, 3.30)
-    rep("CarBuild.clamp fits the car it is given: the MX-5 and the 540i clamp exactly as the "
-        "Corsa (the garage's pre-41 bands), a bus keeps its 1.60 m flank and 3.30 m top wing "
-        "(a Corsa clamps all four)",
+    rep("CarBuild.clamp fits the car it is given: the 540i (and a retired car's key) clamp "
+        "exactly as the Corsa (the garage's pre-41 bands), a bus keeps its 1.60 m flank and "
+        "3.30 m top wing (a Corsa clamps all four)",
         f_c == (round(CAR_X_FRONT - 0.5 * DEV_CHORD, 4), 0.9, -0.9, round(deck_z(-0.9) + 0.14, 4))
         and f_m == f_c and f_5 == f_c and f_b == (3.0, 1.6, -4.5, 3.3)
         and f_cb[1] == H_W_MAX and f_cb[3] == TOP_H_MAX,
@@ -6666,14 +8738,17 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
         bodies.LEGACY_DECK == tuple((st[0], st[3]) for st in STATIONS)
         and all(bodies.legacy_deck_z(x_) == deck_z(x_) for x_ in np.linspace(-2.2, 1.9, 83))
         and all(top_h_band(k_, x_)[0] == deck_z(x_) + TOP_STOW_GAP + 0.08
-                for k_ in ("corsa", "mx5", "540i") for x_ in (TOP_X_MIN, -1.62, -0.9, TOP_X_MAX)),
+                for k_ in _cars.STOCK_CARS for x_ in (TOP_X_MIN, -1.62, -0.9, TOP_X_MAX)),
         f"{len(STATIONS)} stations")
     #  a build saved before task 41 at the old band's extremes -- both ends of
-    #  every band -- loads on the MX-5 and the 540i with nothing moved: the
+    #  every band -- loads on the stock cars with nothing moved: the
     #  same build_id, so its PBs stay attached (finding 4's scenario)
     from .records import build_id as _bid
     ext = []
-    for fx_end, fh, tx, th in ((0, H_W_MIN, TOP_X_MIN, None), (1, H_W_MAX, TOP_X_MAX, TOP_H_MAX)):
+    #  (task 46: the rear end is where the top wing's pylons still stand on
+    #  the car -- the old band's floor put a 0.30 m wing's feet behind the tail)
+    tx0 = max([TOP_X_MIN] + [top_x_floor(k_, lib.wings["rear-s1223"]) for k_ in ("corsa", "mx5", "540i")])
+    for fx_end, fh, tx, th in ((0, H_W_MIN, tx0, None), (1, H_W_MAX, TOP_X_MAX, TOP_H_MAX)):
         c_ = lib.wings["flank-e423"].chord
         fx = (CAR_X_REAR + 0.5 * c_) if fx_end == 0 else (CAR_X_FRONT - 0.5 * c_)
         th = deck_z(tx) + TOP_STOW_GAP + 0.08 if th is None else th
@@ -6684,20 +8759,21 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
                                               mode="active"),
                                    top=dict(wing="rear-s1223", x=tx, h=th, inc_deg=6.0,
                                             mode="active"))))
-    moved = [(e["name"], k_) for e in ext for k_ in ("corsa", "mx5", "540i")
+    moved = [(e["name"], k_) for e in ext for k_ in _cars.STOCK_CARS
              if _bid("", CarBuild.from_json(e).clamp(lib, k_).to_json()) != _bid("", e)]
-    rep("a pre-41 build at the old extremes loads on the Corsa, MX-5 and 540i unmoved",
+    rep("a pre-41 build at the old extremes loads on the stock cars unmoved",
         not moved, f"top x {TOP_X_MIN:+.4f} h {ext[0]['slots']['top']['h']:.4f} / "
         f"x {TOP_X_MAX} h {TOP_H_MAX}, flank x {ext[0]['slots']['left']['x']:+.4f} / "
         f"{ext[1]['slots']['left']['x']:+.4f}: same build_id" if not moved else str(moved))
     rb = CarBuild.for_car(tall)
     rep("a fresh car and R's reset put the slots at the car's own defaults",
         (rb.left.x, rb.left.h, rb.top.x, rb.top.h) == (3.00, 1.60, -4.50, 3.30)
+        and CarBuild.for_car("540i").to_json() == CarBuild().to_json()
         and CarBuild.for_car("mx5").to_json() == CarBuild().to_json(),
         f"bus flank ({rb.left.x}, {rb.left.h}) top ({rb.top.x}, {rb.top.h})")
     #  the preview is that car's body; the Corsa's mesh is the one above, bit for bit
-    bus_mesh = build_car_mesh(car="bus")
-    bb_ = bodies.body("bus")
+    bus_mesh = build_car_mesh(car="rally")
+    bb_ = bodies.body("rally")
     zs_b = np.concatenate([q[0][:, 2] for q in bus_mesh])
     xs_b = np.concatenate([q[0][:, 0] for q in bus_mesh])
     in_b = np.array([0.5 * (bb_.x_front + bb_.x_rear), 0.0, 0.5 * (bb_.ground + bb_.height)])
@@ -6705,9 +8781,11 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
                 and np.dot(np.cross(v_[1] - v_[0], v_[2] - v_[0]), v_.mean(axis=0) - in_b) < 0)
     same_c = all(np.array_equal(a_[0], b_[0]) and a_[1:] == b_[1:]
                  for a_, b_ in zip(build_car_mesh(), build_car_mesh(car="corsa")))
-    rep("the preview draws the fitted car: a 12 m bus lofted from its own shell, outward",
+    rep("the preview draws the fitted car: the rally Escort lofted from its own shell, "
+        "outward, its livery on the top",
         same_c and bad_b == 0 and abs(zs_b.max() - (bb_.height + 0.02)) < 1e-9
-        and abs(xs_b.max() - bb_.x_front) < 1e-9 and abs(xs_b.min() - bb_.x_rear) < 1e-9,
+        and abs(xs_b.max() - bb_.x_front) < 1e-9 and abs(xs_b.min() - bb_.x_rear) < 1e-9
+        and sum(1 for _v, c_, _k in bus_mesh if c_ == C_LIVERY) == 10,
         f"{len(bus_mesh)} polys, x {xs_b.min():.2f}..{xs_b.max():.2f}, z to {zs_b.max():.2f}")
     #  the review of task 41's root design: an any-car (or another car's)
     #  build only LOOKED at on another car is not moved -- the garage edits a
@@ -6717,20 +8795,20 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     anyb.left.wing, anyb.top.wing, anyb.top.h = "flank-e423", "rear-s1223", 1.60
     anyb.sync_mirror("left")
     any_js = anyb.to_json()
-    gv = Garage((1280, 800), anyb, headless=True, lib=lib, car="bus")
-    looked = (gv.build is not anyb and gv.build.top.h > 3.0 and gv.handed_back() is anyb
+    gv = Garage((1280, 800), anyb, headless=True, lib=lib, car="express")
+    looked = (gv.build is not anyb and gv.build.top.h > 1.85 and gv.handed_back() is anyb
               and anyb.to_json() == any_js)
     gv._move(dinc=1.0)
     edited = gv.handed_back() is gv.build
     lib.save_build(any_js)
     gv._load_build("any old")
-    reloaded = gv.handed_back().to_json() == any_js and gv.build.top.h > 3.0
-    ownb = new_build("bus")
-    go = Garage((1280, 800), ownb, headless=True, lib=lib, car="bus")
+    reloaded = gv.handed_back().to_json() == any_js and gv.build.top.h > 1.85
+    ownb = new_build("express")
+    go = Garage((1280, 800), ownb, headless=True, lib=lib, car="express")
     rep("a build of another car / any car is viewed as a fitted copy and handed back unmoved; "
         "an edit hands the copy back; this car's own build is edited in place",
         looked and edited and reloaded and go.build is ownb and go.handed_back() is ownb,
-        f"any-car top h 1.60 shown at {gv.build.top.h:.2f} on the bus")
+        f"any-car top h 1.60 shown at {gv.build.top.h:.2f} on the Express")
     lib.delete("builds", "any old")
     #  task 45: a first launch's car -- the Corsa's defaults, 'my corsa', any
     #  car (drive.py's launch with no garage_design.json) -- opened on the
@@ -6748,36 +8826,36 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     ge.prompt_build()
     asked = ge.prompt.value
     ge.prompt.open_ = False
-    looked = ge.handed_back() is first and first.to_json() == first_js and first.name == "my corsa"
+    looked = ge.handed_back() is first and first.to_json() == first_js and first.name == "my civetta"
     ge._move(dinc=1.0)
-    edited = ge.handed_back().name == "my express"
-    own_e = CarBuild(name="my corsa", car="express")
+    edited = ge.handed_back().name == "my courier"
+    own_e = CarBuild(name="my civetta", car="express")
     in_place = Garage((1280, 800), own_e, headless=True, lib=lib, car="express").build is own_e
     chosen = Garage((1280, 800), CarBuild(name="Fast"), headless=True, lib=lib, car="express")
-    corsa_b = CarBuild(name="my corsa", car="corsa")
+    corsa_b = CarBuild(name="my civetta", car="corsa")
     lib.save_build(corsa_b.to_json())
     gl_ = Garage((1280, 800), CarBuild(name="Fast"), headless=True, lib=lib, car="express")
-    gl_._load_build("my corsa")
-    lib.delete("builds", "my corsa")
-    rep("a first launch's 'my corsa' on the Express is 'my express' in the garage (BUILD line, "
-        "save row, S's prompt), goes back as it came when only looked at, 'my express' once "
-        "edited; the Express's own 'my corsa' is renamed in place; a chosen name and the "
-        "library's 'my corsa' stay",
-        "BUILD  my express" in head and "'my express'" in row and asked == "my express"
-        and looked and edited and in_place and own_e.name == "my express"
-        and chosen.build.name == "Fast" and gl_.build.name == "my corsa"
-        and not other_car_name(new_build("bus"), "bus", lib),
+    gl_._load_build("my civetta")
+    lib.delete("builds", "my civetta")
+    rep("a first launch's 'my civetta' on the Courier is 'my courier' in the garage (BUILD line, "
+        "save row, S's prompt), goes back as it came when only looked at, 'my courier' once "
+        "edited; the Courier's own 'my civetta' is renamed in place; a chosen name and the "
+        "library's 'my civetta' stay",
+        "BUILD  my courier" in head and "'my courier'" in row and asked == "my courier"
+        and looked and edited and in_place and own_e.name == "my courier"
+        and chosen.build.name == "Fast" and gl_.build.name == "my civetta"
+        and not other_car_name(new_build("rally"), "rally", lib),
         f"'{head}' / '{row}' / prompt '{asked}'")
     real, unl = _NS(wing_limits="real"), _NS(wing_limits="unlimited")
     wide = lib.wings["flank-e423"].copy(name="tall-fin", builtin=False)
     wide.span = 1.60                        # past a Corsa flank's 1.50 m limit at h 0.90
     lib.save_wing(wide)
-    gb = Garage((1280, 800), CarBuild.for_car("bus"), headless=True, lib=lib, car="bus",
+    gb = Garage((1280, 800), CarBuild.for_car("express"), headless=True, lib=lib, car="express",
                 settings=real)
     gb.frame(1.0 / 60.0)
-    rep("the orbit camera stands back for the bus (the Corsa's view unchanged)",
-        abs(gb.cam.dist - 7.6 * gb.view.geo.scale) < 1e-9 and gb.view.geo.scale > 3.0
-        and g.cam.scale == 1.0 and gb.car == "bus", f"scale {gb.view.geo.scale:.2f}, "
+    rep("the orbit camera stands back for the tall Express (the Corsa's view unchanged)",
+        abs(gb.cam.dist - 7.6 * gb.view.geo.scale) < 1e-9 and gb.view.geo.scale > 1.2
+        and g.cam.scale == 1.0 and gb.car == "express", f"scale {gb.view.geo.scale:.2f}, "
         f"distance {gb.cam.dist:.1f} m")
     #  REAL: W skips a wing past this slot's limit and says why; DOWN stops
     #  where the panel's lower tip reaches the ground clearance
@@ -6885,9 +8963,9 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     rep("Unlimited: DOWN goes past the clearance, stops with the lower tip at the road (0 m); "
         "crossing the limit says the runs count as UNLIMITED, and back says so",
         tips_u[0] < 0.15 - 1e-9 and min(tips_u) > -1e-9 and abs(tips_u[-1]) < 1e-9
-        and "left is now past the Corsa's" in hints_u[0] and "UNLIMITED (not official)" in hints_u[0]
+        and "left is now past the Civetta's" in hints_u[0] and "UNLIMITED (not official)" in hints_u[0]
         and "at the road" in hints_u[-1]
-        and any(s_.startswith("left is within the Corsa's limit again") for s_ in ups_u),
+        and any(s_.startswith("left is within the Civetta's limit again") for s_ in ups_u),
         f"tips {tips_u[0]:+.2f} .. {tips_u[-1]:+.2f} m; '{hints_u[0]}'")
     #  a panel too long for the band stays up at its stop; one saved BELOW
     #  the road is left where it is (Unlimited)
@@ -6943,7 +9021,7 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     hint_l = gl.hint
     lib.delete("builds", "wide load")
     heads = {}
-    for ck in ("corsa", "mx5", "540i", "express", "bus"):
+    for ck in _cars.CAR_ORDER:
         for st_ in (real, unl):
             bh = CarBuild.for_car(ck)
             bh.left.wing = "tall-fin"
@@ -6954,35 +9032,37 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     cut = [k_ for k_, (h_, _m) in heads.items() if h_.endswith("...") or not h_]
     rep("loading a build past the limit says its runs count as UNLIMITED; SPAN LIMITS never "
         "cuts a car's name ('limits: Unlimited' -> 'Unlimited' first)",
-        "left is now past the Corsa's 1.50 m limit" in hint_l and "UNLIMITED" in hint_l
-        and not cut and heads["corsa", "unlimited"] == ("SPAN LIMITS  Opel Corsa C 1.2", "Unlimited"),
+        "left is now past the Civetta's 1.50 m limit" in hint_l and "UNLIMITED" in hint_l
+        and not cut and heads["corsa", "unlimited"] == ("SPAN LIMITS  Aurel Civetta 1.2", "Unlimited"),
         f"'{hint_l}'; cut {cut}; Corsa {heads['corsa', 'unlimited']}")
     #  THE DESIGNER on the car's limits (task 41 wired into AeroBO's designer):
     #  each slot's session reads the car it is fitted to (`drive/bodies.py`
-    #  through `aerobo_bridge`): the bus's flank span row opens at ITS limit
-    #  (the lower tip at its own 0.28 m underbody, at the slot's h), its top
-    #  wing rides over its own deck, up to 0.41 m over its roof, and is 1.2 x
-    #  its width at most; a Corsa flank moved down to h 0.40 caps at 0.50 m.
+    #  through `aerobo_bridge`): the Express's flank span row opens at ITS
+    #  limit (the lower tip at its own 0.16 m underbody, at the slot's h), its
+    #  top wing rides over its own deck, up to 0.41 m over its roof, and is
+    #  1.2 x its width at most; a Corsa flank moved down to h 0.40 caps at
+    #  0.50 m. (Task 46: the Express in the retired bus's role.)
     #  (The old carsim designer's commit / re-cap rows are the AeroBO
     #  designer's in its own section below: S refuses a wing past the limit.)
     sb_f, sb_t = gb.design_page.session_for("left"), gb.design_page.session_for("top")
-    bb = bodies.body("bus")
+    bb = bodies.body("express")
     of_b, ot_b = sb_f.op, sb_t.op
     hb = gb.build.left.h
-    t_lo, t_hi = bodies.top_h_band("bus", gb.build.top.x)
+    t_lo, t_hi = bodies.top_h_band("express", gb.build.top.x)
     gl = Garage((1280, 800), CarBuild.for_car("corsa"), headless=True, lib=lib, settings=real)
     gl.build.left.h = H_W_MIN
     gl.build.sync_mirror("left")
     ol = gl.design_page.session_for("left").op
-    rep("the WingLab designer reads the car: the bus's flank span row is its own limit at h, its "
-        "top wing rides its own band over its own deck; a Corsa flank at h 0.40 caps at 0.50 m",
-        of_b.car == "bus" and abs(of_b.limit - 2.0 * (hb - bb.ground)) < 1e-12
+    rep("the WingLab designer reads the car: the Express's flank span row is its own limit at "
+        "h, its top wing rides its own band over its own deck; a Corsa flank at h 0.40 caps at "
+        "0.50 m",
+        of_b.car == "express" and abs(of_b.limit - 2.0 * (hb - bb.ground)) < 1e-12
         and abs(of_b.size_rows["b_m"][1] - of_b.limit) < 1e-6
         and abs(ot_b.deck - bb.deck_z(gb.build.top.x)) < 1e-12
         and (ot_b.ride_band[0], ot_b.ride_band[1]) == (t_lo, t_hi)
         and abs(ot_b.size_rows["b_m"][1] - 1.2 * bb.width) < 1e-6
         and abs(ol.limit - 0.50) < 1e-12 and abs(ol.size_rows["b_m"][1] - 0.50) < 1e-6,
-        f"bus flank <= {of_b.limit:.2f} m at h {hb:.2f} (rows b {of_b.size_rows['b_m']}), top "
+        f"Express flank <= {of_b.limit:.2f} m at h {hb:.2f} (rows b {of_b.size_rows['b_m']}), top "
         f"deck {ot_b.deck:.2f} ride {ot_b.ride_band[0]:.2f}-{ot_b.ride_band[1]:.2f} m, b <= "
         f"{ot_b.size_rows['b_m'][1]:.3f} m; Corsa h 0.40: <= {ol.limit:.2f} m")
     #  a Param's band may be a callable, read at every step (the span row's)
@@ -7654,9 +9734,10 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
             os.environ.pop("CARSIM_NO_XFOIL", None)
         else:
             os.environ["CARSIM_NO_XFOIL"] = env_nx
-    # --- the library page
-    key(pygame.K_l)
-    rep("L opens the library", g.page == "library" and len(g.lib_page.wings.items) >= 5, f"{len(g.lib_page.wings.items)} wings")
+    # --- the library page (task 46: SHIFT+L; L is SAVED WINGS)
+    key(pygame.K_l, pygame.KMOD_SHIFT)
+    rep("SHIFT+L opens the library (the text list)", g.page == "library"
+        and len(g.lib_page.wings.items) >= 5, f"{len(g.lib_page.wings.items)} wings")
     g.frame(1.0 / 60.0)
     if screenshot_dir:
         pygame.image.save(g.screen, os.path.join(screenshot_dir, "garage_library.png"))
@@ -7677,6 +9758,7 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     ok = _check_hints(g, rep) and ok
     ok = _check_build_header(g, lib, key, rep) and ok
     ok = _check_car_panel(g, lib, rep) and ok
+    ok = _check_saved(g, lib, rep, screenshot_dir) and ok        # task 46
     # --- the pad guard, as before
     class _FakePad:
         name, layout = "DualSense Wireless Controller", "ps"
@@ -7781,17 +9863,18 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     #  row; this car again only says so; another returns 'car' with the pick
     #  in car_wanted. A bare garage (no Settings) has no row.
     import cars as _cars
-    g5 = Garage((1280, 800), CarBuild(), headless=True, lib=lib, car="mx5",
+    g5 = Garage((1280, 800), CarBuild(), headless=True, lib=lib, car="rally",
                 settings=_FakeSettings())
     g5._menu_open()
     rows5 = [(lbl, a_) for lbl, a_ in g5.menu.items]
-    row_ok = rows5[1] == ("Change car  (now: MX-5)", "cars")
+    row_ok = rows5[1] == ("Change car  (now: Halcón)", "cars")
     r_open = g5._menu_action(g5.menu.handle("nav_down") or g5.menu.handle("select"))
     list5 = [a_ for _, a_ in g5.menu.items]
     list_ok = (r_open is None and g5.menu.open and g5.menu.title == "CHANGE CAR"
                and list5 == ["car:" + k for k in _cars.CAR_ORDER] + ["car_back"]
-               and g5.menu.action() == "car:mx5"
-               and g5.menu.items[list5.index("car:mx5")][0].endswith("(this car)"))
+               and g5.menu.action() == "car:rally"
+               and g5.menu.items[list5.index("car:rally")][0].endswith("(this car)")
+               and "car:mx5" not in list5 and "car:bus" not in list5)
     g5.menu.idx = len(g5.menu.items) - 1                        # Back
     r_back = g5._menu_action(g5.menu.handle("select"))
     back_ok = (r_back is None and g5.menu.open and g5.menu.title == "GARAGE"
@@ -7804,17 +9887,17 @@ def self_check(verbose: bool = True, screenshot_dir: str = "runs") -> bool:
     back_ok = back_ok and r_res is None and not g5.menu.open
     g5._menu_open(at="cars")
     g5._menu_action(g5.menu.handle("select"))
-    r_same = g5._menu_action(g5.menu.handle("select"))          # the MX-5 again
+    r_same = g5._menu_action(g5.menu.handle("select"))          # the rally car again
     same_ok = r_same is None and g5.car_wanted is None and "already" in g5.hint
     g5._menu_open(at="cars")
     g5._menu_action(g5.menu.handle("select"))
-    g5.menu.handle("nav_down")                                  # the MX-5 -> the 540i
+    g5.menu.handle("nav_down")                                  # the rally car -> the 540i
     r_pick = g5._menu_action(g5.menu.handle("select"))
     pick_ok = r_pick == "car" and g5.car_wanted == "540i" and not g5.menu.open
     g6 = Garage((1280, 800), CarBuild(), headless=True, lib=lib)
     g6._menu_open()
     bare_ok = "cars" not in [a_ for _, a_ in g6.menu.items]
-    g7 = Garage((1280, 800), CarBuild(), headless=True, lib=lib, car="mx5",
+    g7 = Garage((1280, 800), CarBuild(), headless=True, lib=lib, car="rally",
                 settings=_FakeSettings())
     g7.car_fixed = True                                         # a challenge's car
     g7._menu_open()

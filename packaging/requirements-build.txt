@@ -1,0 +1,9 @@
+# packaging/requirements-build.txt -- what the Steam build installs (no torch:
+# AeroBO's Bayesian optimisers are optional and would add ~1 GB; without them
+# the DESIGN page offers AeroBO's optimisers that need none).
+numpy
+scipy
+pygame
+pymoo
+pyinstaller>=6.10
+pillow          # packaging/make_icons.py (.ico); not shipped

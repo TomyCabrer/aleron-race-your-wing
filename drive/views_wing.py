@@ -38,7 +38,7 @@ NO_RUN = "No run yet. Configure the search on the Solver tab and press Run (F5 t
 
 #: what each row of AeroBO's car-wing box IS, in the Design box's second
 #: line (AeroBO's param labels are the first); the ride row is worded per
-#: slot below (`_row_words`)
+#: slot below (`row_words`; 4 Results' box card words its rows the same)
 ROW_WORDS = {
     "taper": "tip chord / root chord",
     "twist_root_deg": "twist at the root [deg]",
@@ -58,7 +58,7 @@ ROW_WORDS = {
 }
 
 #: who set a box row's band (`WingModel.band_source`) -> its chip colour
-SOURCE_COLOUR = {"WingLab default": "INK_FAINT", "carsim packaging": "ACCENT", "slot": "ACCENT",
+SOURCE_COLOUR = {"WingLab default": "INK_FAINT", "car packaging": "ACCENT", "slot": "ACCENT",
                  "user": "WARN", "released": "INK_FAINT", "fixed": "WARN", "fixed from 2.8": "GOOD",
                  am.TIP_PIN_SOURCE: "ACCENT"}
 
@@ -70,7 +70,7 @@ BOX_HEAD_HELP = {
            "the search is one dimension smaller, and the run still reports the whole wing. It "
            "opens at the middle of its band; type the value it is held at in its low field.\n\n"
            "A fixed row is NOT a band of width zero — WingLab refuses that.",
-    "source": "Who set this band. “WingLab default” is the family's own; “carsim packaging” the "
+    "source": "Who set this band. “WingLab default” is the family's own; “car packaging” the "
               "slot's size rows (the side wing's cut to WingLab's AR ≥ 3); “slot” the ride row the "
               "slot can carry; “user” your number; “fixed from 2.8” the plate's t/c pinned to the "
               "section chosen in 2.8; “tip device: none” the plate's height held at 0 by the "
@@ -442,7 +442,7 @@ def _derived_card(ui, ctx, wing) -> None:
             ui.tag("GROUND EFFECT" if wing.role == "top" else "NO GROUND EFFECT", T.INK_MUTED)
         ui.hint(f"WingLab's own car-wing evaluator: {n} rows in its box, "
                 f"{dim} searched.",
-                help="The slot family is WingLab's family with only its ride band moved (and carsim's "
+                help="The slot family is WingLab's family with only its ride band moved (and the game's "
                      "air, ρ 1.2): at the family's own band it is bit-for-bit WingLab's problem.")
         cons = constraint_labels(ctx, wing)
         ui.kv("margins", ", ".join(cons) if cons else "—",
@@ -456,7 +456,7 @@ def _operating_card(ui, ctx, wing) -> None:
     with ui.card("Operating point"):
         ui.kv("design speed", f"{float(op.V):.1f} m/s",
               tip=str(op.V_source or "the stated lap's mean speed"))
-        ui.kv("air", f"ρ {float(op.rho):.3g} kg/m³ · ν {float(op.nu):.3g} m²/s (carsim's)")
+        ui.kv("air", f"ρ {float(op.rho):.3g} kg/m³ · ν {float(op.nu):.3g} m²/s (the game's)")
         ui.kv("design CZ", f"{float(op.cz_design):.2f}")
         ui.hint(ground_words(wing), split=False)
 
@@ -470,7 +470,7 @@ def wing_dim(wing) -> tuple:
 # --------------------------------------------------------------------------- #
 #  w.box -- Design box (AeroBO 15)                                             #
 # --------------------------------------------------------------------------- #
-def _row_words(wing, lab) -> str:
+def row_words(wing, lab) -> str:
     if lab == "ride_height_m":
         if wing.role == "top":
             return "height over the road [m] — the slot's band over the deck"
@@ -588,13 +588,13 @@ def _box_grid(ui, wing, box, pins, outside) -> None:
                 what = (f"{float(pins[lab]):.4f}", "from 2.8")
             else:
                 what = ("searched", "by WingLab")
-            rows.append([("text2", lab, _row_words(wing, lab), None), ("empty",), ("empty",),
+            rows.append([("text2", lab, row_words(wing, lab), None), ("empty",), ("empty",),
                          ("text", what[0]), ("text", what[1], T.INK_FAINT_TEXT, "sans", T.NOTE_CSS),
                          ("tag", src if lab in pins else "WingLab", getattr(
                              T, SOURCE_COLOUR.get(src, "INK_FAINT"))),
                          ("empty",), ("empty",)])
             continue
-        cells = [("text2", lab, _row_words(wing, lab), None),
+        cells = [("text2", lab, row_words(wing, lab), None),
                  ("switch", f"bx.{lab}.con", T.ACCENT,
                   "fixed — no band to constrain" if lab in pins
                   else "off: the family's own band is searched"),
@@ -646,7 +646,7 @@ def _derived_geometry(ui, wing, box) -> None:
                       "chord law's k1..k3 shape WingLab's physics, not the drawing")
         if wing.role == "flank":
             ui.hint("The side wing's size rows are the car's span limit at this slot height (task 41) "
-                    "cut to WingLab's AR ≥ 3: a taller, narrower panel than carsim's published one.")
+                    "cut to WingLab's AR ≥ 3: a taller, narrower panel than the car's published one.")
 
 
 def _ride_card(ui, wing) -> None:
@@ -776,7 +776,7 @@ def _what_will_run(ui, ctx, wing, eff) -> None:
         except Exception as exc:                            # noqa: BLE001 -- shown, never raised
             ui.hint(f"no configuration: {type(exc).__name__}: {exc}", "bad")
             return
-        ui.kv("problem", base_family(wing), tip=str(cfg.problem_name))
+        ui.kv("problem", base_family(wing), tip=am.bridge.shown_family(cfg.problem_name))
         ui.kv("optimiser", f"{cfg.optimiser}, {int(cfg.budget)} evaluations, seed {int(cfg.seed)}")
         ui.kv("wing section", flown(ctx, wing, "af"))
         if wing.choices["plates"]:
@@ -969,7 +969,7 @@ def _onto_car_card(ui, ctx, wing) -> None:
                                f"[{law['CL_min']:+.3f}, {law['CL_max']:+.3f}]")
             ui.kv(f"{force_word(wing)} at {float(law['V_ref']):.1f} m/s",
                   f"game {game:.2f} N · WingLab {float(aero):.2f} N" if vc.finite(aero) else f"game {game:.2f} N",
-                  tip="the game computes ½ρV²S·CZ from the law with carsim's ρ; at the design point "
+                  tip="the game computes ½ρV²S·CZ from the law with its own ρ; at the design point "
                       "it is WingLab's force by construction")
         elif wing.law_outcome and wing.law_outcome.get("state") == "error":
             ui.hint(f"no law: {wing.msg}", "bad")

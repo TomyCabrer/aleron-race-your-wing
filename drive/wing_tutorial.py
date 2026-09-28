@@ -248,8 +248,8 @@ STEPS = (
           "page offers (Build > PICK) and B steps through, on any map, each with its "
           "best lap; F makes one the car's own default.",
           "ESC / CIRCLE back to the car and S saves it (pad: OPTIONS > Save build); "
-          "or L opens the library, where S / SQUARE saves it too.",
-          _chk_build, ("list", "builds")),
+          "or G opens your saved cars, where S / SQUARE saves it too.",
+          _chk_build, ("cards", "cars")),
     WStep("drive", "Drive it",
           "The TIME TRIAL page opens with this build; its laps are filed with it, "
           "so the table shows which of your builds is fastest.",
@@ -407,6 +407,10 @@ def anchor_rect(g, anchor):
     if kind == "list" and g.page == "library":
         lst = getattr(g.lib_page, anchor[1], None)
         return getattr(lst, "_rect", None)
+    if kind == "cards" and g.page == anchor[1]:
+        #  task 46: a card page's cards (SAVED CARS, SAVED WINGS)
+        grid = getattr(g, "cars_page" if anchor[1] == "cars" else "wings_page", None)
+        return getattr(grid, "_rect", None)
     return None
 
 
@@ -853,8 +857,14 @@ def menu_row(progress, tutor=None):
     if sv["step"] and sv["step"] != STEPS[0].id:
         i = [s.id for s in STEPS].index(sv["step"])
         return (f"Wing-design tutorial: continue at step {i + 1}", "wt_resume")
-    return ("Wing-design tutorial: a guided first wing" + (" (done)" if sv["done"] else ""),
-            "wt_start")
+    #  task 46: the finished tutorial's row was the garage menu's widest (48
+    #  characters); with the menu's Saved wings / Saved cars / Save wing rows
+    #  its list scrolls at 1280x720 and 1440 / 1600 x 900, and the help beside
+    #  the widest row and its 'v 15 more' wrapped past the footer. Now 40
+    #  characters, under the build default's row (garage._check_menu_fits)
+    if sv["done"]:
+        return ("Wing-design tutorial (done): start again", "wt_start")
+    return ("Wing-design tutorial: a guided first wing", "wt_start")
 
 
 # ==================================================================== #
@@ -1013,12 +1023,12 @@ def self_check(verbose: bool = True) -> bool:
     key(pygame.K_s)
     seen["fit"] += (frame() and t.step.id == "build",
                     g.build.left.wing == dp.wing.spec.name)
-    # 9 the build: ESC to the car, L, S (the prompt), a name
+    # 9 the build: ESC to the car, G (SAVED CARS, task 46), S (the prompt), a name
     rejoin()
     seen["build"] = (not frame(),)
     key(pygame.K_ESCAPE)
     key(pygame.K_ESCAPE)
-    key(pygame.K_l)
+    key(pygame.K_g)
     seen["build"] += (not frame(), anchor_rect(g, t.step.anchor) is not None)
     g._save_build_quick()
     seen["build"] += (frame() and t.step.id == "drive",)
@@ -1296,7 +1306,7 @@ def self_check(verbose: bool = True) -> bool:
         fr()
         kw(pygame.K_ESCAPE)
         kw(pygame.K_ESCAPE)
-        kw(pygame.K_l)
+        kw(pygame.K_g)                    # SAVED CARS (task 46)
         fr()
         gw._save_build_quick()
         fr()

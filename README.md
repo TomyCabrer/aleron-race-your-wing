@@ -1,4 +1,87 @@
-# carsim — deployable lateral flank wing on an Opel Corsa C 1.2 16V
+<p align="center">
+  <img src="steam/store/art/header_capsule.jpg" alt="Alerón: Race Your Wing" width="720">
+</p>
+
+# Alerón: Race Your Wing
+
+**Design the wings, then drive them.** A physics-first time-attack racer where the lap is
+won in the garage: shape movable side and top wings with a real aerodynamic optimiser,
+bolt them on, and race the clock, your ghosts and bots you trained yourself.
+
+<p align="center">
+  <img src="steam/store/art/screenshot_02_kestrel_n540.jpg" alt="Nordwerk N540 on the Kestrel ring, race HUD, wings armed" width="32%">
+  <img src="steam/store/art/screenshot_03_ashdown_halcon.jpg" alt="Halcón RS18 rally car with side and top wings at Ashdown circuit" width="32%">
+  <img src="steam/store/art/screenshot_04_fairfield_courier.jpg" alt="Rivière Courier van on the Fairfield oval" width="32%">
+</p>
+
+> **Status: Steam release in preparation** (build 0.9.0). Playable from source today.
+
+### What it is
+
+- **Wing design with a real optimiser.** The garage's WingLab designs side (flank) wings and a
+  top wing in 3-D within each car's span limits, running AeroBO, my own wing-design engine:
+  vortex-lattice aerodynamics, the UIUC airfoil library (2,174 sections), genetic (pymoo) and
+  Bayesian (BoTorch) optimisers.
+- **A vehicle simulation first.** Two-track model at a fixed 1 kHz step: load transfer, roll,
+  a Pacejka Magic Formula 6.2 combined-slip tyre read from a TNO `.tir` file, engine, clutch,
+  gearbox, differential, brakes, ABS and traction control, and wet patches that change the grip mid-lap.
+- **Validated against analysis.** The simulator is held to a closed-form quasi-steady-state
+  (QSS) analysis of the same car: corner speed within 0.7 %, peak lateral acceleration within
+  0.9 %, top speed within 0.04 % ([table](#what-it-is-held-to)); 82/82 acceptance checks pass.
+- **Something to chase.** Author, gold, silver and bronze medals per circuit and car, top-five laps
+  with ghosts and a live delta, eight challenges (braking, skidpad, air brake, laps) and
+  local leaderboards per map, car and wing mode.
+- **Bots that learn.** Breed a swarm of driving agents from your own lap (a small neural policy
+  evolved by a genetic algorithm across worker processes), then race the best of them.
+- **Four fictional cars, eight maps.** Aurel Civetta 1.2 (FWD hatchback), Halcón RS18 (1970s RWD
+  rally car), Nordwerk N540 (V8 RWD saloon), Rivière Courier 1.4 (FWD van), each built from
+  published specs, with estimates marked as such. Five circuits plus an open proving
+  ground, a skidpad and a dragstrip.
+- **Keyboard or gamepad** (PlayStation and Xbox layouts via SDL), mouse in the menus; manual,
+  clutch or automatic gearbox; driving and wing-design tutorials.
+
+### Engineering highlights
+
+- [`drive/tyre.py`](drive/tyre.py): MF6.2 evaluated from the same tyre data the QSS analysis was
+  distilled from; swapping it into the analysis moves its corner speed by less than 0.005 %.
+- [`drive/vehicle.py`](drive/vehicle.py): equations of motion, aero and wings, ABS/TC, and a
+  documented integrator order (the reversed order diverges at 3 m/s at any step under 8 ms).
+- [`drive/powertrain.py`](drive/powertrain.py): each engine's torque curve is a shape-preserving PCHIP
+  through its published torque and power figures, cross-checked against the top-speed power balance.
+- [`drive/validate.py`](drive/validate.py): the acceptance suite. HARD checks (signs, identities,
+  conservation laws) fail the run; SOFT calibration bands are reported. 82/82 pass in ~2 min.
+- [`aerobo/`](aerobo/): AeroBO vendored unmodified, with a content hash the test suite checks.
+- [`drive/ml/`](drive/ml/): evolution-strategy and genetic-algorithm bots in plain numpy. They train at a
+  2 ms step and every reported number is re-measured at 1 ms; the physics never imports them.
+- [`drive/render.py`](drive/render.py): software renderer on pygame + numpy, no OpenGL. It draws a
+  top-down view and a 3-D chase camera with vectorised projection and clipping, built around
+  per-frame costs measured on the target machine.
+- [`drive/audio.py`](drive/audio.py): engine, tyre and wind sound synthesised in numpy from
+  the sim state. There are no sample files.
+- [`packaging/`](packaging/) + [CI](.github/workflows/steam-build.yml): PyInstaller builds for
+  Windows, macOS (Apple silicon and Intel) and Linux, each smoke-tested on an empty save folder.
+
+### Play it
+
+```
+python3 -m pip install -r requirements.txt   # Python 3.11+; torch/botorch/gpytorch optional, see Install
+python3 launch_game.py
+```
+
+Arrow keys drive, `G` changes the wing mode, `BACKSPACE` opens the garage and `ESC` opens
+the menu, whose *Controls* page lists every key and pad button. Packaged builds will be
+published on this repository's GitHub Releases page.
+
+**Tech stack:** Python, NumPy, SciPy, pygame (SDL2), pymoo, optional PyTorch/BoTorch/GPyTorch,
+PyInstaller, GitHub Actions. No game engine and no OpenGL: the 3-D is drawn in software.
+
+The project began as an engineering study (is a deployable flank wing worth it on a small
+hatchback?) and the game grew out of the simulator built to answer it. The study and the
+simulator are documented below.
+
+---
+
+## Developer documentation: carsim, the deployable flank-wing study
 
 Two halves that answer two different questions about the same car and the same
 device, and are held to each other numerically.
@@ -38,17 +121,17 @@ python3 -m drive.drive --track open             # the open proving ground
 python3 -m drive.drive --track skidpad --radius 100
 python3 -m drive.drive --track dragstrip
 python3 -m drive.drive --gearbox manual         # or: auto | clutch
-python3 -m drive.drive --engine stock           # the real 75 hp car (default: sport, 2x)
+python3 -m drive.drive --engine sport           # 2x the torque (default: stock, each car its own)
 python3 -m drive.drive --sound off              # or: low | mid | high
 python3 -m drive.drive --wing plate --wet all   # sealed plate, wet
-python3 -m drive.drive --car mx5                # or: corsa | 540i
+python3 -m drive.drive --car rally              # or: corsa | 540i | express
 python3 -m drive.drive --ballast 200 --ballast-at boot
 python3 -m drive.drive --camera chase           # the 3D view from behind
 python3 -m drive.drive --garage                 # start in the 3D garage
 python3 -m drive.drive --ml-drive drive/ml/checkpoints/arena_plate.json
 python3 -m drive.drive --race best              # race the newest swarm checkpoint in the car it was bred in
 python3 -m drive.drive --swarm 32 --swarm-seed latest   # a learning swarm, bred from your lap
-python3 -m drive.drive --swarm 32 --swarm-car mx5 --swarm-fast --swarm-save never   # in a stock MX-5, unwatched, unsaved
+python3 -m drive.drive --swarm 32 --swarm-car rally --swarm-fast --swarm-save never   # in a stock rally Escort, unwatched, unsaved
 ```
 
 **The title screen.** A launch opens on it: **ALERÓN** — *Race Your Wing* — over a live scene —
@@ -57,7 +140,7 @@ their reference laps (the author laps the medals come from), each in its own
 body and paint, and a chase camera that cuts from car to car every 10 s.
 *Drive* is your car on your map, exactly as before (the first launch still
 offers the tutorial, a timed map still opens on TIME TRIAL); *Challenges*,
-*Tutorial* and *Settings* start a session opened on that page (`ESC` there is
+*Leaderboards*, *Tutorial* and *Settings* start a session opened on that page (`ESC` there is
 the pause menu); *Garage* opens the garage; *Quit* quits. `↑` `↓` / d-pad and
 `ENTER` / `✕`, or the mouse; `ESC` quits and `BACKSPACE` is the garage, as
 everywhere. A right click, `○` or `OPTIONS` only moves to *Quit* (then `ENTER`
@@ -110,7 +193,8 @@ or not the TIME TRIAL page opens, and so do *RACE*, `SHIFT+R` and `R` on the
 out-lap or in the first sector. Where the map has a straight of 45 m or more
 into the line, the car starts where that straight begins (at most 250 m
 out) at 22 m/s (79 km/h): Linden park 50 m out, Ashdown circuit 60 m, Kestrel
-ring 70 m. Otherwise it starts on the nearest straight back from the line
+ring 70 m, the Fairfield oval 240 m (the whole half-straight out of its second
+bend). Otherwise it starts on the nearest straight back from the line
 with that 3 s (the Open proving ground: 150 m out, at the 68 km/h its run-in's
 corners allow). The Arena circuit has no such straight, so it sets off out of
 the T6 hairpin at 36 km/h (the 30 m to T7 in 3 s; T7 is taken flat out),
@@ -140,13 +224,14 @@ saved). Scripted and headless runs never read the file.
 
 | setting | values | applies |
 |---|---|---|
-| Map | Arena circuit / Linden park / Kestrel ring / Ashdown circuit / Open proving ground / Skidpad / Dragstrip (`--track`, `TAB`) | restarts the session on the new map, same car |
-| Car | Opel Corsa C 1.2 / Mazda MX-5 1.8 / BMW 540i / Renault Express 1.4 / Mercedes Citaro bus (`--car`) | restarts the session: a different car is a different tyre, load set, roll block and gearbox. The new car opens with **its own default build** (below, *Your builds, per car*) |
-| Paint | factory (the car's own: Corsa yellow, MX-5 red, 540i blue, Express fleet white, Citaro transit teal) / signal yellow / rosso red / estoril blue / arctic white / silver / racing green / midnight purple / cobalt blue / teal / burgundy, with a swatch beside the row; kept per car | at once, on the road and in the garage; looks only: never in the class, a ranking or a medal (a lap's settings snapshot lists it, as it does Graphics) |
+| Map | Arena circuit / Linden park / Kestrel ring / Ashdown circuit / Fairfield oval / Open proving ground / Skidpad / Dragstrip (`--track`, `TAB`) | restarts the session on the new map, same car |
+| Car | Opel Corsa C 1.2 / Ford Escort rally (RS1800) / BMW 540i / Renault Express 1.4 (`--car`) | restarts the session: a different car is a different tyre, load set, roll block and gearbox. The new car opens with **its own default build** (below, *Your builds, per car*) |
+| Paint | factory (the car's own: Corsa yellow, Escort red with white stripes, 540i blue, Express fleet white) / signal yellow / rosso red / estoril blue / arctic white / silver / racing green / midnight purple / cobalt blue / teal / burgundy, with a swatch beside the row; kept per car | at once, on the road and in the garage; looks only: never in the class, a ranking or a medal (a lap's settings snapshot lists it, as it does Graphics) |
 | Wing limits | **Real** (each car's own physical span limit) / **Unlimited** (up to 3x the limit: impossible wings, for fun) | at once, in the garage's editors. A run whose wings are past the limit is filed as **UNLIMITED**, apart from the official records (*Wing limits*, below) |
 | Ballast | None / 25 / 50 / 75 / 100 / 150 / 200 kg (`--ballast`, 0-300) | restarts the session |
 | Ballast at | Nose (front subframe, low) / Passenger seat (at the CG) / Floorpan over the rear axle (low) / Boot floor, behind the rear axle (high) (`--ballast-at`) | restarts the session |
-| Engine | Stock 1.2 16V (75 hp) / Tuned (~110 hp) / Sport (~150 hp) (`--engine`) | at once |
+| Engine | Stock 1.2 16V (75 hp) / Tuned (~110 hp) / Sport (~150 hp) (`--engine`); **kept per car** (a car never given one opens on Stock). Tuned and Sport are just for messing around: never on a leaderboard, and the row says so | at once |
+| Wings | FULL WING: top + side / ONLY TOP / ONLY TOP, FIXED / TOP FIXED + SIDE / FREE (your build as designed) -- the wing mode a timed drive races in; each has its own leaderboards, FREE is never on one (*Leaderboards*, below) | restarts the session |
 | Gearbox | Automatic / Manual (auto clutch) / Manual + clutch pedal (`--gearbox`) | at once |
 | ABS | On / Off (`--abs` / `--no-abs`) | at once |
 | TC | On / Off (`--tc` / `--no-tc`) | at once |
@@ -161,12 +246,14 @@ saved). Scripted and headless runs never read the file.
 | Default | this car's default build: `ENTER` makes the build you are driving the default (saved to the library first if it is not there) | at once |
 | Garage | opens the 3D panel editor | |
 
-**Engine.** The real car is a 75 hp 1.2 that takes 15 s to 100 km/h, and from
-the seat that is slow, so the drive starts on *Sport*: the whole torque curve
+**Engine.** Every car starts on *Stock*, its own engine -- the car every
+scripted and validation number is measured on, and the only one on a
+leaderboard -- and **each car keeps its own Engine** (and its own TC), so a
+Sport Corsa does not make a Sport BMW. *Sport* is the whole torque curve
 times two (the clutch uprated to suit; rev limit, overrun, idle and every gear
-ratio unchanged), ~150 hp, 0-100 km/h in 8.4 s with the traction control
-holding the fronts. *Tuned* is 1.5x (~110 hp, 10.2 s). *Stock* is the car every
-scripted and validation number is measured on, and it is one press away; the
+ratio unchanged): on the Corsa ~150 hp, 0-100 km/h in 8.4 s with the traction
+control holding the fronts; on the 540i 570 hp. *Tuned* is 1.5x (~110 hp on the
+Corsa, 10.2 s). Tuned and Sport are just for messing around: one press away; the
 HUD shows `75 HP` / `110 HP` / `150 HP` under the gearbox label. No script
 ever reads the setting.
 
@@ -196,10 +283,10 @@ over) following the physics' rpm and engine load, tyre squeal from the worst
 wheel's slip, a grass rumble off the tarmac, wind with speed squared and a
 clunk as a gear engages. It streams through one `pygame.mixer` channel about
 50-90 ms behind the physics; the settings page re-levels or drops it live, and
-each car has its own engine voice (the MX-5's four, the 540i's V8, the
-Express's plainer 1.4 four; the Citaro's 6.4-litre turbo-diesel six clatters at
-idle, rumbles at its 1650 rpm cruise, hisses its turbo under load and never
-pops, and the rev bar and shift lights use each car's own range), and
+each car has its own engine voice (the rally Escort's Cosworth BDA wailing to
+9000 rpm with a lumpy race-cam idle and the most crackle on a lift, the 540i's
+V8, the Express's plainer 1.4 four; the rev bar and shift lights use each
+car's own range), and
 a machine without an audio device just drives silently. `python3 -m
 drive.audio` checks the synthesis and writes `runs/selfcheck/audio_demo.wav`.
 
@@ -239,8 +326,14 @@ cycles.
 * **Ashdown circuit** — 1390.0 m, the clockwise one: six right-handers and a
   left (R = 30 … 120 m), the R = 35 m hairpin among them. Standing water
   through the fast T5, a wet half-strip braking into the hairpin.
+* **Fairfield oval** — 1902.5 m, anticlockwise (task 46): two 480 m straights
+  and two very big 180° bends of R = 150 m, the fastest lap of the five
+  (about 55 s in a Corsa). It is 16 m wide, not 12: a 14 s bend at the limit
+  needs the room. A damp band across the second bend into its apex, a wet
+  half-strip braking into the first; brake boards at 300 / 200 / 100 m
+  before each bend. Sectors: T1, the back straight, T2.
 
-  The four circuits all have lap and sector timing, records, medals, ghosts
+  The five circuits all have lap and sector timing, records, medals, ghosts
   and the race, and each is dressed the same way — kerbs, gravel, the grid,
   pits, stands, barriers, trees — laid out from its own shape.
 * **Open proving ground** — a 522 × 362 m rounded-rectangle of tarmac with a
@@ -375,10 +468,10 @@ automatic`, `your wings rule out the 3rd star: at most 15.0 kg of wing`),
 and a result short of a star names them too (`... - ABS off, manual box: the
 stars were set with ABS on and the automatic`).
 
-Each car and config has **its own stars and best** -- 5 cars x 4 configs =
-20 per challenge -- and the list shows those of the pick. A few cannot be
-driven: the Citaro is governed to 80 km/h, so the stops from 100 and 150
-say *not for this car* and have no Start.
+Each car and config has **its own stars and best** -- 4 cars x 4 configs =
+16 per challenge -- and the list shows those of the pick. A combo whose
+reference cannot be driven says *not for this car* and has no Start (none
+today: every car drives all eight).
 
 Each runs in its own map, engine and surface, in the car you picked (yours
 come back when you end it); its page shows the goal, the three
@@ -401,7 +494,7 @@ Three stars saved on a stop before the board stay three.
 
 ## Time trial: the pre-race screen and your records
 
-A drive on a map with a lap (the four circuits, open, the standard skidpad)
+A drive on a map with a lap (the five circuits, open, the standard skidpad)
 starts on the **TIME TRIAL** page, not on the tarmac: the class you are about to be timed
 in, the build you are driving, the class's top 5 (time, build, assists, date)
 and the medal targets. The cursor opens on **RACE**, so an unchanged car is one
@@ -469,7 +562,7 @@ centre (hangars, a tower, a windsock), the dragstrip has its walls, start
 lights and timing boards. It is all laid out from the track's own shape, so
 a new track gets it too, and nothing solid is nearer than 30 m to the road
 (the car cannot hit any of it -- the physics has no scenery). The car is
-drawn in its own body style (hatch, roadster, saloon; generic shapes), rolls
+drawn in its own body style (hatch, rally two-door, saloon, van; generic shapes), rolls
 with the physics' roll angle, steers its front wheels, spins its rims, lights
 its brake lamps and casts a soft shadow; the chase camera follows on a
 spring and looks a little into the corners. Tyres smoke past the grip peak
@@ -478,7 +571,7 @@ spray on the wet. Settings > *Graphics* trades the detail for speed, or goes
 back to the classic plain look.
 
 The engine is built from each cylinder's firing through an exhaust, per car
-(the Corsa's small four, the MX-5's rorty four, the 540i's V8), with pops on
+(the Corsa's small four, the rally car's crisp BDA, the 540i's V8), with pops on
 a lift from high revs, one clunk per shift and the limiter's stutter. The
 tyres scrub before the limit and squeal past it, the kerbs rumble, gravel
 crunches, the wet hisses, the wind rises with speed, the active wing's
@@ -524,9 +617,48 @@ python3 -m drive.medals --build        # 1626 runs, ~65 min on 6 cores (est.); -
 python3 -m drive.medals --show         # the table
 ```
 
+## Leaderboards: every map and car, you against your bots
+
+The title screen's **Leaderboards**, or the pause menu's *Leaderboards*, opens
+the LEADERBOARDS page (task 47). There is **one board per map, car and wing
+mode**: every map with a lap (the circuits, open and the standard skidpad),
+times every car, times the challenges' four wing modes -- **FULL WING** (top + side),
+**ONLY TOP**, **ONLY TOP, FIXED**, **TOP FIXED + SIDE**. `LEFT` / `RIGHT` on
+the *Map* and *Wings* rows step them; each car's row then says **your best
+time and the build ("car") that set it**, **your best bot's time and its
+name**, and **who is ahead by how much**. The highlighted car's board is in
+the column beside it in full: the best lap of each of your builds, the best
+of each of your bots, the gap. `ENTER` on a car races that board: its map,
+car and wing mode on a Stock engine and the default surface, straight to its
+TIME TRIAL page.
+
+What counts:
+
+* the **Stock engine** only. **Tuned and Sport engines are just for messing
+  around: they never go on a leaderboard** (the Settings page's Engine row,
+  its help, the TIME TRIAL page and the drive's first seconds all say so);
+* the default surface, *Dry, wet patches*;
+* a **wing mode**: the TIME TRIAL page's *Wings* row (or Settings > *Wings*)
+  picks it, like a challenge's -- your wings where the build has them, the
+  stock ones lent where it has none, the side wings off on a top-only mode,
+  the top wing held on a FIXED one, `G` limited to what the mode allows.
+  *FREE* (the default: your build exactly as designed, every `G` mode) is
+  still driven and still recorded, but never on a board;
+* wings within the car's limits (an Unlimited build never counts), and a
+  valid lap round the circuit -- the records' own rule;
+* **your bots**: your trained bots (a checkpoint, never the built-in
+  driver) set their times in a race (*Race vs bot*: every car on the grid
+  runs the session's wing mode -- a bot in its own car gets its bred build in
+  that mode) or with the RACE page's *Test* (each car's best flying lap goes
+  on that car's board), on a Stock engine. A race lap counts when it is
+  valid, went round, and the bot was not put back on the track in it.
+
+The boards live in `runs/leaderboard_local/` (one JSON file per board);
+`python3 -m drive.leaderboard --show` prints every board with a time.
+
 ### Your records
 
-Every lap you drive on a map with a lap (the four circuits, open, the
+Every lap you drive on a map with a lap (the five circuits, open, the
 standard 50 m skidpad) is recorded, and the valid ones go into that
 **class's top 5**, kept in `runs/records/`. A class is *map | car | engine | surface*, e.g.
 `arena | corsa | sport | wet patches`: change any of those four and it is a
@@ -572,14 +704,15 @@ python3 -m drive.drive --garage --track skidpad --radius 100
 The garage is always one keypress away: `BACKSPACE` (touchpad on the pad),
 the *Garage* entry on the pause menu or on its settings page. `--garage` merely
 starts there. A software-rendered model of the car you are driving (the
-Corsa, the MX-5, the 540i, the Express van or the Citaro bus, framed to its
+Corsa, the rally Escort, the 540i or the Express van, framed to its
 size) you can orbit, carrying up to **three wings**: a panel on each flank and a wing on top. Each is a slot
 holding a wing from the library at a station, a height and an incidence;
-left and right mirror each other until `M` unlocks them. On the Corsa, the
-MX-5 and the 540i the slots move in the same bands -- the garage's own from
-before the Express and the bus, so a saved build never moves between those
-three -- while the Express and the bus take theirs from their own bodies (the
-preview always draws the real body of the car you drive). The side panel shows
+left and right mirror each other until `M` unlocks them. On the Corsa and the
+540i the slots move in the same bands -- the garage's own from before task
+41, so a saved build never moves between them -- while the Express and the
+rally car take theirs from their own bodies (the rally car's top wing sits on
+its boot lid, just over the roof line; the preview always draws the real
+body of the car you drive). The side panel shows
 what the physics will see for the selected slot: the lift law, the force and
 drag at the R = 100 m limit speed, `crossover.gain` at R = 50 / 100 / 130 m
 for a flank panel, the front / rear downforce split for the top wing, and the
@@ -601,10 +734,11 @@ then comes back for that map (the TIME TRIAL section below).
 | `←` `→` | station `x` (SHIFT: 1 cm) | `↑` `↓` | height `h` |
 | `[` `]` | incidence ±1° | `W` / `SHIFT+W` | next / previous library wing in the slot |
 | `M` | mirror left ↔ right | `T` | top wing: fixed / active (brake + steer) |
-| `SPACE` | deploy preview (0.45 s actuator) | `D` `A` `L` | design a wing (mission first) / airfoils / library |
+| `SPACE` | deploy preview (0.45 s actuator) | `D` / `A` | design a wing (mission first) / airfoils |
+| `L` / `G` | **saved wings** / **saved cars** (below) | `SHIFT+L` | the library as a text list, with every number |
 | `R` `R` / `U` | all wings off (`R` twice) / put them back | `C` / `ENTER` | reset camera / drive it |
 | `S` / `SHIFT+S` | save the build (in place, or asks a name) / save as a new name | `B` / `SHIFT+B` | next / previous of this car's saved builds |
-| `F` | make this build the car's **default** | | |
+| `K` / `SHIFT+K` | save the selected slot's **wing** under a name / as a new name | `F` | make this build the car's **default** |
 | `ESC` | menu (the mouse works in it) | `H` | the wing tutorial's box: hide / show |
 
 ### Your builds, per car
@@ -620,9 +754,9 @@ are *any car*, and every car can still use them.
   way `W` steps a slot's wings (the first press on an unsaved car only warns
   you). `F` makes the build in hand this car's **default**, saving it first if
   needed. On a pad the four are rows in the OPTIONS menu -- *Save build*,
-  *Save build as a new name*, *Load a build*, *Set as <car> default* --
+  *Save build as a new name*, *Saved cars*, *Set as <car> default* --
   and `✕` accepts the name a prompt offers.
-- **The library page** (`L`) lists this car's builds first, then the any-car
+- **The library page** (`SHIFT+L`) lists this car's builds first, then the any-car
   ones, then other cars' builds, dimmed and tagged with their car (they still
   load). `D` (pad `R1`) makes the build under the cursor this car's default,
   `R` renames it (a default pointing at it, and every map that remembers
@@ -653,10 +787,54 @@ are *any car*, and every car can still use them.
   driving this car's default: a build the library already holds (under any
   name) is that build; one it does not is saved once, under a free name, and
   from then on the drive knows it by that name.
-- **Each map remembers the last build per car**, so driving the bus on the
-  arena no longer replaces the Corsa's arena build -- and a build made for
-  another car (a bus build driven in a Corsa challenge) is never remembered
-  as the Corsa's.
+- **Each map remembers the last build per car**, so driving the Express on
+  the arena no longer replaces the Corsa's arena build -- and a build made
+  for another car (a van build driven in a Corsa challenge) is never
+  remembered as the Corsa's.
+- A build made for a **retired car** (the MX-5 or the Citaro bus, task 46)
+  loads as a Corsa build; an old settings file that names one opens the Corsa.
+
+### Saved wings and saved cars
+
+- **Save a wing** the way you save a car: `K` (pad: OPTIONS > *Save the side
+  wing as ...*) saves the selected slot's wing under a name you type -- its
+  design and its forces as they are, and the car it was made on. `ENTER` on
+  the wing's own name keeps it (the car is recorded if it had none);
+  `SHIFT+K` offers a free name; a name another wing has is never written
+  over (it is saved beside it, `-2`). The slot then carries the saved wing.
+  A wing WingLab designs records its car by itself. The study's two
+  published panels (Side fin, Side plate) are on every car already.
+- **SAVED WINGS** (`L`): every wing as a card -- yours first, then the
+  built-ins -- with a small diagram (the planform from above, span and root /
+  tip chord; the front view with its end plates and what holds it: two
+  pylons, or its endplates down to the car's side or the deck), its span,
+  area and the car it was made on. Each card says whether it fits the
+  selected slot of the car in the garage: a top wing only goes in the top
+  slot, and its span must be within this car's span limit at that slot (the
+  same rule as `W`; x3 with Settings > Wing limits: Unlimited). One that does
+  not fit is dimmed with the reason in red (`too wide for the Opel Corsa:
+  1.88 m, the limit here is 1.50 m`); `ENTER` on it says what would make it
+  fit (the slot height it fits from, Unlimited). `ENTER` fits a wing that
+  fits. `1` `2` `3` (pad `L1` / `R1`, or click the slot chips) change the
+  slot; `DEL` twice deletes one of yours; `N` designs a new one.
+- **SAVED CARS** (`G`): every saved build as a card with a picture of its car
+  carrying its wings, its name, its car, its wings and `(default)` when it is
+  its car's default. `ENTER` loads a build of this car; on another car's
+  build it takes the garage to that car with that build (from the drive's
+  garage; a challenge's car stays its own). `D` makes it its car's default,
+  `R` renames it, `DEL` twice deletes it, `S` saves the car in hand. `TAB`
+  goes across between the two pages; both take the mouse (a click selects a
+  card, a second click is its `ENTER`; the wheel scrolls).
+- **What holds a wing stands on the car** (task 46). A side wing's two struts
+  run to the body at their own height: straight in to the flank or the side
+  glass, or -- over a bonnet or past the tail, where there is no side at that
+  height -- braced down onto the body's top edge. A carrying side plate is
+  set down on the side at its own station (the nose and the tail are
+  narrower). A top wing goes no further back than where its pylons' feet (or
+  its endplates) still stand on the car: pushed against it, the garage says
+  so. A top wing wider than the body on its endplates gets a bracket in to
+  the side. A pylon wing's tip device (vertical, canted, blended) turns with
+  the wing's incidence and twist, so it always caps its tip.
 
 The published car is still here, bit-for-bit: the built-in wings `fin`
 (CL 0.70) and `plate` (CL 1.25) are the study's 0.35 m² panel with its fixed
@@ -676,10 +854,9 @@ body (`drive/bodies.py`):
 | car | ground clearance | width | flank limit at the default slot | flank limit at the highest slot | top limit |
 |---|---|---|---|---|---|
 | Opel Corsa C | 0.15 m | 1.646 m | 1.50 m (h 0.90) | 2.10 m (h 1.20) | 1.975 m |
-| Mazda MX-5 | 0.14 m | 1.680 m | 1.52 m (h 0.90) | 2.12 m (h 1.20) | 2.016 m |
+| Ford Escort rally | 0.19 m | 1.700 m | 1.42 m (h 0.90) | 2.02 m (h 1.20) | 2.040 m |
 | BMW 540i | 0.15 m | 1.800 m | 1.50 m (h 0.90) | 2.10 m (h 1.20) | 2.160 m |
 | Renault Express | 0.16 m | 1.566 m | 1.78 m (h 1.05) | 2.75 m (h 1.54) | 1.879 m |
-| Mercedes Citaro bus | 0.28 m | 2.550 m | 2.64 m (h 1.60) | 5.20 m (h 2.88) | 3.060 m |
 
 The rule is static -- the car standing still, as an inspector would measure
 it -- and the clearance margin (the car's own underbody height rather than
@@ -703,7 +880,7 @@ The car page's SPAN LIMITS panel lists each fitted wing as *span / max* on this
 car, with **PAST THE LIMIT** in red.
 
 **Any run whose build has a wing past its car's limit is an UNLIMITED run**,
-whatever the setting says (a bus build loaded on a Corsa is one). Unlimited
+whatever the setting says (a big van build loaded on a Corsa is one). Unlimited
 runs are recorded in `runs/records/unlimited/`, in the same classes; they earn
 medals and challenge stars there, shown in their own Unlimited spot and never
 counted with the official ones; and they will **never go to a public
@@ -807,7 +984,7 @@ wing run is sent), *Wing* (AeroBO's family, dimension, objective,
 optimiser, budget) and *Result*.
 
 **Stage 1, MISSION** -- carsim's own. What the wing is for is a **lap** of
-one of carsim's circuits -- the arena, Linden, Kestrel, Ashdown, open or
+one of carsim's circuits -- the arena, Linden, Kestrel, Ashdown, Fairfield, open or
 skidpad -- on a dry, damp or wet surface, integrated
 quasi-steadily over the arcs and straights `drive/track.py` defines the
 track with (at zero downforce, `qss.py` bit for bit). *Operating point*
@@ -819,8 +996,8 @@ R 100 m limit speed is 29 m/s), the reference CZ, **carsim's air** (ρ 1.2,
 where the wing sits: the TOP wing flies AeroBO's car rear wing **with
 ground effect** over the car's deck, its ride height searched in the band
 the slot can reach -- the car's own (`drive/bodies.py`): 1.57-1.85 m at the
-Corsa's default top station, over its 1.43 m deck; 3.08-3.53 m over a
-Citaro's 2.94 m roof -- and its span row is 1.2 x the car's width; a FLANK
+Corsa's default top station, over its 1.43 m deck; 1.92-2.19 m over the
+Express's 1.78 m box -- and its span row is 1.2 x the car's width; a FLANK
 wing flies the same design **without** ground effect (AeroBO's image plane
 pushed 100 m away: the ground term is under 5e-6 of CZ there), its "ride
 height" row being the plate's reach to the car's side (0.25-0.70 m) and its
@@ -997,7 +1174,7 @@ uses the same map.
 |---|---|---|---|
 | `R2` / `L2` | throttle / brake | left stick | steer (expo 1.5, speed-limited) |
 | `R1` / `L1` | shift up / down | `✕` / `□` | handbrake / clutch (hold) |
-| `○` / `△` | wings armed / wing mode | `OPTIONS` / `CREATE` | pause menu / back to the sector line |
+| `○` / `△` | wings armed / wing mode | `OPTIONS` / `CREATE` | pause menu / back to the sector line (hold 0.8 s: restart the lap) |
 | d-pad `↑` `↓` | HUD / force arrows | d-pad `←` `→` | slow-mo / normal |
 | `R3` / `L3` | camera / auto zoom | touchpad | garage |
 
@@ -1079,41 +1256,44 @@ parameter sets, selectable from the CLI (`--car`) and from *Settings*:
 | | mass | wheelbase | % front | power | torque | CdA | layout |
 |---|---|---|---|---|---|---|---|
 | Opel Corsa C 1.2 16V (2003) | 1010 kg | 2.491 m | 61 | 55 kW | 110 N·m | 0.66 | FWD |
-| Mazda MX-5 1.8 (NB2, 2001) | 1140 kg | 2.265 m | 52 | 109 kW | 168 N·m | 0.61 | RWD |
+| Ford Escort RS1800 (Mk2, Group 4 tarmac, 1979) | 980 kg | 2.407 m | 50 | 180 kW | 217 N·m | 0.86 | RWD |
 | BMW 540i (E39, 1998) | 1780 kg | 2.830 m | 51 | 210 kW | 440 N·m | 0.66 | RWD |
 | Renault Express 1.4 (E7J, 1995) | 915 kg | 2.580 m | 60 | 55 kW | 109 N·m | 0.99 | FWD |
-| Mercedes-Benz Citaro O530 12 m bus (2005) | 11 459 kg | 5.845 m | 36 | 205 kW | 1120 N·m | 4.42 | RWD |
 
-**The two big-wing cars (task 41).** Both are drawn as themselves: the
-Express as the Renault 5-based van (the R5's nose and cab, a tall blind load
-box, two rear doors with small lamps) in fleet white, the Citaro as a modern
-low-floor city bus in transit teal (a flat glazed front with a destination
-display and mirrors on arms, a long row of windows, three doors on the right,
-the engine tower at the left rear, the air-con pod on the roof). The chase
-camera frames a taller vehicle as it frames the Corsa, rising and pulling back
-with its height. The *Renault Express* is the 1990s van
-built on the Renault 5 (the Extra in the UK, the Rapid in German-speaking
-countries): the Corsa's power, 55 kW / 75 hp, in a 1.78 m tall, 915 kg box --
-about 0.80 g of cornering, 0-100 km/h in 15 s, 149 km/h flat out. The
-*Citaro* is a 12 m, 11.5 t city bus: OM 906 hLA six, 205 kW, a 6-speed
-automatic, air disc brakes with ABS, governed to 80 km/h. It corners at about
-0.65 g, reaches 50 km/h in about 11 s and stops from 60 km/h in about 21 m;
-it is slow and heavy, and it is there so the biggest wings have a body to fit
-(its top-wing limit is 3.06 m, its flank panels reach 5.2 m). On both the
-steering aid and the computer drivers use the car's own wheelbase, grip and
-lock.
+**The rally car (task 46).** The owner: *"I don't want the buss to big not
+very useful or the roofless car too short. Instead add a rally car."* So the
+Mazda MX-5 and the Citaro bus are **retired** from the game -- no list, row,
+picker, grid, medal class or challenge offers them, and an old save, build,
+record or bot that names one falls back to the Corsa (their parameter sets
+stay in `cars.RETIRED`, for the physics self-checks that exercise the bus's
+truck tyres, air brakes and governor). In their place: the *Ford Escort
+RS1800*, the Boreham works Mk2 of 1979 in Group 4 **tarmac** trim -- a
+Cosworth BDA 2.0 16v (1975 cc, 217 N·m at 6750 rpm published; 180 kW at
+8500 est, inside the Group 4 sheet's 240-265 hp), a close-ratio ZF 5-speed
+(2.30 / 1.80 / 1.38 / 1.14 / 1.00) on a 4.90 Atlas axle, 980 kg, rear drive
+on a live axle, rally ride height (0.19 m under the floor), stiff springs, a
+tarmac compound (`mu_scale` 1.10, a labelled calibration) and a tarmac brake
+bias behind an adjustable valve. It does 0-100 km/h in about 6.4 s, tops out
+at 189 km/h on the limiter in 5th, corners at 0.93-0.98 g, stops from 100 in
+about 38 m, and laps the arena in about 58 s (LapDriver, flying) -- the
+fastest car here. It is drawn as a boxy two-door Mk2 saloon with a roof,
+Group 4 arches, four spot lamps across the bumper, mud flaps, in red with twin
+white stripes and white door number panels; the steer aid and the computer
+drivers use its own wheelbase, grip and lock.
 
-The bus is the one car the tyre rule below does NOT cover: its wheel loads
-(23-41 kN) are two to four times what the one tyre in `tyre_data/` was
-measured to, and on it the bus cornered at 0.22 g and spun. It runs the same
-coefficients with a declared per-axle **load scale** (`LFZO`, `FZMAX` and the
-carcass stiffnesses together: the tyre is exactly λ times the file tyre at
-Fz/λ; λ 6.6 front, 12.2 for the rear twin pair, from the published load
-index) and a labelled truck-tyre grip calibration (`mu_scale` 0.80), plus its
-own roll split, compliance steer, wheel and engine inertias, rev-scaled
-gearbox bands and an air-brake equivalent -- each an optional CarSpec field
-whose default is the old behaviour, so the Corsa, the MX-5 and the 540i are
-unchanged to the bit (CONTRACT section 2's one declared exception).
+**The Express (task 41).** It is drawn as itself: the Renault 5-based van
+(the R5's nose and cab, a tall blind load box, two rear doors with small
+lamps) in fleet white. The chase camera frames a taller vehicle as it frames
+the Corsa, rising and pulling back with its height. The *Renault Express* is
+the 1990s van built on the Renault 5 (the Extra in the UK, the Rapid in
+German-speaking countries): the Corsa's power, 55 kW / 75 hp, in a 1.78 m
+tall, 915 kg box -- about 0.80 g of cornering, 0-100 km/h in 15 s, 149 km/h
+flat out; the steering aid and the computer drivers use its own wheelbase,
+grip and lock. (Task 41 also added the Citaro bus, retired in task 46; the
+optional CarSpec fields it brought -- a per-axle tyre **load scale**, a roll
+split, compliance steer, wheel and engine inertias, rev-scaled gearbox bands,
+an air-brake equivalent, a governor -- stay, each defaulting to the old
+behaviour, so the Corsa and the 540i are unchanged to the bit.)
 
 Published figures carry their source on the line; everything no manufacturer
 releases — axle weights, CG height, inertias, the whole suspension block — is
@@ -1138,9 +1318,10 @@ coefficients from what is here, and inventing Pacejka data is not something
 this project does. Following the contract's own rule ("rescale geometry only"),
 every car reads the validated `TNO_car205_60R15.tir` and overrides the geometry
 to its own size; the grip difference between a 2003 touring tyre and a modern
-performance tyre is carried by `mu_scale` (+5 % / +8 %), which is a **labelled
-calibration, never presented as measurement**. Strip it out and the MX-5 is
-worth +0.7 % of peak `a_y` and the 540i **−6.4 %** — pure load sensitivity on
+performance tyre is carried by `mu_scale` (+8 % on the 540i, +10 % for the
+rally car's tarmac compound, −5 % for the Express's van tyre), which is a
+**labelled calibration, never presented as measurement**. Strip it out and
+the 540i is worth **−6.4 %** of peak `a_y` — pure load sensitivity on
 1780 kg.
 
 **Weight.** *Ballast* adds mass and it moves everything mass really moves: the
@@ -1224,11 +1405,10 @@ memorised circuit, not a general driver.
 
 ### Race the bots
 
-*A bus on the grid (task 41).* A car that fits a painted grid box takes its
-slot as before; the 12 m Citaro does not, so a bus bot lines up on the
-centreline behind the painted rows (about 42 m back), and if YOU drive the bus
-the bots take the next clear boxes behind you. Stock grids are unchanged. The
-RACE page's *Test* gives a bus bot 169 s so it sets a flying lap.
+*A car too big for the grid (task 41).* A car that fits a painted grid box
+takes its slot; one that does not lines up on the centreline behind the
+painted rows. Every car in the game fits since task 46 (the 12 m Citaro that
+needed it is retired); the rule stays for any car that might not.
 
 From the game: `ESC` → **Race vs bot**. The page is a grid of up to **five**
 bots (the most the loop steps in real time: each bot is a second car at
@@ -1242,10 +1422,11 @@ writes into the checkpoint -- the car, stock or yours with your ballast and
 wing masses, the garage build and the engine; a bundled checkpoint drives its
 stock car with its published wing; the built-in driver, and a swarm bot saved
 before this version, drive yours), *same
-as mine* (your car, ballast and wings included) or a stock Corsa, MX-5 or
-540i on your session's settings with its own grip scale. A
+as mine* (your car, ballast and wings included) or a stock Corsa, rally
+Escort, 540i or Express on your session's settings with its own grip scale
+(a bundled bot bred in the retired MX-5 drives yours). A
 policy is a trim in the car's own actuator units, so one checkpoint can be
-put in each of the three cars and raced against itself; that is how a bot is
+put in each car and raced against itself; that is how a bot is
 tested in a different car. The next slot opens once the one above it is
 filled. *Start* puts every car on the line, standing start: bot 1 two metres
 to your left, bot 2 to your right, bots 3 and 4 a row back, bot 5 a row
@@ -1260,15 +1441,16 @@ restarts the race from the line; if a bot leaves the map or spins it rejoins
 at its last sector line after 2.5 s. From the terminal, `--race anchor`,
 `--race best` (the newest swarm checkpoint) or `--race PATH`, comma-separated
 for a grid, with `--race-car` naming each bot's car the same way:
-`--race best,best,best --race-car corsa,mx5,540i` races the newest bot in
-all three cars. The RACE page also has a `Delete bot` row for bot 1's
+`--race best,best,best --race-car corsa,rally,540i` races the newest bot in
+three cars. The RACE page also has a `Delete bot` row for bot 1's
 checkpoint: select it twice and the file under `drive/ml/checkpoints` is
 removed (the built-in driver cannot be deleted).
 
 **Test a bot in every car.** *Test bot 1 in every car* on the same page
 drives bot 1 **alone**, with nothing drawn, in each car the *car* row offers
-— yours, then the stock Corsa, MX-5 and 540i on your settings — for 150 s
-each (pro rata on a longer circuit: 167 s on Ashdown, 230 s on Kestrel,
+— yours, then the stock Corsa, rally Escort, 540i and Express on your settings — for 150 s
+each (pro rata on a longer circuit: 167 s on Ashdown, 228 s on the Fairfield
+oval, 230 s on Kestrel,
 time for a standing and a flying lap) at the contract's 1 ms, on your map
 and surface, in a process pool of its own (`Sim.start_bot_test` →
 `drive.ml.evaluate.bot_lap`). You keep driving meanwhile; about 16 s later
@@ -1277,8 +1459,8 @@ lap, or how and when the bot left the road, and the HUD and the terminal
 carry the same line. Selecting the row again while it runs cancels it. It is
 the rollout's judgement, so a car that goes off is *out* (a race would put it
 back at the line): measured on the arena with the plate, `swarm_bot_2` — bred
-in a Corsa — laps the Corsa in 62.79 s, goes off in the MX-5 after 6 s and
-spins the 540i after 46 s, which is the case for breeding a bot in the car it
+in a Corsa — laps the Corsa in 62.79 s, went off in the (since retired) MX-5
+after 6 s and spins the 540i after 46 s, which is the case for breeding a bot in the car it
 will drive (below). A bot you have just saved in a swarm from the game comes back as bot 1
 on this page, in the car it was bred in, so racing it is *Race vs bot* →
 *Start*.
@@ -1286,7 +1468,7 @@ on this page, in the car it was bred in, so racing it is *Race vs bot* →
 ### Deploy a swarm, and breed the best
 
 From the game: `ESC` → **Deploy swarm**. The page has *Car* (what the swarm
-breeds in: *same as mine*, or a stock Corsa, MX-5 or 540i on your settings —
+breeds in: *same as mine*, or a stock Corsa, rally Escort, 540i or Express on your settings —
 the RACE page's rule, `--swarm-car` on the command line; the bot is named
 after it, `swarm_<map>_<car>_…`, and a resume keeps it), *Cars* (any number
 from 4 to 128: `←` `→` jump 4 8 16 24 32 48 64 96 128, `ENTER` cycles them,
@@ -1294,9 +1476,9 @@ or type the number on the keyboard), *Seed*
 (none / your last seed lap / best saved swarm), *Generations*, *Sim time* (any
 whole second from 20 to 240: `←` `→` 20 30 45 60 70 90 120 150 180 240, or
 type it; it starts at 70 s, an arena lap and a bit, and pro rata on a longer
-circuit: 78 s on Ashdown, 107 s on Kestrel; a car slower than the Corsa
-gets more in proportion to its lap -- 71 s for the Express, 82 s for the
-bus on the arena -- while the Corsa, the MX-5 and the 540i keep those
+circuit: 78 s on Ashdown, 107 s on Kestrel and the Fairfield oval; a car slower than the Corsa
+gets more in proportion to its lap -- 71 s for the Express on the arena --
+while the Corsa, the rally car and the 540i keep those
 numbers; after a Deploy that default still follows the map (and the *Car*
 row), while a time you set stays on every map),
 *Replay* (watch every generation, or off), *Save best* (what `ESC` does with
@@ -1584,6 +1766,8 @@ drive/
                 start state (re-simulated bit for bit), runs/records/
   prerace.py    the TIME TRIAL page: class, build, top 5, medal targets; PICK a
                 saved build; the build each map opens with
+  leaderboard.py  the leaderboards: one per map, car and wing mode, you vs your
+                trained bots (runs/leaderboard_local/)
   medals.py     author / gold / silver / bronze per class, derived from headless
                 reference laps (data/medals.json, data/reference_laps.json)
   ghosts.py     the PB and ghost-2 ghosts, the live delta, the sector flash

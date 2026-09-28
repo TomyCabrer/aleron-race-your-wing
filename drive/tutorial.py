@@ -1527,14 +1527,16 @@ def self_check(verbose: bool = True) -> bool:
             and bare.left.wing == "" and "tutorial" in wc.name and fitted is not None)
         rep("a car with a flank wing keeps its own", wing_car(g, wc, lib) is None)
         #  fitted to the session's car (review of task 41, finding 7): on the
-        #  bus the plate stays at the bus's 1.60 m flank slot and the top at
-        #  3.30 m; without the car the Corsa's bands would pull them down
-        bus = CarBuild.for_car("bus")
-        wb, wn = wing_car(g, bus, lib, car="bus"), wing_car(g, bus, lib)
+        #  Express (task 46: the tallest car, in the retired bus's role) the
+        #  plate stays at the van's 1.05 m flank slot and the top at 1.95 m;
+        #  without the car the Corsa's bands would pull the top down to 1.85
+        bus = CarBuild.for_car("express")
+        wb, wn = wing_car(g, bus, lib, car="express"), wing_car(g, bus, lib)
         rep("the wing car is fitted to the session's car",
-            (wb.left.h, wb.top.h) == (1.60, 3.30) and wn.left.h == 1.20
-            and (bus.left.h, bus.left.wing) == (1.60, ""),
-            f"bus: flank h {wb.left.h:.2f}, top h {wb.top.h:.2f} (car-less: {wn.left.h:.2f})")
+            (wb.left.h, wb.top.h) == (1.05, 1.95) and wn.top.h == 1.85
+            and (bus.left.h, bus.left.wing) == (1.05, ""),
+            f"Express: flank h {wb.left.h:.2f}, top h {wb.top.h:.2f} (car-less: top "
+            f"{wn.top.h:.2f})")
     except Exception as exc:               # noqa: BLE001
         rep("the wing car", False, f"{type(exc).__name__}: {exc}")
     if verbose:

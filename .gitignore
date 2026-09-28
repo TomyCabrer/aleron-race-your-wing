@@ -6,3 +6,20 @@ runs/
 
 # AeroBO's runtime caches (XFOIL, evaluation cache, screen checkpoints) -- see aerobo/VENDORED.md
 aerobo/results/
+
+# Steam prep: PyInstaller work/output (packaging/build_*.sh) and steamcmd logs (steam/)
+/build/
+/dist/
+steam/output/
+# steam/collect.sh copies whole builds here (a .app is ~150 MB, over GitHub's 100 MB file limit)
+steam/content/
+
+# Local tooling (Claude Code session state, other virtualenvs, test/packaging caches)
+.claude/
+.venv*/
+.pytest_cache/
+*.egg-info/
+
+# The owner's logo sketches: source art, not read by the game -- kept out of the public repo
+/myTitleV1.pdf
+/RaceYourWing.pdf

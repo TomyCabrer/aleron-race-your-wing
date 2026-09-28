@@ -2248,8 +2248,8 @@ def self_check(p: PowertrainParams | None = None, car: CorsaC | None = None,
          "14.79 15.02 15.36 15.70", True, hard=False)
 
     # ---------------- task 41: the per-car fields ----------------
-    #  (1) IDENTITY: the three stock cars declare none of them, so every
-    #  constant a new field can move is the module's own on all three.
+    #  (1) IDENTITY: the stock cars declare none of them, so every constant
+    #  a new field can move is the module's own on each.
     import cars as _cars
     import dataclasses as _dc
     ref = PowertrainParams()
@@ -2261,7 +2261,9 @@ def self_check(p: PowertrainParams | None = None, car: CorsaC | None = None,
     note("t41_stock_cars_untouched", str(moved) if any(moved.values())
          else f"{len(t41)} constants x {len(moved)} cars at the module's own",
          "none moved", not any(moved.values()))
-    bus = _cars.CARS["bus"]
+    #  (task 46: the bus is out of the game; `cars.RETIRED` keeps it for these
+    #  rows, the only car with a governor, air brakes and a 2500 rpm diesel)
+    bus = _cars.RETIRED["bus"]
     pb = PowertrainParams.from_car(bus)
     note("t41_bus_scaled_block",
          f"n_soft {pb.n_soft:.1f}, dn_brake {pb.n_dn_brake:.0f}, stall {pb.n_stall:.0f}, "
@@ -2331,6 +2333,19 @@ def self_check(p: PowertrainParams | None = None, car: CorsaC | None = None,
     vf, vr = lock_pressure(pv, van, "f", van.mu_scale), lock_pressure(pv, van, "r", van.mu_scale)
     note("t41_van_front_locks_first", f"front {vf / 1e5:.1f} bar, rear {vr / 1e5:.1f} bar",
          "front < rear", vf < vr)
+    #  task 46: the rally car's tarmac bias (63 % front below the knee)
+    #  sits behind its adjustable valve ('scaled'), and the front still locks
+    #  first; its rev range is scaled to its 9000 rpm cut
+    ral = _cars.CARS["rally"]
+    pra = PowertrainParams.from_car(ral)
+    raf, rar = lock_pressure(pra, ral, "f", ral.mu_scale), lock_pressure(pra, ral, "r", ral.mu_scale)
+    note("t46_rally_front_locks_first",
+         f"front {raf / 1e5:.1f} bar, rear {rar / 1e5:.1f} bar (knee {pra.p_knee / 1e5:.1f}, "
+         f"{pra.kbf / (pra.kbf + pra.kbr) * 100:.0f} % front); dn_brake {pra.n_dn_brake:.0f}, "
+         f"n_soft {pra.n_soft:.0f} rpm",
+         "front < rear; the rev range at 9000/6200", raf < rar
+         and abs(pra.n_dn_brake - 2200.0 * 9000.0 / 6200.0) < 1e-9
+         and abs(pra.p_knee - P_KNEE * pra.p_max_line / P_MAX_LINE) < 1e-6 * P_KNEE)
 
     # ---------------- task 45: the automatic and the limiter ----------------
     #  (a) every car's full-throttle upshift line sits UNDER the soft
@@ -2338,8 +2353,9 @@ def self_check(p: PowertrainParams | None = None, car: CorsaC | None = None,
     #  be 50 rpm under the cut (Corsa 6150 of 6200), inside the band, and a
     #  corner or TC settled the engine below it on ~40% of its fuel.
     ups, band_ok = [], True
-    for k in _cars.CAR_ORDER:
-        pk = PowertrainParams.from_car(_cars.CARS[k])
+    _every = dict(_cars.CARS, **_cars.RETIRED)       # task 46: the retired two too
+    for k in tuple(_cars.CAR_ORDER) + tuple(_cars.RETIRED):
+        pk = PowertrainParams.from_car(_every[k])
         top = max(n_up_schedule(pk, g, 1.0) for g in range(1, len(pk.gear)))
         band_ok = band_ok and top < pk.n_cut - pk.n_soft
         ups.append(f"{k} {top:.0f}<{pk.n_cut - pk.n_soft:.0f}")

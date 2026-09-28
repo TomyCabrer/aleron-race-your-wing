@@ -38,7 +38,7 @@ C_SQR = (255, 143, 216)
 CONTROLS = (
     ("L2", (CX - 118, CY - 104), "L", "L2", "brake"),
     ("L1", (CX - 118, CY - 86), "L", "L1", "shift down"),
-    ("create", (CX - 76, CY - 58), "L", "CREATE", "reset to the sector line"),
+    ("create", (CX - 76, CY - 58), "L", "CREATE", "sector line; hold: restart"),
     ("up", (CX - 104, CY - 40), "L", "d-pad UP", "HUD cycle"),
     ("left", (CX - 120, CY - 24), "L", "d-pad LEFT", "slow motion"),
     ("right", (CX - 88, CY - 24), "L", "d-pad RIGHT", "normal speed"),
@@ -209,7 +209,7 @@ def draw_pad(screen, rect) -> None:
 #: what each bound command must be called on the drawing: the self-check
 #: holds the labels to drive/input.py's PS_PAD_BUTTONS (a rebinding fails it)
 CMD_WORDS = {"handbrake": "handbrake", "wing": "wings armed", "clutch": "clutch",
-             "wing_side": "wing mode", "reset": "reset", "menu": "menu",
+             "wing_side": "wing mode", "reset": "sector line; hold: restart", "menu": "menu",
              "zoom_auto": "auto zoom", "camera": "camera", "shift_down": "shift down",
              "shift_up": "shift up", "hud": "HUD", "vectors": "force arrows", "slowmo": "slow",
              "normal_speed": "normal speed", "garage": "garage"}

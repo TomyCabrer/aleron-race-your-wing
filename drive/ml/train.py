@@ -21,7 +21,7 @@ arguments), so there is no evaluation noise to average over and one rollout
 per candidate is the right budget. That is unusual for an ES and it is a
 property of this problem, not an oversight.
 
-`--car mx5` trains against that car's engine, brakes, mass, driven axle, lock
+`--car rally` trains against that car's engine, brakes, mass, driven axle, lock
 and wheelbase (the Corsa is the default and `--car corsa` is bit-for-bit the
 no-car path). `--track arena,open` trains ONE policy on SEVERAL circuits: the
 fitness is then the mean over the tracks of that track's reward divided by the
@@ -248,7 +248,7 @@ def main(argv=None) -> int:
     ap.add_argument("--save-every", type=int, default=1,
                     help="iterations between checkpoints (0 = only at the end)")
     ap.add_argument("--car", default=None,
-                    help="cars.py key: corsa (default) | mx5 | 540i | express | bus. The "
+                    help="cars.py key: corsa (default) | rally | 540i | express. The "
                          "policy trims THAT car's own lock and wheelbase.")
     ap.add_argument("--eval", action="store_true",
                     help="after training, re-measure at DT_EVAL and print lap times")

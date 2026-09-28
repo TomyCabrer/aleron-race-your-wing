@@ -533,7 +533,7 @@ def stowed_standoff(chord: float, inc_deg: float) -> float:
 
 
 def plate_rings(root, span_dir, stand_dir, st: dict, thick: float = 0.012,
-                wall=None) -> list:
+                wall=None, chord_dir=None) -> list:
     """`plate_stations` swept into closed rectangle rings (5 corners, the
     first repeated) in world metres, for a loft: each station a flat plate
     of its chord along x and `thick` across the line.
@@ -543,10 +543,17 @@ def plate_rings(root, span_dir, stand_dir, st: dict, thick: float = 0.012,
     (the wall). `wall` = (axis, fn) sets a CARRYING plate's last ring down on
     the body -- fn(corner) is the body's z there (axis 2: the deck, its slope
     and its shoulder) or the car side's y (axis 1) -- so its foot sits on the
-    body under each corner instead of floating off one end of it."""
+    body under each corner instead of floating off one end of it.
+
+    `chord_dir` (task 46; None: x) is the plate's chord direction. A tip
+    device on a pylon-borne wing is fixed to the TIP SECTION, so it turns
+    with the section's incidence and twist: its chord along the tip chord
+    line and `stand_dir` turned the same way (the owner, 2026-09-28: "Wing
+    tip not connected properly to wing in pylon" -- the plate stayed along x
+    while the tip section it caps was turned by the incidence)."""
     root = np.asarray(root, float)
     a_, b_ = np.asarray(span_dir, float), np.asarray(stand_dir, float)
-    ex = np.array([1.0, 0.0, 0.0])
+    ex = np.array([1.0, 0.0, 0.0]) if chord_dir is None else np.asarray(chord_dir, float)
     rings = []
     for dy, dz, psi, c in zip(st["dy"], st["dz"], st["psi"], st["c"]):
         ctr = root + dy * a_ + dz * b_

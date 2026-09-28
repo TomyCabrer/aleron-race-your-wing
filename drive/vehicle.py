@@ -1753,7 +1753,13 @@ class Vehicle:
             g_min = 1.0 - 2.0 * share
             if g_min < TC_GAIN_MIN:
                 g_min = TC_GAIN_MIN
-            tgt = 1.0 - (kx - TC_SLIP_RESTORE) / (TC_SLIP_CUT - TC_SLIP_RESTORE)
+            #  task 48: a car may bring its own slip targets (`CarSpec.
+            #  tc_slip`: the 540i's rear axle is held below its peak); None
+            #  is the module's pair, the same floats: every other car is
+            #  bit-for-bit what it was
+            ts = getattr(self.car, "tc_slip", None)   # corsa_c.CorsaC has none
+            s_r, s_c = (TC_SLIP_RESTORE, TC_SLIP_CUT) if ts is None else ts
+            tgt = 1.0 - (kx - s_r) / (s_c - s_r)
             if tgt < g_min:
                 tgt = g_min
             elif tgt > 1.0:
@@ -2524,10 +2530,11 @@ def validate(verbose: bool = True) -> bool:
                   f"{_c.mu_scale:5.2f}")
 
     # ---------------- T41 task 41: the per-car fields ------------------
-    #  (a) DEFAULTS ARE IDENTITY. The MX-5 (the non-Corsa, rear-driven path)
-    #  with every task-41 field written out at its default must drive the
-    #  same second of throttle, steer and brake to the last bit, and the
-    #  three stock cars must run the unscaled tyre and qss.TYRE itself.
+    #  (a) DEFAULTS ARE IDENTITY. The MX-5 (the non-Corsa, rear-driven path;
+    #  retired from the game in task 46, kept in `cars.RETIRED` for exactly
+    #  this) with every task-41 field written out at its default must drive
+    #  the same second of throttle, steer and brake to the last bit, and the
+    #  stock cars must run the unscaled tyre and qss.TYRE itself.
     def _drive(c):
         v = Vehicle(c, VehicleConfig(mu_scale=c.mu_scale))
         v.reset(V=15.0, gear=2)
@@ -2535,7 +2542,8 @@ def validate(verbose: bool = True) -> bool:
             v.step(Controls(delta=0.06 * sin(k * 0.004), throttle=0.6 if k < 900 else 0.0,
                             brake=0.0 if k < 900 else 0.5), _MU1, _MU1, DT_PHYS)
         return (v.x, v.y, v.psi, v.u, v.v, v.r, v.phi, tuple(v.omega), v.rpm)
-    same = _drive(_cars.MX5_NB) == _drive(_cars.MX5_NB.copy(**_cars.PHYSICS_DEFAULTS))
+    _mx5 = _cars.RETIRED["mx5"]
+    same = _drive(_mx5) == _drive(_mx5.copy(**_cars.PHYSICS_DEFAULTS))
     stock = all(all(t.LFZO == 1.0 for t in car_derived(_cars.CARS[k], par).tyres)
                 and all(r is qss.TYRE for r in car_derived(_cars.CARS[k], par).tyre_refs)
                 and car_derived(_cars.CARS[k], par).roll_dist_f == par.roll_dist_f
@@ -2547,7 +2555,9 @@ def validate(verbose: bool = True) -> bool:
     #  (b) THE BUS CORNERS: 0.55-0.75 g at 15 and 20 m/s, no spin, no wheel
     #  off the ground. On the car tyre at the car tyre's load it managed
     #  0.24 g and spun (the probe); that counterfactual is re-measured.
-    bus = _cars.CARS["bus"]
+    #  (task 46: the bus is out of the game, `cars.RETIRED`; it stays here as
+    #  the one car that exercises the load-scaled tyre and wheel inertias)
+    bus = _cars.RETIRED["bus"]
     bcfg = VehicleConfig(mu_scale=bus.mu_scale)
     rb = [ramp_steer(V, car=bus, cfg=bcfg) for V in (15.0, 20.0)]
     corner_ok = all(0.55 <= r["peak_ay_g"] <= 0.75 and not r["aborted"]
@@ -2867,10 +2877,15 @@ def validate(verbose: bool = True) -> bool:
     #  the road speed; 2.9 s at 8 deg before and after) -- the road does not
     #  agree with the engine there, so the box holds the gear by design
     #  (powertrain._auto_target).
-    runs = [(k, 4.0) for k in _cars.CAR_ORDER] + [("corsa", 12.0)]
+    #  (task 46: the retired MX-5 and bus too -- their gearbox paths, the
+    #  bus's rev-scaled one above all, are still the powertrain's. The rally
+    #  car is the closest: its open diff spins the inside rear in 2nd at
+    #  4 deg for 0.18 s on the limiter, the box holding the gear by design.)
+    _every = dict(_cars.CARS, **_cars.RETIRED)
+    runs = [(k, 4.0) for k in tuple(_cars.CAR_ORDER) + tuple(_cars.RETIRED)] + [("corsa", 12.0)]
     worst, txt = 0.0, []
     for k, deg in runs:
-        rc = auto_corner(_cars.CARS[k], deg)
+        rc = auto_corner(_every[k], deg)
         w = max(rc["limiter"].values()) if rc["limiter"] else 0.0
         worst = max(worst, w)
         txt.append(f"{k}@{deg:.0f} {w:.2f} s {''.join(str(g) for g in rc['gears'])}")
@@ -2887,10 +2902,10 @@ def validate(verbose: bool = True) -> bool:
     #  540i does not creep: its governed idle, 559 rpm, sits 9 rpm over the
     #  anti-stall floor. That is as before task 45 and not tested here.)
     txt, ok_stop = [], True
-    for k in _cars.CAR_ORDER:
+    for k in tuple(_cars.CAR_ORDER) + tuple(_cars.RETIRED):
         for mu_w, abs_w, tag in ((1.0, True, "dry"), (_MU_WET, True, "wet"),
                                  (1.0, False, "dry, ABS off")):
-            rs = auto_stop(_cars.CARS[k], mu=mu_w, abs_on=abs_w)
+            rs = auto_stop(_every[k], mu=mu_w, abs_on=abs_w)
             h = rs["held"]
             good = (not rs["ever"] and rs["t_stop"] is not None and h["clutch_open"]
                     and h["rpm"] > rs["p"].n_stall + 50.0 and rs["v_go"] > 1.0)

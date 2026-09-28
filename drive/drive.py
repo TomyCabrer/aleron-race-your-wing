@@ -68,6 +68,11 @@ from . import track as trk
 from . import race_grid
 from . import paint as pnt
 from .vehicle import Controls, Vehicle, VehicleConfig, wheel_positions
+#: task 47: the Wings setting (Settings.race_wings) -- the challenges' four
+#: wing configs, each with its own leaderboards, then FREE; drive/leaderboard.py
+#: owns the values and their words (it imports only drive/records.py)
+from .leaderboard import (WINGS_MODES as RACE_WINGS_MODES, WINGS_DEFAULT as RACE_WINGS_DEFAULT,
+                          WINGS_LABELS as RACE_WINGS_LABELS, CONFIGS as RACE_CONFIGS)
 
 # ==================================================================== #
 #  HARNESS CONSTANTS -- specs/harness.txt, CONTRACT section 8          #
@@ -94,7 +99,8 @@ LAP_LOCKOUT_S = 3.0          # s   minimum lap; kills the double-fire
 #: straight (|kappa| under ROLL_STRAIGHT_KAPPA) with a clear run ahead of it,
 #: inside the last sector (the out-lap crosses no split line):
 #:  1. the straight INTO the line, where it is at least ROLL_RUNIN_MIN_M long
-#:     (the pit straights of linden 50 m, ashdown 60 m, kestrel 70 m): at its
+#:     (the pit straights of linden 50 m, ashdown 60 m, kestrel 70 m, and
+#:     the oval's 240 m, task 46): at its
 #:     start, at most ROLL_RUNIN_MAX_M (ROLL_BACK_MAX_FRAC of the lap) out;
 #:  2. else the nearest straight back from the line that leaves ROLL_CLEAR_S of
 #:     travel at V0 before its corner: the car no further than ROLL_BACK_M
@@ -146,8 +152,10 @@ SEED_LAP_COLS = ("t", "x", "y", "psi", "u", "v", "r", "beta", "ay", "util_f",
 #: `car`: what the swarm breeds in -- 'same' = the car you are driving
 #: (ballast, garage build and all), else a STOCK library car on your
 #: session's settings with its own grip scale: the RACE page's car rule
-#: (`_swarm_car`, `Sim._race_car`), so a bot bred in the MX-5 is raced and
-#: tested in that same MX-5.
+#: (`_swarm_car`, `Sim._race_car`), so a bot bred in the rally car is raced
+#: and tested in that same rally car. Task 46: a stock car has NO wings (yours
+#: were made for your car), and the row also offers each SAVED build by name
+#: ('build:<name>', `race_grid.saved_choice`): that build on its own car.
 SWARM_MENU_DEFAULTS = dict(pop=24, seed="none", gens=0, T=70.0, view="replay", save="ask",
                            car="same")
 #: the default Sim time is one ARENA lap and a bit, this long: `swarm_T`
@@ -158,12 +166,12 @@ SWARM_T_LAP = 1249.2022
 #: (`drive.ml.env.rollout(Policy(), "arena")`, DT_TRAIN, plate or no wing
 #: alike) is 68.24 s. A car that laps slower gets the default in proportion,
 #: so a default swarm bred in it can finish a lap: the Express's 69.44 s ->
-#: 71 s, the Citaro's 79.78 s -> 82 s (at 70 s it never lapped, and the lap
-#: tie-break never engaged). The three stock cars lap faster (MX-5 65.25 s,
-#: 540i 64.43 s) and are not listed: they keep exactly the map's value.
-#: Measured 2026-09-25; drive's V40 re-drives the bus inside its window.
+#: 71 s (the retired Citaro's 79.78 s took 82). The faster cars lap under
+#: it and are not listed: they keep exactly the map's value (540i 64.43 s;
+#: task 46's rally Escort, standing lap under the same anchor, 62.06 s).
+#: Measured 2026-09-25; drive's V43d re-drives the Express inside its window.
 SWARM_T_BASIS_LAP = 68.24
-SWARM_T_SLOW_LAPS = {"express": 69.44, "bus": 79.78}
+SWARM_T_SLOW_LAPS = {"express": 69.44}
 
 
 def swarm_T(tr, T=None, car=None) -> float:
@@ -171,7 +179,8 @@ def swarm_T(tr, T=None, car=None) -> float:
     set on the arena, where a car laps once and a bit) pro rata on a longer
     race circuit, whole seconds in the page's range. The arena and the
     shorter Linden keep 70 s, Ashdown gets 78 and Kestrel's 1.91 km 107 --
-    at 70 s no car would finish a lap there. `car` (a `cars.py` key: the
+    at 70 s no car would finish a lap there (the oval's 1.90 km: 107 too,
+    task 46). `car` (a `cars.py` key: the
     car the swarm breeds in) stretches it for a car slower than the Corsa
     (`SWARM_T_SLOW_LAPS`); None or a stock car: unchanged. The test maps
     keep `T`: their 'lap' is not what the default was set on."""
@@ -183,7 +192,7 @@ def swarm_T(tr, T=None, car=None) -> float:
     return clamp_T(T * k_car * max(1.0, float(tr.length) / SWARM_T_LAP))
 
 
-def _swarm_menu_kept(launch: dict, tr, car=None) -> dict:
+def _swarm_menu_kept(launch: dict, tr, car=None, lib=None) -> dict:
     """What the Deploy-swarm page keeps of a Deploy on `tr` for the sessions
     after it: every value, except a Sim time still at this map's default
     (`swarm_T(tr, car=)`, `car` the session's) -- the next map's page starts
@@ -191,14 +200,26 @@ def _swarm_menu_kept(launch: dict, tr, car=None) -> dict:
     page, where no car laps in it. A Sim time the player set is theirs, on
     every map."""
     kept = dict(launch)
-    if abs(float(kept.get("T", 0.0)) - swarm_T(tr, car=_swarm_T_car(launch.get("car"), car))) < 0.5:
+    if abs(float(kept.get("T", 0.0))
+           - swarm_T(tr, car=_swarm_T_car(launch.get("car"), car, lib))) < 0.5:
         kept.pop("T", None)
     return kept
 
 
-def _swarm_T_car(choice, session_car):
-    """The car key a swarm page's Car row breeds in: 'same' is the session's."""
-    return session_car if choice in (None, "", "same") else choice
+def _swarm_T_car(choice, session_car, lib=None):
+    """The car key a swarm page's Car row breeds in: 'same' is the session's;
+    a saved build's (task 46) is its own car's (`race_grid.build_home`),
+    read from `lib` (the garage library; None: none at hand -- the
+    session's car, which only sets a default Sim time)."""
+    if choice in (None, "", "same"):
+        return session_car
+    name = race_grid.saved_name(choice)
+    if name is None:
+        return choice
+    try:
+        return race_grid.build_home(lib.builds.get(name)) or session_car
+    except Exception:                      # noqa: BLE001 -- a label never stops a drive
+        return session_car
 
 
 #: `pop` and `T` are FREE values (drive/swarm_panel.py, task 26): any
@@ -219,7 +240,8 @@ SWARM_SAVE_LABELS = {"ask": "ask on exit",
                      "always": "always on exit",
                      "never": "never (K still saves)"}
 SWARM_HELP = [("DEPLOY SWARM", [
-    ("Car", "what they breed in: your car, or a stock one"),
+    ("Car", "what they breed in: your car, a stock one (no"),
+    ("", "wings), or a saved build by name on its own car"),
     ("", "(then raced and tested in that same car)"),
     ("Cars", "how many cars in each generation, 4 to 128:"),
     ("", "LEFT / RIGHT 4 8 16 24 32 48 64 96 128,"),
@@ -267,7 +289,12 @@ RACE_CHECKPOINT_DIR = os.path.join("drive", "ml", "checkpoints")
 #: grip scale (`Sim._race_car`). The policy is a trim in the car's own
 #: actuator units (`policy.Policy.action`), so a checkpoint bred on one car
 #: can be put in another and raced -- which is how a bot is tried in a
-#: different car.
+#: different car. Task 46 (the owner: the bot's car "should be the one
+#: selected by name same as in race"): a stock car has NO wings (the
+#: session's were made for the session's car), and the page's car row also
+#: offers each SAVED build by name ('build:<name>', `Sim._race_car_choices`):
+#: that build on ITS OWN car, its wings and their mass (`race_grid.
+#: saved_car`). RACE_BOT_CARS stays the fixed part: what Test drives a bot in.
 RACE_BOT_CARS = (race_grid.OWN, "same") + tuple(cars.CAR_ORDER)
 RACE_START_OFFSET_M = 2.2       # the bot lines up this far LEFT of the user
 #: The grid, (n, s) per slot: bot 1 on the user's left, bot 2 on the right,
@@ -290,7 +317,8 @@ RACE_HELP = [("RACE VS BOT", [
     ("Bot 1..5", "who drives each other car: the built-in driver, or a"),
     ("", "bot you saved in the swarm (K there);"),
     ("", "a slot opens once the one above it is filled"),
-    ("car", "what that bot drives: your car, or a stock one"),
+    ("car", "what that bot drives: its own, yours, a stock car"),
+    ("", "(no wings), or a saved build by name, on its own car"),
     ("Start", "every car to the line: bot 1 on your left, 2 on"),
     ("", "your right, 3 and 4 a row back, 5 behind them"),
     ("Stop", "takes the bots off the track"),
@@ -301,14 +329,15 @@ RACE_HELP = [("RACE VS BOT", [
     ("", "along the track, and in metres, per bot"),
     ("R", "any reset restarts the race from the line"),
 ])]
-RACE_NOTE = ("A bot is a second car with the ML driver at the wheel -- your car, or "
-             "any car in the library, so one bot can be tried in every car. Bots "
+RACE_NOTE = ("A bot is a second car with the ML driver at the wheel -- your car, a "
+             "stock car, or one of your saved builds by name, on the car it was made "
+             "for, so one bot can be tried in every car. Bots "
              "are ghosts -- you drive through them -- so the race is "
              "against their laps, not their bumpers. A bot that leaves the road or "
              "spins rejoins, rolling, at the last sector line it passed after a "
              "couple of seconds.")
 SWARM_NOTE = ("Learning cars: each generation keeps the best drivers and breeds the "
-              "next from them, in your car or a stock one (Car). The window "
+              "next from them, in your car, a stock one or a saved build (Car). The window "
               "replays each generation as ghost cars while the next is computed -- "
               "or, with Replay off, breeds flat out and shows the table. "
               "K in the swarm window saves the best driver as a bot you can race "
@@ -438,7 +467,11 @@ def engine_label(mode: str, car=None) -> str:
         return ENGINE_LABELS[mode]
     stem = {"stock": "Stock", "tuned": "Tuned", "sport": "Sport"}[mode]
     return f"{stem} ({engine_ps(mode, car)} hp)"
-ENGINE_DEFAULT = "sport"      # the seat's default: a 75 hp 1.2 is slow from it
+#: a new player's engine. Task 47: Stock -- the owner: non-stock engines "are
+#: only for messing around and don't go to leaderboards", and the boards are
+#: "for default car" (it was Sport: "a 75 hp 1.2 is slow from it"). A saved
+#: settings file keeps the engine it has
+ENGINE_DEFAULT = "stock"
 # The Car setting: cars.CARS -> the CarSpec the session is built on. 'corsa'
 # is the car every scripted number is measured on and the only one this study
 # calibrated; the other two are contrasting parameter sets (cars.py's own
@@ -513,11 +546,28 @@ class Settings:
     #: task 41: the player's own default build per car -- car key -> the name
     #: of a library build, loaded when that car is chosen
     car_build: dict = field(default_factory=dict)
+    #: task 47: the wing mode a timed session drives -- one of the
+    #: challenges' four configs, each with its own leaderboards, or FREE (the
+    #: build as designed, every G mode: never on a board). drive/leaderboard.py
+    race_wings: str = RACE_WINGS_DEFAULT   # RACE_WINGS_MODES
+    #: task 48: each car's OWN Engine setting (car key -> ENGINE_MODES), as
+    #: Paint is kept: a car never chosen an engine opens on ENGINE_DEFAULT.
+    #: One global Engine put the 540i on Sport (x2: 880 N.m, 570 hp) because
+    #: the Corsa was ("a 75 hp 1.2 is slow") -- the owner: "just by giving it
+    #: thrust it spins around". `engine` is the car on the road's, kept in
+    #: step with this table (`take_car_engine`, `cycle`)
+    engines: dict = field(default_factory=dict)
+    #: task 48 (the review): each car's own TC too (car key -> bool), kept
+    #: like `engines`: a car never given one opens with TC ON (the default).
+    #: The owner's saved seat had TC off -- set for another car or a
+    #: challenge -- and the 540i on Stock with TC off still spun on power in
+    #: 1st with any steer (a real E39 has ASC as standard)
+    tcs: dict = field(default_factory=dict)
     path: str = field(default=SETTINGS_PATH, repr=False, compare=False)
 
     KEYS = ("track", "car", "ballast", "ballast_at", "engine", "gearbox",
             "abs", "tc", "steer_aid", "wet", "camera", "hud", "vectors", "sound", "shake",
-            "graphics", "paint", "wing_limits", "car_build")
+            "graphics", "paint", "wing_limits", "car_build", "race_wings", "engines", "tcs")
     #  not fields (never saved): what went wrong with the file, for the screen
     load_note = ""
     save_note = ""
@@ -566,7 +616,34 @@ class Settings:
         cb = self.car_build if isinstance(self.car_build, dict) else {}
         self.car_build = {k: v for k, v in cb.items()
                           if k in cars.CARS and isinstance(v, str) and v.strip()}
+        if not ok(self.race_wings, RACE_WINGS_MODES):
+            self.race_wings = RACE_WINGS_DEFAULT
+        en = self.engines if isinstance(self.engines, dict) else {}
+        self.engines = {k: v for k, v in en.items()
+                        if k in cars.CARS and isinstance(v, str) and v in ENGINE_MODES}
+        tc_ = self.tcs if isinstance(self.tcs, dict) else {}
+        self.tcs = {k: v for k, v in tc_.items() if k in cars.CARS and isinstance(v, bool)}
         return self
+
+    def engine_of(self, car: str | None = None) -> str:
+        """`car`'s own Engine setting (default this car): ENGINE_DEFAULT for
+        a car never given one (task 48)."""
+        en = self.engines if isinstance(self.engines, dict) else {}
+        return en.get(car or self.car, ENGINE_DEFAULT)
+
+    def tc_of(self, car: str | None = None) -> bool:
+        """`car`'s own TC setting (default this car): ON for a car never
+        given one (task 48)."""
+        tc_ = self.tcs if isinstance(self.tcs, dict) else {}
+        return bool(tc_.get(car or self.car, True))
+
+    def take_car_engine(self) -> bool:
+        """The car on the road's own Engine and TC become the settings (a car
+        change: the Settings page's Car row, the garage's Change car, a
+        board raced, a challenge over). True when either changed."""
+        was = (self.engine, self.tc)
+        self.engine, self.tc = self.engine_of(self.car), self.tc_of(self.car)
+        return (self.engine, self.tc) != was
 
     def build_of(self, car: str | None = None) -> str:
         """The player's default build for `car` (default this car), by library
@@ -663,6 +740,28 @@ class Settings:
             for k in cls.KEYS:
                 if k in d:
                     setattr(s, k, d[k])
+            mig = False
+            if "engines" not in d and d.get("engine") in ENGINE_MODES:
+                #  task 48: a file from before each car had its own engine --
+                #  its one Engine was chosen for the Corsa (the old default's
+                #  own words: "a 75 hp 1.2 is slow"); every other car opens on
+                #  ENGINE_DEFAULT, and the screen says so when that changes
+                #  the car on the road
+                s.engines, mig = {"corsa": d["engine"]}, True
+            if "tcs" not in d and isinstance(d.get("tc"), bool):
+                s.tcs, mig = {"corsa": d["tc"]}, True     # the same for TC
+            if mig:
+                s.clamp()
+                was_e, was_t = s.engine, s.tc
+                if s.take_car_engine():
+                    said = []
+                    if s.engine != was_e:
+                        said.append(f"on {s.engine.capitalize()} (was {was_e.capitalize()})")
+                    if s.tc != was_t:
+                        said.append("TC " + ("ON" if s.tc else "off"))
+                    s.load_note = (f"Engine and TC are now kept per car: the "
+                                   f"{cars.car_name(s.car)} is " + ", ".join(said)
+                                   + " - Settings")
         except FileNotFoundError:
             pass                           # the first launch
         except OSError as exc:
@@ -683,18 +782,22 @@ class Settings:
             self.track = opts.track
         if getattr(opts, "car", None):
             self.car = opts.car
+            self.take_car_engine()         # task 48: its own engine (--engine wins, below)
         if getattr(opts, "ballast", None) is not None:
             self.ballast = float(opts.ballast)
         if getattr(opts, "ballast_at", None):
             self.ballast_at = opts.ballast_at
         if getattr(opts, "engine", None):
             self.engine = opts.engine
+            if opts.engine in ENGINE_MODES:
+                self.engines = {**self.engines, self.car: opts.engine}
         if getattr(opts, "gearbox", None):
             self.gearbox = opts.gearbox
         if getattr(opts, "abs", None) is not None:
             self.abs = bool(opts.abs)
         if getattr(opts, "tc", None) is not None:
             self.tc = bool(opts.tc)
+            self.tcs = {**self.tcs, self.car: self.tc}   # task 48: per car
         if getattr(opts, "sound", None):
             self.sound = opts.sound
         if getattr(opts, "steer_limit", None) is not None:
@@ -746,8 +849,14 @@ class Settings:
             self.ballast_at = step(cars.BALLAST_STATIONS, self.ballast_at)
         elif key == "engine":
             self.engine = step(ENGINE_MODES, self.engine)
+            #  task 48: the car ON THE ROAD's own (`car`: the Settings page
+            #  passes it while another car is only browsed on the Car row)
+            self.engines = {**(self.engines if isinstance(self.engines, dict) else {}),
+                            (car or self.car): self.engine}
         elif key == "tc":
             self.tc = not self.tc
+            self.tcs = {**(self.tcs if isinstance(self.tcs, dict) else {}),
+                        (car or self.car): self.tc}     # task 48: per car
         elif key == "sound":
             self.sound = step(SOUND_MODES, self.sound)
         elif key == "gearbox":
@@ -771,6 +880,8 @@ class Settings:
             self.paint = {**self.paint, c: step(pnt.PAINT_ORDER, self.paint_of(c))}
         elif key == "wing_limits":
             self.wing_limits = step(WING_LIMIT_MODES, self.wing_limits)
+        elif key == "race_wings":
+            self.race_wings = step(RACE_WINGS_MODES, self.race_wings)
 
 
 #: task 41: the Wing limits row (drive/bodies.py). It gates the garage's
@@ -787,8 +898,9 @@ WING_LIMIT_LABELS = {"real": "Real (each car's own limit)",
 # The settings whose change is a new session (a new map, or a new CarSpec:
 # tyre, wheel stations, static loads, roll block, powertrain). On the page
 # these are BROWSED with LEFT / RIGHT and applied with ENTER, so the driver
-# can read every option before committing to a rebuild.
-RESTART_KEYS = ("track", "wet", "car", "ballast", "ballast_at")
+# can read every option before committing to a rebuild. Task 47: the Wings
+# row too -- a wing mode is a new copy of the build (challenges.config_build)
+RESTART_KEYS = ("track", "wet", "car", "ballast", "ballast_at", "race_wings")
 
 
 SETTINGS_HELP = [
@@ -801,12 +913,12 @@ SETTINGS_HELP = [
         ("BACKSPACE", "garage (while driving; touchpad on the pad)"),
     ]),
     ("CAR", [
-        ("Corsa C 1.2", "the reference car, the most closely measured;"),
+        ("Civetta 1.2", "the reference car, the most closely measured;"),
         ("", "front-wheel drive"),
-        ("MX-5 1.8 / 540i", "lighter and neutral / heavy and powerful;"),
-        ("", "both rear-wheel drive"),
-        ("Express 1.4", "light van: tall sides, big side wings fit"),
-        ("Citaro bus", "12 m bus, governed to 80 km/h, huge wings"),
+        ("Halcón RS18", "a 1979 Group 4 rally car: 180 kW, 980 kg,"),
+        ("", "rear-wheel drive, revs to 9000"),
+        ("N540", "heavy and powerful; rear-wheel drive"),
+        ("Courier 1.4", "light van: tall sides, big side wings fit"),
         ("", "each car has its own records and medals"),
         ("Paint", "per car, looks only: no class, ranking or medal"),
         ("Wing limits", "Real: every span within the car's own limit;"),
@@ -838,6 +950,7 @@ SETTINGS_HELP = [
         ("Linden park", "1110 m, 7 corners R 30..60 m: tight, technical"),
         ("Kestrel ring", "1913 m, 7 corners R 55..100 m, a 390 m straight"),
         ("Ashdown circuit", "1390 m clockwise, 7 corners R 30..120 m, a hairpin"),
+        ("Fairfield oval", "1902 m: two 480 m straights, two R 150 m bends"),
         ("Open proving ground", "522 x 362 m pad: skidpad circles, slalom,"),
         ("", "300 m drag lane, wet square; road round the edge"),
         ("Skidpad", "constant radius (--radius), guide circles"),
@@ -861,24 +974,24 @@ SETTINGS_ROW_HELP = {
         ("Linden park", "1110 m, 7 corners R 30..60 m: tight"),
         ("Kestrel ring", "1913 m, R 55..100 m, a 390 m straight"),
         ("Ashdown", "1390 m clockwise, R 30..120 m, a hairpin"),
+        ("Fairfield oval", "1902 m: 480 m straights, R 150 m bends"),
         ("Open ground", "a 522 x 362 m pad: skidpad circles, a"),
         ("", "slalom, a drag lane, a wet square, a road"),
         ("Skidpad", "constant radius, guide circles"),
         ("Dragstrip", "1500 m straight: 1/8 mile, 1/4 mile, km"),
         ("TAB", "next map: driving, pause, TIME TRIAL")])],
     "set:car": [("CAR", [
-        ("Corsa C 1.2", "the reference car, the most closely"),
+        ("Civetta 1.2", "the reference car, the most closely"),
         ("", "measured; front-wheel drive"),
-        ("MX-5 / 540i", "lighter and neutral / heavy and powerful;"),
-        ("", "both rear-wheel drive"),
-        ("Express", "Renault's 1990s 1.4 van: the Corsa's"),
+        ("Halcón", "the RS18 rally car (Group 4, 1979):"),
+        ("", "180 kW, 980 kg, rear drive, 9000 rpm"),
+        ("N540", "heavy and powerful; rear-wheel drive"),
+        ("Courier", "a 1990s 1.4 van: the Civetta's"),
         ("", "power in a 1.78 m tall box; front drive"),
-        ("Citaro bus", "a 12 m, 11.5 t city bus, governed to"),
-        ("", "80 km/h: room for the biggest wings"),
         ("Records", "each car has its own records and medals")])],
     "set:paint": [("PAINT", [
-        ("Factory", "the car's own colour: the Corsa yellow,"),
-        ("", "the MX-5 red, the 540i blue"),
+        ("Factory", "the car's own colour: the Civetta yellow,"),
+        ("", "the Halcón red, the N540 blue"),
         ("Ten more", "white, silver, green, purple, cobalt ..."),
         ("Per car", "each car keeps its own paint; looks only:"),
         ("", "no class, ranking or medal"),
@@ -948,6 +1061,17 @@ SETTINGS_ROW_HELP = {
                            ("BACKSPACE", "the garage while driving (touchpad)")])],
 }
 SETTINGS_ROW_HELP["set:ballast_at"] = SETTINGS_ROW_HELP["set:ballast"]
+#  task 47: the wing mode a timed session drives (drive/leaderboard.py)
+SETTINGS_ROW_HELP["set:race_wings"] = [("WINGS", [
+    ("FULL WING", "top + side: your wings, stock ones lent"),
+    ("", "where the build has none"),
+    ("ONLY TOP", "the top wing alone; the side wings off"),
+    ("... FIXED", "the top wing held at its angle"),
+    ("FREE", "your build as designed, every G mode:"),
+    ("", "never on a leaderboard"),
+    ("Boards", "each mode has its own leaderboard per"),
+    ("", "map and car (ESC > Leaderboards)"),
+    ("ENTER", "applies it: the drive restarts")])]
 SETTINGS_ROW_HELP["set:tc"] = SETTINGS_ROW_HELP["set:steer_aid"] = SETTINGS_ROW_HELP["set:abs"]
 #  task 41: the car's builds, from the drive
 SETTINGS_ROW_HELP.update({
@@ -983,13 +1107,16 @@ def _class_title(key: str) -> str:
 
 def engine_help(key: str, car=None) -> list:
     """The Engine row's help: the Stock line is `key`'s (a cars.py key)
-    engine at the power the row shows (`engine_ps` on `car`, its spec)."""
+    engine at the power the row shows (`engine_ps` on `car`, its spec).
+    Task 47: the leaderboards' rule, as the owner asked, said here too."""
     hp = [engine_ps(m, car) for m in ENGINE_MODES]
     return [("ENGINE", [
         ("Stock", f"the {cars.car_name(key)}'s own engine, {hp[0]} hp"),
         ("Tuned / Sport", f"{hp[1]} / {hp[2]} hp: 1.5x / 2x the torque,"),
         ("", "the clutch to suit; TC keeps the driven"),
-        ("", "wheels from spinning in 1st")])]
+        ("", "wheels from spinning in 1st"),
+        ("Leaderboards", "Stock only: Tuned and Sport are just"),
+        ("", "for messing around, never on a board")])]
 
 
 SETTINGS_NOTE = ("Map, surface, car and ballast restart the drive: LEFT / RIGHT "
@@ -1121,8 +1248,40 @@ def race_bot_choices() -> list:
                    key=_bot_age_key, reverse=True)
     mine = [p for p in paths if os.path.basename(p).startswith("swarm_")]
     for path in mine + [p for p in paths if p not in mine]:
-        out.append((path, os.path.basename(path)[:-5]))
+        out.append((path, shown_stem(os.path.basename(path)[:-5])))
     return out
+
+
+#: a retired car's key as a file name's word on screen (task 49)
+_RETIRED_WORDS = {"mx5": "roadster", "bus": "bus"}
+
+
+def car_file_word(car) -> str:
+    """A stock car as a file name's word (task 49): its short shown name
+    (`prerace.car_label`) folded to plain lower-case ASCII -- 'civetta',
+    'halcon', 'n540', 'courier' -- never the key; a retired car's key as
+    `_RETIRED_WORDS` says; anything else as it is."""
+    car = str(car or "")
+    if car in _RETIRED_WORDS:
+        return _RETIRED_WORDS[car]
+    if car in cars.CARS:
+        import unicodedata
+        from .prerace import car_label
+        w = unicodedata.normalize("NFKD", car_label(car))
+        w = "".join(ch for ch in w.encode("ascii", "ignore").decode().lower() if ch.isalnum())
+        if w:
+            return w
+    return car
+
+
+def shown_stem(stem: str) -> str:
+    """A bot's or a seed lap's file stem as the player reads it (task 49):
+    each '_'-separated word that is a car KEY by `car_file_word` --
+    '540i_arena_plate' -> 'n540_arena_plate', 'mx5_arena_plate' ->
+    'roadster_arena_plate'. The files keep their names; only the words on
+    screen (and so a bot's leaderboard name) change."""
+    return "_".join(car_file_word(w) if (w in cars.CARS or w in _RETIRED_WORDS) else w
+                    for w in str(stem).split("_"))
 
 
 def race_newest_bot():
@@ -1138,7 +1297,7 @@ def race_bot_label(spec) -> str:
     for k, lbl in race_bot_choices():
         if k == spec:
             return lbl
-    return os.path.basename(str(spec))[:-5] if str(spec).endswith(".json") else str(spec)
+    return shown_stem(os.path.basename(str(spec))[:-5]) if str(spec).endswith(".json") else str(spec)
 
 
 def race_slot_keys(i: int) -> tuple:
@@ -1148,35 +1307,122 @@ def race_slot_keys(i: int) -> tuple:
     return "bot" + sfx, "car" + sfx
 
 
-def race_car_label(name) -> str:
+def _saved_label(name: str, lib=None) -> str:
+    """A saved build as a race / swarm car row names it (task 46): 'my
+    express - Express', its own car by the rows' short name (the page's
+    help column keeps its width); '(not in the library)' for a name the
+    library no longer holds; with no library at hand (a scripted session),
+    '(saved build)'."""
+    from .prerace import car_label
+    short = name if len(name) <= 22 else name[:20] + ".."
+    if lib is None:
+        return f"{short} (saved build)"
+    try:
+        home = race_grid.build_home(lib.builds.get(name))
+    except Exception:                      # noqa: BLE001 -- a label never stops a drive
+        home = ""
+    return f"{short} - {car_label(home)}" if home else f"{short} (not in the library)"
+
+
+def race_car_label(name, lib=None) -> str:
+    """A RACE page car choice in words. Task 46: a stock car is 'stock, no
+    wings'; a saved build is named, with its own car (`lib`: the garage
+    library)."""
     if name == race_grid.OWN:
         return "its own (the car it was bred in)"
-    return "same as mine" if name in ("same", None, "") else f"{cars.car_name(name)} ({name})"
+    if name in ("same", None, ""):
+        return "same as mine"
+    saved = race_grid.saved_name(name)
+    if saved is not None:
+        return _saved_label(saved, lib)
+    return f"{cars.car_name(name)} (stock, no wings)"
 
 
-def swarm_car_label(name, session_car) -> str:
-    """The Deploy-swarm page's Car row."""
+def swarm_car_label(name, session_car, lib=None) -> str:
+    """The Deploy-swarm page's Car row (task 46: a stock car has no wings;
+    a saved build is named, with its own car)."""
     if name in ("same", None, ""):
         return f"same as mine ({cars.car_name(session_car)})"
-    return f"stock {cars.car_name(name)} ({name})"
+    saved = race_grid.saved_name(name)
+    if saved is not None:
+        return _saved_label(saved, lib)
+    return f"stock {cars.car_name(name)} (no wings)"
 
 
-def _swarm_car(name, car, cfg_kwargs: dict, session_car_name: str) -> tuple:
+def _car_row_choices(fixed, lib, default_of=None) -> list:
+    """A race / swarm car row's cycle (task 46): its `fixed` choices ('own',
+    'same', ...) then, car by car in `cars.CAR_ORDER`, the stock car (its
+    key) and that car's saved builds by name (`race_grid.car_choices`: the
+    car's default first), 'build:<name>' each."""
+    out = [c for c in fixed if c not in cars.CARS]
+    builds = getattr(lib, "builds", None) or {}
+    for car, name in race_grid.car_choices(builds, default_of):
+        out.append(race_grid.saved_choice(name) if name else car)
+    return out
+
+
+def _swarm_car(name, car, cfg_kwargs: dict, session_car_name: str, lib=None) -> tuple:
     """The car a swarm breeds in -> (car, cfg_kwargs, car_name).
 
     'same' (or None) is the session's own car and config, untouched; a
-    `cars.CARS` key is that STOCK car on the session's config (aero,
-    assists, power scale) with its own grip scale -- `Sim._race_car`'s
-    rule, so the car a bot is bred in is the car the RACE page and its
-    Test put it back in. An unknown name breeds in the session's car."""
+    `cars.CARS` key is that STOCK car on the session's config (assists,
+    power scale) with its own grip scale -- `Sim._race_car`'s rule, so the
+    car a bot is bred in is the car the RACE page and its Test put it back
+    in. Task 46: the stock car has NO wings (the session's were made for
+    the session's car), and a saved build ('build:<name>') is that build on
+    its own car, its wings and their mass (`race_grid.saved_car`). An
+    unknown name breeds in the session's car."""
     if name in (None, "", "same"):
         return car, cfg_kwargs, session_car_name
+    saved = race_grid.saved_name(name)
+    if saved is not None:
+        try:
+            if lib is None:
+                from . import garage as grg
+                lib = grg.library()
+            got = race_grid.saved_car(lib.builds.get(saved), VehicleConfig(**cfg_kwargs), lib)
+        except Exception as exc:           # noqa: BLE001 -- a bad build: your car
+            print(f"swarm car {saved!r}: {type(exc).__name__}: {exc}")
+            got = None
+        if got is None:
+            print(f"swarm car {saved!r}: not a saved build of a car in the game; "
+                  f"breeding in your car")
+            return car, cfg_kwargs, session_car_name
+        c, cfg_, key = got
+        from dataclasses import fields
+        return c, {f.name: getattr(cfg_, f.name) for f in fields(cfg_) if f.init}, key
     if name not in cars.CARS:
         print(f"swarm car {name!r}: not in the library "
               f"({', '.join(cars.CAR_ORDER)}); breeding in your car")
         return car, cfg_kwargs, session_car_name
     c = cars.get(name)
-    return c, dict(cfg_kwargs, mu_scale=float(c.mu_scale)), name
+    return c, dict(cfg_kwargs, mu_scale=float(c.mu_scale), **race_grid.NO_WINGS), name
+
+
+def _swarm_bred(want_car, car_name: str, settings, opts, cfg_kwargs: dict, lib=None) -> dict:
+    """What a swarm's saved bot records about the car it bred in (`race_grid.
+    bred_meta`, plan D3), by the Car row's choice (task 46): 'same' -- your
+    car, your build, ballast and all, as before; a stock car -- its EMPTY
+    build (no wings: 'its own' rebuilds exactly that); a saved build -- that
+    build by name, on its own car, no ballast."""
+    power = float(cfg_kwargs.get("power_scale", 1.0))
+    saved = race_grid.saved_name(want_car)
+    if saved is not None:
+        try:
+            if lib is None:
+                from . import garage as grg
+                lib = grg.library()
+            js = lib.builds.get(saved)
+        except Exception:                  # noqa: BLE001
+            js = None
+        if isinstance(js, dict) and race_grid.build_home(js) == car_name:
+            return race_grid.bred_meta(car_name, False, js, settings, power, saved=saved)
+    elif want_car not in (None, "", "same") and car_name == want_car:
+        from . import garage as grg
+        return race_grid.bred_meta(car_name, True, grg.new_build(car_name).to_json(),
+                                   settings, power)
+    return race_grid.bred_meta(car_name, False, getattr(opts, "build_json", None),
+                               settings, power)
 
 
 def swarm_wings_label(cfg_kwargs: dict, build_name: str = "", wing: str = "off") -> str:
@@ -1197,9 +1443,14 @@ def _swarm_state_car(path: str, session_car_name: str) -> str:
     (it was bred in a stock car), else 'same'."""
     try:
         with open(path) as f:
-            bred = json.load(f).get("car_name")
+            st_ = json.load(f)
+        bred, meta = st_.get("car_name"), st_.get("bred")
     except Exception:
         return "same"
+    if isinstance(meta, dict) and meta.get("saved"):
+        #  task 46: bred in a saved build, by name: that build again
+        print(f"swarm: resuming in the saved build it was bred in, '{meta['saved']}'")
+        return race_grid.saved_choice(meta["saved"])
     if bred and bred != session_car_name and bred in cars.CARS:
         print(f"swarm: resuming in the car it was bred in, the stock {cars.car_name(bred)}")
         return bred
@@ -1286,7 +1537,7 @@ class Rival:
         self.colour = tuple(colour)
         self.slot = int(slot)                 # the RACE page's slot (its colour, its number)
         self.grid_n, self.grid_s = float(grid[0]), float(grid[1])
-        self.car_name = car_name            # 'same' or a cars.CARS key
+        self.car_name = car_name            # 'same', 'own', a cars.CARS key, 'build:<name>' (task 46)
         self.spec = spec                    # the RACE page choice it was built from
         self.track = track
         self.dt = float(dt)
@@ -1302,6 +1553,12 @@ class Rival:
         self.on_track4 = [True, True, True, True]
         self.ctl = Controls()
         self.respawns = 0
+        #: task 47: `on_lap(t)` for a VALID lap -- the timer's verdict, round
+        #: the circuit (records.LAP_MIN_FRACTION of the length) and no
+        #: respawn in it; the Sim files it on the bot's leaderboard
+        self.on_lap = None
+        self._lap_p0 = None
+        self._lap_resp0 = 0
         self.reset()
 
     # -- the trail the time gap is read from -----------------------------
@@ -1326,6 +1583,7 @@ class Rival:
         self.trail_t: list = []            # sim time it was reached
         self.lap.reset()
         self._lost_s = 0.0
+        self._lap_p0 = None                # task 47: a lap is timed from a crossing
         self._sample_surfaces()
 
     def _sample_surfaces(self) -> None:
@@ -1366,9 +1624,17 @@ class Rival:
                     ds -= tr.length
             if abs(ds) <= 10.0 and active:
                 self.progress += ds
-            self.lap.update(t_now, self._s_prev, s, dt,
-                            all_off_track=not any(self.on_track4),
-                            active=active and armed)
+            events = self.lap.update(t_now, self._s_prev, s, dt,
+                                     all_off_track=not any(self.on_track4),
+                                     active=active and armed)
+            for e in events:
+                if e[0] == "lap" and self.on_lap is not None and self._lap_p0 is not None:
+                    from .records import LAP_MIN_FRACTION
+                    if (self.lap.lap_valid and self.respawns == self._lap_resp0
+                            and self.progress - self._lap_p0 >= LAP_MIN_FRACTION * tr.length):
+                        self.on_lap(float(e[3]))
+                if e[0] in ("lap", "start"):
+                    self._lap_p0, self._lap_resp0 = self.progress, self.respawns
         self._s_prev = s
         self.s, self.n_lat = s, n_lat
         self.n += 1
@@ -1776,6 +2042,15 @@ class Sim:
         #: driving or the pause page shows
         self._quit_armed = False
         self._from_title = None
+        #: task 47 (drive/leaderboard.py): the wing mode this session races
+        #: in (a config, or None: FREE / a challenge's own), the boards (a
+        #: player session's, made on first use: `_boards`), the LEADERBOARDS
+        #: page's map and wing mode, and a restart that must open on the
+        #: TIME TRIAL page (a wing mode or a board picked)
+        self.race_wings = None
+        self.boards = None
+        self._lb = {}
+        self.prerace_force = False
         self.swarm_opts = dict(SWARM_MENU_DEFAULTS, T=swarm_T(track))   # the Deploy-swarm page
         self._swarm_typed = None           # its digits typed on Cars / Sim time (task 34)
         self.swarm_launch = None           # set when the page fires 'Deploy'
@@ -1836,6 +2111,12 @@ class Sim:
         # sessions only. `ch_pick` (task 44): the (car, config) the page's Car
         # and Wings rows picked -- None until the player picks: the car being
         # driven, FULL WING -- remembered for the launch (opts.ch_pick).
+        # `ch_build` (task 46): the Car row's build beside it -- a SAVED
+        # library build's name (driven on its own car), challenges.STOCK
+        # ('') for the stock car, or None: not picked yet, the page's own
+        # rule (`challenges.default_choice`) -- remembered as opts.ch_build.
+        # `challenge_build`'s json is then only the build being DRIVEN: the
+        # page opens on it when it is saved, and says so when it is not.
         # Task 45: `ch_from_title` -- the Start was on the list the title
         # opened (the ended run's list goes back to the title, else to the
         # pause page); `_ch_back` -- where a challenge's page goes back to:
@@ -1845,6 +2126,7 @@ class Sim:
         self.challenge_end = False
         self.challenge_build = None
         self.ch_pick = None
+        self.ch_build = None
         self.ch_from_title = False
         self._ch_back = "challenges"
         self.stop_hold = None              # a stop held at its v0 (challenges.StopHold, task 42)
@@ -2509,7 +2791,9 @@ class Sim:
         """Cycle one setting, apply it live, save. Returns True when the
         session has to be rebuilt (a new map or a new surface set)."""
         s = self.settings
-        s.cycle(key, d)                    # Paint: the car the Car row shows
+        #  Paint: the car the Car row shows; Engine / TC (task 48, per car):
+        #  the car on the road -- the running car, not one only browsed
+        s.cycle(key, d, car=self._pending.get("car", s.car) if key in ("engine", "tc") else None)
         restart = False
         tut = self.tutorial
         if key == "gearbox" and tut is not None and tut.gearbox_prev is not None:
@@ -2531,6 +2815,10 @@ class Sim:
             self.set_gearbox(s.gearbox)
         elif key == "engine":
             self.set_engine(s.engine)
+            if s.engine != "stock" and self.progress_file is not None:
+                #  task 47, the owner: "this should be mentioned"
+                self._rec_note("Tuned / Sport engine: just for fun - not on the leaderboards",
+                               4.0)
         elif key == "abs":
             self.veh.cfg.abs_on = bool(s.abs)
         elif key == "tc":
@@ -2702,14 +2990,17 @@ class Sim:
                 return
             back = (ev == "wing_side_prev")
             old = self.wing_side_mode
-            cfg_ = (self.challenge.ch.get("config") if self.challenge is not None else None)
+            cfg_ = self._wing_config()
             if cfg_ is not None:
                 #  task 44: a challenge's wing config IS its wing mode: G may
-                #  only add the air brake, where there are side wings for it
+                #  only add the air brake, where there are side wings for it.
+                #  Task 47: a timed session's wing mode, the same
                 from .challenges import g_modes, CONFIG_LABELS
                 modes = g_modes(cfg_)
                 if len(modes) < 2:
-                    self._rec_note(f"the challenge sets the wings: {CONFIG_LABELS[cfg_]} "
+                    who = ("the challenge" if self.challenge is not None
+                           else "the wing mode (TIME TRIAL > Wings)")
+                    self._rec_note(f"{who} sets the wings: {CONFIG_LABELS[cfg_]} "
                                    "(G changes nothing here)", 3.0)
                     return
                 if self.wing_side_mode in modes:
@@ -2781,9 +3072,9 @@ class Sim:
                      if w is not None]
             wing = "wings: " + (", ".join(n for n in dict.fromkeys(names) if n)
                                 or "your garage build")
-        ch_cfg = (getattr(self.challenge, "ch", None) or {}).get("config")
-        if ch_cfg:                             # a challenge drives its wing config
-            from .challenges import CONFIG_LABELS
+        ch_cfg = self._wing_config()
+        if ch_cfg:                             # a challenge (task 47: a wing mode) drives
+            from .challenges import CONFIG_LABELS          # its wing config
             wing += "  ·  " + CONFIG_LABELS.get(ch_cfg, ch_cfg)
         run = self._pending.get("car", self.settings.car)   # not a car only browsed
         title = self.track.title or trk.TRACK_TITLES.get(self.track.name, self.track.name)
@@ -2820,6 +3111,8 @@ class Sim:
                      ("Controls: keyboard and gamepad", "controls")]
             if self.prerace is not None:
                 items.append(("Time trial: your top 5, medals, the build", "timetrial"))
+            if self.progress_file is not None:     # task 47
+                items.append(("Leaderboards: every map and car, you vs your bots", "boards"))
             if self.progress_file is not None:
                 from .tutorial import menu_row
                 items.append((menu_row(self.progress_file, self.tutorial), "tutorial"))
@@ -2828,8 +3121,9 @@ class Sim:
                 #  subtitle's 'This car + wings'), not every car x config's
                 from .challenges import menu_row as ch_row
                 car, cfg = self._ch_combo()
-                items.append((ch_row(self.progress_file, self.challenge, car=car, config=cfg),
-                              "challenges"))
+                #  task 46: named by the pick's build ('my express + wings')
+                items.append((ch_row(self.progress_file, self.challenge, car=car, config=cfg,
+                                     build=self._ch_choice()[1]), "challenges"))
             #  what each reset does HERE (task 45): SHIFT+R is a rolling start
             #  where there is one (`_rolling_pose`), else the start line
             items += [("Back to the last sector line (R)", "reset"),
@@ -2880,11 +3174,16 @@ class Sim:
                  f"{s.car_base.m:.0f} kg{mark['car']}", "set:car"),
                 (f"{'Paint':<12s}{pnt.PAINT_LABELS[s.paint_of()]}{whose}", "set:paint"),
                 (f"{'Wing limits':<12s}{WING_LIMIT_LABELS[s.wing_limits]}", "set:wing_limits"),
+                (f"{'Wings':<12s}{RACE_WINGS_LABELS[s.race_wings]}{mark['race_wings']}",
+                 "set:race_wings"),
                 (f"{'Ballast':<12s}{s.ballast_text()}{mark['ballast']}", "set:ballast"),
                 (f"{'Ballast at':<12s}{cars.BALLAST_LABELS[s.ballast_at]}"
                  f"{mark['ballast_at']}", "set:ballast_at"),
                 (f"{'Engine':<12s}"
-                 f"{engine_label(s.engine, self.veh.car)}", "set:engine"),
+                 f"{engine_label(s.engine, self.veh.car)}"
+                 #  task 47, the owner: "this should be mentioned"
+                 f"{'' if s.engine == 'stock' else '  (just for fun: not on leaderboards)'}",
+                 "set:engine"),
                 (f"{'Gearbox':<12s}{GEARBOX_LABELS[s.gearbox]}", "set:gearbox"),
                 (f"{'ABS':<12s}{'On' if s.abs else 'Off'}", "set:abs"),
                 (f"{'TC':<12s}{'On' if s.tc else 'Off'}", "set:tc"),
@@ -2906,7 +3205,10 @@ class Sim:
         #  (ENTER: this build becomes it). The car on the road, not one only
         #  browsed on the Car row: a default is set for the car it was driven on
         pk = self._picker()
-        if self.has_garage and pk is not None:
+        #  task 46: not in a challenge run -- there the challenge page's Car
+        #  row is the build (a saved build of the challenge's car, or its
+        #  stock car); a PICK here would change only the build in hand
+        if self.has_garage and pk is not None and self.challenge is None:
             run = self._pending.get("car", s.car)
             tag = "  (not saved)" if pk.unsaved() else ""     # the TIME TRIAL page's rule
             rows.append((f"{'Build':<12s}{(pk.build_name or '(unnamed)')[:24]}{tag}",
@@ -3011,11 +3313,11 @@ class Sim:
             c = sorted(glob.glob(os.path.join(SEED_LAP_DIR, "seed_*.json")),
                        key=os.path.getmtime)
             mine = [p for p in c if f"seed_{self.track.name}_" in os.path.basename(p)]
-            return os.path.basename(mine[-1])[5:-5] if mine else "none recorded on this map"
+            return shown_stem(os.path.basename(mine[-1])[5:-5]) if mine else "none recorded on this map"
         if key == "best":
             c = sorted(glob.glob(os.path.join("drive", "ml", "checkpoints", "swarm_*.json")),
                        key=os.path.getmtime)
-            return os.path.basename(c[-1])[6:-5] if c else "none saved yet"
+            return shown_stem(os.path.basename(c[-1])[6:-5]) if c else "none saved yet"
         return ""
 
     def _swarm_items(self) -> list:
@@ -3025,13 +3327,19 @@ class Sim:
         armed = ("recording now" if self.seed_rows is not None
                  else "armed (K)" if self.seed_armed else "drive one now")
         cfg = self.veh.cfg
-        if getattr(cfg, "has_designed", lambda: False)():
+        pick = o.get("car", "same")
+        saved = race_grid.saved_name(pick)
+        if saved is not None:              # task 46: the saved build's own wings
+            aero = f"the wings of '{saved[:22]}'"
+        elif pick not in (None, "", "same"):
+            aero = "none (a stock car has no wings)"
+        elif getattr(cfg, "has_designed", lambda: False)():
             aero = "garage build"
         elif cfg.wing != "off":
             aero = f"{cfg.wing} flank panel"
         else:                              # the swarm breeds THIS car: no wing,
             aero = "NONE - fit one (garage / Aero)"   # nothing to deploy
-        return [(f"{'Car':<13s}{swarm_car_label(o.get('car', 'same'), self.settings.car)}",
+        return [(f"{'Car':<13s}{swarm_car_label(pick, self.settings.car, self.garage_lib)}",
                  "set:sw_car"),
                 (f"{'Aero':<13s}{aero}", "swarm_aero"),
                 (f"{'Cars':<13s}{self._swarm_row('pop')}   (4 - 128)", "set:sw_pop"),
@@ -3094,7 +3402,7 @@ class Sim:
                          f"{race_bot_label(spec)}", f"set:race_{kb}"))
             if spec == "none":
                 break                      # the next slot opens once this one is filled
-            rows.append((f"{'  car':<8s}{race_car_label(o.get(kc, 'same'))}",
+            rows.append((f"{'  car':<8s}{race_car_label(o.get(kc, 'same'), self.garage_lib)}",
                          f"set:race_{kc}"))
         n = len(self._race_slots())
         if self.rivals:
@@ -3142,7 +3450,7 @@ class Sim:
             os.remove(spec)
         except OSError as exc:
             print(f"delete bot {spec}: {type(exc).__name__}: {exc}")
-            self._race_note("race: could not delete (see the terminal)", 4.0)
+            self._race_note("race: could not delete (see the log)", 4.0)
             return False
         i = ch.index(spec)
         self.race_opts["bot"] = ch[i - 1] if i > 0 else "none"
@@ -3164,10 +3472,16 @@ class Sim:
                        title="RACE VS BOT", idx=idx, columns=1)
         self._menu_page = "race"
 
+    def _race_car_choices(self) -> list:
+        """A slot's car row (task 46): its own, same as mine, then car by car
+        each STOCK car and each SAVED build by name ('build:<name>', the
+        car's default first)."""
+        return _car_row_choices(RACE_BOT_CARS, self.garage_lib, self._ch_default_of)
+
     def _race_step(self, key: str, d: int) -> None:
         """LEFT / RIGHT on a page row; `key` is 'bot', 'car', 'bot2', ..."""
         ch = ([k for k, _ in race_bot_choices()] if key.startswith("bot")
-              else list(RACE_BOT_CARS))
+              else self._race_car_choices())
         cur = self.race_opts.get(key)
         i = ch.index(cur) if cur in ch else 0
         self.race_opts[key] = ch[(i + d) % len(ch)]
@@ -3178,20 +3492,59 @@ class Sim:
         bred in (its checkpoint's meta, `race_grid.own_car`), or yours when
         it has none; 'same' is the session's own car and config, ballast and
         wings included; a library name is that STOCK car on the session's
-        config (aero, assists, power scale) with its own grip scale, the way
-        `drive.ml.env.rollout` builds it."""
+        config (assists, power scale) with its own grip scale, the way
+        `drive.ml.env.rollout` builds it -- task 46: with NO wings
+        (`race_grid.stock_car`; the session's were made for the session's
+        car) -- and 'build:<name>' is that SAVED build on its own car, its
+        wings and their mass (`race_grid.saved_car`)."""
         if car_name == race_grid.OWN:
-            own = race_grid.own_car(meta or {}, self.veh.cfg, self.garage_lib)
+            #  task 47: its own bred build, in this session's wing mode
+            own = race_grid.own_car(meta or {}, self.veh.cfg, self.garage_lib,
+                                    config=self.race_wings)
             if own is not None:
                 return own[0], own[1]
             car_name = "same"
         if car_name in ("same", None, ""):
             return self.veh.car, self.veh.cfg
+        saved = race_grid.saved_name(car_name)
+        if saved is not None:
+            lib = self.garage_lib
+            got = (race_grid.saved_car(self._in_wing_mode(lib.builds.get(saved)),
+                                       self.veh.cfg, lib)
+                   if lib is not None else None)
+            if got is None:
+                raise ValueError(f"'{saved}' is not a saved build of a car in the game")
+            return got[0], got[1]
         if car_name not in cars.CARS:
             raise ValueError(f"unknown car '{car_name}' (one of {', '.join(cars.CAR_ORDER)})")
-        from dataclasses import replace
-        car = cars.get(car_name)
-        return car, replace(self.veh.cfg, mu_scale=float(car.mu_scale))
+        if self.race_wings is not None and self.garage_lib is not None:
+            #  task 47: a stock car in a wing-mode race carries the mode's
+            #  STOCK wings (`config_build` of no build: a challenge's
+            #  reference car), their mass too -- every car races the mode
+            js = self._in_wing_mode(None, car_name)
+            got = race_grid.saved_car(js, self.veh.cfg, self.garage_lib) if js else None
+            if got is not None:
+                return got[0], got[1]
+        car, cfg, _k = race_grid.stock_car(car_name, self.veh.cfg)
+        return car, cfg
+
+    def _in_wing_mode(self, build_json, car=None):
+        """Task 47: `build_json` (None: no build, on `car`) in this session's
+        wing mode -- `challenges.config_build` on the build's own car -- as
+        JSON tagged with that car; the build as it is when the session is
+        FREE (or the mode cannot be applied)."""
+        if self.race_wings is None or self.garage_lib is None:
+            return build_json
+        home = car or (race_grid.build_home(build_json) if isinstance(build_json, dict) else "")
+        if not home:
+            return build_json
+        try:
+            from .challenges import config_build
+            js = config_build(build_json, self.garage_lib, home, self.race_wings).to_json()
+        except Exception:                  # noqa: BLE001 -- a build this library cannot read
+            return build_json
+        js["car"] = home
+        return js
 
     def start_race(self, spec=None) -> bool:
         """Put the grid on the line and restart. `spec` given: that one bot
@@ -3213,22 +3566,47 @@ class Sim:
             pol, label = loaded
             try:
                 car, cfg = self._race_car(car_name, getattr(pol, "meta", None))
+                own_cfg = None
                 if car_name == race_grid.OWN:
                     own_name = race_grid.own_car(getattr(pol, "meta", None) or {},
                                                  self.veh.cfg, self.garage_lib)
-                    if own_name is not None and own_name[2] != self.settings.car:
-                        label = f"{label}/{own_name[2]}"
+                    #  task 46: bred in a saved build -- its name on the ghost
+                    tag = race_grid.own_label(getattr(pol, "meta", None))
+                    if own_name is not None and (own_name[2] != self.settings.car
+                                                 or tag != own_name[2]):
+                        from .prerace import car_label
+                        shown = tag[:14] or own_name[2]
+                        #  a car KEY reads as the car's short name ('N540', not '540i')
+                        label = f"{label}/{car_label(shown) if shown in cars.CARS else shown}"
+                    own_cfg = self._own_board_car(getattr(pol, "meta", None))
+                elif race_grid.saved_name(car_name) is not None:
+                    label = f"{label}/{race_grid.saved_name(car_name)[:14]}"   # the build, by name
+                    own_cfg = self._saved_board_car(car_name)
                 elif car_name not in ("same", None, ""):
-                    label = f"{label}/{car_name}"
-                rivals.append(Rival(pol, car, cfg, self.track, label=label, dt=self.dt,
-                                    global_wet=self.global_wet,
-                                    colour=C_RIVALS[(i - 1) % len(C_RIVALS)],
-                                    grid=RACE_GRID[(i - 1) % len(RACE_GRID)],
-                                    car_name=car_name, spec=sp, slot=i))
+                    from .prerace import car_label
+                    label = f"{label}/{car_label(car_name)}"      # the car's short name
+                    own_cfg = self._stock_board_car(car_name)
+                rv = Rival(pol, car, cfg, self.track, label=label, dt=self.dt,
+                           global_wet=self.global_wet,
+                           colour=C_RIVALS[(i - 1) % len(C_RIVALS)],
+                           grid=RACE_GRID[(i - 1) % len(RACE_GRID)],
+                           car_name=car_name, spec=sp, slot=i)
+                #  task 47: a trained bot's laps go on its board -- on the
+                #  board's surface only: a race started after T (wet
+                #  everywhere) files nothing, and the bots keep the surface
+                #  they started on whatever T does after
+                key = (self._bot_board_key(sp, car_name, cfg, own_cfg)
+                       if self.global_wet == 1.0 else None)
+                if key is not None:
+                    name = race_bot_label(sp)
+                    rv.on_lap = (lambda t, _k=key, _n=name, _b=self._bot_build_name(
+                        car_name, getattr(pol, "meta", None)):
+                        self._bot_race_lap(_k, _n, t, _b))
+                rivals.append(rv)
             except Exception as exc:
                 print(f"race vs bot {sp}: {type(exc).__name__}: {exc}")
         if not rivals:
-            self._race_note("race: no bot loaded (see the terminal)", 4.0)
+            self._race_note("race: no bot loaded (see the log)", 4.0)
             return False
         # task 41: a car too big for a painted grid box (the bus) lines up
         # behind the painted grid, and a user's bus keeps the bots off the
@@ -3240,6 +3618,80 @@ class Sim:
         self.rivals = rivals
         self.reset(to_checkpoint=False)    # every car to the line
         return True
+
+    def _own_board_car(self, meta):
+        """The car key of a bot's OWN car when it can carry this session's
+        wing mode (its bred build, `race_grid.own_car(config=)`) within the
+        limits; None otherwise (no mode, a legacy bot with no build, a build
+        past its car's limit)."""
+        if self.race_wings is None or self.garage_lib is None:
+            return None
+        meta = meta if isinstance(meta, dict) else {}
+        bred = meta.get("bred") if isinstance(meta.get("bred"), dict) else None
+        if not bred or not isinstance(bred.get("build"), dict):
+            return None
+        name = bred.get("car") or meta.get("car")
+        if name not in cars.CARS:
+            return None
+        try:
+            from .challenges import config_build
+            from .bodies import over_limits
+            js = config_build(bred["build"], self.garage_lib, name, self.race_wings).to_json()
+            if over_limits(js, self.garage_lib, name):
+                return None
+        except Exception:                  # noqa: BLE001 -- a build this library cannot read
+            return None
+        return name
+
+    def _saved_board_car(self, car_name):
+        """The car key a bot in a SAVED build ('build:<name>') races on, when
+        that build in this session's wing mode stays within its car's
+        limits; None otherwise (task 47)."""
+        saved = race_grid.saved_name(car_name)
+        lib = self.garage_lib
+        if saved is None or lib is None or self.race_wings is None:
+            return None
+        js = lib.builds.get(saved)
+        home = race_grid.build_home(js) if isinstance(js, dict) else ""
+        return self._within_limits(self._in_wing_mode(js), home)
+
+    def _stock_board_car(self, car_name):
+        """The car key of a STOCK library car in this session's wing mode
+        (its stock wings, `_race_car`), None when it races with no wings
+        (no mode, no library) or they are past its limits (task 47)."""
+        if car_name not in cars.CARS or self.race_wings is None or self.garage_lib is None:
+            return None
+        return self._within_limits(self._in_wing_mode(None, car_name), car_name)
+
+    def _within_limits(self, js, car):
+        """`car` when the build `js` is within that car's span limits
+        (bodies.over_limits), else None."""
+        if not car or not isinstance(js, dict) or car not in cars.CARS:
+            return None
+        try:
+            from .bodies import over_limits
+            return None if over_limits(js, self.garage_lib, car) else car
+        except Exception:                  # noqa: BLE001
+            return None
+
+    @staticmethod
+    def _bot_build_name(car_name, meta) -> str:
+        """The build a bot drives, in a board entry's words."""
+        if car_name == race_grid.OWN:
+            bred = (meta or {}).get("bred") if isinstance(meta, dict) else None
+            b = bred.get("build") if isinstance(bred, dict) else None
+            return str((b or {}).get("name") or "its own build") if isinstance(b, dict) \
+                else "its own build"
+        saved = race_grid.saved_name(car_name)
+        if saved is not None:
+            return saved
+        from .prerace import car_label
+        return "your build" if car_name in ("same", None, "") else f"stock {car_label(car_name)}"
+
+    def _bot_race_lap(self, key, name, t, build) -> None:
+        """A bot's valid race lap on its board (its key was given only on
+        the board's surface: see `start_race`)."""
+        self._bot_board_lap(key, name, t, "race", build)
 
     def stop_race(self, quiet: bool = False) -> None:
         if self.rivals and not quiet:
@@ -3275,7 +3727,7 @@ class Sim:
             from .ml.evaluate import bot_lap, bot_test_T, BOT_TEST_T
         except Exception as exc:
             print(f"bot test: drive.ml unavailable ({type(exc).__name__}: {exc})")
-            self._race_note("test: drive.ml unavailable (see the terminal)", 4.0)
+            self._race_note("test: drive.ml unavailable (see the log)", 4.0)
             return False
         #  `T` is an ARENA budget and is what each job carries: bot_lap
         #  scales it to this lap (Kestrel's 1.91 km runs 230 s). What the
@@ -3283,6 +3735,7 @@ class Sim:
         T = float(T or BOT_TEST_T)
         T_run = bot_test_T(self.track, T)
         jobs = []
+        boards = []                        # task 47: each cell's leaderboard, or None
         meta = _bot_meta(spec)
         for name in RACE_BOT_CARS:
             car, cfg = self._race_car(name, meta)
@@ -3290,12 +3743,17 @@ class Sim:
             #  the rollout has no global wet: the same grip through the config
             kw["mu_scale"] = float(kw["mu_scale"]) * self.global_wet
             jobs.append(dict(spec=spec, car=car, cfg_kwargs=kw, tr=self.track, T=T))
+            own = (self._own_board_car(meta) if name == race_grid.OWN
+                   else self._saved_board_car(name) if race_grid.saved_name(name) is not None
+                   else self._stock_board_car(name) if name != "same" else None)
+            key = self._bot_board_key(spec, name, cfg, own) if self.global_wet == 1.0 else None
+            boards.append((key, self._bot_build_name(name, meta)))
         label = RACE_ANCHOR_TAG if spec == RACE_BOT_ANCHOR else race_bot_label(spec)
         n = len(jobs) if workers is None else max(1, min(int(workers), len(jobs)))
         pool = mp.Pool(n)
         self._bot_test = dict(spec=spec, label=label, T=T_run, pool=pool,
                               res=pool.map_async(bot_lap, jobs, chunksize=1),
-                              t0=time.perf_counter())
+                              t0=time.perf_counter(), boards=boards)
         print(f"bot test: {label} alone in "
               + ", ".join(race_car_label(c) for c in RACE_BOT_CARS)
               + f" -- {T_run:.0f} s each at 1 ms, in the background")
@@ -3334,6 +3792,15 @@ class Sim:
         rows = list(zip(RACE_BOT_CARS, res))
         self.bot_test_result = dict(spec=bt["spec"], label=bt["label"], T=bt["T"],
                                     rows=rows, secs=time.perf_counter() - bt["t0"])
+        #  task 47: each car's best flying lap on that car's board (the same
+        #  car twice -- yours as 'same' and as its library name -- files the
+        #  faster: a board keeps each bot's best)
+        seen = set()
+        for (key, build), (_n, r) in zip(bt.get("boards") or [], rows):
+            t_ = r.get("best") if isinstance(r, dict) else None
+            if key and isinstance(t_, (int, float)) and t_ > 0 and (key, t_) not in seen:
+                seen.add((key, t_))
+                self._bot_board_lap(key, race_bot_label(bt["spec"]), t_, "test", build)
         print(f"bot test: {bt['label']}, best flying lap at 1 ms on "
               f"{self.track.title or self.track.name} ({bt['T']:.0f} s per car, "
               f"{self.bot_test_result['secs']:.1f} s wall)")
@@ -3398,6 +3865,8 @@ class Sim:
         self._rec_note(text, secs)
         self._rec_tag_until = self._rec_msg_until
         print(text)
+        if not res.get("refiled"):
+            self._board_lap(res)           # task 47: its leaderboard, when it counts there
         if res.get("refiled") or (res.get("save_error") and res.get("pos") is not None):
             return      # the filing thread's repeat of a lap already carded: the note only
         #  the results card and the chime (drive/results.py, audio.py; task 27)
@@ -3442,6 +3911,224 @@ class Sim:
     def _rec_hud(self) -> str:
         return self._rec_msg if (self._rec_msg and self.n < self._rec_msg_until) else ""
 
+    # ---- the LEADERBOARDS (drive/leaderboard.py, task 47) --------------------
+    def _wing_config(self):
+        """The wing config this session drives: a challenge's (task 44), else
+        the Wings setting's mode (task 47); None: FREE, every G mode."""
+        ch = (getattr(self.challenge, "ch", None) or {}).get("config")
+        return ch or self.race_wings
+
+    def _boards(self):
+        """The leaderboards, or None: a PLAYER session's only (one with the
+        progress file), kept beside it -- `runs/leaderboard_local/` -- so a
+        self-check's session reads its own temporary folder, and a scripted
+        or headless run never opens the player's."""
+        if self.boards is None and self.progress_file is not None:
+            try:
+                from .leaderboard import Boards, BOARDS_DIR
+                p = str(getattr(self.progress_file, "path", "") or "")
+                self.boards = Boards(os.path.join(os.path.dirname(p), "leaderboard_local")
+                                     if os.path.dirname(p) else BOARDS_DIR)
+            except Exception as exc:       # noqa: BLE001 -- never stops a drive
+                print(f"leaderboards unavailable ({type(exc).__name__}: {exc})")
+        return self.boards
+
+    def _board_now(self) -> tuple:
+        """(board key or None, why not) for the NEXT lap: the class it is
+        filed in (a live engine change moves it) and this session's wing mode."""
+        from .leaderboard import session_board
+        from .records import split_key
+        key = getattr(self.recorder, "key", None)
+        if key is None:
+            s = self.settings
+            return session_board(self.track.name, s.car, s.engine, s.wet, self.race_wings,
+                                 unlimited=self.unlimited,
+                                 radius=getattr(self, "track_radius", 50.0),
+                                 cw=getattr(self, "track_cw", False))
+        t, c, e, w = split_key(key)
+        return session_board(t, c, e, w, self.race_wings, unlimited=self.unlimited)
+
+    def _board_lap(self, res: dict) -> None:
+        """A valid lap the recorder closed goes on its board -- this map, car
+        and wing mode -- when it counts there (Stock engine, the default
+        surface, a wing mode, wings within the limits): the best of each
+        build, by its name. Never raises: a board is never worth the car."""
+        if not res.get("valid") or res.get("unlimited") or self.challenge is not None:
+            return
+        if self._tutorial_quiet() or self._boards() is None:
+            return
+        try:
+            from .leaderboard import session_board, YOU, board_title, gap_text
+            from .records import split_key, fmt_time
+            t, c, e, w = split_key(res.get("key", ""))
+            key, _why = session_board(t, c, e, w, self.race_wings, unlimited=self.unlimited)
+            if key is None:
+                return
+            meta = getattr(self.recorder, "meta", None) or {}
+            name = str(meta.get("build_name") or "") or "(unnamed)"
+            r = self.boards.submit(key, YOU, dict(time=float(res["time"]), name=name,
+                                                  assists=dict(meta.get("assists") or {})))
+            res["board"] = dict(key=key, rank=r["rank"], board_best=r["board_best"])
+            if r["rank"] is not None:
+                gap = gap_text(self.boards.compare(key)["gap"])
+                print(f"leaderboard {board_title(key)}: {fmt_time(res['time'])} {name} "
+                      f"P{r['rank']}" + (f" ({gap})" if gap else ""))
+        except Exception as exc:           # noqa: BLE001
+            print(f"leaderboard: lap not filed ({type(exc).__name__}: {exc})")
+
+    def _bot_board_key(self, spec, car_name, cfg, own_config=None):
+        """The board a trained bot's lap in this session goes on, or None:
+        a checkpoint (never the built-in driver), on a Stock engine, in this
+        session's wing mode within its car's limits, on the default surface.
+        `own_config`: the car key of a bot car that is not the session's own
+        -- its own bred car, a saved build, a stock car -- when it carries
+        the mode within limits (`_own_board_car`, `_saved_board_car`,
+        `_stock_board_car`); None: it does not, and files nothing."""
+        if not spec or spec in ("none", RACE_BOT_ANCHOR) or self.race_wings is None:
+            return None
+        if self._boards() is None or self.challenge is not None or self.tutorial is not None:
+            return None
+        if abs(float(getattr(cfg, "power_scale", 1.0)) - 1.0) > 1e-9:
+            return None                    # a bot bred on a Tuned / Sport engine
+        if car_name in ("same", None, ""):
+            if self.unlimited:
+                return None
+            car_key = self.settings.car
+        else:
+            if own_config is None:
+                return None                # not in the mode, or past its limits
+            car_key = own_config
+        from .leaderboard import session_board
+        key, _why = session_board(self.track.name, car_key, "stock", self.settings.wet,
+                                  self.race_wings, radius=getattr(self, "track_radius", 50.0),
+                                  cw=getattr(self, "track_cw", False))
+        return key
+
+    def _bot_board_lap(self, key, name, t, how, build="") -> None:
+        """One trained bot's lap on its board (a race lap or a Test's best)."""
+        if not key or self._boards() is None:
+            return
+        try:
+            from .leaderboard import BOTS, board_title
+            from .records import fmt_time
+            r = self.boards.submit(key, BOTS, dict(time=float(t), name=str(name), how=how,
+                                                   build=str(build or "")))
+            if r["rank"] is not None:
+                print(f"leaderboard {board_title(key)}: bot {name} {fmt_time(t)} "
+                      f"({how}) P{r['rank']}")
+        except Exception as exc:           # noqa: BLE001
+            print(f"leaderboard: bot lap not filed ({type(exc).__name__}: {exc})")
+
+    def _lb_state(self) -> tuple:
+        """(map, wing mode) the LEADERBOARDS page shows: its own pick, else
+        this session's map and mode (the first of each where there is none)."""
+        from .leaderboard import TRACKS, CONFIGS
+        t = self._lb.get("track")
+        if t not in TRACKS:
+            t = self.track.name if self.track.name in TRACKS else TRACKS[0]
+        w = self._lb.get("wings")
+        if w not in CONFIGS:
+            w = self.race_wings if self.race_wings in CONFIGS else CONFIGS[0]
+        return t, w
+
+    def _lb_items(self) -> list:
+        from .leaderboard import board_key, car_row, WINGS_LABELS
+        from .prerace import car_label
+        t, w = self._lb_state()
+        rows = [(f"{'Map':<8s}{trk.TRACK_TITLES.get(t, t)}", "set:lb_track"),
+                (f"{'Wings':<8s}{WINGS_LABELS[w]}", "set:lb_wings")]
+        for c in cars.CAR_ORDER:
+            rows.append((car_row(self.boards, board_key(t, c, w), car_label(c)), f"lb_car:{c}"))
+        rows.append(("Back", "lb_back"))
+        return rows
+
+    def _lb_help(self, idx: int) -> list:
+        """The page's help column for the highlighted row: a car's board in
+        full (you, your bots, the gap), else what counts."""
+        from .leaderboard import board_key, detail_sections, RULES
+        items = self.menu.items if self.menu is not None else []
+        act = items[idx][1] if 0 <= idx < len(items) else ""
+        if act.startswith("lb_car:") and self.boards is not None:
+            t, w = self._lb_state()
+            return detail_sections(self.boards, board_key(t, act[len("lb_car:"):], w), n=5)
+        return list(RULES)
+
+    def _menu_show_boards(self, idx: int = 0) -> None:
+        """LEADERBOARDS: one board per map, car and wing mode. LEFT / RIGHT on
+        the Map and Wings rows step them; each car's row is your best (and
+        its build), your best bot's (and its name) and the gap, and the help
+        column shows the highlighted car's board in full. ENTER on a car
+        races that board: its map, car and wing mode on a Stock engine and
+        the default surface, a new session on its TIME TRIAL page."""
+        from .leaderboard import ENGINE_NOTE
+        try:
+            items = self._lb_items()
+        except Exception as exc:           # noqa: BLE001 -- a bad board file must not
+            print(f"leaderboards: {type(exc).__name__}: {exc}")   # take the session down
+            self._menu_show_main()
+            return
+        self.menu.show(items=items, sections=[], help_for=self._lb_help,
+                       subtitle="one board per map, car and wing mode  ·  Stock engine  ·  "
+                                "Dry, wet patches",
+                       note=ENGINE_NOTE,
+                       footer="LEFT / RIGHT map and wings   ENTER on a car: race that board   "
+                              "ESC / CIRCLE back",
+                       title="LEADERBOARDS", idx=idx, columns=1)
+        self._menu_page = "leaderboards"
+
+    def _boards_event(self, action: str) -> bool:
+        """The LEADERBOARDS page; False lets the hotkeys fall through."""
+        if action in ("reset", "full_reset", "garage"):
+            return False
+        from .leaderboard import TRACKS, CONFIGS
+        idx = self.menu.idx
+        if action in ("resume", "lb_back"):
+            self._menu_show_main()
+            acts = [a for _, a in self.menu.items]
+            if "boards" in acts:
+                self.menu.idx = acts.index("boards")
+            return True
+        if action.endswith(("set:lb_track", "set:lb_wings")):
+            d = -1 if action.startswith("prev:") else +1
+            t, w = self._lb_state()
+            if action.endswith("set:lb_track"):
+                self._lb["track"] = TRACKS[(TRACKS.index(t) + d) % len(TRACKS)]
+            else:
+                self._lb["wings"] = CONFIGS[(CONFIGS.index(w) + d) % len(CONFIGS)]
+            self._menu_show_boards(idx=idx)
+            return True
+        if action.startswith("lb_car:"):
+            t, w = self._lb_state()
+            self._board_race(t, action[len("lb_car:"):], w)
+            return True
+        self._menu_show_boards(idx=idx)
+        return True
+
+    def _board_race(self, track: str, car: str, wings: str) -> None:
+        """Race a board: its map, car and wing mode, on a Stock engine and the
+        default surface (what a board counts), saved; a new session that
+        opens on its TIME TRIAL page. The car change is the Settings page's
+        (the new car opens with its default build)."""
+        from .leaderboard import ENGINE, SURFACE
+        if self.tutorial is not None and getattr(self.tutorial, "active", False):
+            #  the tutorial picks the car and the map (review): say so, change nothing
+            self._rec_note("the tutorial picks the car and the map - end it first "
+                           "(ESC > Tutorial)", 4.0)
+            self._menu_show_boards(idx=self.menu.idx if self.menu is not None else 0)
+            return
+        s = self.settings
+        self.revert_pending()
+        was = (s.engine, s.wet)
+        s.track, s.car, s.race_wings, s.engine, s.wet = track, car, wings, ENGINE, SURFACE
+        s.engines = {**(s.engines if isinstance(s.engines, dict) else {}), car: ENGINE}
+        s.tc = s.tc_of(car)                # that car's own TC (task 48)
+        self._save_settings()
+        if was != (ENGINE, SURFACE):
+            print("leaderboards: Stock engine, Dry with wet patches -- what a board counts")
+        self.prerace_force = True
+        self._menu_close()
+        self.restart()
+
     # ---- the TIME TRIAL / pre-race page (drive/prerace.py) ----------------
     def open_prerace(self) -> bool:
         """The pre-race screen: at a timed session's start, and the pause
@@ -3455,11 +4142,17 @@ class Sim:
 
     def _prerace_sync(self) -> None:
         """The page shows the class the NEXT lap is filed in (a live engine
-        change moves it) and the engine the car has now."""
+        change moves it) and the engine the car has now. Task 47: the wing
+        mode (a row a player session has) and this session's leaderboard."""
         pr = self.prerace
         if self.recorder is not None:
             pr.key, pr.book = self.recorder.key, self.recorder.book
         pr.titles["engine"] = engine_label(self.settings.engine, self.veh.car)
+        if self._boards() is not None and self.challenge is None and self.tutorial is None:
+            from .leaderboard import prerace_rows
+            key, why = self._board_now()
+            pr.wings = RACE_WINGS_LABELS.get(self.settings.race_wings, self.settings.race_wings)
+            pr.board_rows = prerace_rows(self.boards, key, why)
         if self.ghosts is not None:
             from .ghosts import slot_label
             pr.ghost_label = slot_label(self.ghosts.slot, pr.book, pr.key)
@@ -3539,7 +4232,8 @@ class Sim:
             if lib is None or not isinstance(held, dict):
                 self._rec_note("save this build in the garage first (S there)", 3.0)
                 return
-            name = lib.unique_name("builds", pk.build_name or f"my {run}")
+            from .garage import default_build_name     # the garage's own new-build name
+            name = lib.unique_name("builds", pk.build_name or default_build_name(run))
             try:
                 lib.save_build(dict(held, name=name, builtin=False))
             except (OSError, ValueError) as exc:
@@ -3597,6 +4291,16 @@ class Sim:
             elif action.endswith("set:pr_ghost") and self.ghosts is not None:
                 self.ghosts.step_slot(-1 if action.startswith("prev:") else +1)
                 self._menu_show_prerace(idx=idx)
+            elif action.endswith("set:pr_mode"):
+                #  task 47: the wing mode -- a new copy of the build, so a new
+                #  session, which opens on this page again
+                self.settings.cycle("race_wings", -1 if action.startswith("prev:") else +1)
+                self._save_settings()
+                if self.recorder is not None:
+                    self.recorder.discard("the wing mode changed")
+                self.prerace_force = True
+                self._menu_close()
+                self.restart()
             elif action in ("pr_edit", "pr_wings") and self.has_garage:
                 #  the garage, on this build; its ENTER comes back here. 'Try
                 #  ready-made wings' (round 3): with its W already pressed on
@@ -3771,6 +4475,8 @@ class Sim:
             self._menu_show_challenges()
         elif page == "tutorial" and self.progress_file is not None:
             self._menu_show_tutorial()
+        elif page == "leaderboards" and self._boards() is not None:   # task 47
+            self._menu_show_boards()
         self._from_title = page if (title and self._menu_page == page) else None
         return True
 
@@ -3882,15 +4588,76 @@ class Sim:
     # ---- challenges (drive/challenges.py) ---------------------------------
     def _challenge_stats(self, ch) -> dict:
         """The stats of the copy a challenge would drive (task 44: the
-        working build with the combo's wing config applied, fitted to its
-        car -- `challenges.config_build`); a bare file: the build as it is."""
+        combo's wing config applied, fitted to its car -- `challenges.
+        config_build`; task 46: to the SAVED build the Car row picked, or
+        the stock car -- never the working build on another car); a bare
+        file: the build as it is."""
         from .challenges import build_stats, config_build
         from .records import split_key
         js, lib = self.challenge_build
         car = split_key(ch["class"])[1]
         if ch.get("config"):
-            js = config_build(js, lib, car, ch["config"]).to_json()
+            js = config_build(self._ch_chosen(car), lib, car, ch["config"]).to_json()
         return build_stats(js, lib, cars.get(car), self.settings.ballast)
+
+    def _ch_builds(self) -> dict:
+        """The garage library's saved builds the Car row offers (task 46)."""
+        lib = self.challenge_build[1] if self.challenge_build is not None else None
+        b = getattr(lib, "builds", None)
+        return b if isinstance(b, dict) else {}
+
+    def _ch_default_of(self, car: str) -> str:
+        """`car`'s default build's name (Settings > Default), '' for none."""
+        f = getattr(self.settings, "build_of", None)
+        return (f(car) or "") if callable(f) else ""
+
+    def _ch_choice(self) -> tuple:
+        """(car, build) the Car row shows (task 46): `ch_build` when it is
+        the stock car or a saved build of the picked car; else (not picked
+        yet, or a pick for another car) the running challenge's build on its
+        car; else the page's own rule (`challenges.default_choice`): the
+        build being driven if it is saved and that car's, else the car's
+        default build, else its stock car."""
+        from . import challenges as chm
+        car, _cfg = self._ch_combo()
+        builds = self._ch_builds()
+        cands = [self.ch_build]
+        run = self.challenge.ch if self.challenge is not None else {}
+        if self.ch_build is None and run.get("car") == car:
+            cands.append(run.get("build"))
+        for b in cands:
+            if b == chm.STOCK or (isinstance(b, str) and chm.chosen_json(car, b, builds)):
+                return car, b
+        driven = self.challenge_build[0] if self.challenge_build is not None else None
+        return chm.default_choice(car, driven, builds, self._ch_default_of(car))
+
+    def _ch_chosen(self, car: str | None = None):
+        """The library build json the picked car drives (task 46), None = the
+        stock car. `car` given (a combo's): only a pick made for that car."""
+        from . import challenges as chm
+        c, b = self._ch_choice()
+        if car is not None and car != c:
+            return None
+        return chm.chosen_json(c, b, self._ch_builds())
+
+    def _ch_label(self) -> str:
+        """The Car row's words for the pick (`challenges.choice_text`)."""
+        from . import challenges as chm
+        c, b = self._ch_choice()
+        return chm.choice_text(c, b, default=bool(b) and b == self._ch_default_of(c))
+
+    def _ch_parts(self, config: str) -> dict:
+        """`challenges.config_parts` of the pick, named (task 46)."""
+        from . import challenges as chm
+        c, b = self._ch_choice()
+        return chm.config_parts(self._ch_chosen(), self.challenge_build[1], config, name=b)
+
+    def _ch_unsaved(self) -> bool:
+        """Is the build being driven in no library file (task 46)? The page
+        then says `challenges.UNSAVED_NOTE`: only saved builds are offered."""
+        from . import challenges as chm
+        driven = self.challenge_build[0] if self.challenge_build is not None else None
+        return chm.unsaved(driven, self._ch_builds())
 
     def _ch_combo(self) -> tuple:
         """(car, config) the challenge pages show (task 44): the player's
@@ -3906,14 +4673,31 @@ class Sim:
         return (self.settings.car if self.settings.car in cars.CARS else cars.CAR_DEFAULT), "full"
 
     def _ch_step(self, key: str, d: int) -> None:
-        """LEFT / RIGHT (or a click) on the page's Car / Wings row."""
-        from .challenges import CONFIGS
+        """LEFT / RIGHT (or a click) on the page's Car / Wings row. Task 46:
+        the Car row steps through the CAR CHOICES (`race_grid.car_choices`:
+        each car's stock car, then its saved builds, its default first),
+        never a bare car carrying the working build; the Wings row keeps the
+        build picked."""
+        from .challenges import CONFIGS, STOCK
+        from .race_grid import car_choices
         car, cfg = self._ch_combo()
+        cur = self._ch_choice()
         if key == "ch_car":
-            car = cars.CAR_ORDER[(cars.CAR_ORDER.index(car) + d) % len(cars.CAR_ORDER)]
+            ch = car_choices(self._ch_builds(), self._ch_default_of)
+            i = ch.index(cur) if cur in ch else (
+                ch.index((car, STOCK)) if (car, STOCK) in ch else 0)
+            car, self.ch_build = ch[(i + d) % len(ch)]
         else:
             cfg = CONFIGS[(CONFIGS.index(cfg) + d) % len(CONFIGS)]
+            self.ch_build = cur[1]
         self.ch_pick = (car, cfg)
+
+    def _ch_unsaved_text(self) -> str:
+        """The page's words for an unsaved build being driven (task 46)."""
+        from .challenges import UNSAVED_NOTE
+        driven = self.challenge_build[0] if self.challenge_build is not None else None
+        name = str((driven or {}).get("name", "") or "your car")
+        return f"'{name[:24]}' is not saved: {UNSAVED_NOTE}"
 
     def _menu_show_challenges(self, idx: int | None = None, cid: str | None = None) -> None:
         """The CHALLENGES page: every challenge with its stars and best for
@@ -3923,23 +4707,27 @@ class Sim:
         starts on `cid`'s row (a challenge's page, Back), else on the
         running challenge's (the '<- now' one), else on the first
         challenge; the subtitle says which one is running, or the pick's
-        stars -- out of its own, then out of every car and wing config's."""
+        stars -- out of its own, then out of every car and wing config's.
+        Task 46: the Car row is the pick's build on its car (or the stock
+        car), and the note says so when the build being driven is not saved."""
         from . import challenges as chm
         self._ch_all = chm.load_all()
         car, cfg = self._ch_combo()
+        _c, build = self._ch_choice()
         run = self.challenge
         try:
-            parts = chm.config_parts(self.challenge_build[0], self.challenge_build[1], cfg)
+            parts = self._ch_parts(cfg)
         except Exception:                  # noqa: BLE001 -- the rows name the pick all the same
             parts = dict(top=(chm.STOCK_TOP, "stock"), side=None)
-        pick = chm.pick_rows(car, cfg, parts)[:2]   # (the page's line under them is not here)
+        pick = chm.pick_rows(car, cfg, parts, label=self._ch_label())[:2]
         items = pick + chm.list_items(self._ch_all, self.progress_file, run, car=car, config=cfg)
         if idx is None:
             acts = [a for _, a in items]
             want = f"ch:{cid}" if cid else (f"ch:{run.ch['id']}" if run is not None else None)
             idx = acts.index(want) if want in acts else len(pick)
         if run is not None:
-            head = f"Now running: {run.ch['title']}   -   shown: " + chm.pick_text(car, cfg)
+            head = (f"Now running: {run.ch['title']}   -   shown: "
+                    + chm.pick_text(car, cfg, build))
         else:
             #  this pick's stars out of the ones it has (3 per challenge it
             #  can drive), then every combo's: "0 of 456" alone said nothing.
@@ -3948,8 +4736,10 @@ class Sim:
             got, of = chm.pick_stars(self.progress_file, car, cfg, self._ch_all, refs)
             g_all, t_all = chm.total_stars(self.progress_file, self._ch_all, refs)
             head = (f"This car + wings: {got} of {of} stars   (all: {g_all} of {t_all})   "
-                    + chm.pick_text(car, cfg))
-        self.menu.show(items=items, sections=chm.LIST_HELP, subtitle=head, note="",
+                    + chm.pick_text(car, cfg, build))
+        note = (self._ch_unsaved_text() + ". Your saved builds and every stock car are "
+                "on the Car row.") if self._ch_unsaved() else ""
+        self.menu.show(items=items, sections=chm.LIST_HELP, subtitle=head, note=note,
                        footer="LEFT / RIGHT car, wings   ENTER / CROSS open   "
                               "ESC / CIRCLE back   or click a row",
                        title="CHALLENGES", idx=idx, columns=1)
@@ -3968,13 +4758,16 @@ class Sim:
         Back; a re-show after a Car / Wings step keeps the row. Round 3:
         YOUR SETUP -- the Settings' ABS, TC and gearbox and whose wings
         drive, against what the stars were set with (the challenge keeps
-        them all: the owner's call)."""
+        them all: the owner's call). Task 46: all of it for the SAVED build
+        the Car row picked, on its own car, or the stock car -- named on the
+        page -- and a WINGS row says so when the build being driven is not
+        saved (it is not on the Car row)."""
         from . import challenges as chm
+        from .menu import Warn
         ch = self._ch_resolved(cid)
         parts = None
         try:
-            parts = chm.config_parts(self.challenge_build[0], self.challenge_build[1],
-                                     ch["config"])
+            parts = self._ch_parts(ch["config"])
             stats = self._challenge_stats(ch)
         except Exception as exc:           # noqa: BLE001 -- a bad build: say so
             stats, why = None, [f"the build cannot be read ({type(exc).__name__})"]
@@ -3982,7 +4775,11 @@ class Sim:
         else:
             why = chm.refusals(ch["constraints"], stats)
         items, secs, note = chm.detail(ch, stats, why, self.progress_file, parts=parts,
-                                       setup=chm.player_setup(self.settings))
+                                       setup=chm.player_setup(self.settings),
+                                       car_row=self._ch_label())
+        if self._ch_unsaved() and secs and secs[0][0] == "WINGS":
+            secs = [(secs[0][0], list(secs[0][1]) + [("!", Warn(self._ch_unsaved_text()))])] + \
+                list(secs[1:])
         if idx is None:
             acts = [a for _, a in items]
             idx = next((i for i, a in enumerate(acts) if a.startswith("ch_go:")),
@@ -4036,6 +4833,7 @@ class Sim:
                 self._menu_show_challenge(self._ch_cur, idx=idx)   # not for this car
                 return True
             self.ch_pick = self._ch_combo()    # the pick it starts in: remembered
+            self.ch_build = self._ch_choice()[1]   # ... and its build (task 46), as shown
             self.challenge_pick = action[len("ch_go:"):]
             #  started from the list the title opened: its end goes back there
             self.ch_from_title = self._from_title == "challenges"
@@ -4061,6 +4859,8 @@ class Sim:
                 self.swarm_opts[key] = step_value(key, cur, d)
             return
         ch = SWARM_MENU_CHOICES[key]
+        if key == "car":                   # task 46: + each saved build by name
+            ch = _car_row_choices(ch, self.garage_lib, self._ch_default_of)
         cur = self.swarm_opts[key]
         i = ch.index(cur) if cur in ch else 0
         self.swarm_opts[key] = ch[(i + d) % len(ch)]
@@ -4068,10 +4868,11 @@ class Sim:
             #  a Sim time still at the old car's default follows the car (a
             #  bus needs longer to lap, `swarm_T`); one the player set stays
             own = getattr(getattr(self, "settings", None), "car", None)
-            was = swarm_T(self.track, car=_swarm_T_car(cur, own))
+            lib = self.garage_lib
+            was = swarm_T(self.track, car=_swarm_T_car(cur, own, lib))
             if abs(float(self.swarm_opts["T"]) - was) < 0.5:
                 self.swarm_opts["T"] = swarm_T(
-                    self.track, car=_swarm_T_car(self.swarm_opts["car"], own))
+                    self.track, car=_swarm_T_car(self.swarm_opts["car"], own, lib))
 
     def _menu_open(self) -> None:
         """ESC / OPTIONS. Pauses the accumulator and hands the inputs to the
@@ -4184,6 +4985,8 @@ class Sim:
             self.quit = True
             return
         if self._menu_page in ("prerace", "prerace_pick") and self._prerace_event(action):
+            return
+        if self._menu_page == "leaderboards" and self._boards_event(action):
             return
         if self._menu_page.startswith("tutorial") and self._tutorial_event(action):
             return
@@ -4366,6 +5169,9 @@ class Sim:
         elif action == "timetrial" and self.prerace is not None:
             self._menu_show_prerace()
             return
+        elif action == "boards" and self._boards() is not None:
+            self._menu_show_boards()
+            return
         elif action == "tutorial" and self.progress_file is not None:
             self._menu_show_tutorial()
             return
@@ -4383,6 +5189,8 @@ class Sim:
             if run["id"] in self._ch_all:
                 if run.get("car") in cars.CARS and run.get("config") in CONFIGS:
                     self.ch_pick = (run["car"], run["config"])
+                    #  ... in the build it runs in (task 46; None: the page's rule)
+                    self.ch_build = run.get("build") if isinstance(run.get("build"), str) else None
                 self._ch_back = "main"
                 self._menu_show_challenge(run["id"])
             return
@@ -4557,7 +5365,7 @@ class Sim:
         os.makedirs(SEED_LAP_DIR, exist_ok=True)
         name = self._seed_safe_name(name) or time.strftime("%Y%m%d_%H%M%S")
         path = os.path.join(SEED_LAP_DIR,
-                            f"seed_{self.track.name}_{self.settings.car}_{name}.json")
+                            f"seed_{self.track.name}_{car_file_word(self.settings.car)}_{name}.json")
         d = dict(kind=SEED_LAP_KIND, track=self.track.name, car=self.settings.car,
                  name=name, wing=self.wing, lap_time=lap_s, hz=SEED_LAP_HZ, dt=self.dt,
                  lock_rad=float(getattr(self.veh, "lock_rad", 0.0)),
@@ -6126,7 +6934,8 @@ def _v30_race_vs_bot(verbose=True):
         car_ok = (r1.veh.car is s2.veh.car and r2.veh.car is c540
                   and abs(r2.veh.cfg.mu_scale - c540.mu_scale) < 1e-12
                   and r2.veh.cfg.wing == s2.veh.cfg.wing
-                  and r2.label.endswith("/540i") and r1.label == r2.label[:-5])
+                  and r2.label.endswith("/N540") and r1.label == r2.label[:-5]
+                  and "540i" not in r2.label)      # the car's short name, never its key
         n1 = trk.project(s2.track, r1.veh.x, r1.veh.y)[1]
         n2 = trk.project(s2.track, r2.veh.x, r2.veh.y)[1]
         pos_ok = (abs(n1 - RACE_START_OFFSET_M) < 0.05
@@ -6136,7 +6945,7 @@ def _v30_race_vs_bot(verbose=True):
         h2 = s2.hud_data()
         ghosts_ok = (len(h2.ghosts) == 2 and h2.ghosts[0][3] != h2.ghosts[1][3]
                      and h2.ghosts[0][3] == C_RIVAL and "BOTS" in h2.msg
-                     and "/540i" in h2.msg)
+                     and "/N540" in h2.msg)
         s2.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
         s2._menu_open()
         s2._menu_show_race()
@@ -6158,17 +6967,22 @@ def _v30_race_vs_bot(verbose=True):
                     and race_newest_bot() == (ch[2] if any(mine) else None))
         cyc2 = cyc2 and order_ok
         # the swarm page's Car row cycles the library, and `_swarm_car` puts
-        # a stock car on the session's config the way `_race_car` does
+        # a stock car on the session's config the way `_race_car` does --
+        # task 46: with NO wings (the session's plate was made for its car)
         s2._menu_show_swarm()
         sw_row = "set:sw_car" in [a for _, a in s2.menu.items]
         s2._swarm_step("car", +1)
         kw0 = dict(wing="plate", mu_scale=1.0, abs_on=True)
-        c_m, kw_m, n_m = _swarm_car("mx5", s2.veh.car, kw0, "corsa")
+        c_m, kw_m, n_m = _swarm_car("540i", s2.veh.car, kw0, "corsa")
         c_s, kw_s, n_s = _swarm_car("same", s2.veh.car, kw0, "corsa")
         swcar_ok = (sw_row and s2.swarm_opts["car"] == SWARM_MENU_CHOICES["car"][1]
-                    and c_m is cars.get("mx5") and n_m == "mx5" and kw_m["wing"] == "plate"
-                    and kw_m["mu_scale"] == float(cars.get("mx5").mu_scale)
-                    and c_s is s2.veh.car and kw_s is kw0 and n_s == "corsa")
+                    and c_m is cars.get("540i") and n_m == "540i" and kw_m["wing"] == "off"
+                    and kw_m["dev_left"] is None and kw_m["top"] is None and kw_m["abs_on"]
+                    and kw_m["mu_scale"] == float(cars.get("540i").mu_scale)
+                    and c_s is s2.veh.car and kw_s is kw0 and n_s == "corsa"
+                    #  task 46: the retired cars are in no car row
+                    and not {"mx5", "bus"} & set(SWARM_MENU_CHOICES["car"])
+                    and not {"mx5", "bus"} & set(RACE_BOT_CARS))
         # the RACE page's Test: the bot ALONE in every car, in a pool, and
         # the result lands on the page (a 3 s drive each: the plumbing)
         s2._menu_show_race()
@@ -6259,6 +7073,10 @@ def _v31_records(tmp, verbose=True):
     # a LIVE setting change files the next lap under the new class (the
     # engine is in the key) with the new assists, and drops the lap in hand
     was = rec.recording
+    #  the step is Sport -> Stock, the car's own power either way (the
+    #  scripted Sim runs power 1.0): task 47 made Stock the default, and
+    #  Stock -> Tuned would change the car this check drives
+    sim.settings.engine = "sport"
     sim.apply_setting("engine")
     sim.apply_setting("abs")
     st = sim.settings
@@ -6554,14 +7372,20 @@ def _v44p_challenge_pick(tmp, verbose=True):
     (`_loop_run`). (a) The page opens on the car being driven with FULL
     WING; LEFT / RIGHT and a click cycle the Car and Wings rows, and the
     line under them, the rules and Start follow; the list shows the pick's
-    stars; a combo with no reference (the bus, governed under a stop's v0)
-    says "not for this car" and never starts. (b) G in a challenge run: the
-    config IS the mode -- AUTO / AIR BRAKE with side wings, nothing on a
-    top-only config -- and a session starts on it armed. (c) The next
+    stars; a combo with no usable reference says "not for this car" and never
+    starts (task 46: no car in the game is governed under a stop's v0 since
+    the Citaro left it, so the check marks one combo's reference unavailable
+    for the page, as refs.json does a combo whose reference cannot be
+    driven). (b) G in a challenge run: the config IS the mode -- AUTO /
+    AIR BRAKE with side wings, nothing on a top-only config -- and a
+    session starts on it armed. (c) The next
     session drives the picked car and the config's fitted copy: a top-only
     config has no flanks in it, the stock top is lent to a build that lacks
     one, a build's own top is kept (fixed in a FIXED config), the working
-    build never moves, and the pick is kept for the launch. (d) A stop held
+    build never moves, and the pick is kept for the launch -- task 46: a
+    SAVED build of that car, or its stock car, never another car's build
+    (the Corsa's 'my fins' in an Express challenge is the stock Express).
+    (d) A stop held
     at v0 lets go with a FIXED top wing out, as a car running at v0 has it
     (`Sim._hold_top`), and a moving one in -- the reference and a player's
     late, ramped DOWN alike; AIR BRAKE's top wing comes out on the brake."""
@@ -6577,6 +7401,9 @@ def _v44p_challenge_pick(tmp, verbose=True):
     flanks = dict(version=2, name="my fins", mirror=True, builtin=False, car="corsa",
                   slots=dict(left=dict(fl), right=dict(fl),
                              top=dict(wing="", x=-0.9, h=1.55, inc_deg=6.0, mode="active")))
+    #  task 46: only a SAVED build is offered (the page opens on the build
+    #  being driven when the library holds it): 'my fins' is saved
+    lib.save_build(dict(flanks))
     #  (a) the page
     sim = _build("arena", driver=lambda t, v, T_: Controls())
     sim.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
@@ -6598,7 +7425,7 @@ def _v44p_challenge_pick(tmp, verbose=True):
 
     def wings_row():                               # whose wings: the WINGS section's first row
         return dict(sim.menu.sections)["WINGS"][0]
-    sim.progress_file.section(chm.SECTION)[chm.combo_key("lap_arena", "mx5", "top_fixed")] = (
+    sim.progress_file.section(chm.SECTION)[chm.combo_key("lap_arena", "rally", "top_fixed")] = (
         dict(best=61.0, stars=2))
     ev("menu")
     goto("challenges")
@@ -6609,7 +7436,7 @@ def _v44p_challenge_pick(tmp, verbose=True):
     rows0, start0, wl0 = rows(), [a for _, a in sim.menu.items if a.startswith("ch_go:")], wings_row()
     on0 = sim.menu.action()                        # task 45: the page opens on Start
     goto("set:ch_car")
-    ev("nav_right")                                # Car: the Corsa -> the MX-5
+    ev("nav_right")                                # Car: my fins (the Corsa's) -> the stock Escort
     ev("nav_down")
     ev("nav_right")                                # Wings: FULL -> ONLY TOP
     rows1, idx1, wings1, wl1 = rows(), sim.menu.idx, rule("wings in"), wings_row()
@@ -6622,40 +7449,56 @@ def _v44p_challenge_pick(tmp, verbose=True):
     ev("nav_right")
     #  task 45: Start is the third row (whose wings drive is the WINGS
     #  section's first row: a row of its own took the cursor)
-    page_ok = (rows0 == [f"Car     < {cars.car_name('corsa')} >", "Wings   < FULL WING: top + side >",
-                         "Start"]
-               and wl0 == ("wings", "top: Rear wing (stock) - side: Low-drag side wing (yours)")
+    page_ok = (rows0 == [f"Car     < my fins - {cars.car_name('corsa')} >",
+                         "Wings   < FULL WING: top + side >", "Start"]
+               and wl0 == ("wings", "top: Rear wing (stock) - side: Low-drag side wing (my fins)")
                and start0 == ["ch_go:lap_arena"] and on0 == "ch_go:lap_arena"
-               and rows1 == [f"Car     < {cars.car_name('mx5')} >", "Wings   < ONLY TOP >", "Start"]
+               and rows1 == [f"Car     < {cars.car_name('rally')} (stock) >", "Wings   < ONLY TOP >",
+                             "Start"]
                and wl1 == ("wings", "top: Rear wing (stock) - side wings hidden")
                and idx1 == 1 and wings1 == "top" and rows2[1] == "Wings   < ONLY TOP, FIXED >"
                and rows3[1] == "Wings   < FULL WING: top + side >"
-               and sim.ch_pick == ("mx5", "top_fixed")
+               and sim.ch_pick == ("rally", "top_fixed") and sim.ch_build == chm.STOCK
                and sub0.startswith("This car + wings: ")
-               and sub0.endswith(cars.car_name("corsa") + ", FULL WING: top + side"))
+               and sub0.endswith("my fins - " + cars.car_name("corsa") + ", FULL WING: top + side"))
     ev("menu")                                     # ESC: the list, for the pick
     listed = dict((a, t) for t, a in sim.menu.items)
     list_ok = (sim._menu_page == "challenges" and "[**-]" in listed["ch:lap_arena"]
-               and sim.menu.subtitle.endswith(chm.pick_text("mx5", "top_fixed")))
-    sim.ch_pick = ("bus", "full")                  # governed to 80 km/h: no stop from 100
-    sim._menu_show_challenges()
-    bus_row = dict((a, t) for t, a in sim.menu.items)["ch:brake_100"]
-    goto("ch:brake_100")
-    ev("select")
-    no_start = (not any(a.startswith("ch_go:") for _, a in sim.menu.items)
-                and (sim.menu.note or "").startswith("NOT FOR THIS CAR")
-                and "governed to 80 km/h" in sim.menu.note and "not for this car" in bus_row)
-    sim._challenge_event("ch_go:brake_100")       # forced: still refused
-    no_start = no_start and not sim.quit and sim.challenge_pick is None
-    ev("menu")
-    sim.ch_pick = ("mx5", "top_fixed")
+               and sim.menu.subtitle.endswith(chm.pick_text("rally", "top_fixed", chm.STOCK)))
+    #  a combo whose reference cannot be driven (refs.json 'unavailable', its
+    #  why): marked so for the page, the file untouched
+    why46 = "its reference cannot be driven (the self-check's mark)"
+    k46 = chm.combo_key("brake_100", "express", "full")
+    refs46 = dict(chm.load_refs())
+    refs46[k46] = dict(refs46.get(k46, {}), status="unavailable", why=why46)
+    rp46 = chm.REFS_PATH
+    cache46 = chm._REFS_CACHE.get(rp46)
+    try:
+        chm._REFS_CACHE[rp46] = (os.path.getmtime(rp46), refs46)
+        sim.ch_pick = ("express", "full")
+        sim._menu_show_challenges()
+        bus_row = dict((a, t) for t, a in sim.menu.items)["ch:brake_100"]
+        goto("ch:brake_100")
+        ev("select")
+        no_start = (not any(a.startswith("ch_go:") for _, a in sim.menu.items)
+                    and (sim.menu.note or "").startswith("NOT FOR THIS CAR")
+                    and why46 in sim.menu.note and "not for this car" in bus_row)
+        sim._challenge_event("ch_go:brake_100")   # forced: still refused
+        no_start = no_start and not sim.quit and sim.challenge_pick is None
+        ev("menu")
+    finally:
+        if cache46 is None:
+            chm._REFS_CACHE.pop(rp46, None)
+        else:
+            chm._REFS_CACHE[rp46] = cache46
+    sim.ch_pick = ("rally", "top_fixed")
     sim._menu_show_challenges()
     goto("ch:lap_arena")
     ev("select")
     goto("ch_go:lap_arena")
     ev("select")
     go_ok = (sim.quit and sim.stop_reason == "restart" and sim.challenge_pick == "lap_arena"
-             and sim.ch_pick == ("mx5", "top_fixed"))
+             and sim.ch_pick == ("rally", "top_fixed"))
     #  (b) G in a challenge run, and the session's start
     g_seen = {}
     for cfg in ("top", "full"):
@@ -6679,8 +7522,9 @@ def _v44p_challenge_pick(tmp, verbose=True):
     own["name"] = "my top"
     own["slots"]["left"]["wing"] = own["slots"]["right"]["wing"] = ""
     own["slots"]["top"]["wing"] = "my-top"
+    lib.save_build(dict(own))                      # task 46: saved, so it is offered
     lp = _loop_run(os.path.join(root, "a"), lib, flanks, dict(car="corsa", track="arena"),
-                   [dict(pick="lap_arena", combo=("mx5", "top")),
+                   [dict(pick="lap_arena", combo=("rally", "top")),
                     dict(pick="skid_dry", combo=("express", "full")),
                     dict(end=True), dict(pick="brake_100", combo=("bus", "full")),
                     dict(stop="quit")])
@@ -6690,20 +7534,25 @@ def _v44p_challenge_pick(tmp, verbose=True):
     def sl(e, k):
         return e["build"]["slots"][k]
     loop_ok = (len(lp) == 5 and len(lq) == 2
-               and lp[1]["car"] == "mx5" and lp[1]["key"] == "lap_arena|mx5|top"
+               and lp[1]["car"] == "rally" and lp[1]["key"] == "lap_arena|rally|top"
                and sl(lp[1], "left")["wing"] == sl(lp[1], "right")["wing"] == ""
                and sl(lp[1], "top")["wing"] == chm.STOCK_TOP
-               and sl(lp[1], "top")["mode"] == "active" and lp[1]["pick"] == ("mx5", "top")
+               and sl(lp[1], "top")["mode"] == "active" and lp[1]["pick"] == ("rally", "top")
                and lp[2]["car"] == "express" and lp[2]["key"] == "skid_dry|express|full"
-               and sl(lp[2], "left")["wing"] == "flank-e423"
+               #  task 46: the Corsa's 'my fins' never rides on the Express:
+               #  with no Express build saved, the stock Express drives
+               and sl(lp[2], "left")["wing"] == chm.STOCK_SIDE
+               and lp[1]["chal_build"] == lp[2]["chal_build"] == chm.STOCK
                and sl(lp[2], "top")["wing"] == chm.STOCK_TOP
                and sl(lp[2], "top")["h"] > 1.85             # fitted: the van's own station
                and all(e["design"]["name"] == "my fins"
                        and e["design"]["slots"]["top"]["wing"] == "" for e in lp)
                and lp[3]["car"] == "corsa" and lp[3]["key"] is None
                and sl(lp[3], "top")["wing"] == ""
-               and lp[4]["car"] == "corsa" and lp[4]["key"] is None       # the bus: refused
-               and lq[1]["key"] == "lap_open|corsa|top_fixed"
+               #  a stale pick naming a retired car (task 46: the bus) runs
+               #  the challenge in its file's own car, FULL WING, never a crash
+               and lp[4]["car"] == "corsa" and lp[4]["key"] == "brake_100|corsa|full"
+               and lq[1]["key"] == "lap_open|corsa|top_fixed" and lq[1]["chal_build"] == "my top"
                and sl(lq[1], "top")["wing"] == "my-top" and sl(lq[1], "top")["mode"] == "fixed"
                and sl(lq[1], "left")["wing"] == "")
     #  (d) a stop held at v0 (Sim._hold_top): ONLY TOP, FIXED's top wing is
@@ -6747,8 +7596,8 @@ def _v44p_challenge_pick(tmp, verbose=True):
     ok = page_ok and list_ok and no_start and go_ok and g_ok and loop_ok and hold_ok
     if verbose:
         print(f"  V44p ch. pick   : page rows {rows0[:2]} -> {rows1[:2]}, ENTER {rows2[1]!r}, "
-              f"rules follow: {page_ok}; the list shows the pick's stars {list_ok}; bus / stop "
-              f"from 100 not for this car, never starts {no_start}; Start in the pick "
+              f"rules follow: {page_ok}; the list shows the pick's stars {list_ok}; an "
+              f"unavailable combo not for this car, never starts {no_start}; Start in the pick "
               f"{go_ok}; G: ONLY TOP {g_seen['top'][:2]}, FULL {g_seen['full'][:2]} {g_ok}; "
               f"the next sessions: {[(e['car'], e['key']) for e in lp]}, own top fixed "
               f"{sl(lq[1], 'top')['wing'] if len(lq) > 1 else None}: {loop_ok}; held at v0 "
@@ -6829,8 +7678,17 @@ def _v35_challenges(tmp, verbose=True):
                     + (f" board {r['miss']:+.2f} m" if bb is not None and r["miss"] is not None
                        else "") + ("" if good else " FAIL"))
         g_, (s_, V_, n_) = ch["goal"], r["start"]
+        #  in the gear the automatic holds there on full throttle: above 1st
+        #  on a road car's box; the rally car's close-ratio 1st reaches 81
+        #  km/h at its line (task 46), so its 80 km/h stop rolls in 1st
+        from . import powertrain as ptm
+        pt_g = ptm.PowertrainParams.from_car(cars.get(ch["car"]))
+        n_want = next((k for k in range(1, len(pt_g.gear))
+                       if ptm.rpm_at_speed(pt_g, k, V_) < ptm.n_up_schedule(pt_g, k, 1.0)),
+                      len(pt_g.gear))
         roll_ok = roll_ok and (
-            (s_ == chm.START_S and abs(V_ * 3.6 - g_["start_kmh"]) < 1e-9 and n_ > 1)
+            (s_ == chm.START_S and abs(V_ * 3.6 - g_["start_kmh"]) < 1e-9 and n_ == n_want
+             and (n_ > 1 or ch["car"] == "rally"))
             if g_["metric"] == "stop_distance" else V_ == 0.0)
     #  R mid-stop rolls again; after the stop the box's line keeps it
     bc, rec = chm.resolve(allc["brake_100"], "corsa", "full", refs), {}
@@ -7172,6 +8030,8 @@ def _wing_mode_shown(sim) -> str:
     FIXED' (task 45: the chip said AUTO while the config set the wing)."""
     run = getattr(sim, "challenge", None)
     cfg = run.ch.get("config") if run is not None else None
+    if cfg is None:
+        cfg = getattr(sim, "race_wings", None)   # task 47: a timed session's wing mode
     if cfg is not None:
         from .challenges import g_modes, CONFIG_LABELS
         if len(g_modes(cfg)) < 2:
@@ -7751,9 +8611,13 @@ def _v36_grid(tmp, verbose=True):
     slot_ok = slots == list(RACE_GRID[:n]) and len(set(slots)) == n
     col_ok = [r.colour for r in rv] == list(C_RIVALS[:n]) and len(set(C_RIVALS[:n])) == n
     own = [r for r in rv if r.spec.endswith("540i_arena_plate.json")]
+    #  task 46: the bundled MX-5 bot (bred in a car retired since) has no
+    #  car of its own any more and drives yours, as the built-in does
+    mx_ = [r for r in rv if r.spec.endswith("mx5_arena_plate.json")]
     own_ok = (len(own) == 1 and own[0].veh.car is cars.get("540i")
-              and own[0].veh.cfg.wing == "plate" and own[0].label.endswith("/540i")
-              and rv[0].veh.car is s1.veh.car)         # the built-in driver drives yours
+              and own[0].veh.cfg.wing == "plate" and own[0].label.endswith("/N540")
+              and rv[0].veh.car is s1.veh.car          # the built-in driver drives yours
+              and len(mx_) == 1 and mx_[0].veh.car is s1.veh.car)
     hud = s1.hud_data()
     hud_ok = (len(getattr(hud, "ghosts", [])) == n
               and [g[3] for g in hud.ghosts] == list(C_RIVALS[:n])
@@ -7771,18 +8635,18 @@ def _v36_grid(tmp, verbose=True):
         lib = Library(os.path.join(tmp, "grid_lib"), use_xfoil=False)
         build = dict(version=2, name="bred", mirror=True, builtin=False,
                      slots={"left": {"wing": "flank-e423", "x": 0.97, "h": 0.9, "inc_deg": 0.0}})
-        st = Settings(path="", car="mx5", engine="tuned")
-        sw = Swarm(pop=4, track="arena", car_name="mx5", workers=1)
-        sw.bred = race_grid.bred_meta("mx5", True, build, st, 1.5)
+        st = Settings(path="", car="rally", engine="tuned")
+        sw = Swarm(pop=4, track="arena", car_name="rally", workers=1)
+        sw.bred = race_grid.bred_meta("rally", True, build, st, 1.5)
         sw.best = dict(theta=_np.zeros(Policy.n_param(sw.n_act)), gen=3, id=7, reward=1.0,
                        lap_best=None)
         sp = sw.save_state(os.path.join(tmp, "grid_state.json"))
         sw2 = Swarm.load_state(sp, workers=1)
         meta = sw2.best_policy().meta
         car_, cfg_, name_ = race_grid.own_car(meta, s1.veh.cfg, lib)
-        bred_ok = (meta.get("bred", {}).get("build") == build and name_ == "mx5"
+        bred_ok = (meta.get("bred", {}).get("build") == build and name_ == "rally"
                    and cfg_.dev_left is not None and cfg_.power_scale == 1.5
-                   and car_ is cars.get("mx5"))
+                   and car_ is cars.get("rally"))
     except Exception as exc:               # noqa: BLE001
         print(f"    V36 bred: {type(exc).__name__}: {exc}")
     # the cost, the reason the grid is five: steps of the user alone and with
@@ -7797,26 +8661,26 @@ def _v36_grid(tmp, verbose=True):
         s1.step_physics(s1.dt)
     t_grid = (time.perf_counter() - t0) / (k * s1.dt)
     frame_ms = 1e3 / FPS * t_grid
-    # task 41, start_race's own path with the bus (race_grid.grid_layout): a
-    # bus bot lines up behind the painted grid on the centreline while a
-    # Corsa bot keeps its box; you in the bus -> a Corsa bot at (2.2, -14),
-    # clear of the boxes your body covers
+    # task 41, start_race's own path through race_grid.grid_layout: a car
+    # that fits takes its painted box (a car too big for one -- the retired
+    # bus -- lines up behind the grid: race_grid's self-check drives that
+    # rule with the bus's spec). Task 46: a rally bot and a Corsa bot take
+    # boxes 1 and 2; you in the rally car, a Corsa bot takes box 1
     bus_ok, bus_msg = False, ""
     try:
         with contextlib.redirect_stdout(io.StringIO()):
             sb = _build("arena", driver=lambda t, v, T_: Controls())
-            sb.race_opts.update(bot=RACE_BOT_ANCHOR, car="bus", bot2=RACE_BOT_ANCHOR,
+            sb.race_opts.update(bot=RACE_BOT_ANCHOR, car="rally", bot2=RACE_BOT_ANCHOR,
                                 car2="corsa")
             ok_b = sb.start_race()
-            su = _build("arena", driver=lambda t, v, T_: Controls(), car=cars.get("bus"))
+            su = _build("arena", driver=lambda t, v, T_: Controls(), car=cars.get("rally"))
             su.race_opts.update(bot=RACE_BOT_ANCHOR, car="corsa")
             ok_u = su.start_race()
         g_b = [(r.grid_n, r.grid_s) for r in sb.rivals]
         g_u = [(r.grid_n, r.grid_s) for r in su.rivals]
-        bus_ok = (ok_b and ok_u and len(g_b) == 2 and g_b[0][0] == 0.0
-                  and g_b[0][1] + race_grid.footprint("bus")[0] < -34.5 and g_b[1] == RACE_GRID[1]
-                  and g_u == [race_grid.grid_slot(5)])
-        bus_msg = f"bus bot at {g_b[0][1]:.1f} m, corsa bot {g_b[1]}; you in the bus: bot {g_u}"
+        bus_ok = (ok_b and ok_u and g_b == [RACE_GRID[0], RACE_GRID[1]]
+                  and sb.rivals[0].veh.car is cars.get("rally") and g_u == [RACE_GRID[0]])
+        bus_msg = f"rally bot {g_b[0]}, corsa bot {g_b[1]}; you in the rally car: bot {g_u}"
     except Exception as exc:               # noqa: BLE001
         bus_msg = f"{type(exc).__name__}: {exc}"
     ok = (same and full and moved and slot_ok and col_ok and own_ok and hud_ok and agree
@@ -7827,7 +8691,7 @@ def _v36_grid(tmp, verbose=True):
               f"({', '.join(f'{r.progress:.0f}' for r in rv)} m); slots {slot_ok}; colours "
               f"{col_ok}; the 540i checkpoint drives its own 540i {own_ok}; HUD ghosts + gaps "
               f"{hud_ok}; render budget grid = {rnd.V22_GRID_BOTS} {agree}; a swarm's saved bot "
-              f"carries its bred car (state and checkpoint) {bred_ok}; the bus on the grid "
+              f"carries its bred car (state and checkpoint) {bred_ok}; the rally car on the grid "
               f"{bus_ok} ({bus_msg}); cost: RTF "
               f"{1 / t_one:.1f} alone, {1 / t_grid:.2f} with the grid = {frame_ms:.1f} ms of "
               f"physics in a {1e3 / FPS:.1f} ms frame  -> {'ok' if ok else 'FAIL'}")
@@ -8004,8 +8868,8 @@ def _v26_settings_and_menu(tmp, verbose=True):
     s = Settings(path=path)
     s.track, s.gearbox, s.abs, s.wet = "open", "clutch", False, "all"
     s.engine, s.tc, s.sound = "tuned", False, "low"
-    s.car, s.ballast, s.ballast_at = "mx5", 75.0, "boot"
-    s.paint = {"mx5": "cobalt", "540i": "burgundy"}
+    s.car, s.ballast, s.ballast_at = "rally", 75.0, "boot"
+    s.paint = {"rally": "cobalt", "540i": "burgundy"}
     s.vectors = True                                # the force arrows (V), task 45
     s.save()
     back = Settings.load(path)
@@ -8013,10 +8877,10 @@ def _v26_settings_and_menu(tmp, verbose=True):
              back.engine, back.tc, back.sound,
              back.car, back.ballast, back.ballast_at, back.vectors) == (
         "open", "clutch", False, "all", "car_up", "tuned", False, "low",
-        "mx5", 75.0, "boot", True) and Settings(path="").vectors is False
+        "rally", 75.0, "boot", True) and Settings(path="").vectors is False
     # the Paint setting, per car: what was saved comes back, and a car never
     # painted reads 'factory'
-    paint_ok = (back.paint == {"mx5": "cobalt", "540i": "burgundy"}
+    paint_ok = (back.paint == {"rally": "cobalt", "540i": "burgundy"}
                 and back.paint_of() == "cobalt" and back.paint_of("540i") == "burgundy"
                 and back.paint_of("corsa") == pnt.PAINT_DEFAULT
                 and paint_rgb(back) == pnt.rgb("cobalt")
@@ -8024,7 +8888,7 @@ def _v26_settings_and_menu(tmp, verbose=True):
     bad = Settings(path=path)
     bad.track, bad.gearbox, bad.engine, bad.sound = "moon", "dsg", "v8", "11"
     bad.car, bad.ballast, bad.ballast_at = "delorean", 1e9, "roof"
-    bad.paint = {"mx5": "chartreuse", "delorean": "red", "540i": "teal", "corsa": 7}
+    bad.paint = {"rally": "chartreuse", "delorean": "red", "540i": "teal", "corsa": 7}
     bad.clamp()
     clamp_ok = (bad.track, bad.gearbox, bad.engine, bad.sound, bad.car,
                 bad.ballast, bad.ballast_at) == (
@@ -8035,6 +8899,21 @@ def _v26_settings_and_menu(tmp, verbose=True):
     p_bad = os.path.join(tmp, "settings_badpaint.json")
     with open(p_bad, "w") as f:
         json.dump(dict(car="540i", paint=["red"]), f)
+    #  task 46: a settings file from before -- the car, a paint and a
+    #  default build for the retired MX-5 / Citaro -- opens the Corsa and
+    #  drops their entries, keeping the rest
+    p_old = os.path.join(tmp, "settings_retired.json")
+    with open(p_old, "w") as f:
+        json.dump(dict(car="mx5", paint={"mx5": "red", "bus": "teal", "540i": "blue"},
+                       car_build={"bus": "big bus", "corsa": "mine"}), f)
+    old46 = Settings.load(p_old)
+    with open(p_old, "w") as f:
+        json.dump(dict(car="bus"), f)
+    retired_ok = (old46.car == CAR_DEFAULT and old46.paint == {"540i": "blue"}
+                  and old46.car_build == {"corsa": "mine"}
+                  and Settings.load(p_old).car == CAR_DEFAULT
+                  and old46.car_spec() is cars.CORSA_C)
+    clamp_ok = clamp_ok and retired_ok
     paint_ok = paint_ok and (bad.paint == {"540i": "teal"}
                              and Settings(path="", paint="red").clamp().paint == {}
                              and Settings.load(p_bad).paint == {}
@@ -8078,7 +8957,7 @@ def _v26_settings_and_menu(tmp, verbose=True):
                 and (cv.tyre is CORSA_TYRE) == (name == CAR_DEFAULT)
                 and len(cv.pt_p.gear) == len(stock.gear)
                 and cv.der.I_roll > 0.0 and cv._det_roll > 0.0
-                #  the car's own split (task 41: the bus declares 0.45),
+                #  the car's own split (task 41: the retired bus declared 0.45),
                 #  which is cfg's 0.74 on every car that declares none
                 and abs(cv.der.lltd_geo_f + cv.der.lltd_roll_f
                         - cv.der.roll_dist_f) < 1e-15
@@ -8103,8 +8982,8 @@ def _v26_settings_and_menu(tmp, verbose=True):
               and o.gearbox == "clutch" and o.auto_gearbox is False
               and o.abs is False and o.wet == "all" and o.steer_limit is True
               and o.engine == "tuned" and o.tc is False and o.sound == "off"
-              and back.sound == "off" and back.car == "mx5"
-              and o.car == "mx5" and o.ballast == 75.0 and o.ballast_at == "boot"
+              and back.sound == "off" and back.car == "rally"
+              and o.car == "rally" and o.ballast == 75.0 and o.ballast_at == "boot"
               and back.power_scale == 1.5
               and Settings(path="", engine="tuned").power_scale == 1.5)
     # an EXPLICIT --car / --ballast still wins over the file
@@ -8120,16 +8999,16 @@ def _v26_settings_and_menu(tmp, verbose=True):
         seq.append(cyc.track)
     cycle_ok = tuple(seq) == tuple(trk.TRACK_ORDER[1:]) + (trk.TRACK_ORDER[0],)
     # each car's paint is its own: stepping one leaves the others alone
-    pc = Settings(path="", car="mx5")
-    pc.cycle("paint")                               # the MX-5: factory -> the first colour
+    pc = Settings(path="", car="rally")
+    pc.cycle("paint")                               # the rally car: factory -> the first colour
     pc.cycle("paint", car="corsa")
     pc.cycle("paint", car="corsa")                  # the Corsa: two on
     pc.cycle("paint", -1, car="540i")               # the 540i: LEFT wraps to the last
-    paint_ok = paint_ok and pc.paint == {"mx5": pnt.PAINT_ORDER[1], "corsa": pnt.PAINT_ORDER[2],
+    paint_ok = paint_ok and pc.paint == {"rally": pnt.PAINT_ORDER[1], "corsa": pnt.PAINT_ORDER[2],
                                          "540i": pnt.PAINT_ORDER[-1]}
     for _ in range(len(pnt.PAINT_ORDER) - 1):
         pc.cycle("paint")
-    paint_ok = paint_ok and (pc.paint_of("mx5") == pnt.PAINT_DEFAULT
+    paint_ok = paint_ok and (pc.paint_of("rally") == pnt.PAINT_DEFAULT
                              and pc.paint_of("corsa") == pnt.PAINT_ORDER[2])
 
     # the menu state machine on a headless Sim with a real keyboard input
@@ -8442,7 +9321,7 @@ def _v41_paint_on_the_road(tmp, verbose=True):
     plan-view frame drawn): each draws its car's saved paint, set again on
     every session, so neither the last session's paint nor a factory car
     in someone else's colour survives a restart. The garage's preview car
-    is the driven car's paint, factory resolved (an MX-5 is red, never the
+    is the driven car's paint, factory resolved (the rally car is red, never the
     garage's stock yellow); the swarm viewer's cars are their own colour.
     And the Deploy-swarm page's Sim time after a Deploy: a default one
     follows the map (Kestrel's own, not the arena's 70 s, in which no car
@@ -8479,14 +9358,14 @@ def _v41_paint_on_the_road(tmp, verbose=True):
         return sim, r.screen
 
     purple, teal = pnt.rgb("purple"), pnt.rgb("teal")
-    red, blue = rnd.factory_colour("mx5"), rnd.factory_colour("540i")
+    red, blue = rnd.factory_colour("rally"), rnd.factory_colour("540i")
     run0, car0 = Sim.run_interactive, rnd._CAR
     Sim.run_interactive = lambda self: None
     try:
         rnd.set_paint(teal)                # the last session's paint, still set
         st = Settings(path=os.path.join(tmp, "v41_settings.json"), track="kestrel",
-                      car="mx5", camera="car_up", graphics="classic",
-                      paint={"mx5": "purple", "corsa": "teal"}).clamp()
+                      car="rally", camera="car_up", graphics="classic",
+                      paint={"rally": "purple", "corsa": "teal"}).clamp()
         arena, kestrel = trk.make_arena(), trk.make_track("kestrel")
         #  an arena Deploy at its default Sim time, 48 cars
         sim, sc = session(st, _swarm_menu_kept(dict(SWARM_MENU_DEFAULTS, pop=48,
@@ -8497,7 +9376,7 @@ def _v41_paint_on_the_road(tmp, verbose=True):
         T_a = sim.swarm_opts["T"]
         swarm_ok = (T_a == swarm_T(kestrel) and T_a > SWARM_MENU_DEFAULTS["T"]
                     and sim.swarm_opts["pop"] == 48)
-        #  the MX-5 back to factory, on the arena; a Kestrel Deploy at 90 s,
+        #  the rally car back to factory, on the arena; a Kestrel Deploy at 90 s,
         #  the player's own value
         st.track, st.paint = "arena", {"corsa": "teal"}
         sim, sc = session(st, _swarm_menu_kept(dict(SWARM_MENU_DEFAULTS, T=90.0), kestrel))
@@ -8505,7 +9384,7 @@ def _v41_paint_on_the_road(tmp, verbose=True):
         b_ok = (rnd._PAINT is None and n_b["red"] > 100
                 and n_b["purple"] == 0 and n_b["teal"] == 0)
         swarm_ok = swarm_ok and sim.swarm_opts["T"] == 90.0
-        #  the garage the loop opens, on that factory MX-5
+        #  the garage the loop opens, on that factory rally car
         g = _painted_garage(grg, (640, 400), grg.CarBuild(), None, None, st)
         gar_ok = g.view.paint == red and red != grg.C_PAINT
         #  the swarm viewer, deployed from a painted session
@@ -8745,17 +9624,18 @@ def _v41_builds(tmp, verbose=True):
         b.clamp(lib)
         lib.save_build(b.to_json())
         return b
-    c_fast, m_fast, old = mk("corsa fast", "corsa", "fin"), mk("mx fast", "mx5", "plate"), \
+    c_fast, m_fast, old = mk("corsa fast", "corsa", "fin"), mk("r fast", "rally", "plate"), \
         mk("old any", "", "plate")
     st = Settings(path="")
-    st.car_build = {"mx5": "mx fast"}
+    st.car_build = {"rally": "r fast"}
     quiet = contextlib.redirect_stdout(io.StringIO())
     #  _car_build: the default wins; none -> another car's build is dropped for
     #  the empty one (a hint), an any-car one kept; a gone default: noted
-    d1, n1 = _car_build(grg, lib, c_fast.copy(), "mx5", st)
+    d1, n1 = _car_build(grg, lib, c_fast.copy(), "rally", st)
     d2, n2 = _car_build(grg, lib, c_fast.copy(), "540i", st)
     d3, n3 = _car_build(grg, lib, old.copy(), "540i", st)
-    d4, n4 = _car_build(grg, lib, m_fast.copy(), "mx5", Settings(path="", car_build={"mx5": "gone"}))
+    d4, n4 = _car_build(grg, lib, m_fast.copy(), "rally",
+                        Settings(path="", car_build={"rally": "gone"}))
     st_gone = Settings(path="", car_build={"540i": "gone"})
     d5, n5 = _car_build(grg, lib, c_fast.copy(), "540i", st_gone)
     #  the per-map memory is asked before the empty build (stubbed here: the
@@ -8763,20 +9643,20 @@ def _v41_builds(tmp, verbose=True):
     #  its self-check cover the per-car filter)
     real_tb = globals()["_track_build"]
     globals()["_track_build"] = lambda g_, l_, d_, t_, o_, car=None: (
-        grg.CarBuild.from_json(m_fast.to_json()) if (t_, car) == ("arena", "mx5") else None)
+        grg.CarBuild.from_json(m_fast.to_json()) if (t_, car) == ("arena", "rally") else None)
     try:
-        d6, n6 = _car_build(grg, lib, c_fast.copy(), "mx5", Settings(path=""),
+        d6, n6 = _car_build(grg, lib, c_fast.copy(), "rally", Settings(path=""),
                             track="arena", opts=SimpleNamespace())
     finally:
         globals()["_track_build"] = real_tb
-    car_ok = (d1 is not None and d1.name == "mx fast" and "default" in n1
-              and d2 is not None and d2.car == "540i" and d2.name == "my 540i"
+    car_ok = (d1 is not None and d1.name == "r fast" and "default" in n1
+              and d2 is not None and d2.car == "540i" and d2.name == "my n540"
               and not d2.has_any(lib) and "no wings" in n2 and "F" in n2
               and d3 is None and not n3
               and d4 is None and "no longer" in n4
               and d5 is not None and not d5.has_any(lib) and "gone" in n5 and "no wings" in n5
               and max(len(n) for n in (n1, n2, n4, n5, n6)) <= 120
-              and d6 is not None and d6.name == "mx fast" and "last build" in n6)
+              and d6 is not None and d6.name == "r fast" and "last build" in n6)
     #  _resolve_design at launch: a last garage car of another car -> this
     #  car's default; --build / --wing win untouched; an any-car car is kept
     dpath = os.path.join(tmp, "builds41", "garage_design.json")
@@ -8795,23 +9675,23 @@ def _v41_builds(tmp, verbose=True):
             o = SimpleNamespace(build=want, wing="plate" if "--wing" in argv else "off",
                                 wing_x=0.97, wing_h=0.90, wing_inc=0.0)
             with quiet:
-                _g, dsg, _l = _resolve_design(o, Settings(path="", car="mx5",
-                                                          car_build={"mx5": "mx fast"}))
+                _g, dsg, _l = _resolve_design(o, Settings(path="", car="rally",
+                                                          car_build={"rally": "r fast"}))
             launches[tag] = (dsg.name if isinstance(dsg, grg.CarBuild) else str(dsg),
                              bool(o.build_note))
     finally:
         grg.CarBuild.load = load0
         grg._LIB, sys.argv[:] = lib0, argv0
-    launch_ok = launches == {"default": ("mx fast", True), "flag build": ("corsa fast", False),
-                             "flag wing": ("my corsa", False), "any car": ("old any", False)}
+    launch_ok = launches == {"default": ("r fast", True), "flag build": ("corsa fast", False),
+                             "flag wing": ("my civetta", False), "any car": ("old any", False)}
     #  back from the garage: changed -> this car's; only looked at -> as it was
     seen = old.copy()
-    _stamp_car(seen, seen.to_json(), "mx5")
+    _stamp_car(seen, seen.to_json(), "rally")
     edited = old.copy()
     was = edited.to_json()
     edited.left.inc_deg += 1.0
-    _stamp_car(edited, was, "mx5")
-    stamp_ok = seen.car == "" and edited.car == "mx5"
+    _stamp_car(edited, was, "rally")
+    stamp_ok = seen.car == "" and edited.car == "rally"
     #  the Settings page on the dragstrip (no records, no pre-race page)
     with quiet:
         sim = _build("dragstrip", driver=lambda t, v, T_: Controls())
@@ -8838,8 +9718,8 @@ def _v41_builds(tmp, verbose=True):
     picks = [a for _, a in sim.menu.items]
     page_ok = (sim._menu_page == "prerace_pick"
                and picks == ["pr_back", "pr_build:corsa fast", "pr_build:old any",
-                             "pr_build:mx fast", "pr_back"]
-               and "[MX-5]" in sim.menu.items[3][0] and "not saved" in rows["build_pick"]
+                             "pr_build:r fast", "pr_back"]
+               and "[Halcón]" in sim.menu.items[3][0] and "not saved" in rows["build_pick"]
                and "none" in rows["build_default"])
     ev("menu")                                     # ESC: back to the settings row
     back_ok = sim._menu_page == "settings" and sim.menu.action() == "build_pick"
@@ -8878,7 +9758,9 @@ def _loop_run(root, lib, design_json, st_kw, script, argv=(), last=None, title="
     `car` (the Settings page's Car row, during the session), `pick` (a
     challenge id), `end` (the challenge's end), `prerace_pick` ((name, json)),
     `saved_as` (Settings > Default's library name for the build driven),
-    `combo` ((car, config): the challenge page's pick, task 44), `tut` (a
+    `combo` ((car, config): the challenge page's pick, task 44), `build`
+    (the Car row's build beside it, task 46: a library name, '' = the stock
+    car; absent = not picked, the page's rule), `tut` (a
     driving tutorial the session hands back running, task 45), `from_title`
     (the pick was on the list the title opened, task 45) and
     `stop` ('restart' by default; the script ends with 'quit'). `last`:
@@ -8910,19 +9792,25 @@ def _loop_run(root, lib, design_json, st_kw, script, argv=(), last=None, title="
                         over=_session_over_limits(opts, settings),
                         chal=(getattr(opts, "challenge", None) or {}).get("id"),
                         key=(getattr(opts, "challenge", None) or {}).get("key"),
+                        chal_build=(getattr(opts, "challenge", None) or {}).get("build"),
                         pick=getattr(opts, "ch_pick", None),
                         page=getattr(opts, "open_page", None),
                         page_title=getattr(opts, "open_page_title", True),
-                        tut=getattr(opts, "tutorial", None) is not None))
+                        tut=getattr(opts, "tutorial", None) is not None,
+                        wings=getattr(opts, "wings_applied", None)))
         opts.open_page, opts.open_page_title = None, True
         if "car" in st:
             settings.car = st["car"]
+            settings.save()
+        if "race_wings" in st:             # task 47: the Wings row, in the session
+            settings.race_wings = st["race_wings"]
             settings.save()
         saved = (st["saved_as"], opts.design_json) if "saved_as" in st else None
         return NS(stop_reason=st.get("stop", "restart"), inp=NS(pad=None), race_opts={},
                   rivals=[], prerace_pick=st.get("prerace_pick"), wing_side_mode=0,
                   ghosts=None, challenge_pick=st.get("pick"), challenge_end=st.get("end", False),
-                  ch_pick=st.get("combo"), ch_from_title=st.get("from_title", False),
+                  ch_pick=st.get("combo"), ch_build=st.get("build"),
+                  ch_from_title=st.get("from_title", False),
                   tutorial=st.get("tut"), wing_tutor_start=False, swarm_launch=None,
                   track=NS(name=settings.track),
                   build_saved_as=saved)
@@ -8975,11 +9863,13 @@ def _v43_fitted_sessions(tmp, verbose=True):
     """The review of task 41's root design, in the REAL loop (`_loop_run`):
     every session drives a copy of the working build fitted to its car, and
     the working build never moves. (a) a pre-41 any-car build driven Corsa ->
-    Express -> Corsa comes back bit-identical (finding 1); (b) a bus build in
-    a Corsa challenge is DRIVEN fitted (flank h 1.20), JUDGED fitted
-    (UNLIMITED, as challenges.build_stats says) and never written over the
-    Corsa's own per-map memory (finding 0); (c) a challenge's end is no car
-    change -- the MX-5 keeps its edited build -- while a real car change
+    Express -> Corsa comes back bit-identical (finding 1); (b) an Express
+    build in hand (the tallest car left, in the retired bus's role) in a
+    Corsa challenge -- task 46: no longer driven there at all (the stock
+    Corsa drives: only saved builds of the Corsa are offered), still
+    Unlimited as challenges.build_stats judges it on a Corsa -- is never
+    written over the Corsa's own per-map memory (finding 0); (c) a challenge's end is no car
+    change -- the rally car keeps its edited build -- while a real car change
     autosaves the unsaved build it replaces (finding 2)."""
     import cars as _cars
     from . import garage as grg
@@ -8989,8 +9879,8 @@ def _v43_fitted_sessions(tmp, verbose=True):
     from .records import RecordBook
     root = os.path.join(tmp, "fit43")
     lib = Library(os.path.join(root, "library"), use_xfoil=False)
-    big = lib.wings["flank-e423"].copy(name="bus-fin", builtin=False)
-    big.span = 4.40                        # legal on the bus at h 2.50 (2 x 2.22)
+    big = lib.wings["flank-e423"].copy(name="van-fin", builtin=False)
+    big.span = 2.60                        # legal on the Express at h 1.50 (2 x 1.34)
     lib.save_wing(big)
     #  (a) finding 1
     anyc = dict(version=2, name="plate car", mirror=True, builtin=False, slots=dict(
@@ -9006,47 +9896,53 @@ def _v43_fitted_sessions(tmp, verbose=True):
                and la[1]["car"] == "express" and la[1]["build"]["slots"]["top"]["h"] > 1.85
                and _same_build(mem_a["arena|corsa"]["build"], anyc))
     #  (b) finding 0
-    busb = grg.new_build("bus")
-    busb.left.wing, busb.left.h = "bus-fin", 2.50
+    busb = grg.new_build("express")
+    busb.left.wing, busb.left.h = "van-fin", 1.50
     busb.sync_mirror("left")
     own = grg.new_build("corsa")
     own.name, own.left.wing = "corsa arena", "fin"
     own.sync_mirror("left")
-    lb_ = _loop_run(os.path.join(root, "b"), lib, busb.to_json(), dict(car="bus", track="arena"),
+    lb_ = _loop_run(os.path.join(root, "b"), lib, busb.to_json(), dict(car="express", track="arena"),
                     [dict(pick="lap_arena"), dict(end=True), dict(stop="quit")],
                     last={("arena", "corsa"): own.to_json()})
     mem_b = RecordBook(os.path.join(root, "b", "runs", "records")).last_builds()
     st_b = build_stats(lb_[1]["design"], lib, _cars.get("corsa"), 0.0) if len(lb_) > 1 else {}
+    #  task 46 (the owner: "you can only race with cars that have been
+    #  saved"): the bus build -- Unlimited on a Corsa, as build_stats still
+    #  judges it -- no longer rides in the Corsa challenge at all. With no
+    #  saved Corsa build the challenge drives the stock Corsa (the stock
+    #  plate pair, official), and the bus build comes back untouched
     chal_ok = (len(lb_) == 3 and lb_[1]["car"] == "corsa" and lb_[1]["chal"] == "lap_arena"
-               and lb_[1]["build"]["slots"]["left"]["h"] == 1.20
-               and [o["slot"] for o in lb_[1]["over"]] == ["left", "right"]
+               and lb_[1]["chal_build"] == "" and lb_[1]["over"] == []
+               and lb_[1]["build"]["slots"]["left"]["wing"] == "plate"
                and st_b.get("unlimited") is True and lb_[0]["over"] == []
                and mem_b["arena|corsa"]["name"] == "corsa arena"
-               and lb_[2]["car"] == "bus" and lb_[2]["build"] == lb_[0]["build"]
+               and lb_[2]["car"] == "express" and lb_[2]["build"] == lb_[0]["build"]
                and lb_[2]["design"] == lb_[0]["design"] == busb.to_json())
     #  (c) finding 2
-    for nm, car, wing in (("mxdef", "mx5", ""), ("cdef", "corsa", "fin")):
+    for nm, car, wing in (("rdef", "rally", ""), ("cdef", "corsa", "fin")):
         d_ = grg.new_build(car)
         d_.name, d_.left.wing = nm, wing
         d_.sync_mirror("left")
         lib.save_build(d_.to_json())
-    ed = grg.new_build("mx5")
-    ed.name, ed.left.wing, ed.left.inc_deg = "mx edit", "plate", 4.0
+    ed = grg.new_build("rally")
+    ed.name, ed.left.wing, ed.left.inc_deg = "r edit", "plate", 4.0
     ed.sync_mirror("left")
     lc = _loop_run(os.path.join(root, "c"), lib, ed.to_json(),
-                   dict(car="mx5", track="linden", car_build={"mx5": "mxdef", "corsa": "cdef"}),
+                   dict(car="rally", track="linden", car_build={"rally": "rdef", "corsa": "cdef"}),
                    [dict(pick="lap_arena"), dict(end=True), dict(car="corsa"), dict(stop="quit")])
     names = [((e["design"] or {}).get("name"), e["car"]) for e in lc]
-    back_ok = (names == [("mx edit", "mx5"), ("mx edit", "corsa"), ("mx edit", "mx5"),
+    back_ok = (names == [("r edit", "rally"), ("r edit", "corsa"), ("r edit", "rally"),
                          ("cdef", "corsa")]
-               and _same_build(lib.builds.get("mx edit (autosave)"), ed.to_json()))
+               and _same_build(lib.builds.get("r edit (autosave)"), ed.to_json()))
     ok = trip_ok and chal_ok and back_ok
     if verbose:
         print(f"  V43 fitted      : any-car build Corsa -> Express -> Corsa bit-identical "
-              f"{trip_ok}; bus build in a Corsa challenge driven at flank h "
-              f"{lb_[1]['build']['slots']['left']['h'] if len(lb_) > 1 else None}, "
-              f"UNLIMITED {bool(lb_[1]['over']) if len(lb_) > 1 else None} (= build_stats "
-              f"{st_b.get('unlimited')}), the Corsa's arena memory kept: {chal_ok}; "
+              f"{trip_ok}; a Corsa challenge with an Express build in hand (UNLIMITED there, "
+              f"build_stats {st_b.get('unlimited')}) drives the stock Corsa (side "
+              f"{lb_[1]['build']['slots']['left']['wing'] if len(lb_) > 1 else None}, "
+              f"over {lb_[1]['over'] if len(lb_) > 1 else None}), the Corsa's arena "
+              f"memory kept: {chal_ok}; "
               f"challenge end is no car change, a car change autosaves: {back_ok} {names}")
     return ok, dict(trip=trip_ok, chal=chal_ok, back=back_ok, names=names)
 
@@ -9059,9 +9955,10 @@ def _v43b_launch_and_judges(tmp, verbose=True):
     build is rebuilt on the car it was bred in, not the Corsa (finding 7);
     and every page's judge -- `_prerace_books`' (the PICK page and the
     class-less picker call `bodies.over_limits` the same way; the garage's
-    library page too) -- agrees with `challenges.build_stats` on a bus build
-    driven on a Corsa, while the pick page reads a library build as saved
-    and fits it for its best (finding 6, the root design)."""
+    library page too) -- agrees with `challenges.build_stats` on an Express
+    build (task 46: the retired bus's role) driven on a Corsa, while the pick
+    page reads a library build as saved and fits it for its best (finding 6,
+    the root design)."""
     import cars as _cars
     from types import SimpleNamespace
     from . import garage as grg
@@ -9074,34 +9971,35 @@ def _v43b_launch_and_judges(tmp, verbose=True):
     from .vehicle import VehicleConfig
     root = os.path.join(tmp, "launch43")
     lib = Library(os.path.join(root, "library"), use_xfoil=False)
-    big = lib.wings["flank-e423"].copy(name="bus-fin", builtin=False)
-    big.span = 4.40
+    big = lib.wings["flank-e423"].copy(name="van-fin", builtin=False)
+    big.span = 2.60
     lib.save_wing(big)
-    b_a, b_b, c_x = grg.new_build("bus"), grg.new_build("bus"), grg.new_build("corsa")
-    b_a.name, b_a.left.wing = "bus A", "plate"
-    b_b.name, b_b.left.wing, b_b.left.inc_deg = "bus B", "plate", 3.0
+    b_a, b_b, c_x = grg.new_build("express"), grg.new_build("express"), grg.new_build("corsa")
+    b_a.name, b_a.left.wing = "van A", "plate"
+    b_b.name, b_b.left.wing, b_b.left.inc_deg = "van B", "plate", 3.0
     c_x.name, c_x.left.wing = "corsa x", "fin"
     for b_ in (b_a, b_b, c_x):
         b_.sync_mirror("left")
     lib.save_build(b_a.to_json())
     l5 = _loop_run(os.path.join(root, "d"), lib, c_x.to_json(),
-                   dict(car="bus", track="arena", car_build={"bus": "bus A"}), [dict(stop="quit")],
-                   last={("arena", "bus"): b_b.to_json()})
+                   dict(car="express", track="arena", car_build={"express": "van A"}),
+                   [dict(stop="quit")], last={("arena", "express"): b_b.to_json()})
     l10 = _loop_run(os.path.join(root, "e"), lib, b_b.to_json(), dict(car="corsa", track="arena"),
                     [dict(stop="quit")], argv=("--build", "rase"))
-    launch_ok = ([(e["design"] or {}).get("name") for e in l5 + l10] == ["bus A", "my corsa"]
+    launch_ok = ([(e["design"] or {}).get("name") for e in l5 + l10] == ["van A", "my civetta"]
                  and l10[0]["design"]["car"] == "corsa")
-    #  a bot bred on the bus with an any-car build rides its top wing at the
-    #  bus's 3.30 m, not the Corsa's 1.85 m ceiling
-    bred = grg.new_build("bus")
+    #  a bot bred on the Express with an any-car build rides its top wing at
+    #  the van's 1.95 m, not the Corsa's 1.85 m ceiling
+    bred = grg.new_build("express")
     bred.car, bred.top.wing = "", "rear-s1223"
     st0 = SimpleNamespace(engine="", ballast=0.0, ballast_at="")
-    bot = race_grid.own_car(dict(bred=race_grid.bred_meta("bus", True, bred.to_json(), st0, 1.0)),
+    bot = race_grid.own_car(dict(bred=race_grid.bred_meta("express", True, bred.to_json(), st0,
+                                                          1.0)),
                             VehicleConfig(), lib)
-    bot_ok = bot is not None and bot[2] == "bus" and bot[1].top.h_t == 3.30
-    #  the judges: a bus build (4.40 m flanks at h 2.50) on a Corsa
-    bj = grg.new_build("bus")
-    bj.name, bj.left.wing, bj.left.h = "bus big", "bus-fin", 2.50
+    bot_ok = bot is not None and bot[2] == "express" and bot[1].top.h_t == 1.95
+    #  the judges: an Express build (2.60 m flanks at h 1.50) on a Corsa
+    bj = grg.new_build("express")
+    bj.name, bj.left.wing, bj.left.h = "van big", "van-fin", 1.50
     bj.sync_mirror("left")
     raw = bj.to_json()
     fit_c = _fitted(bj, lib, "corsa").to_json()
@@ -9111,21 +10009,21 @@ def _v43b_launch_and_judges(tmp, verbose=True):
     judged = (pb["judge"](raw), bool(over_limits(raw, lib, "corsa")),
               bool(over_limits(fit_c, lib, "corsa")),
               build_stats(raw, lib, _cars.get("corsa"), 0.0)["unlimited"])
-    #  the pick page on the bus: an any-car library build, driven as its
+    #  the pick page on the Express: an any-car library build, driven as its
     #  fitted copy, still reads as the saved build; its best is looked up
     #  under the fitted id
     anyb = dict(c_x.to_json(), name="any", car="")
     anyb["slots"] = dict(anyb["slots"], top=dict(anyb["slots"]["top"], wing="rear-s1223"))
-    f_bus = _fitted(grg.CarBuild.from_json(anyb), lib, "bus").to_json()
+    f_bus = _fitted(grg.CarBuild.from_json(anyb), lib, "express").to_json()
     pr = PreRace(None, None, "any", f_bus, builds={"any": anyb}, design_json=anyb,
-                 fit=_fit_json(lib, "bus"))
+                 fit=_fit_json(lib, "express"))
     pick_ok = pr.saved() and pr._fitted(anyb) == f_bus and f_bus != anyb
     ok = launch_ok and bot_ok and judged == (True, True, True, True) and pick_ok
     if verbose:
         print(f"  V43b launch     : default kept over the map memory / a missing --build "
               f"guarded -> {[(e['design'] or {}).get('name') for e in l5 + l10]}: {launch_ok}; "
-              f"bus-bred bot's top wing at h {bot[1].top.h_t if bot else None}: {bot_ok}; "
-              f"bus build on a Corsa judged (page, raw, fitted, build_stats) {judged}; "
+              f"Express-bred bot's top wing at h {bot[1].top.h_t if bot else None}: {bot_ok}; "
+              f"Express build on a Corsa judged (page, raw, fitted, build_stats) {judged}; "
               f"pick page saved + fitted best {pick_ok}")
     return ok, dict(launch=launch_ok, bot=bot_ok, judged=judged, pick=pick_ok)
 
@@ -9181,38 +10079,42 @@ def _v43c_default_build(tmp, verbose=True):
 
 def _v43d_swarm_T(tmp, verbose=True):
     """The swarm's default Sim time per car (review of task 41, finding 11):
-    the three stock cars keep exactly each map's old value (arena / Linden
-    70 s, Ashdown 78, Kestrel 107); the bus gets 82 s on the arena and the
-    Express 71; on the Deploy page a Sim time left at its default follows
-    the Car row, a typed one stays; and the swarm's own anchor driver, in
-    the bus, does finish an arena lap inside the bus's window."""
+    the stock cars keep exactly each map's old value (arena / Linden 70 s,
+    Ashdown 78, Kestrel 107; the oval, task 46, pro rata 107 too), and so
+    does the rally Escort (a faster car); the Express gets 71 s on the arena
+    (the retired bus had 82); on the Deploy page a Sim time left at its
+    default follows the Car row, a typed one stays; and the swarm's own
+    anchor driver, in the Express, does finish an arena lap inside the
+    Express's window."""
     import cars as _cars
     from .ml.env import rollout
     from .ml.policy import Policy
-    maps = {n: trk.make_track(n) for n in ("arena", "linden", "ashdown", "kestrel")}
+    maps = {n: trk.make_track(n) for n in ("arena", "linden", "ashdown", "kestrel",
+                                            "fairfield")}
     old = {n: swarm_T(tr) for n, tr in maps.items()}
-    stock_ok = (old == {"arena": 70.0, "linden": 70.0, "ashdown": 78.0, "kestrel": 107.0}
+    stock_ok = (old == {"arena": 70.0, "linden": 70.0, "ashdown": 78.0, "kestrel": 107.0,
+                        "fairfield": 107.0}
                 and all(swarm_T(tr, car=k) == old[n] for n, tr in maps.items()
-                        for k in _cars.STOCK_CARS))
-    new_ok = (swarm_T(maps["arena"], car="bus"), swarm_T(maps["arena"], car="express")) == (82.0, 71.0)
+                        for k in tuple(_cars.STOCK_CARS) + ("rally", "bus")))
+    new_ok = swarm_T(maps["arena"], car="express") == 71.0
     sim = _build("arena", driver=lambda t, v, tr: Controls(brake=1.0))
     sim.settings = Settings(path="", car="corsa")
     o = sim.swarm_opts
-    sim._swarm_step("car", -1)                     # 'same' -> the bus (the row wraps)
+    sim._swarm_step("car", -1)                     # 'same' -> the Express (the row wraps)
     t_bus = (o["car"], o["T"])
     sim._swarm_step("car", +1)                     # back to 'same' (the Corsa)
     t_same = o["T"]
     o["T"] = 90.0                                  # the player's own number
     sim._swarm_step("car", -1)
-    page_ok = t_bus == ("bus", 82.0) and t_same == 70.0 and o["T"] == 90.0
-    e = rollout(Policy(), "arena", T=swarm_T(maps["arena"], car="bus"), wing="plate",
-                car=_cars.get("bus"))
+    page_ok = t_bus == ("express", 71.0) and t_same == 70.0 and o["T"] == 90.0
+    e = rollout(Policy(), "arena", T=swarm_T(maps["arena"], car="express"), wing="plate",
+                car=_cars.get("express"))
     lap_ok = e.laps >= 1 and e.ended == "time"
     ok = stock_ok and new_ok and page_ok and lap_ok
     if verbose:
-        print(f"  V43d swarm T    : stock cars keep {old}: {stock_ok}; bus / Express on the arena "
-              f"82 / 71 s {new_ok}; the page's Car row moves a default T {t_bus}, back "
-              f"{t_same}, a typed 90 stays {page_ok}; the bus's anchor laps in "
+        print(f"  V43d swarm T    : stock cars keep {old}: {stock_ok}; the Express on the arena "
+              f"71 s {new_ok}; the page's Car row moves a default T {t_bus}, back "
+              f"{t_same}, a typed 90 stays {page_ok}; the Express's anchor laps in "
               f"{e.lap_times[0] if e.lap_times else None} s of its window: {lap_ok}")
     return ok, dict(old=old, page=page_ok, lap=e.lap_times)
 
@@ -9260,7 +10162,7 @@ def _v44_title(tmp, verbose=True):
             ("session", [dict(stop="title"), dict(), dict(stop="quit")],
              ["drive", "settings"], "drive"),
             ("garage", [], ["garage", "quit"], ["title"]),
-            ("challenge", [dict(pick="brake_100", combo=("mx5", "full")), dict(stop="title"),
+            ("challenge", [dict(pick="brake_100", combo=("rally", "full")), dict(stop="title"),
                            dict(stop="quit")], ["drive", "drive"], "drive")):
         seen = []
         lg = _loop_run(os.path.join(root, "back_" + tag), lib, own.to_json(),
@@ -9272,7 +10174,7 @@ def _v44_title(tmp, verbose=True):
         "session": ([(None, "corsa", None), ("settings", "corsa", None),
                      (None, "corsa", None)], 2),
         "garage": (["GARAGE"], 2),
-        "challenge": ([(None, "corsa", None), (None, "mx5", "brake_100"),
+        "challenge": ([(None, "corsa", None), (None, "rally", "brake_100"),
                        (None, "corsa", None)], 2)}
     back_ok = back_runs == back_want
     loop_ok = loop_ok and back_ok
@@ -9404,8 +10306,9 @@ def _v45_rolling_start(verbose=True):
                            - ROLL_CORNER_G * G) < 1e-6)
     #  the player review: on every circuit (and the open map) ROLL_CLEAR_S at
     #  V0 before the first corner, or a straight run to the line; never behind
-    #  the last split. Where each lands: the pit straights of linden, kestrel
-    #  and ashdown run straight into the line; the open map's back straight
+    #  the last split. Where each lands: the pit straights of linden, kestrel,
+    #  ashdown and fairfield (the oval's whole 240 m half-straight out of T2,
+    #  task 46) run straight into the line; the open map's back straight
     #  keeps its 150 m; the arena has no straight with 3 s at a corner's speed
     #  between T5 and the line (40 m, 30 m), so it sets off out of T6 at
     #  36 km/h (30 m / 3 s) with only the flat-out T7 left; the skidpad keeps
@@ -9414,11 +10317,14 @@ def _v45_rolling_start(verbose=True):
     clear_ok = (all((c[0] >= ROLL_CLEAR_S - 1e-9
                      or (c[1] and poses[n][2] - poses[n][1][0] >= ROLL_RUNIN_MIN_M))
                     and poses[n][1][0] > c[2] for n, c in clear.items())
-                and {n for n, c in clear.items() if c[1]} == {"linden", "kestrel", "ashdown"}
+                and {n for n, c in clear.items() if c[1]} == {"linden", "kestrel", "ashdown",
+                                                              "fairfield"}
                 and at == {"arena": 1106.2, "linden": 1060.4, "kestrel": 1843.3,
-                           "ashdown": 1330.5, "open": 1492.7, "skidpad": 267.0}
+                           "ashdown": 1330.5, "fairfield": 1662.5, "open": 1492.7,
+                           "skidpad": 267.0}
                 and abs(poses["arena"][1][1] - 30.0 / ROLL_CLEAR_S) < 0.01
-                and all(poses[n][1][1] == 22.0 for n in ("linden", "kestrel", "ashdown")))
+                and all(poses[n][1][1] == 22.0 for n in ("linden", "kestrel", "ashdown",
+                                                         "fairfield")))
     # who rolls: a lap / circle challenge and the tutorial's laps with a
     # window; a stop goal, a race and the tutorial's other steps never
     who = {}
@@ -9875,7 +10781,7 @@ def _v45d_challenge_pause(tmp, verbose=True):
                and retry == "Retry (SHIFT+R)" and "TAB" not in foot and "SHIFT+R retry" in foot)
     # This challenge: its page on Start, on the car and wings it runs in;
     # Back is the pause page, on that row
-    sim.ch_pick = ("mx5", "top")                   # a pick browsed and left
+    sim.ch_pick = ("rally", "top")                 # a pick browsed and left
     goto("ch_this")
     ev("select")
     this = (sim._menu_page, sim.menu.title, sim.menu.action(), sim.ch_pick)
@@ -10013,6 +10919,7 @@ def _v45e_challenge_list(tmp, verbose=True):
     ev("select")
     first = (acts()[:2], sim.menu.action(), sim.menu.subtitle, "LEFT / RIGHT car, wings"
              in sim.menu.footer, "[**-]" in row("ch:lap_arena"))
+    unsaved_note = sim.menu.note or ""
     goto("set:ch_cfg")
     ev("nav_right")                                # Wings: FULL -> ONLY TOP
     top = (sim.ch_pick, sim._menu_page, sim.menu.action(), sim.menu.items[1][0],
@@ -10020,25 +10927,29 @@ def _v45e_challenge_list(tmp, verbose=True):
     ev("select")                                   # ENTER steps it on: ONLY TOP, FIXED
     fixed = (sim.ch_pick, sim._menu_page, sim.menu.action())
     goto("set:ch_car")
-    ev("nav_left")                                 # Car: the Corsa -> the Citaro (wraps)
+    ev("nav_left")                                 # Car: the Corsa -> the Express (wraps)
     bus = (sim.ch_pick, "not for this car" in row("ch:brake_100"), sim.menu.subtitle)
     goto("ch_back")
-    ev("select")                                   # Back: the pause page, the Citaro pick
+    ev("select")                                   # Back: the pause page, the Express pick
     pause1 = (sim._menu_page, row("challenges"))
+    #  task 46: 't45e car' is in no library file, so the list opens on the
+    #  stock Corsa (named so on the subtitle and the pause row) and says so
     list_ok = (first[0] == ["set:ch_car", "set:ch_cfg"] and first[1] == "ch:brake_100"
                and first[2] == (f"This car + wings: 2 of {mine('corsa', 'full')} stars   "
-                                f"(all: {g_all} of {t_all})   " + chm.pick_text("corsa", "full"))
+                                f"(all: {g_all} of {t_all})   "
+                                + chm.pick_text("corsa", "full", chm.STOCK))
                and first[3] and first[4] and g_all == 5
                and top[:4] == (("corsa", "top"), "challenges", "set:ch_cfg",
                                "Wings   < ONLY TOP >")
                and top[4] and top[5].startswith(f"This car + wings: 3 of {mine('corsa', 'top')} ")
                and fixed == (("corsa", "top_fixed"), "challenges", "set:ch_cfg")
-               and bus[0] == ("bus", "top_fixed") and bus[1]
-               and bus[2].startswith(f"This car + wings: 0 of {mine('bus', 'top_fixed')} ")
-               and mine("bus", "top_fixed") < mine("corsa", "full")
-               and pause0 == f"Challenges: 2 of {mine('corsa', 'full')} stars (this car + wings)"
-               and pause1 == ("main", f"Challenges: 0 of {mine('bus', 'top_fixed')} stars "
-                                      "(this car + wings)"))
+               and bus[0] == ("express", "top_fixed")
+               and bus[2].startswith(f"This car + wings: 0 of {mine('express', 'top_fixed')} ")
+               and mine("express", "top_fixed") > 0
+               and pause0 == f"Challenges: 2 of {mine('corsa', 'full')} stars (stock Civetta + wings)"
+               and pause1 == ("main", f"Challenges: 0 of {mine('express', 'top_fixed')} stars "
+                                      "(stock Courier + wings)")
+               and chm.UNSAVED_NOTE in unsaved_note)
     # the start mode and the chip, on stub runs
     runs = {}
     for cfg in ("full", "top"):
@@ -10066,7 +10977,7 @@ def _v45e_challenge_list(tmp, verbose=True):
             print(f"    first {first}\n    top {top}\n    fixed {fixed}\n    bus {bus}"
                   f"\n    pause {pause0!r} {pause1}"
                   f"\n    mine {mine('corsa', 'full')} {mine('corsa', 'top')} "
-                  f"{mine('bus', 'top_fixed')} all {g_all} {t_all}\n    runs {runs} {free_chip}")
+                  f"{mine('express', 'top_fixed')} all {g_all} {t_all}\n    runs {runs} {free_chip}")
     return ok, dict(first=first[:2], runs=runs)
 
 
@@ -10135,14 +11046,17 @@ def _v45f_menu_copy(verbose=True):
            and sim.menu.subtitle == MENU_NO_PAD)
     ev("menu")
     back = sim._menu_page == "main" and sim.menu.items[sim.menu.idx][1] == "controls"
-    #  Settings: one label width, the garage row, the five cars
+    #  Settings: one label width, the garage row, the cars (task 46: the
+    #  Escort in, the MX-5 and the Citaro out)
     goto("settings")
     ev("select")
     srows = [t for t, a in sim.menu.items if a.startswith("set:")]
     cars_help = " ".join(k for k, _w in dict(SETTINGS_HELP)["CAR"])
     set_ok = (all(len(t) > 12 and t[11] == " " and t[12] != " " for t in srows)
               and "Garage: wings and builds" in [t for t, _ in sim.menu.items]
-              and "Express" in cars_help and "Citaro" in cars_help)
+              and all(n in cars_help for n in ("Civetta", "Halcón", "N540", "Courier"))
+              and not any(n in cars_help for n in ("Citaro", "MX-5", "Corsa", "Escort",
+                                                   "540i", "Express")))
     #  RACE VS BOT: the player's words, and the built-in driver's tag
     ch = dict(race_bot_choices())
     with contextlib.redirect_stdout(io.StringIO()):
@@ -10156,7 +11070,7 @@ def _v45f_menu_copy(verbose=True):
           swarm_wings_label({"dev_left": None}, "", "plate"), swarm_wings_label({}, "", "off"))
     sw_ok = sw == ("wings: your garage build (my corsa)", "wings: plate flank panel", "no wings")
     cls = _class_title("arena|corsa|sport|patch")
-    cls_ok = (cls == "Arena circuit  ·  Opel Corsa C 1.2  ·  Sport (~150 hp)  ·  Dry, wet patches"
+    cls_ok = (cls == "Arena circuit  ·  Aurel Civetta 1.2  ·  Sport (~150 hp)  ·  Dry, wet patches"
               and _class_title("not a key") == class_label("not a key"))
     ok = (sub_ok and pause_ok and kb_first and pad and back and set_ok and race_ok
           and sw_ok and cls_ok)
@@ -10204,16 +11118,16 @@ def _v45g_car_named_build(tmp, verbose=True):
     mem = RecordBook(os.path.join(root, "a", "runs", "records")).last_builds()
     ex, co = mem.get("arena|express") or {}, mem.get("arena|corsa") or {}
     gd = os.path.join(root, "a", "runs", "garage_design.json")
-    kept = (not os.path.exists(gd)) or _json.load(open(gd)).get("name") == "my corsa"
+    kept = (not os.path.exists(gd)) or _json.load(open(gd)).get("name") == "my civetta"
     title_b = [dict(t).get("BUILD") for t in titles]
-    first_ok = (names(la) == [("corsa", "my corsa", "my corsa"),
-                              ("express", "my express", "my corsa"),
-                              ("express", "my express", "my corsa"),
-                              ("corsa", "my corsa", "my corsa")]
-                and ex.get("name") == "my express" and ex["build"].get("name") == "my corsa"
-                and co.get("name") == "my corsa"
-                and title_b == ["my corsa  (no wings)", "my express  (no wings)"]
-                and kept and not any(n.startswith("my express") for n in lib.builds))
+    first_ok = (names(la) == [("corsa", "my civetta", "my civetta"),
+                              ("express", "my courier", "my civetta"),
+                              ("express", "my courier", "my civetta"),
+                              ("corsa", "my civetta", "my civetta")]
+                and ex.get("name") == "my courier" and ex["build"].get("name") == "my civetta"
+                and co.get("name") == "my civetta"
+                and title_b == ["my civetta  (no wings)", "my courier  (no wings)"]
+                and kept and not any(n.startswith("my courier") for n in lib.builds))
     #  (b) a name the player chose stays
     own = grg.new_build("corsa")
     own.name, own.car, own.left.wing = "fast one", "", "plate"
@@ -10228,19 +11142,28 @@ def _v45g_car_named_build(tmp, verbose=True):
     wb.sync_mirror("left")
     lc = _loop_run(os.path.join(root, "c"), lib, wb.to_json(), dict(car="express", track="arena"),
                    [dict(prerace_pick=("fast one", own.to_json())), dict(stop="quit")])
-    auto_ok = (names(lc)[0] == ("express", "my express", "my corsa")
-               and "my express (autosave)" in lib.builds
-               and "my corsa (autosave)" not in lib.builds)
+    auto_ok = (names(lc)[0] == ("express", "my courier", "my civetta")
+               and "my courier (autosave)" in lib.builds
+               and "my civetta (autosave)" not in lib.builds)
     #  (d) the library's own 'my corsa' (same content) keeps its name
     lib.save_build(dict(la[0]["design"], builtin=False))
     ld = _loop_run(os.path.join(root, "d"), lib, None, dict(car="express", track="arena"),
                    [dict(stop="quit")])
-    lib_ok = names(ld) == [("express", "my corsa", "my corsa")]
-    #  (e) a challenge's copy (its wing config) is named the same way
-    o_ = NS(challenge=dict(config="top"))
+    lib_ok = names(ld) == [("express", "my civetta", "my civetta")]
+    #  (e) a challenge's copy (its wing config) is named for the build it
+    #  drives -- task 46: the SAVED build the page picked, on its own car
+    #  ('van wings'), else the stock car ('stock wings', the stock top lent);
+    #  the working build as the player holds it keeps 'my corsa'
+    from .challenges import STOCK_NAME, STOCK_TOP
+    lib.save_build(dict(wb.to_json(), name="van wings", car="express"))
+    o_ = NS(challenge=dict(config="top", build="van wings"))
     _drive_design(o_, grg.CarBuild.from_json(wb.to_json()), lib, "express")
-    chal_ok = (o_.build_name == "my express" and o_.build_json["name"] == "my express"
-               and o_.design_json["name"] == "my corsa")
+    o2 = NS(challenge=dict(config="top"))
+    _drive_design(o2, grg.CarBuild.from_json(wb.to_json()), lib, "express")
+    chal_ok = (o_.build_name == "van wings" and o_.build_json["name"] == "van wings"
+               and o_.design_json["name"] == "my civetta"
+               and o2.build_name == STOCK_NAME and o2.design_json["name"] == "my civetta"
+               and o2.build_json["slots"]["top"]["wing"] == STOCK_TOP)
     ok = first_ok and chose_ok and auto_ok and lib_ok and chal_ok
     if verbose:
         print(f"  V45g build name : a first launch's 'my corsa' on the Express is 'my "
@@ -10253,6 +11176,512 @@ def _v45g_car_named_build(tmp, verbose=True):
                   f"titles {title_b} kept {kept} lib {sorted(lib.builds)}\n    "
                   f"{names(lb_)} {names(lc)} {names(ld)} {getattr(o_, 'build_name', None)}")
     return ok, dict(first=first_ok, chose=chose_ok, auto=auto_ok, lib=lib_ok, chal=chal_ok)
+
+
+def _v47_leaderboards(tmp, verbose=True):
+    """Task 47: the leaderboards (drive/leaderboard.py), wired.
+
+    (a) the REAL loop drives each session's copy in the Wings setting's mode:
+        ONLY TOP drops the build's flanks and lends the stock top wing, FULL
+        keeps its flanks and lends the top, FREE drives it as designed -- the
+        working build never moves; (b) a valid lap goes on its board (this
+        map, car and wing mode) under the build's name, and a Tuned engine's,
+        an Unlimited build's, a FREE session's or a challenge's does not;
+        (c) the LEADERBOARDS page: Map, Wings, one row per car (your best
+        and its build, your bot's, the gap), the highlighted car's board in
+        the help column, LEFT / RIGHT step the map and the mode, ENTER on a
+        car races that board (Stock, the default surface, its TIME TRIAL
+        page) and the title opens it; the Engine row says a Tuned engine is
+        not on the boards, and a session on one says so at its start; (d) a
+        wing mode limits G as a challenge's config does; (e) a trained bot's
+        laps: a race lap that is valid, round and without a respawn is handed
+        on (and no other), the built-in driver and a bot on a Tuned engine
+        are never on a board, a Test's best goes on each car's board."""
+    import contextlib
+    import io
+    from types import SimpleNamespace as NS
+    from . import garage as grg
+    from . import leaderboard as lbm
+    from .aero.library import Library
+    from .progress import Progress
+    root = os.path.join(tmp, "boards46")
+    lib = Library(os.path.join(root, "library"), use_xfoil=False)
+    # (a) the loop: FULL / ONLY TOP / FREE on a flank-only build
+    own = grg.new_build("corsa")
+    own.name, own.left.wing = "flanks only", "plate"
+    own.sync_mirror("left")
+    rows = _loop_run(os.path.join(root, "a"), lib, own.to_json(),
+                     dict(car="corsa", track="arena", race_wings="top"),
+                     [dict(race_wings="full"), dict(race_wings="free"), dict(stop="quit")])
+    slots = lambda b: {k: (v or {}).get("wing", "") for k, v in (b or {}).get("slots", {}).items()}   # noqa: E731
+    got = [(r["wings"], slots(r["build"]), (r["build"] or {}).get("name")) for r in rows]
+    top_s, full_s, free_s = (g[1] for g in got)
+    design_kept = all(slots(r["design"]) == slots(own.to_json()) for r in rows)
+    loop_ok = (len(rows) == 3 and [g[0] for g in got] == ["top", "full", None]
+               and not top_s.get("left") and not top_s.get("right") and top_s.get("top")
+               and full_s.get("left") == "plate" and full_s.get("top")
+               and free_s.get("left") == "plate" and not free_s.get("top")
+               and all(g[2] == "flanks only" for g in got) and design_kept)
+    # (b) a lap on its board
+    with contextlib.redirect_stdout(io.StringIO()):
+        sim = _build("arena", driver=lambda t, v, T_: Controls())
+    sim.renderer = NS(cfg=NS(mode="car_up"))
+    sp = os.path.join(root, "b", "runs", "settings.json")
+    sim.settings = Settings(path=sp, car="corsa", track="arena", race_wings="full")
+    sim.progress_file = Progress(os.path.join(root, "b", "runs", "progress.json"))
+    sim.race_wings = "full"
+    sim.recorder = NS(key="arena|corsa|stock|patch", meta=dict(build_name="low drag",
+                      assists=dict(abs=True, tc=True, steer_aid=False, gearbox="auto")),
+                      book=None, discard=lambda *a: None)
+    board = "arena|corsa|full"
+    lap = lambda t, key="arena|corsa|stock|patch", **kw: dict(valid=True, time=t, key=key, **kw)   # noqa: E731
+    with contextlib.redirect_stdout(io.StringIO()):
+        sim._board_lap(lap(61.25))
+        sim._board_lap(lap(58.0, key="arena|corsa|tuned|patch"))     # a Tuned engine
+        sim._board_lap(lap(57.0, unlimited=True))                      # an Unlimited build
+        sim._board_lap(dict(valid=False, time=50.0, key="arena|corsa|stock|patch"))
+        sim.race_wings = None
+        sim._board_lap(lap(56.0))                                      # FREE
+        sim.race_wings = "full"
+    disk = lbm.Boards(os.path.join(root, "b", "runs", "leaderboard_local"))
+    you = disk.top(board, lbm.YOU)
+    files = sorted(os.listdir(os.path.join(root, "b", "runs", "leaderboard_local")))
+    file_ok = ([(e["name"], e["time"]) for e in you] == [("low drag", 61.25)]
+               and you[0]["assists"]["abs"] and files == ["arena__corsa__full.json"])
+    # (e) the bots
+    cfg1 = sim.veh.cfg
+    from dataclasses import replace as _rp
+    cfg_t = _rp(cfg1, power_scale=1.5)
+    spec = os.path.join(RACE_CHECKPOINT_DIR, "swarm_v47.json")
+    #  another library car than the two named here: the roster may change
+    other = next(c for c in cars.CAR_ORDER if c not in ("corsa", "540i"))
+    i_other = cars.CAR_ORDER.index(other)
+    sim.garage_lib = lib                   # a stock car races the mode's stock wings
+    keys = (sim._bot_board_key(spec, "same", cfg1), sim._bot_board_key(RACE_BOT_ANCHOR, "same", cfg1),
+            sim._bot_board_key(spec, "same", cfg_t),
+            sim._bot_board_key(spec, other, cfg1, sim._stock_board_car(other)),
+            sim._bot_board_key(spec, race_grid.OWN, cfg1, None),
+            sim._bot_board_key(spec, race_grid.OWN, cfg1, "540i"))
+    #  ... and with no mode (FREE) or no library a stock car carries no wings: no board
+    sim.race_wings = None
+    free_other = sim._stock_board_car(other)
+    sim.race_wings = "full"
+    keys_ok = (keys == (board, None, None, f"arena|{other}|full", None, "arena|540i|full")
+               and free_other is None and sim._bot_board_key(spec, other, cfg1) is None)
+
+    class _Pol:
+        def controls(self, obs, C, **kw):
+            return C()
+    handed = []
+    rv = Rival(_Pol(), sim.veh.car, sim.veh.cfg, sim.track, label="v47")
+    rv.on_lap = handed.append
+    L = sim.track.length
+    evs = []
+    rv.lap.update = lambda *a, **k: list(evs)
+    rv.step(sim.dt, 0.0)                   # the first step: nothing to update against
+    evs[:] = [("start", 0, 0.0, float("nan"))]
+    rv.step(sim.dt, sim.dt)
+    evs[:] = []
+    rv.progress += 0.97 * L
+    evs[:] = [("lap", 1, 40.0, 40.0)]
+    rv.lap.lap_valid = True
+    rv.step(sim.dt, 2 * sim.dt)            # valid, round, no respawn: handed on
+    rv.progress += 0.5 * L                 # half a lap: short
+    rv.step(sim.dt, 3 * sim.dt)
+    rv.progress += 0.97 * L
+    rv.respawns += 1                       # put back on the track in it
+    rv.step(sim.dt, 4 * sim.dt)
+    rv.progress += 0.97 * L
+    rv.lap.lap_valid = False               # the timer's verdict: off track
+    rv.step(sim.dt, 5 * sim.dt)
+    rival_ok = handed == [40.0]
+    with contextlib.redirect_stdout(io.StringIO()):
+        sim._bot_board_lap(board, "swarm_v47", 60.5, "race", "its own build")
+        #  a Test's result: each car's best on that car's board
+        sim._bot_test = dict(spec=spec, label="swarm_v47", T=90.0, t0=time.perf_counter(),
+                             pool=NS(terminate=lambda: None),
+                             res=NS(ready=lambda: True,
+                                    get=lambda: [dict(best=None)] + [dict(best=59.9)]
+                                    + [dict(best=62.0 + i) for i in range(len(cars.CAR_ORDER))]),
+                             boards=[(None, "")] + [(board, "your build")]
+                             + [(f"arena|{c}|full", "your build") for c in cars.CAR_ORDER])
+        sim._bot_test_poll()
+    disk = lbm.Boards(os.path.join(root, "b", "runs", "leaderboard_local"))
+    bots = disk.top(board, lbm.BOTS)
+    mx = disk.best(f"arena|{other}|full", lbm.BOTS)
+    bots_ok = (keys_ok and rival_ok and [(e["name"], e["time"], e["how"]) for e in bots]
+               == [("swarm_v47", 59.9, "test")] and mx is not None and mx["time"] == 62.0 + i_other)
+    # (c) the page
+    sim.boards = None                      # made again from the progress file's folder
+    opened = sim.open_page("leaderboards")
+    items = list(sim.menu.items)
+    acts = [a for _, a in items]
+    corsa = dict((a, t) for t, a in items)["lb_car:corsa"]
+    help_c = sim._lb_help(acts.index("lb_car:corsa"))
+    help_m = sim._lb_help(0)
+    page_ok = (opened and sim._menu_page == "leaderboards" and sim._from_title == "leaderboards"
+               and acts[:2] == ["set:lb_track", "set:lb_wings"] and acts[-1] == "lb_back"
+               and acts[2:-1] == [f"lb_car:{c}" for c in cars.CAR_ORDER]
+               and "1:01.250" in corsa and "low drag" in corsa and "59.900" in corsa
+               and "you" in corsa and "bot ahead by 1.350 s" in corsa
+               and help_c[1][0].startswith("YOU") and "low drag" in help_c[1][1][0][1]
+               and help_m[0][0] == "WHAT COUNTS" and lbm.ENGINE_NOTE == sim.menu.note)
+    sim._from_title = None
+    sim.menu.idx = acts.index("set:lb_wings")
+    sim._menu_event("nav_right")
+    w_next = sim._lb_state()[1]
+    sim.menu.idx = acts.index("set:lb_track")
+    sim._menu_event("nav_left")
+    t_prev = sim._lb_state()[0]
+    step_ok = (w_next == "top" and t_prev == lbm.TRACKS[-1] and sim._menu_page == "leaderboards"
+               and "ONLY TOP" in sim.menu.items[1][0])
+    sim.settings.engine, sim.settings.wet = "tuned", "none"
+    sim.menu.idx = [a for _, a in sim.menu.items].index(f"lb_car:{other}")
+    with contextlib.redirect_stdout(io.StringIO()):
+        sim._menu_event("select")
+    st = Settings.load(sp)
+    race_ok = (sim.quit and sim.stop_reason == "restart" and sim.prerace_force
+               and (st.track, st.car, st.race_wings, st.engine, st.wet)
+               == (lbm.TRACKS[-1], other, "top", "stock", "patch"))
+    sim.quit, sim.stop_reason, sim.prerace_force = False, "", False
+    # the Engine row and the start note: a Tuned engine is said to be off the boards
+    sim.settings.engine = "tuned"
+    eng_row = next(t for t, a in sim._settings_items() if a == "set:engine")
+    sim.unlimited, sim.challenge = False, None
+    _board_note(sim, sim.settings)
+    note = sim._rec_hud()
+    eng_help = [r for _t, rows_ in engine_help("corsa", sim.veh.car) for r in rows_]
+    said_ok = ("not on leaderboards" in eng_row and "not on the leaderboards" in note
+               and any(k == "Leaderboards" for k, _ in eng_help))
+    # (d) a wing mode limits G: ONLY TOP is AUTO alone
+    from .airbrake import AUTO, TOP
+    sim.challenge, sim.race_wings, sim.wing_side_mode = None, "top", TOP
+    _challenge_wings(sim)
+    g_ok = sim.wing_side_mode == AUTO and sim._wing_config() == "top"
+    ok = loop_ok and file_ok and bots_ok and page_ok and step_ok and race_ok and said_ok and g_ok
+    if verbose:
+        print(f"  V47 leaderboards: the loop drives ONLY TOP / FULL / FREE {loop_ok}; a lap on "
+              f"its board under its build, not a Tuned / Unlimited / FREE one {file_ok}; bots "
+              f"(keys {keys_ok}, race lap rule {rival_ok}, Test) {bots_ok}; the page {page_ok}, "
+              f"LEFT/RIGHT {step_ok}, ENTER races that board {race_ok}; the Engine row and "
+              f"the start say Tuned is off the boards {said_ok}; G {g_ok}  -> "
+              f"{'ok' if ok else 'FAIL'}")
+        if not ok:
+            print(f"    loop {got}\n    you {you} files {files}\n    keys {keys} handed "
+                  f"{handed} bots {bots} mx {mx}\n    corsa {corsa!r} help {help_c[:2]}\n"
+                  f"    step {w_next} {t_prev}; race {(st.track, st.car, st.race_wings, st.engine, st.wet)}"
+                  f"\n    engine row {eng_row!r} note {note!r}")
+    return ok, dict(loop=loop_ok, file=file_ok, bots=bots_ok, page=page_ok and step_ok,
+                    race=race_ok, said=said_ok, g=g_ok)
+
+
+def _v48_bmw(tmp, verbose=True):
+    """Task 48, the owner: "fix the bmw. just by giving it thrust it spins
+    arround and it is very difficult to control in general".
+
+    (a) each car keeps its OWN Engine setting: a settings file from before
+    (one Engine, chosen for the Corsa) loads with that engine on the Corsa
+    only -- the 540i opens on Stock, and the screen says so; a change is
+    kept for the car it was made on; a car change takes the new car's; the
+    command line's --car takes that car's, --engine sets it. (b) the 540i's
+    own TC slip targets reach `_tc` (the car with them and the same car
+    without drive apart, TC on, full throttle in 1st), and a car with none
+    runs the module's pair to the bit (an explicit (0.12, 0.20) is
+    identical); every TC-off run is untouched. (c) its steer aid is its own
+    (aid_own), the Corsa-derived three are not; (d) a session in the 540i
+    with TC off says so once a launch."""
+    import contextlib
+    import io
+    from types import SimpleNamespace as NS
+    from dataclasses import replace as _rp
+    from .progress import Progress
+    root = os.path.join(tmp, "bmw47")
+    os.makedirs(root, exist_ok=True)
+    # (a) the migration and the per-car memory
+    p_old = os.path.join(root, "old.json")
+    with open(p_old, "w") as f:
+        json.dump(dict(car="540i", engine="sport", tc=False, track="arena"), f)
+    st = Settings.load(p_old)
+    mig = (st.engine == "stock" and st.engines == {"corsa": "sport"}
+           and "540i" not in st.engines and "kept per car" in st.load_note
+           and st.engine_of("corsa") == "sport"
+           #  TC too: the old file's TC off is the Corsa's; the 540i opens with TC on
+           and st.tc is True and st.tcs == {"corsa": False} and "TC ON" in st.load_note)
+    p_c = os.path.join(root, "corsa.json")
+    with open(p_c, "w") as f:
+        json.dump(dict(car="corsa", engine="sport"), f)
+    sc = Settings.load(p_c)
+    mig = mig and sc.engine == "sport" and sc.load_note == ""   # the Corsa's own: kept, no note
+    st.cycle("engine")                                          # 540i: stock -> tuned
+    st.car = "corsa"
+    st.take_car_engine()
+    back_c = st.engine
+    st.car = "540i"
+    st.take_car_engine()
+    mem = (back_c == "sport" and st.engine == "tuned"
+           and st.engines == {"corsa": "sport", "540i": "tuned"} and st.tc is True)
+    st.save()
+    st2 = Settings.load(p_old)
+    mem = mem and st2.engines == st.engines and st2.engine == "tuned" and st2.load_note == ""
+    o1 = NS(car="express", engine=None)
+    Settings(path="", engines={"express": "tuned"}).apply_cli(o1)
+    o2 = NS(car="express", engine="sport")
+    s2 = Settings(path="", engines={"express": "tuned"})
+    s2.apply_cli(o2)
+    cli = o1.engine == "tuned" and o2.engine == "sport" and s2.engines["express"] == "sport"
+    eng_ok = mig and mem and cli
+
+    # (b) the TC slip targets reach _tc; None is the module pair to the bit
+    def run(car, tc=True, secs=2.0):
+        with contextlib.redirect_stdout(io.StringIO()):
+            sim = _build("open", driver=lambda t, v, T_: Controls(throttle=1.0), car=car)
+        sim.veh.cfg.tc_on = tc
+        rows = []
+        for i in range(int(secs / sim.dt)):
+            sim.step_physics(sim.dt)
+            if i % 50 == 0:
+                v = sim.veh
+                rows.append((v.x, v.y, v.psi, v.u, v.tc_gain))
+        return rows
+    e39 = cars.get("540i")
+    corsa = cars.get("corsa")
+    from .vehicle import TC_SLIP_RESTORE as TC_SLIP_R, TC_SLIP_CUT as TC_SLIP_C
+    same = run(corsa) == run(corsa.copy(tc_slip=(TC_SLIP_R, TC_SLIP_C)))
+    differ = run(e39) != run(e39.copy(tc_slip=None))
+    tc_off = run(e39, tc=False) == run(e39.copy(tc_slip=None), tc=False)
+    tc_ok = (same and differ and tc_off and e39.tc_slip == (0.06, 0.12)
+             and all(cars.get(k).tc_slip is None for k in cars.CAR_ORDER if k != "540i"))
+    # (c) the steer aid
+    from . import input as inp_mod
+    a_e = inp_mod.aid_for_car(e39)
+    a_m = inp_mod.aid_for_car(cars.get("corsa"))
+    aid_ok = (a_e["aid_L"] == e39.L and a_e["k_us_deg"] > 10.0
+              and a_m["aid_L"] == inp_mod.L_WB and a_m["k_us_deg"] == inp_mod.K_US_DEG_MEASURED)
+    # (d) the TC-off note, once a launch
+    with contextlib.redirect_stdout(io.StringIO()):
+        sim = _build("arena", driver=lambda t, v, T_: Controls(), car=e39)
+    sim.renderer = NS(cfg=NS(mode="car_up"))
+    sim.progress_file = Progress(os.path.join(root, "runs", "progress.json"))
+    stt = Settings(path="", car="540i", tc=False)
+    _TC_NOTED.discard("540i")
+    _tc_note(sim, stt)
+    n1 = sim._rec_hud()
+    sim._rec_msg = ""
+    _tc_note(sim, stt)
+    n2 = sim._rec_hud()
+    stt.tc = True
+    _TC_NOTED.discard("540i")
+    _tc_note(sim, stt)
+    n3 = sim._rec_hud()
+    note_ok = n1.startswith("TC is OFF") and "Nordwerk N540" in n1 and n2 == "" and n3 == ""
+    ok = eng_ok and tc_ok and aid_ok and note_ok
+    if verbose:
+        print(f"  V48 the BMW     : Engine per car (an old file's Sport stays the Corsa's, the "
+              f"540i opens on Stock with a note {mig}; kept per car {mem}; --car / --engine "
+              f"{cli}); TC slip targets reach _tc, a car without them bit-for-bit, TC off "
+              f"untouched {tc_ok}; its own steer aid {aid_ok}; the TC-off note once {note_ok}"
+              f"  -> {'ok' if ok else 'FAIL'}")
+        if not ok:
+            print(f"    {st.engines} {st.engine} {st.load_note!r} same {same} differ {differ} "
+                  f"off {tc_off} aid {a_e} notes {n1!r} {n2!r} {n3!r}")
+    return ok, dict(engine=eng_ok, tc=tc_ok, aid=aid_ok, note=note_ok)
+def _v46_saved_cars(tmp, verbose=True):
+    """Task 46, the owner (2026-09-28): "I did a wing for the Renault and
+    when changing car they appear on the other car (Renault wings are very
+    big so didn't fit properly. This happened in challenges. So to fix this,
+    you can only race with cars that have been saved (default cars are also
+    an option)" -- "And for bot and racing bot should be the one selected by
+    name same as in race". The owner's repro: an Express build with a 1.88 m
+    side wing, saved as 'my express', driven on the Express.
+
+    (a) The challenge page opens on 'my express' (the build being driven,
+    saved, the Express's); its Car row cycles every car's stock car and
+    every saved build by name on its own car -- the Corsa's 'my corsa'
+    marked (default) -- and never the working build on another car: on the
+    stock Corsa the stock plates drive, on 'my express' its own 1.88 m wing
+    on the Express. Its words name the build. An unsaved build in hand is
+    not offered and the page says so. (b) The loop drives exactly the pick:
+    the stock Corsa (plates), 'my express' on the Express, and a pick of
+    'my express' for a Corsa is the Corsa's default build. (c) RACE VS BOT: each
+    slot's car row offers its own, same as mine, each stock car (no wings)
+    and each saved build; 'build:my express' is that build on the Express
+    (its wings and their mass), the ghost says its name. (d) DEPLOY SWARM:
+    the Car row offers the same; a saved build breeds in its own car and the
+    bot's meta records it, so 'its own' puts the bot back in it."""
+    import contextlib
+    import io
+    from types import SimpleNamespace
+    from . import challenges as chm
+    from . import garage as grg
+    from .aero.library import Library
+    from .prerace import car_label
+    from .progress import Progress
+    root = os.path.join(tmp, "saved46")
+    lib = Library(os.path.join(root, "library"), use_xfoil=False)
+    big = lib.wings["flank-e423"].copy(name="winglab-46", builtin=False)
+    big.span = 1.88                                # the owner's WingLab side wing
+    lib.save_wing(big)
+    exp = grg.new_build("express")
+    exp.name, exp.left.wing, exp.left.h, exp.top.wing = "my express", "winglab-46", 1.15, "rear-s1223"
+    exp.sync_mirror("left")
+    exp.clamp(lib, "express")
+    cor = grg.new_build("corsa")
+    cor.name, cor.left.wing = "my corsa", "fin"
+    cor.sync_mirror("left")
+    for b_ in (exp, cor):
+        lib.save_build(b_.to_json())
+    # --- (a) the page
+    with contextlib.redirect_stdout(io.StringIO()):
+        sim = _build("arena", driver=lambda t, v, T_: Controls(), car=cars.get("express"))
+    sim.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
+    sim.progress_file = Progress(os.path.join(root, "progress.json"))
+    sim.settings = Settings(path="", car="express", car_build={"corsa": "my corsa"})
+    sim.has_garage, sim.garage_lib = True, lib
+    sim.challenge_build = (exp.to_json(), lib)
+    ev = sim.handle_event
+
+    def goto(action):
+        i = [a for _, a in sim.menu.items].index(action)
+        while sim.menu.idx != i:
+            ev("nav_down")
+
+    def car_row():
+        return sim.menu.items[0][0]
+
+    def fitted():                                  # the copy the page judges and a run drives
+        c_, _cfg = sim._ch_combo()
+        return chm.config_build(sim._ch_chosen(c_), lib, c_, _cfg)
+
+    ev("menu")
+    goto("challenges")
+    ev("select")
+    goto("ch:lap_arena")
+    ev("select")
+    opened = (car_row(), sim._ch_choice(), fitted().left.wing, fitted().left.h)
+    wl_open = dict(sim.menu.sections)["WINGS"][0][1]
+    seen, rows_seen = [], []
+    goto("set:ch_car")
+    for _ in range(len(race_grid.car_choices(lib.builds, sim._ch_default_of))):   # round once
+        ev("nav_right")
+        seen.append(sim._ch_choice())
+        rows_seen.append(car_row())
+        f_ = fitted()
+        if sim._ch_choice() == ("corsa", chm.STOCK):
+            stock_corsa = (f_.left.wing, f_.right.wing, f_.top.wing,
+                           dict(sim.menu.sections)["WINGS"][0][1],
+                           dict(sim.menu.sections)["YOUR SETUP"][0][1])
+    pause = [t for t, a in (sim._menu_show_main() or sim.menu.items) if a == "challenges"]
+    choices = race_grid.car_choices(lib.builds, sim._ch_default_of)
+    page_ok = (opened[0] == f"Car     < my express - {cars.car_name('express')} >"
+               and opened[1] == ("express", "my express") and opened[2] == "winglab-46"
+               and "(my express)" in wl_open
+               and seen[-1] == opened[1] and set(seen) == set(choices)
+               and ("corsa", "my corsa") in seen
+               and f"Car     < my corsa - {cars.car_name('corsa')} (default) >" in rows_seen
+               and f"Car     < {cars.car_name('corsa')} (stock) >" in rows_seen
+               and all(c_ == race_grid.build_home(lib.builds[n]) for c_, n in seen if n)
+               and stock_corsa[:3] == (chm.STOCK_SIDE, chm.STOCK_SIDE, chm.STOCK_TOP)
+               and "(stock)" in stock_corsa[3] and "stock wings" in stock_corsa[4]
+               and pause and "(my express + wings)" in pause[0])
+    #  an unsaved build in hand: not offered, and the page says so
+    wip = exp.copy()
+    wip.name, wip.left.inc_deg = "my express wip", 2.0
+    sim.challenge_build = (wip.to_json(), lib)
+    sim.ch_pick, sim.ch_build = None, None
+    sim._menu_show_challenges()
+    note_list = sim.menu.note or ""
+    sim._menu_show_challenge("lap_arena")
+    warn = [str(t) for k, t in dict(sim.menu.sections)["WINGS"] if k == "!"]
+    unsaved_ok = (chm.UNSAVED_NOTE in note_list and warn and chm.UNSAVED_NOTE in warn[0]
+                  and sim._ch_choice() == ("express", chm.STOCK)
+                  and not any(n == "my express wip" for _, n in choices))
+    sim.renderer = None
+    # --- (b) the loop drives exactly the pick
+    lp = _loop_run(os.path.join(root, "loop"), lib, exp.to_json(),
+                   dict(car="express", track="arena", car_build={"corsa": "my corsa"}),
+                   [dict(pick="lap_arena", combo=("corsa", "full"), build=chm.STOCK),
+                    dict(pick="lap_arena", combo=("express", "full"), build="my express"),
+                    dict(pick="lap_arena", combo=("corsa", "full"), build="my express"),
+                    dict(pick="lap_arena", combo=("corsa", "top"), build="my corsa"),
+                    dict(end=True), dict(stop="quit")])
+
+    def sl(e, k):
+        return e["build"]["slots"][k]
+    loop_ok = (len(lp) == 6
+               and lp[1]["car"] == "corsa" and sl(lp[1], "left")["wing"] == chm.STOCK_SIDE
+               and lp[1]["build"]["name"] == chm.STOCK_NAME and lp[1]["over"] == []
+               and lp[2]["car"] == "express" and sl(lp[2], "left")["wing"] == "winglab-46"
+               and lp[2]["build"]["name"] == "my express"
+               #  'my express' asked for on a Corsa (no page offers that): never
+               #  fitted there -- the Corsa's default, 'my corsa', drives
+               and lp[3]["car"] == "corsa" and sl(lp[3], "left")["wing"] == "fin"
+               and lp[3]["chal_build"] == "my corsa" and lp[3]["build"]["name"] == "my corsa"
+               and lp[4]["car"] == "corsa" and sl(lp[4], "left")["wing"] == ""
+               and sl(lp[4], "top")["wing"] == chm.STOCK_TOP and lp[4]["build"]["name"] == "my corsa"
+               and all(e["design"]["name"] == "my express" for e in lp)
+               and lp[5]["car"] == "express" and lp[5]["key"] is None)
+    # --- (c) RACE VS BOT: a saved build by name, on its own car
+    with contextlib.redirect_stdout(io.StringIO()):
+        rs = _build("arena", driver=lambda t, v, T_: Controls())
+    rs.settings = Settings(path="", car="corsa", car_build={"corsa": "my corsa"})
+    rs.garage_lib = lib
+    rch = rs._race_car_choices()
+    rs.race_opts.update(bot=RACE_BOT_ANCHOR, car=race_grid.saved_choice("my express"),
+                        bot2=RACE_BOT_ANCHOR, car2="540i")
+    with contextlib.redirect_stdout(io.StringIO()):
+        started = rs.start_race()
+    r1, r2 = (rs.rivals + [None, None])[:2]
+    se = race_grid.saved_car(exp.to_json(), rs.veh.cfg, lib)
+    rs.renderer = SimpleNamespace(cfg=SimpleNamespace(mode="car_up"))
+    rs._menu_open()
+    rs._menu_show_race()
+    race_rows = [t for t, a in rs.menu.items if a == "set:race_car"]
+    race_ok = (rch[:2] == [race_grid.OWN, "same"] and "express" in rch and "540i" in rch
+               and race_grid.saved_choice("my express") in rch
+               and rch.index(race_grid.saved_choice("my corsa")) == rch.index("corsa") + 1
+               and started and r1 is not None and r2 is not None
+               and r1.veh.car.m == se[0].m and r1.veh.cfg.dev_left is not None
+               and r1.veh.cfg.dev_left == se[1].dev_left and r1.label.endswith("/my express")
+               and not r2.veh.cfg.has_designed() and r2.veh.cfg.wing == "off"
+               and r2.veh.car is cars.get("540i")
+               and race_rows and f"my express - {car_label('express')}" in race_rows[0])
+    rs.stop_race(quiet=True)
+    # --- (d) DEPLOY SWARM: the same choices; the bot remembers the build
+    rs._menu_show_swarm()
+    for _ in range(len(_car_row_choices(SWARM_MENU_CHOICES["car"], lib)) + 1):
+        if rs.swarm_opts["car"] == race_grid.saved_choice("my express"):
+            break
+        rs._swarm_step("car", +1)
+    rs._menu_show_swarm()
+    sw_rows = [t for t, a in rs.menu.items if a in ("set:sw_car", "swarm_aero")]
+    kw0 = dict(wing="plate", mu_scale=1.0, abs_on=True, power_scale=1.0)
+    c_b, kw_b, n_b = _swarm_car(race_grid.saved_choice("my express"), rs.veh.car, kw0, "corsa", lib)
+    st_ = Settings(path="", car="corsa", ballast=40.0)
+    bred = _swarm_bred(race_grid.saved_choice("my express"), n_b, st_, SimpleNamespace(), kw_b, lib)
+    bred_s = _swarm_bred("540i", "540i", st_, SimpleNamespace(), kw0, lib)
+    own = race_grid.own_car(dict(bred=bred), rs.veh.cfg, lib)
+    own_s = race_grid.own_car(dict(bred=bred_s), rs.veh.cfg, lib)
+    swarm_ok = (rs.swarm_opts["car"] == race_grid.saved_choice("my express")
+                and sw_rows and "my express" in sw_rows[0] and "my express" in sw_rows[1]
+                and n_b == "express" and c_b.m == se[0].m and kw_b["dev_left"] is not None
+                and bred["saved"] == "my express" and bred["ballast"] == 0.0
+                and bred["build"]["name"] == "my express"
+                and own is not None and own[2] == "express" and own[0].m == se[0].m
+                and own[1].dev_left == se[1].dev_left
+                and race_grid.own_label(dict(bred=bred)) == "my express"
+                and own_s is not None and not own_s[1].has_designed() and own_s[2] == "540i")
+    rs.renderer = None
+    ok = page_ok and unsaved_ok and loop_ok and race_ok and swarm_ok
+    if verbose:
+        print(f"  V46 saved cars  : the page opens on {opened[0].split('<')[1].strip(' >')!r} "
+              f"(its {opened[2]} at h {opened[3]:.2f} on the Express), cycles {len(set(seen))} "
+              f"choices (stock + saved, each on its own car), the stock Corsa drives "
+              f"{stock_corsa[:3]}: {page_ok}; an unsaved build not offered, said {unsaved_ok}; "
+              f"the loop drives {[(e.get('car'), (e.get('build') or {}).get('name')) for e in lp]}"
+              f": {loop_ok}; race: 'build:my express' on the Express {r1.label if r1 else None}, "
+              f"stock 540i no wings: {race_ok}; swarm: bred in 'my express', 'its own' is it "
+              f"again: {swarm_ok}  -> {'ok' if ok else 'FAIL'}")
+    return ok, dict(page=page_ok, unsaved=unsaved_ok, loop=loop_ok, race=race_ok, swarm=swarm_ok)
 
 
 def self_check(verbose=True) -> bool:
@@ -10282,6 +11711,9 @@ def self_check(verbose=True) -> bool:
                      ("V45e", lambda: _v45e_challenge_list(tmp, verbose)),
                      ("V45f", lambda: _v45f_menu_copy(verbose)),
                      ("V45g", lambda: _v45g_car_named_build(tmp, verbose)),
+                     ("V47", lambda: _v47_leaderboards(tmp, verbose)),
+                     ("V48", lambda: _v48_bmw(tmp, verbose)),
+                     ("V46", lambda: _v46_saved_cars(tmp, verbose)),
                      ("V27", lambda: _v27_gearbox_modes(verbose)),
                      ("V28", lambda: _v28_open_map(verbose)),
                      ("V29", lambda: _v29_engine_tc(verbose)),
@@ -10325,7 +11757,8 @@ C camera | - / = zoom | 0 auto zoom | H HUD: race / full / off | V force arrows 
 T toggle wet | M telemetry marker | L toggle recording | K arm a SEED LAP for the swarm | TAB next map | J ghosts
 BACKSPACE garage: wings and builds | ESC menu: settings (map, engine, gearbox, ABS, TC, aids, sound), reset, race vs bot, main menu, quit
 PS5 pad: R2 throttle | L2 brake | L-stick steer | R1/L1 shift | CROSS handbrake | SQUARE clutch
-         CIRCLE wing | TRIANGLE wing mode | OPTIONS menu | CREATE sector line | TOUCHPAD garage
+         CIRCLE wing | TRIANGLE wing mode | OPTIONS menu | TOUCHPAD garage
+         CREATE sector line | hold CREATE restart the lap
          d-pad up HUD / down force arrows / left slow-mo / right normal | R3 camera | L3 auto zoom"""
 _HELP_PRINTED = False
 
@@ -10333,7 +11766,7 @@ _HELP_PRINTED = False
 def build_parser():
     p = argparse.ArgumentParser(
         prog="python3 -m drive.drive",
-        description="Corsa C flank-wing driving simulator.",
+        description="Flank-wing driving simulator.",
         epilog=KEYS_HELP,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     # track / wet / camera / gearbox / abs / steer aid default to None: the
@@ -10376,9 +11809,9 @@ def build_parser():
                         "ESC > Race vs bot")
     p.add_argument("--race-car", dest="race_car", default=None, metavar="CAR[,CAR2,...]",
                    help="what each bot drives: 'own' (the car it was bred in, the "
-                        "default), 'same' (your car) or a stock corsa / mx5 / 540i / "
-                        "express / bus, "
-                        "per bot like --race")
+                        "default), 'same' (your car), a stock car with no wings ("
+                        + " / ".join(cars.CAR_ORDER) + ") or build:NAME (a saved "
+                        "build, on its own car), per bot like --race")
     p.add_argument("--garage", action="store_true",
                    help="open the 3D editor first; ENTER / cross drives the "
                         "car you built, BACKSPACE / touchpad comes back")
@@ -10405,8 +11838,8 @@ def build_parser():
     p.add_argument("--swarm-car", dest="swarm_car", default=None,
                    choices=("same",) + tuple(cars.CAR_ORDER),
                    help="what the swarm breeds in: 'same' (your car, the default) or "
-                        "a stock corsa / mx5 / 540i / express / bus on your settings, "
-                        "like --race-car")
+                        "a stock car with no wings on your settings, like --race-car "
+                        "(a saved build: the Deploy-swarm page's Car row)")
     p.add_argument("--swarm-fast", dest="swarm_fast", action="store_true",
                    help="no replay: the next generation starts the moment one is "
                         "scored (V in the swarm window toggles it)")
@@ -10649,7 +12082,7 @@ def _drive_name(design, lib, car) -> str:
     return str(getattr(design, "name", "") or "")
 
 
-def _drive_design(opts, design, lib, car) -> dict:
+def _drive_design(opts, design, lib, car, wings=None) -> dict:
     """The next session drives `design` on `car` (review of task 41, the root
     design). The player's WORKING build -- the loop's `design`, the garage's
     build -- is never moved by fitting it to a car it is merely driven on: a
@@ -10665,20 +12098,50 @@ def _drive_design(opts, design, lib, car) -> dict:
     Task 45: the copy is called what the garage calls the build on `car`
     (`_drive_name`: the first launch's 'my corsa' is 'my express' on the
     Express), so the TIME TRIAL page and the pause pages say what the garage
-    says; `opts.design_json` keeps the player's own name."""
+    says; `opts.design_json` keeps the player's own name.
+
+    Task 47: `wings`, the Wings setting -- one of the challenges' four
+    configs (`challenges.config_build`, as a challenge drives it) or FREE.
+    `opts.wings_applied` says which config the copy carries (None: FREE, a
+    challenge's own, or a legacy car), what the session races for."""
     from . import garage as grg
     chal = getattr(opts, "challenge", None)
-    if (chal is not None and chal.get("config") and isinstance(design, grg.CarBuild)
-            and lib is not None):
+    cfg_ = chal.get("config") if chal is not None else None
+    #  task 47: a timed session's wing mode (the Wings setting) is a config
+    #  too -- the same copy a challenge drives, on the leaderboard of that
+    #  mode. A challenge's own config wins; FREE (or none) drives the build
+    #  as it is
+    race = wings if (chal is None and wings in RACE_CONFIGS) else None
+    opts.wings_applied = None
+    named = None
+    if cfg_ and isinstance(design, grg.CarBuild) and lib is not None:
         #  task 44: a challenge drives its wing config -- the build's own
         #  wings where it has them, the stock ones lent, the side wings
-        #  gone on a top-only config -- fitted to the challenge's car
+        #  gone on a top-only config -- fitted to the challenge's car.
+        #  Task 46 (the owner: "you can only race with cars that have been
+        #  saved"): the build is the page's pick, `chal['build']` -- a SAVED
+        #  library build of this very car, or the stock car ('' / absent /
+        #  a build gone from the library or made for another car) -- never
+        #  the working build, which was made for the car the player drives
+        from .challenges import config_build, chosen_json, STOCK_NAME
+        want = chal.get("build") or ""
+        js = chosen_json(car, want, getattr(lib, "builds", None) or {})
+        if want and js is None:
+            print(f"challenge: the build '{want}' is not a saved build of the "
+                  f"{cars.car_name(car)}; the stock car drives")
+        fitted = config_build(js, lib, car, cfg_)
+        named = want if js is not None else STOCK_NAME
+    elif race and isinstance(design, grg.CarBuild) and lib is not None:
+        #  task 47: the Wings setting's mode on the working build (task 44's
+        #  config rule, fitted to the session's car)
         from .challenges import config_build
-        fitted = config_build(design.to_json(), lib, car, chal["config"])
+        fitted = config_build(design.to_json(), lib, car, race)
+        opts.wings_applied = race
     else:
         fitted = _fitted(design, lib, car)
     if isinstance(fitted, grg.CarBuild):
-        fitted.name = _drive_name(design, lib, car)   # only the copy (task 45)
+        #  only the copy (task 45); a challenge's is its pick's (task 46)
+        fitted.name = named if named is not None else _drive_name(design, lib, car)
     kw = _apply_design(opts, fitted, lib)
     opts.design_json = design.to_json() if isinstance(design, grg.CarBuild) else None
     return kw
@@ -10697,6 +12160,8 @@ def _painted_garage(grg, size, design, pad, lib, settings):
     the garage's stock yellow, so a factory MX-5 is handed its red."""
     g = grg.Garage(size, design, pad=pad, lib=lib, car=settings.car, settings=settings)
     g.set_paint(paint_rgb(settings, concrete=True))
+    #  task 46: the SAVED CARS page draws every car in its own Paint setting
+    g.paint_for = lambda car: paint_rgb(settings, car, concrete=True)
     return g
 
 
@@ -10853,7 +12318,8 @@ def run_interactive_cli(opts) -> int:
                     #  its Change car (2026-09-27): the garage again, on the
                     #  car picked, opened as the Settings Car row opens it
                     design, seen_car = _garage_car(grg, lib, design, g.car_wanted,
-                                                   settings, opts, seen_car)
+                                                   settings, opts, seen_car,
+                                                   build=getattr(g, "build_wanted", None))
                     continue
                 if action != "drive":
                     break
@@ -10876,6 +12342,9 @@ def run_interactive_cli(opts) -> int:
                 print(f"challenge '{chal['title']}': the class changed; it is over")
                 _challenge_restore(opts, settings, keep_changed=chal["class"])
                 chal = None
+            if chal is None and seen_car is not None and settings.car != seen_car:
+                if settings.take_car_engine():     # task 48: each car its own Engine
+                    settings.save()
             if (grg is not None and design is not None and not from_garage
                     and chal is None and seen_car is not None and settings.car != seen_car):
                 #  a new car (task 41): its default wins over the map's memory
@@ -10907,6 +12376,7 @@ def run_interactive_cli(opts) -> int:
             #  the tutorial's wing laps need a flank wing: a car without one
             #  drives them with the library's plate (in memory, never saved)
             tut_car = None
+            opts.wings_applied = None          # task 47: set by _drive_design below
             if tut is not None and tut.wants_wing():
                 from .tutorial import wing_car
                 tut_car = wing_car(grg, design, lib, car=settings.car)
@@ -10917,10 +12387,14 @@ def run_interactive_cli(opts) -> int:
                 #  EVERY session -- the first, after a challenge switched the
                 #  car, after a car change that kept the build, after a PICK,
                 #  back from the garage -- drives a copy fitted to the car it
-                #  is on; the working build is never moved (review, root design)
-                _drive_design(opts, design, lib, settings.car)
+                #  is on; the working build is never moved (review, root design).
+                #  Task 47: in the Wings setting's mode -- never a tutorial's car
+                _drive_design(opts, design, lib, settings.car,
+                              wings=None if tut is not None else settings.race_wings)
             opts.tutorial_car = tut_car is not None
-            if grg is not None and design is not None and tut_car is None:
+            if grg is not None and design is not None and tut_car is None and chal is None:
+                #  (task 46: a challenge drives its pick, not the build in
+                #  hand, so its map's memory is not given the build in hand)
                 _track_build_used(settings.track, design, opts, car=settings.car, lib=lib)
             sim = _interactive_session(opts, pad=pad, settings=settings,
                                        garage=(grg is not None))
@@ -10942,6 +12416,8 @@ def run_interactive_cli(opts) -> int:
                 from .prerace import _same_build
                 if _same_build(design.to_json(), saved_as[1]):
                     design.name = saved_as[0]      # Settings > Default: its library name
+            if getattr(sim, "prerace_force", False):
+                opts.prerace_force = True      # task 47: a wing mode / board picked: its page
             pick = getattr(sim, "prerace_pick", None)
             if pick and grg is not None:
                 #  the pre-race PICK: that saved build is the car from now on;
@@ -10998,7 +12474,7 @@ def run_interactive_cli(opts) -> int:
                 opts.swarm_saved = None
                 #  the page remembers its values; a Sim time left at the
                 #  map's default follows the map (_swarm_menu_kept)
-                opts.swarm_menu = _swarm_menu_kept(launch, sim.track, car=settings.car)
+                opts.swarm_menu = _swarm_menu_kept(launch, sim.track, car=settings.car, lib=lib)
                 opts.prerace_skip = True           # back from the swarm: drive, not a timed start
                 continue
             if sim.stop_reason == "restart":
@@ -11149,10 +12625,11 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
         _resolve_design(opts)
     w, h = (int(v) for v in opts.size.lower().split("x"))
     from . import swarm_panel as spn
+    sw_lib = getattr(opts, "garage_lib", None)     # a saved build's library (task 46)
     if opts.swarm_T is None:        # no --swarm-T: the default for this map's lap, this car
         opts.swarm_T = swarm_T(trk.make_track(opts.track, opts.radius, opts.cw),
                                car=_swarm_T_car(getattr(opts, "swarm_car", None),
-                                                getattr(settings, "car", None)))
+                                                getattr(settings, "car", None), sw_lib))
     _pop, _T = spn.clamp_pop(opts.swarm), spn.clamp_T(opts.swarm_T)
     if (_pop, _T) != (opts.swarm, opts.swarm_T):
         print(f"swarm: {opts.swarm} cars / {opts.swarm_T} s -> {_pop} cars / {_T:.0f} s "
@@ -11165,15 +12642,37 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
     want_car = getattr(opts, "swarm_car", None) or "same"
     if opts.swarm_resume and want_car == "same":
         want_car = _swarm_state_car(opts.swarm_resume, settings.car)
-    car, cfg_kwargs, car_name = _swarm_car(want_car, car, cfg_kwargs, settings.car)
+    sess_kw = cfg_kwargs            # the session's own: `_swarm_car` hands it back unchanged
+    car, cfg_kwargs, car_name = _swarm_car(want_car, car, cfg_kwargs, settings.car, sw_lib)
     stock = want_car not in (None, "", "same") and car_name == want_car
+    #  task 46: a saved build breeds under its own name (the window, the
+    #  bot); one that could not be built fell back to your car ('same')
+    saved = race_grid.saved_name(want_car) if cfg_kwargs is not sess_kw else None
+    if race_grid.saved_name(want_car) is not None and saved is None:
+        want_car = "same"
     if global_wet != 1.0:
         #  the rollout has no global wet; the same physics reached through
         #  the config's grip scale (vehicle.py: mu[i] * cfg.mu_scale)
         cfg_kwargs = dict(cfg_kwargs, mu_scale=cfg_kwargs["mu_scale"] * global_wet)
     track_kw = dict(radius=opts.radius, cw=opts.cw, surfaces=(opts.wet != "none"))
-    car_title = cars.car_name(car_name) + (" (stock)" if stock else "")
-    sw_wings = swarm_wings_label(cfg_kwargs, getattr(opts, "build_name", ""), opts.wing)
+    car_title = cars.car_name(car_name) + (" (stock, no wings)" if stock else "")
+    sw_wings = swarm_wings_label(cfg_kwargs, saved or getattr(opts, "build_name", ""),
+                                 str(cfg_kwargs.get("wing", opts.wing) or "off"))
+    #  ... and the window draws the car it breeds in with ITS wings (task
+    #  46): yours on your car, none on a stock car, a saved build's own
+    sw_hud, sw_wing_type = getattr(opts, "hud_cfg", None), opts.wing
+    if want_car not in (None, "", "same"):
+        sw_hud, sw_wing_type = None, str(cfg_kwargs.get("wing", "off") or "off")
+    if saved:
+        car_title = f"{saved} - {cars.car_name(car_name)}"
+        sw_wings = f"wings: your saved build '{saved}'"
+        try:
+            from . import garage as grg
+            lib_ = sw_lib if sw_lib is not None else grg.library()
+            sw_hud = (grg.CarBuild.from_json(lib_.builds[saved]).clamp(lib_, car_name)
+                      .hud_kwargs(lib_))
+        except Exception as exc:           # noqa: BLE001 -- only the drawing needs it
+            print(f"swarm: the saved build's wings are not drawn ({type(exc).__name__})")
     opts.swarm_saved = None         # the checkpoint this run writes, if any
 
     user_replay = None
@@ -11226,8 +12725,9 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
     #  the car it breeds in goes into the saved bot (plan D3): the RACE page's
     #  'own' car puts it back in this car -- ALWAYS the car this run breeds
     #  and measures in (a resume in another car / build / engine records that)
-    bred_now = race_grid.bred_meta(car_name, stock, getattr(opts, "build_json", None),
-                                   settings, float(cfg_kwargs.get("power_scale", 1.0)))
+    #  task 46: by the Car row's choice (`_swarm_bred`): your car and build,
+    #  a stock car's empty build (no wings), or a saved build by name
+    bred_now = _swarm_bred(want_car, car_name, settings, opts, cfg_kwargs, sw_lib)
     if getattr(sw, "bred", None) not in (None, bred_now):
         print("swarm: this resume breeds in a different car / build / engine than the one "
               "it started in; the saved bot records the one it breeds and is measured in now")
@@ -11489,16 +12989,19 @@ def run_swarm_cli(opts, settings=None, embedded: bool = False) -> int:
                 x0, y0, psi0 = trk.start_pose(tr)
                 hero_st = SimpleNamespace(x=x0, y=y0, psi=psi0, u=0.0, v=0.0)
             hud.ghosts = ghosts
-            hc = getattr(opts, "hud_cfg", None)
+            hc = sw_hud
             if hc:
                 for kk, vv in hc.items():          # the garage build's wing geometry
                     setattr(hud, kk, vv)
             hud.x_w = cfg_kwargs.get("x_w", hud.x_w)
             hud.h_w = cfg_kwargs.get("h_w", hud.h_w)
-            hud.wing_type = opts.wing
+            hud.wing_type = sw_wing_type
 
             # --- overlay -------------------------------------------------
-            lines = [f"SWARM {sw.name}   {sw.pop} cars   seed {sw.seed_source}   "
+            _sk, _sp, _sb = sw.seed_source.partition(":")   # 'ckpt:540i_arena_plate.json'
+            _seed_shown = (f"{_sk}:{shown_stem(_sb[:-5] if _sb.endswith('.json') else _sb)}"
+                           if _sp else sw.seed_source)          # a car KEY by its shown name
+            lines = [f"SWARM {sw.name}   {sw.pop} cars   seed {_seed_shown}   "
                      f"{tr.title or tr.name} / {car_title} / {sw_wings}"]
             if shown is not None:
                 lb = shown["lap_best"]
@@ -11719,10 +13222,11 @@ TITLE_SKIP = ("garage", "race", "challenge", "tutorial", "ml_drive", "swarm",
               "pad_calib", "self_check")
 #: the title's picks that are a session opened on a pause-menu page
 #: (title.PAGES; Sim.open_page)
-TITLE_PAGES = ("challenges", "tutorial", "settings")
+TITLE_PAGES = ("challenges", "leaderboards", "tutorial", "settings")
 #: each of those pages' Back row (task 45): it and ESC there end a session
 #: the title opened on it with 'title' -- the title again (Sim._menu_event)
-TITLE_BACK = {"challenges": "ch_back", "tutorial": "tut_back", "settings": "settings_back"}
+TITLE_BACK = {"challenges": "ch_back", "leaderboards": "lb_back", "tutorial": "tut_back",
+              "settings": "settings_back"}
 
 
 def _title_wanted(opts) -> bool:
@@ -11906,24 +13410,32 @@ def _car_build(grg, lib, design, car: str, settings, track: str | None = None, o
     return d, f"the {car_label(car)} starts with no wings ({whose}): garage F sets its default"
 
 
-def _garage_car(grg, lib, design, car, settings, opts, seen_car):
+def _garage_car(grg, lib, design, car, settings, opts, seen_car, build=None):
     """The garage's Change car (2026-09-27): `car` becomes the Settings car
     (saved) and the build it opens with is the one a car change on the
     Settings page gives it (`_car_build`: its default build, else the build
     in hand when it may ride on it, else its last build on this map, else
     none) -- a build in hand it replaces that is in no library file is saved
-    there first, as `(autosave)`. The note for the next garage's hint goes to
-    `opts.garage_hint`. Returns (the build, the car the loop takes as seen:
-    the new one, so the next session does not change it again). A car that
-    is not a car, this one, or any car while a challenge runs (its car is
-    the challenge's: the garage shows no row then) changes nothing."""
+    there first, as `(autosave)`. Task 46: `build`, a library build's name
+    (the garage's SAVED CARS page picked another car's build), is the one
+    it opens with instead, when the library still holds it. The note for
+    the next garage's hint goes to `opts.garage_hint`. Returns (the build,
+    the car the loop takes as seen: the new one, so the next session does
+    not change it again). A car that is not a car, this one, or any car
+    while a challenge runs (its car is the challenge's: the garage shows no
+    row then) changes nothing."""
     from .prerace import car_label
     was = settings.car
     if car not in CAR_MODES or car == was or getattr(opts, "challenge", None) is not None:
         return design, seen_car
     note = ""
     if grg is not None:
-        d2, note = _car_build(grg, lib, design, car, settings, track=settings.track, opts=opts)
+        js = lib.builds.get(build) if (build and lib is not None) else None
+        if isinstance(js, dict):
+            #  as the library holds it: the next garage fits it to its car
+            d2, note = grg.CarBuild.from_json(js), f"the {car_label(car)} with the build '{build}'"
+        else:
+            d2, note = _car_build(grg, lib, design, car, settings, track=settings.track, opts=opts)
         if d2 is not None:
             if design is not None and design.has_any(lib):
                 had = set(lib.builds)
@@ -11933,6 +13445,7 @@ def _garage_car(grg, lib, design, car, settings, opts, seen_car):
                     note = (note + "  ·  " if note else "") + f"your wings saved as '{kept[0]}'"
             design = d2
     settings.car = car
+    settings.take_car_engine()             # task 48: the car's own Engine
     settings.save()
     print(f"garage: now the {cars.car_name(car)}" + (f" ({note})" if note else ""))
     opts.garage_hint = note or f"now the {car_label(car)}"
@@ -11949,6 +13462,40 @@ def _stamp_car(design, entered, car: str) -> None:
         design.car = car
 
 
+#: task 48: the cars whose TC-off hint was shown this launch
+_TC_NOTED: set = set()
+
+
+def _tc_note(sim, settings) -> None:
+    """Task 48: a car that brings its own TC calibration (`CarSpec.tc_slip`:
+    the 540i, 440 N.m on a rear axle) driven with TC OFF says so once a
+    launch -- the owner's 'it spins just by giving it thrust' was this car
+    with TC off (and on the old Sport default)."""
+    car = sim.veh.car
+    if (sim.progress_file is None or sim.renderer is None or settings.tc
+            or getattr(car, "tc_slip", None) is None or settings.car in _TC_NOTED):
+        return
+    _TC_NOTED.add(settings.car)
+    msg = (f"TC is OFF: the {cars.car_name(settings.car)} spins its rear wheels "
+           "on full throttle - Settings > TC")
+    sim._rec_note(msg, 7.0)
+    sim._start_notes = list(getattr(sim, "_start_notes", None) or []) + [msg]
+
+
+def _board_note(sim, settings) -> None:
+    """Task 47, the owner: non-stock engines "are only for messing around and
+    don't go to leaderboards (this should be mentioned)" -- said at the start
+    of a player's timed session on a Tuned or Sport engine."""
+    if (sim.recorder is None or sim.progress_file is None or sim.challenge is not None
+            or sim.tutorial is not None or settings.engine == "stock" or sim.unlimited):
+        return
+    from .leaderboard import ENGINE_WORDS
+    msg = (f"{ENGINE_WORDS.get(settings.engine, settings.engine)} engine: just for "
+           "fun - not on the leaderboards")
+    sim._rec_note(msg, 6.0)
+    sim._start_notes = list(getattr(sim, "_start_notes", None) or []) + [msg]
+
+
 def _challenge_wings(sim) -> None:
     """A challenge session's wings at its start (task 44): the config IS the
     wing mode -- AUTO, or the air brake kept (G survives a restart) on a
@@ -11960,12 +13507,15 @@ def _challenge_wings(sim) -> None:
     one with no config: nothing changes."""
     run = getattr(sim, "challenge", None)
     cfg = run.ch.get("config") if run is not None else None
+    if cfg is None and run is None:
+        cfg = getattr(sim, "race_wings", None)   # task 47: a timed session's wing mode
     if cfg is None:
         return
     from .airbrake import AUTO
     from .challenges import g_modes, REF_WING_MODES
     modes = g_modes(cfg)
-    own = REF_WING_MODES.get(run.ch.get("ref", {}).get("wing_mode", "auto"), AUTO)
+    own = (REF_WING_MODES.get(run.ch.get("ref", {}).get("wing_mode", "auto"), AUTO)
+           if run is not None else AUTO)
     if own != AUTO and own in modes:
         sim.wing_side_mode = own
     elif sim.wing_side_mode not in modes:
@@ -12029,6 +13579,9 @@ def _challenge_restore(opts, settings, keep_changed: str | None = None) -> None:
         for i, k in enumerate(("track", "car", "engine", "wet")):
             if cls is None or getattr(settings, k) == cls[i]:
                 setattr(settings, k, prev[k])
+        #  task 48: the car back on the road runs its OWN engine and TC (an
+        #  engine changed for the challenge's car stays that car's)
+        getattr(settings, "take_car_engine", lambda: None)()
         settings.save()
         opts.radius, opts.cw = prev.get("_radius", opts.radius), prev.get("_cw", opts.cw)
     opts.challenge, opts.challenge_prev = None, None
@@ -12043,6 +13596,7 @@ def _challenge_switch(sim, opts, settings) -> None:
     pick = getattr(sim, "challenge_pick", None)
     if getattr(sim, "ch_pick", None):
         opts.ch_pick = tuple(sim.ch_pick)      # the page's car + wings: kept for the launch
+        opts.ch_build = getattr(sim, "ch_build", None)   # ... and its build (task 46)
     if pick:
         #  task 45: started from the list the title opened -- or picked in a
         #  run that was (This challenge, another from the list): its End
@@ -12087,6 +13641,18 @@ def _challenge_switch(sim, opts, settings) -> None:
     if not ch["available"]:
         print(f"challenge '{ch['title']}': not for this car ({ch['unavailable']})")
         return
+    #  task 46: the build it drives -- the page's pick (a SAVED build of this
+    #  car, or the stock car), else the page's own rule (`default_choice`:
+    #  the build being driven if it is saved and this car's, else the car's
+    #  default, else its stock car); never the working build on another car.
+    #  `_drive_design` fits it (`challenges.config_build`)
+    from .challenges import STOCK, chosen_json, default_choice
+    builds = getattr(getattr(opts, "garage_lib", None), "builds", None) or {}
+    want = getattr(sim, "ch_build", None)
+    if not (want == STOCK or (isinstance(want, str) and chosen_json(ch["car"], want, builds))):
+        want = default_choice(ch["car"], getattr(opts, "design_json", None), builds,
+                              settings.build_of(ch["car"]))[1]
+    ch["build"] = want
     if getattr(opts, "challenge_prev", None) is None:
         opts.challenge_prev = dict(track=settings.track, car=settings.car,
                                    engine=settings.engine, wet=settings.wet,
@@ -12318,18 +13884,23 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
         sim.challenge_build = (dj if isinstance(dj, dict) else getattr(opts, "build_json", None),
                                lib)
     sim.ch_pick = getattr(opts, "ch_pick", None)
+    sim.ch_build = getattr(opts, "ch_build", None)     # the Car row's build (task 46)
     chal = getattr(opts, "challenge", None)
     if chal is not None and sim.challenge_build is not None:
         try:
-            from .challenges import ChallengeRun, build_stats, config_parts, refusals
+            from .challenges import (ChallengeRun, build_stats, config_parts, refusals,
+                                     chosen_json)
             #  judged on what it drives: the copy with the config applied
             #  (`_drive_design`), as the page judged it
             stats = build_stats(getattr(opts, "build_json", None), lib, car, settings.ballast)
             why = refusals(chal["constraints"], stats)
             #  whose wings drive, for the result's 'the stars were set with
-            #  the stock wings' (round 3): the page's own reading
+            #  the stock wings' (round 3): the page's own reading -- of the
+            #  build it drives, named (task 46: the pick, not the working one)
             try:
-                parts = (config_parts(sim.challenge_build[0], lib, chal["config"])
+                b_ = chal.get("build") if isinstance(chal.get("build"), str) else ""
+                js_ = chosen_json(settings.car, b_, lib.builds)
+                parts = (config_parts(js_, lib, chal["config"], name=b_ if js_ else "")
                          if chal.get("config") else None)
             except Exception:          # noqa: BLE001 -- only the result's words need it
                 parts = None
@@ -12373,6 +13944,10 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     for k in RACE_MENU_DEFAULTS:
         if race_menu.get(k):
             sim.race_opts[k] = race_menu[k]
+    #  task 47: the wing mode this session races for its leaderboard (what
+    #  `_drive_design` put on the copy; a challenge drives its own) -- set
+    #  BEFORE a race kept across the restart is built, so its bots race it
+    sim.race_wings = getattr(opts, "wings_applied", None) if sim.challenge is None else None
     race_spec = getattr(opts, "race", None)
     race_on = False
     if race_spec:
@@ -12405,6 +13980,8 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
     if sim.tutorial is not None and sim.tutorial.step.id == "wing_off":
         sim.wing_on = False                # the tutorial's lap 1 is OFF: it counts without F (task 45)
     _challenge_wings(sim)
+    _board_note(sim, settings)
+    _tc_note(sim, settings)                # last: the one that matters more
     if not _HELP_PRINTED:
         print(KEYS_HELP)
         _HELP_PRINTED = True
@@ -12437,7 +14014,9 @@ def _interactive_session(opts, pad=None, garage=False, settings=None):
         notes += list(getattr(sim.recorder.book, "notes", None) or [])
         opts.records_noted = True
     if notes:
-        sim._rec_note(" / ".join(notes)[:120], 6.0)
+        #  task 48: the start's own notes (the engine, TC off) are kept with them
+        extra = list(getattr(sim, "_start_notes", None) or [])
+        sim._rec_note(" / ".join(notes + extra)[:220 if extra else 120], 8.0 if extra else 6.0)
     #  the title screen's pick (drive/title.py, task 44): Challenges,
     #  Tutorial or Settings opens this first session on that page, in place
     #  of WELCOME (still offered, at the next launch) or the pre-race page

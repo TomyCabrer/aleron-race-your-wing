@@ -1,0 +1,152 @@
+{
+ "game": "Alerón: Race Your Wing",
+ "logo": "ALERÓN",
+ "subtitle": "RACE YOUR WING",
+ "version": "0.9.0",
+ "files": [
+  {
+   "file": "screenshot_01_linden_civetta.jpg",
+   "size": [
+    1920,
+    1080
+   ],
+   "note": "linden, corsa, chase, HUD off"
+  },
+  {
+   "file": "screenshot_02_kestrel_n540.jpg",
+   "size": [
+    1920,
+    1080
+   ],
+   "note": "kestrel, 540i, chase, HUD minimal"
+  },
+  {
+   "file": "screenshot_03_ashdown_halcon.jpg",
+   "size": [
+    1920,
+    1080
+   ],
+   "note": "ashdown, rally, chase, HUD off"
+  },
+  {
+   "file": "screenshot_04_fairfield_courier.jpg",
+   "size": [
+    1920,
+    1080
+   ],
+   "note": "fairfield, express, chase, HUD off"
+  },
+  {
+   "file": "screenshot_05_arena_civetta.jpg",
+   "size": [
+    1920,
+    1080
+   ],
+   "note": "arena, corsa, chase, HUD minimal"
+  },
+  {
+   "file": "screenshot_06_linden_plan.jpg",
+   "size": [
+    1920,
+    1080
+   ],
+   "note": "linden, 540i, car_up, HUD minimal"
+  },
+  {
+   "file": "header_capsule.jpg",
+   "size": [
+    920,
+    430
+   ],
+   "note": "scene linden_corsa"
+  },
+  {
+   "file": "small_capsule.png",
+   "size": [
+    462,
+    174
+   ],
+   "note": "scene linden_corsa"
+  },
+  {
+   "file": "main_capsule.jpg",
+   "size": [
+    1232,
+    706
+   ],
+   "note": "scene kestrel_540i"
+  },
+  {
+   "file": "vertical_capsule.jpg",
+   "size": [
+    748,
+    896
+   ],
+   "note": "scene ashdown_rally"
+  },
+  {
+   "file": "library_capsule.png",
+   "size": [
+    600,
+    900
+   ],
+   "note": "scene ashdown_rally"
+  },
+  {
+   "file": "library_header.png",
+   "size": [
+    920,
+    430
+   ],
+   "note": "scene linden_corsa"
+  },
+  {
+   "file": "page_background.jpg",
+   "size": [
+    1438,
+    810
+   ],
+   "note": "scene fairfield_express, blurred + dark"
+  },
+  {
+   "file": "library_hero.png",
+   "size": [
+    3840,
+    1240
+   ],
+   "note": "scene arena_corsa, no text"
+  },
+  {
+   "file": "library_logo.png",
+   "size": [
+    1280,
+    360
+   ],
+   "note": "transparent"
+  },
+  {
+   "file": "community_icon.jpg",
+   "size": [
+    184,
+    184
+   ],
+   "note": ""
+  },
+  {
+   "file": "app_icon_1024.png",
+   "size": [
+    1024,
+    1024
+   ],
+   "note": "for packaging"
+  },
+  {
+   "file": "client_icon.ico",
+   "size": [
+    32,
+    32
+   ],
+   "note": "16/32/48/256 inside"
+  }
+ ]
+}

@@ -30,6 +30,22 @@ thresholds, stars and best, keyed '<id>|<car>|<config>'; `resolve` makes
 the combo's challenge dict, which everything below reads as it always read
 a file. (`constraints.slots` is gone: the config decides the slots.)
 
+THE CAR IS A SAVED BUILD OR A STOCK CAR (task 46). The owner: "I did a
+wing for the Renault and when changing car they appear on the other car
+... you can only race with cars that have been saved (default cars are
+also an option)". The page's Car row no longer puts the player's working
+build on whichever car it names: it cycles CAR CHOICES (`race_grid.
+car_choices`) -- every car's STOCK car (the config's stock wings: the
+reference car) and every SAVED library build by its name, on ITS OWN car
+(`race_grid.build_home`; `chosen_json`), with the config applied to it
+(`config_build`). The car and config stay the combo (stars, progress and
+references are per car + config, as before); the build is the page's
+choice beside them (drive.py's `Sim.ch_build`). The page opens on the
+build being driven when the library holds it and it is that car's, else
+the car's default build, else its stock car (`default_choice`); the working
+build, unsaved, is never offered (`UNSAVED_NOTE` says so on the page). The
+page's words name the build (`choice_text`, `config_parts(name=)`).
+
 THRESHOLDS ARE DERIVED, NEVER HAND-TYPED (the medals' rule, D4, and the
 same multipliers): the reference run -- a scripted driver, headless, on the
 config's STOCK wings in the combo's car and class -- measures a value V,
@@ -116,7 +132,8 @@ SECTION_UNLIMITED = "challenges_unlimited"
 STAR_X = (1.12, 1.06, 1.02)
 METRICS = {
     "lap_time": dict(unit="s", lower=True,
-                     tracks=("arena", "linden", "kestrel", "ashdown", "open", "skidpad")),
+                     tracks=("arena", "linden", "kestrel", "ashdown", "fairfield", "open",
+                             "skidpad")),
     "stop_distance": dict(unit="m", lower=True, tracks=("dragstrip",), param="v0_kmh"),
     "skid_ay": dict(unit="g", lower=False, tracks=("skidpad",)),
     "drag_time": dict(unit="s", lower=True, tracks=("dragstrip",), param="distance_m"),
@@ -425,16 +442,20 @@ def validate_refs(allc: dict, refs: dict) -> list:
     return bad
 
 
-def not_for_car(ch: dict) -> str:
+def not_for_car(ch: dict, car=None) -> str:
     """Why a resolved combo cannot be driven at all, before any run ('' =
-    it can): a stop from a speed over the car's governor (the Citaro's 80
-    km/h) -- held at a v0 it could never reach, it would be no stop of its."""
+    it can): a stop from a speed over the car's governor (the retired
+    Citaro's 80 km/h) -- held at a v0 it could never reach, it would be no
+    stop of its. `car`: the spec to judge (default the combo's car's; task
+    46: no car in the game is governed now, and the self-check hands it the
+    retired bus's spec)."""
     import cars
     g = ch["goal"]
-    car = cars.get(ch["car"])
+    car = cars.get(ch["car"]) if car is None else car
     gov = float(getattr(car, "v_governor", 0.0) or 0.0) * 3.6
     if g["metric"] == "stop_distance" and gov > 0.0 and gov < float(g["v0_kmh"]) - GOVERNOR_TOL_KMH:
-        return (f"the {cars.car_name(ch['car'])} is governed to {gov:.0f} km/h: it never "
+        return (f"the {getattr(car, 'name', '') if ch['car'] not in cars.CARS else cars.car_name(ch['car'])}"
+                f" is governed to {gov:.0f} km/h: it never "
                 f"reaches {g['v0_kmh']:.0f}")
     return ""
 
@@ -489,11 +510,15 @@ def build_stats(build_json, lib, car, ballast_kg: float) -> dict:
                 unlimited=bool(over), over_limits=over)
 
 
-def config_parts(build_json, lib, config: str) -> dict:
+def config_parts(build_json, lib, config: str, name=None) -> dict:
     """Which wings a config drives (task 44): {'top': (wing, whose),
     'side': (wing, whose) or None} -- whose is 'yours' (the build's own) or
-    'stock' (lent: the build has none there). `build_json` is the player's
-    WORKING build (None = no build: every wing stock)."""
+    'stock' (lent: the build has none there). `build_json` is the build the
+    challenge drives (task 46: the SAVED build picked on the page,
+    `chosen_json`; None = the stock car: every wing stock). With `name`
+    (task 46: the pick's library name, STOCK for the stock car) the parts
+    carry it as 'build', and every text that reads them names the build
+    ('my express') where it said 'yours'."""
     from .garage import CarBuild, SLOT_ROLE
     b = CarBuild.from_json(build_json) if isinstance(build_json, dict) else None
 
@@ -507,14 +532,100 @@ def config_parts(build_json, lib, config: str) -> dict:
     if CONFIG_SIDE[config]:
         side = own("left") or own("right")
         out["side"] = (side, "yours") if side else (STOCK_SIDE, "stock")
+    if name is not None:
+        out["build"] = str(name)
     return out
+
+
+# ==================================================================== #
+#  THE CAR CHOICE: a saved build on its own car, or a stock car         #
+#  (task 46)                                                           #
+# ==================================================================== #
+#: the Car row's STOCK choice: no library build -- the car with the
+#: config's stock wings, the reference car (`config_build` of no build)
+STOCK = ""
+#: what the stock choice's fitted copy is called (the pause page, the laps)
+STOCK_NAME = "stock wings"
+#: the page's plain words when the build being driven is in no library file
+#: (the owner: "you can only race with cars that have been saved")
+UNSAVED_NOTE = "save this car in the garage (S) to race it in challenges"
+
+
+def chosen_json(car: str, name, builds: dict):
+    """The library build `name` a challenge on `car` drives (task 46), or
+    None: the stock car -- for STOCK, a name the library no longer holds,
+    or a build made for another car (never fitted onto this one)."""
+    from .race_grid import build_home
+    js = (builds or {}).get(name) if name else None
+    return js if isinstance(js, dict) and build_home(js) == car else None
+
+
+def driven_saved(driven_json, builds: dict):
+    """The library name of the build being driven (`driven_json`, the
+    player's working build), '' when no library build has its content --
+    the name it is held under first, else the first by name. None when it
+    is not a build at all (the published one-panel car)."""
+    from .prerace import _same_build
+    if not isinstance(driven_json, dict):
+        return None
+    same = sorted(n for n, js in (builds or {}).items() if _same_build(js, driven_json))
+    held = str(driven_json.get("name", ""))
+    return held if held in same else (same[0] if same else "")
+
+
+def unsaved(driven_json, builds: dict) -> bool:
+    """Does the page say UNSAVED_NOTE? When the build being driven has
+    wings and no library build is it: the page cannot offer it. A car with
+    no wings drives as the stock car does (every wing lent), so it is not
+    worth the words."""
+    from .prerace import no_wings
+    return (isinstance(driven_json, dict) and not no_wings(driven_json)
+            and driven_saved(driven_json, builds) == "")
+
+
+def default_choice(car: str, driven_json, builds: dict, default: str = "") -> tuple:
+    """(car, build) the page opens on for `car` (task 46; the owner's
+    rule): the build being driven, when the library holds it and it is
+    `car`'s; else the car's `default` build (Settings > Default, the
+    garage's F); else the stock car (STOCK)."""
+    name = driven_saved(driven_json, builds)
+    if name and chosen_json(car, name, builds) is not None:
+        return car, name
+    if default and chosen_json(car, default, builds) is not None:
+        return car, default
+    return car, STOCK
+
+
+def choice_text(car: str, build, default: bool = False) -> str:
+    """The Car row's words for a choice: 'Opel Corsa C 1.2 (stock)', 'my
+    express - Renault Express 1.4', '... (default)' for the car's default."""
+    import cars
+    if not build:
+        return f"{cars.car_name(car)} (stock)"
+    return f"{_short(str(build), 22)} - {cars.car_name(car)}" + (" (default)" if default else "")
+
+
+def _whose(parts, whose: str) -> str:
+    """'yours' as the page says it: the picked build's name (task 46) when
+    the parts carry one, else 'yours'; 'stock' stays."""
+    b = (parts or {}).get("build")
+    return _short(b, 22) if (whose == "yours" and b) else whose
+
+
+def _who(parts) -> str:
+    """Whose numbers a RULES row compares: the picked build's name, 'stock'
+    for the stock car (task 46), 'yours' when the parts do not say."""
+    if parts is None or "build" not in parts:
+        return "yours"
+    return _short(parts["build"], 22) if parts["build"] else "stock"
 
 
 def config_build(build_json, lib, car, config: str):
     """The FITTED COPY a challenge drives in `config` on `car` (task 44; the
     owner: "Top wing would represent the normal wing a car has. Just hide
-    and no use for side wing"). From the player's working build
-    (`build_json`, None = none; never changed):
+    and no use for side wing"). From the build it drives (`build_json`,
+    never changed; task 46: the SAVED build picked on the page,
+    `chosen_json` -- None = the stock car):
 
       top slot    the build's own top wing, else the STOCK one lent
                   (`STOCK_TOP`, the reference's, at the car's own default
@@ -750,11 +861,18 @@ def setup_diffs(ch: dict, setup, parts=None, stats=None) -> list:
     wing_broke = [(k, v) for k, v in broke.items() if k in WING_BOUNDS]
     if wing_broke or _own_wings(parts):
         #  the bound alone: RULES' amber '3rd star' row right under it has
-        #  the copy's own number (one line: the page is full)
-        mark = ("your wings rule out the 3rd star: "
+        #  the copy's own number (one line: the page is full). Task 46: the
+        #  picked build by name ('my express wings'); the stock car's are
+        #  'the stock wings'
+        w_ = _whose(parts, "yours")
+        if not _own_wings(parts) and (parts or {}).get("build", None) == STOCK:
+            mine_w = "the stock wings"
+        else:
+            mine_w = "your wings" if w_ == "yours" else f"{w_} wings"
+        mark = (f"{mine_w} rule out the 3rd star: "
                 + "; ".join(_bound_text(k, v) for k, v in wing_broke) if wing_broke
-                else "your wings: the stars were set with the stock ones")
-        out.append(dict(key="wings", yours="your wings", theirs="the stock wings", mark=mark,
+                else f"{mine_w}: the stars were set with the stock ones")
+        out.append(dict(key="wings", yours=mine_w, theirs="the stock wings", mark=mark,
                         rules_out=bool(wing_broke)))
     return out
 
@@ -770,14 +888,17 @@ def setup_note(diffs: list) -> str:
 
 def _wings_word(parts) -> str:
     """Whose wings drive, for the 'yours' row: 'stock wings', 'your wings',
-    'your top, stock side'."""
+    'your top, stock side' -- task 46: the picked build by name, 'my
+    express wings', 'my express top, stock side'."""
     whose = [p_[1] for p_ in (parts["top"], parts["side"]) if p_]
+    b = _whose(parts, "yours")
+    mine = "your" if b == "yours" else b
     if all(w == "stock" for w in whose):
         return "stock wings"
     if all(w == "yours" for w in whose):
-        return "your wings"
-    return (("your" if parts["top"][1] == "yours" else "stock") + " top, "
-            + ("your" if parts["side"][1] == "yours" else "stock") + " side")
+        return f"{mine} wings"
+    return ((mine if parts["top"][1] == "yours" else "stock") + " top, "
+            + (mine if parts["side"][1] == "yours" else "stock") + " side")
 
 
 def setup_section(ch: dict, setup, parts=None, stats=None) -> tuple:
@@ -1314,14 +1435,15 @@ def _largest_wing(stats: dict) -> tuple:
     return max(stats["area"].items(), key=lambda kv: kv[1], default=("", 0.0))
 
 
-def bound_check(k: str, v, stats) -> str:
+def bound_check(k: str, v, stats, who: str = "yours") -> str:
     """A 3-star bound against the copy's `stats` (task 45), a RULES row:
     'at most 15.0 kg of wing  -  yours 20.3 kg  NO'. The mark is
     `refusals`' own verdict, so the page and the result agree; the bound
-    alone with no stats (a build that cannot be read)."""
+    alone with no stats (a build that cannot be read). `who` (task 46,
+    `_who`): the picked build's name, or 'stock', in place of 'yours'."""
     if stats is None:
         return _bound_text(k, v)
-    return (f"{_bound_text(k, v)}  -  yours {_yours_text(k, stats)}  "
+    return (f"{_bound_text(k, v)}  -  {who} {_yours_text(k, stats)}  "
             + ("NO" if refusals({k: v}, stats) else "OK"))
 
 
@@ -1331,10 +1453,14 @@ def constraints_text(ch: dict) -> list:
 
 def combo_text(ch: dict) -> str:
     """'Opel Corsa C 1.2, FULL WING: top + side. ' -- the box's first words
-    on a combo (task 44); '' on a bare file."""
+    on a combo (task 44); '' on a bare file. Task 46: a combo started from
+    the page carries the build it drives ('build': a library name, STOCK),
+    named: 'my express - Renault Express 1.4, FULL WING: top + side. '."""
     if not ch.get("config"):
         return ""
     import cars
+    if isinstance(ch.get("build"), str):
+        return f"{choice_text(ch['car'], ch['build'])}, {CONFIG_LABELS[ch['config']]}. "
     return f"{cars.car_name(ch['car'])}, {CONFIG_LABELS[ch['config']]}. "
 
 
@@ -1433,22 +1559,36 @@ def pick_stars(progress, car: str = "corsa", config: str = "full", allc=None,
     return got, of
 
 
-def menu_row(progress, run=None, car: str = "corsa", config: str = "full") -> str:
+def menu_row(progress, run=None, car: str = "corsa", config: str = "full",
+             build=None) -> str:
     """The pause page's row; with a challenge running, its title (the list
     it opens has the End row and every other challenge). Task 45: else the
     stars of the pick the list opens on (`car`, `config`), as the list's
     subtitle counts them -- 'of 456' was every car x config, a total that
-    meant nothing to a player."""
+    meant nothing to a player. Task 46: with the pick's `build` (a library
+    name, STOCK for the stock car) the row names it: '(my express +
+    wings)', '(stock Express + wings)'; None: '(this car + wings)'."""
     if run is not None:
         return f"Challenges: {run.ch['title']} running"
     got, of = pick_stars(progress, car, config)
-    return f"Challenges: {got} of {of} stars (this car + wings)"
+    if build is None:
+        who = "this car"
+    elif build:
+        who = _short(str(build), 22)
+    else:
+        from .prerace import car_label
+        who = f"stock {car_label(car)}"
+    return f"Challenges: {got} of {of} stars ({who} + wings)"
 
 
-def pick_text(car: str, config: str) -> str:
-    """'Opel Corsa C 1.2, FULL WING: top + side': the list's subtitle."""
+def pick_text(car: str, config: str, build=None) -> str:
+    """'Opel Corsa C 1.2, FULL WING: top + side': the list's subtitle. Task
+    46: with the pick's `build` (a name, STOCK) the car part is the Car
+    row's (`choice_text`): 'my express - Renault Express 1.4, FULL WING:
+    top + side', 'Opel Corsa C 1.2 (stock), ONLY TOP'."""
     import cars
-    return f"{cars.car_name(car)}, {CONFIG_LABELS[config]}"
+    who = cars.car_name(car) if build is None else choice_text(car, build)
+    return f"{who}, {CONFIG_LABELS[config]}"
 
 
 def list_items(allc, progress, run=None, car: str = "corsa", config: str = "full",
@@ -1486,21 +1626,25 @@ def wings_line(parts: dict) -> str:
     side: Side plate (stock)' or 'top: Rear wing (stock) - side wings
     hidden'. The WINGS section's first row since task 45; a built-in wing
     by the garage's own player name (`garage.wing_shown`, round 3), never
-    its library key."""
+    its library key. Task 46: 'yours' is the picked build's name when the
+    parts carry it ('top: rear-new (my express) - ...')."""
     from .garage import wing_shown
     (tn, tw), side = parts["top"], parts["side"]
-    return (f"top: {_short(wing_shown(tn)[0], 20)} ({tw}) - "
-            + (f"side: {_short(wing_shown(side[0])[0], 20)} ({side[1]})" if side
-               else "side wings hidden"))
+    return (f"top: {_short(wing_shown(tn)[0], 20)} ({_whose(parts, tw)}) - "
+            + (f"side: {_short(wing_shown(side[0])[0], 20)} ({_whose(parts, side[1])})"
+               if side else "side wings hidden"))
 
 
-def pick_rows(car: str, config: str, parts: dict) -> list:
+def pick_rows(car: str, config: str, parts: dict, label=None) -> list:
     """The page's first two rows (task 44): the Car and the Wings, LEFT /
     RIGHT or a click to cycle. Which wings drive is the WINGS section's
     first row (task 45): as a row of its own it took the cursor, and ENTER
-    there did nothing. `parts` is kept for the callers."""
+    there did nothing. `parts` is kept for the callers. Task 46: `label` is
+    the Car row's choice in words (`choice_text`: a saved build on its car,
+    or the stock car); None: the car's name, as before."""
     import cars
-    return [(f"{'Car':<8s}< {cars.car_name(car)} >", "set:ch_car"),
+    return [(f"{'Car':<8s}< {label if label is not None else cars.car_name(car)} >",
+             "set:ch_car"),
             (f"{'Wings':<8s}< {CONFIG_LABELS[config]} >", "set:ch_cfg")]
 
 
@@ -1547,7 +1691,8 @@ def other_configs(ch: dict, refs: dict | None = None, allc: dict | None = None) 
             if cfg != ch["config"] and resolve(raw, ch["car"], cfg, refs)["available"]]
 
 
-def detail(ch, stats, why, progress, parts=None, refs=None, allc=None, setup=None) -> tuple:
+def detail(ch, stats, why, progress, parts=None, refs=None, allc=None, setup=None,
+           car_row=None) -> tuple:
     """(items, sections, note) of one challenge's page. A resolved combo
     (task 44) with `parts` (`config_parts`) opens with the Car / Wings rows
     and the WINGS section; one that is not available says "not for this
@@ -1555,10 +1700,12 @@ def detail(ch, stats, why, progress, parts=None, refs=None, allc=None, setup=Non
     section checks each 3-star bound against the copy's `stats` (task 45),
     a bound it breaks in amber. With the player's `setup` (`player_setup`,
     round 3), YOUR SETUP under WINGS: theirs against the stars', each
-    difference marked, a 3rd star their wings rule out named before Start."""
+    difference marked, a 3rd star their wings rule out named before Start.
+    Task 46: `car_row` is the Car row's words (`choice_text`), and parts
+    that carry the picked build ('build') have the page name it."""
     from .menu import Warn
     metric = ch["goal"]["metric"]
-    pick = (pick_rows(ch["car"], ch["config"], parts)
+    pick = (pick_rows(ch["car"], ch["config"], parts, label=car_row)
             if parts is not None and ch.get("config") else [])
     wsec = ([wings_section(ch["config"], parts)]
             if parts is not None and ch.get("config") else [])
@@ -1586,8 +1733,10 @@ def detail(ch, stats, why, progress, parts=None, refs=None, allc=None, setup=Non
     rules = constraints_text(ch) or [("rules", "none: any build")]
     #  task 45: each 3-star bound with this copy's number and OK / NO; a NO
     #  in amber (round 3)
-    rules += [("3rd star", Warn(bound_check(k, v, stats))
-               if stats is not None and refusals({k: v}, stats) else bound_check(k, v, stats))
+    who = _who(parts)                      # task 46: the picked build's numbers, by name
+    rules += [("3rd star", Warn(bound_check(k, v, stats, who))
+               if stats is not None and refusals({k: v}, stats)
+               else bound_check(k, v, stats, who))
               for k, v in eff.items()]
     if stats is not None:
         rules.append(("wing mass", f"{stats['mass']:.1f} kg"))
@@ -1765,8 +1914,9 @@ _CANNOT = {"lap_time": "drive a clean lap here", "skid_ay": "hold the circle",
            "stop_distance": "stop here", "drag_time": "run the strip",
            "trap_speed": "run the strip"}
 #: a lap reference that leaves the road backs its margin off this much a
-#: try, down to BACKOFF_MIN, before its combo is called unavailable: the MX-5
-#: with only a top wing slides off the arena at the file's 0.90, not at 0.85
+#: try, down to BACKOFF_MIN, before its combo is called unavailable: the
+#: (retired) MX-5 with only a top wing slid off the arena at the file's 0.90,
+#: not at 0.85
 BACKOFF_STEP = 0.05
 BACKOFF_MIN = 0.70
 
@@ -1862,7 +2012,7 @@ def main(argv=None) -> int:
                     help="run every combo's reference (challenge x car x config), print it")
     ap.add_argument("--write", action="store_true", help=f"... and write {REFS_FILE}")
     ap.add_argument("--only", default="",
-                    help="only the combos whose key contains this ('lap_open', '|bus|'); "
+                    help="only the combos whose key contains this ('lap_open', '|rally|'); "
                          f"--write merges them into {REFS_FILE}")
     ap.add_argument("--jobs", type=int, default=max(1, min(8, (os.cpu_count() or 2) - 2)),
                     help="worker processes")
@@ -1967,9 +2117,11 @@ def self_check(verbose: bool = True) -> bool:
     every = combos(allc, refs)
     n_ok = sum(c["available"] for c in every)
     gone = [c for c in every if not c["available"]]
-    rep(f"{REFS_FILE} covers every combo (8 x 5 cars x 4 configs), each ok with its value or "
-        "unavailable with why, and is current with the files",
-        len(every) == 160 and validate_refs(allc, refs) == [] and n_ok >= 120,
+    rep(f"{REFS_FILE} covers every combo (8 x {len(_cars_.CAR_ORDER)} cars x 4 configs), each "
+        "ok with its value or unavailable with why, and is current with the files",
+        len(every) == 8 * len(_cars_.CAR_ORDER) * len(CONFIGS) == 32 * len(_cars_.CAR_ORDER)
+        and validate_refs(allc, refs) == [] and n_ok >= len(every) - 8
+        and not any(k_.split("|")[1] in _cars_.RETIRED for k_ in refs),
         f"{n_ok} ok, {len(gone)} unavailable"
         + (f" ({gone[0]['key']}: {gone[0]['unavailable']})" if gone else "")
         + ("; " + "; ".join(validate_refs(allc, refs)[:3]) if validate_refs(allc, refs) else ""))
@@ -1977,11 +2129,16 @@ def self_check(verbose: bool = True) -> bool:
     rep("every challenge is available on the Corsa with FULL WING", len(fl) == 8
         and all(c["available"] for c in fl), ", ".join(c["key"] for c in fl if not c["available"]))
     ab = [c for c in every if c["id"] == "airbrake_150"]
-    rep("a stop over the bus's 80 km/h governor is not for it; the 80 km/h wet stop is",
-        all(not c["available"] and "governed to 80 km/h" in c["unavailable"]
-            for c in every if c["car"] == "bus" and c["id"] in ("brake_100", "airbrake_150"))
-        and all(c["available"] for c in every if c["car"] == "bus" and c["id"] == "brake_wet"),
-        next((c["unavailable"] for c in every if c["key"] == "brake_100|bus|full"), ""))
+    #  task 46: no car in the game is governed; the rule is judged on the
+    #  retired Citaro's spec (cars.RETIRED), never offered to a player
+    bus_ = _cars_.RETIRED["bus"]
+    gov = {cid: not_for_car(resolve(allc[cid], "express", "full", refs), car=bus_)
+           for cid in ("brake_100", "airbrake_150", "brake_wet")}
+    rep("a stop over a governor (the retired bus's 80 km/h) is not for that car; the 80 km/h "
+        "wet stop is; no car in the game is governed",
+        "governed to 80 km/h" in gov["brake_100"] and "governed to 80 km/h" in gov["airbrake_150"]
+        and gov["brake_wet"] == "" and all(not not_for_car(c) for c in every),
+        gov["brake_100"])
     #  a stop held at v0 has a FIXED top wing out when the brake goes in, as
     #  a car running at v0 has it (drive.Sim._hold_top, task 44): let go
     #  stowed, each FIXED config measured its moving twin to the bit
@@ -1995,23 +2152,23 @@ def self_check(verbose: bool = True) -> bool:
     rep("the stops: no FIXED config measures its moving twin (ONLY TOP, FULL WING) to the "
         "bit -- the fixed top wing is out when the brake goes in -- and the Corsa's ONLY TOP, "
         "FIXED stops shorter than ONLY TOP",
-        len(held) == 26 and not same and len(corsa) == 3
+        len(held) == 6 * len(_cars_.CAR_ORDER) and not same and len(corsa) == 3
         and all(_num(v) and f < v for f, v in corsa),
         f"{len(held)} combos, the same: {same[:3]}; the Corsa fixed / moving "
         + ", ".join(f"{f:.2f} / {v:.2f} m" for f, v in corsa if _num(v)))
     fake_v = 42.0
-    fake = {combo_key(good["id"], "mx5", "top"): {
+    fake = {combo_key(good["id"], "rally", "top"): {
         "status": "ok", "value": fake_v, "class": "|".join(
-            [good["class"].split("|")[0], "mx5"] + good["class"].split("|")[2:]),
+            [good["class"].split("|")[0], "rally"] + good["class"].split("|")[2:]),
         "driver": good["ref"]["driver"], "wing_mode": "auto"}}
-    r_ = resolve(good, "mx5", "top", fake)
-    stale = resolve(good, "mx5", "top", {k: dict(v, driver="lapdriver:0.5")
-                                          for k, v in fake.items()})
+    r_ = resolve(good, "rally", "top", fake)
+    stale = resolve(good, "rally", "top", {k: dict(v, driver="lapdriver:0.5")
+                                            for k, v in fake.items()})
     rep("resolve: the class's car swapped, the combo's key, thresholds derived from refs.json "
         "at load; an entry measured with another driver is out of date",
-        r_["available"] and r_["class"].split("|")[1] == "mx5"
+        r_["available"] and r_["class"].split("|")[1] == "rally"
         and r_["class"].split("|")[::2] == good["class"].split("|")[::2]
-        and r_["key"] == f"{good['id']}|mx5|top" and thresholds(r_) == derived(
+        and r_["key"] == f"{good['id']}|rally|top" and thresholds(r_) == derived(
             good["goal"]["metric"], fake_v) and r_["ref"]["value"] == fake_v
         and not stale["available"] and "out of date" in stale["unavailable"]
         and "threshold" not in good["goal"], f"{r_['class']} {thresholds(r_)}")
@@ -2038,7 +2195,7 @@ def self_check(verbose: bool = True) -> bool:
     own_top = json.loads(json.dumps(ref_build("tall")))
     own_top["slots"]["top"]["wing"], own_top["slots"]["left"]["wing"] = "rear-s1223", ""
     cb = {c: config_build(own, lib, "corsa", c) for c in CONFIGS}
-    bus_top = config_build(own, lib, "bus", "top")
+    bus_top = config_build(own, lib, "express", "top")      # task 46: the tallest car
     parts = config_parts(own, lib, "full"), config_parts(own_top, lib, "top_fixed")
     rep("a build with flanks and no top: FULL keeps its flanks and borrows the stock top "
         "(active); ONLY TOP / ONLY TOP FIXED drop the flanks; the FIXED ones fix the top",
@@ -2047,9 +2204,9 @@ def self_check(verbose: bool = True) -> bool:
         and cb["top"].left.wing == cb["top"].right.wing == "" and cb["top"].top.mode == "active"
         and cb["top_fixed"].left.wing == "" and cb["top_fixed"].top.mode == "fixed"
         and cb["top_fixed_side"].left.wing == "flank-e423"
-        and cb["top_fixed_side"].top.mode == "fixed" and bus_top.top.h > 3.0
+        and cb["top_fixed_side"].top.mode == "fixed" and bus_top.top.h > 1.85
         and bus_top.left.wing == "" and json.loads(json.dumps(own)) == own,
-        f"full top {cb['full'].top}; bus top h {bus_top.top.h:.2f}")
+        f"full top {cb['full'].top}; Express top h {bus_top.top.h:.2f}")
     no_fl = config_build(own_top, lib, "corsa", "full")
     #  round 3: the line names a built-in wing as the garage does, never by
     #  its library key; a wing the player made keeps its own name
@@ -2068,6 +2225,85 @@ def self_check(verbose: bool = True) -> bool:
         and not any(nm_ in BUILTIN_WING_SHOWN for ln_ in lines_
                     for nm_ in re.findall(r"(?:top|side): (.+?) \((?:yours|stock)\)", ln_)),
         " / ".join(repr(ln_) for ln_ in lines_))
+    #  task 46: the Car row picks a SAVED build on its own car, or a stock
+    #  car -- never the working build on another car (the owner's Renault
+    #  wing on the Corsa). The builds: the Express's (a flank, no top), the
+    #  Corsa's, an any-car one from before task 41
+    exp_b = json.loads(json.dumps(own))
+    exp_b.update(name="my express", car="express")
+    cor_b = dict(json.loads(json.dumps(own_top)), name="my corsa", car="corsa")
+    old_b = dict(json.loads(json.dumps(own_top)), name="old one", car="")
+    builds_ = {b_["name"]: b_ for b_ in (exp_b, cor_b, old_b)}
+    driven_ = dict(exp_b, name="as driven")           # the same car, held under another name
+    wip_ = json.loads(json.dumps(exp_b))
+    wip_["slots"]["left"]["inc_deg"] = 5.0            # edited, not saved
+    bare_ = ref_build("none")
+    on_corsa = config_build(chosen_json("corsa", "my express", builds_), lib, "corsa", "full")
+    on_exp = config_build(chosen_json("express", "my express", builds_), lib, "express", "full")
+    rep("task 46: a saved build drives only on its own car (an any-car one on the Corsa); a "
+        "build of another car is the stock car there; the page opens on the build being "
+        "driven when saved and that car's, else the car's default, else its stock car",
+        chosen_json("express", "my express", builds_) is exp_b
+        and chosen_json("corsa", "my express", builds_) is None
+        and chosen_json("corsa", STOCK, builds_) is None
+        and chosen_json("corsa", "old one", builds_) is old_b
+        and chosen_json("corsa", "gone", builds_) is None
+        and on_corsa.left.wing == on_corsa.right.wing == STOCK_SIDE
+        and on_corsa.top.wing == STOCK_TOP
+        and on_exp.left.wing == "flank-e423" and on_exp.top.wing == STOCK_TOP
+        and default_choice("express", driven_, builds_) == ("express", "my express")
+        and default_choice("corsa", driven_, builds_, "my corsa") == ("corsa", "my corsa")
+        and default_choice("corsa", wip_, builds_, "gone") == ("corsa", STOCK)
+        and default_choice("express", wip_, builds_) == ("express", STOCK)
+        and driven_saved(driven_, builds_) == "my express" and driven_saved(wip_, builds_) == ""
+        and unsaved(wip_, builds_) and not unsaved(driven_, builds_)
+        and not unsaved(bare_, builds_) and not unsaved(None, builds_),
+        f"the Express build on a Corsa: side {on_corsa.left.wing}, top {on_corsa.top.wing}; "
+        f"on the Express: side {on_exp.left.wing}")
+    #  ... and its words name the build: the Car row, the WINGS line, YOUR
+    #  SETUP, the 3rd-star rows, the result's words, the pause row, the box
+    pn = config_parts(exp_b, lib, "full", name="my express")
+    ps = config_parts(None, lib, "full", name=STOCK)
+    ch0 = resolve(allc["brake_100"], "express", "full", refs)
+    ch_b = dict(ch0, build="my express")
+    stats_ = build_stats(on_exp.to_json(), lib, _cars_.get("express"), 0.0)
+    diffs_ = setup_diffs(ch0, {}, pn, stats_)
+    eff0 = next(iter(ch0["stars"]["3"]["efficiency"].items()))
+    items_, secs_, _n = detail(ch0, stats_, [], None, parts=pn, refs=refs,
+                               car_row=choice_text("express", "my express"))
+    rows_ = dict(secs_)
+    words = (choice_text("corsa", STOCK), choice_text("corsa", "my corsa", default=True),
+             choice_text("express", "my express"), wings_line(pn), wings_line(ps),
+             _wings_word(pn), _wings_word(ps), [d["yours"] for d in diffs_ if d["key"] == "wings"],
+             bound_check(eff0[0], eff0[1], stats_, _who(pn)),
+             bound_check(eff0[0], eff0[1], stats_, _who(ps)),
+             pick_text("express", "full", "my express"), pick_text("corsa", "top", STOCK),
+             combo_text(ch_b), combo_text(ch0))
+    pr_ = menu_row(None, car="express", config="full", build="my express")
+    rep("task 46: the page names the pick -- 'Aurel Civetta 1.2 (stock)', 'my corsa - ... "
+        "(default)', its wings '(my express)', 'my express wings', the RULES rows' numbers "
+        "'my express ...' / 'stock ...', the subtitle, the pause row and the result box",
+        words[0] == f"{_cars_.car_name('corsa')} (stock)"
+        and words[1] == f"my corsa - {_cars_.car_name('corsa')} (default)"
+        and words[2] == f"my express - {_cars_.car_name('express')}"
+        and words[3] == "top: Rear wing (stock) - side: Low-drag side wing (my express)"
+        and words[4] == "top: Rear wing (stock) - side: Side plate (stock)"
+        and words[5] == "stock top, my express side" and words[6] == "stock wings"
+        and words[7] == ["my express wings"]
+        and "  -  my express " in words[8] and "  -  stock " in words[9]
+        and words[10] == f"my express - {_cars_.car_name('express')}, FULL WING: top + side"
+        and words[11] == f"{_cars_.car_name('corsa')} (stock), ONLY TOP"
+        and words[12].startswith(f"my express - {_cars_.car_name('express')}, FULL WING")
+        and words[13].startswith(f"{_cars_.car_name('express')}, FULL WING")
+        and pr_.endswith("stars (my express + wings)")
+        and menu_row(None, car="express", config="full", build=STOCK).endswith(
+            "(stock Courier + wings)")
+        and menu_row(None, car="express", config="full").endswith("(this car + wings)")
+        and items_[0][0] == f"{'Car':<8s}< {words[2]} >"
+        and detail(ch0, stats_, [], None, parts=pn, refs=refs)[0][0][0]
+        == f"{'Car':<8s}< {_cars_.car_name('express')} >"      # no label: the car, as before
+        and rows_["WINGS"][0][1] == words[3],
+        " | ".join(str(w_) for w_ in words[:8]))
     #  every stock config meets every challenge's rules and 3-star bound on
     #  every car: a player with no wings of their own can always start, and
     #  the reference earns its third star
@@ -2249,7 +2485,7 @@ def self_check(verbose: bool = True) -> bool:
     rep("constraints: a build inside every bound starts",
         refusals(dict(max_wing_area=0.5, max_wing_mass=15.0, max_ballast=50.0, max_cda=0.81),
                  st) == [])
-    ch = resolve(good, "mx5", "top", fake)
+    ch = resolve(good, "rally", "top", fake)
     lower = METRICS[ch["goal"]["metric"]]["lower"]
     t1, t2, t3 = thresholds(ch)
     eff = ch["stars"]["3"]["efficiency"]
@@ -2542,13 +2778,13 @@ def self_check(verbose: bool = True) -> bool:
     it_ok, sec_ok, _n = detail(ch, clean, [], None, parts=pt)
     it_sd, sec_sd, note_sd = detail(ch, dict(clean, slots=["top"]), ["x"], None, parts=pt)
     r_sd = dict(sec_sd)["RULES"]
-    un = resolve(good, "bus", "top", {})
+    un = resolve(good, "express", "top", {})
     it_un, sec_un, note_un = detail(un, None, [], None, parts=pt, refs={})
-    rep("the page: Car < MX-5 >, Wings < ONLY TOP >, then Start (no info row: nothing dead "
+    rep("the page: Car < the rally car >, Wings < ONLY TOP >, then Start (no info row: nothing dead "
         "takes the cursor); the WINGS section says whose wings drive, what each does and "
         "that G cannot change them",
         [a for _, a in it_ok] == ["set:ch_car", "set:ch_cfg", f"ch_go:{good['id']}", "ch_list"]
-        and it_ok[0][0] == f"Car     < {_cars_.car_name('mx5')} >"
+        and it_ok[0][0] == f"Car     < {_cars_.car_name('rally')} >"
         and it_ok[1][0] == "Wings   < ONLY TOP >"
         and sec_ok[0][0] == "WINGS"
         and sec_ok[0][1][:2] == [("wings", "top: Rear wing (stock) - side wings hidden"),
@@ -2563,10 +2799,13 @@ def self_check(verbose: bool = True) -> bool:
         and r_sd[-3:] == [("wing mass", "0.0 kg"), ("drag area", "0.600 m²"),
                           ("wings in", "top")], str(r_sd[-3:]))
     #  task 45: another wing config is offered only where this car has one
-    #  that can drive it -- the bus, governed to 80 km/h, has none for a
-    #  stop from 100; a Corsa missing one config's reference has three more
-    bus = resolve(allc["brake_100"], "bus", "full", refs)
-    _i, _s, note_bus = detail(bus, None, [], None, parts=pt, refs=refs, allc=allc)
+    #  that can drive it -- a car with no config for a stop from 100 (task
+    #  46: the Express with every brake_100 reference taken away, the retired
+    #  governed bus's case) has none; a Corsa missing one config's reference
+    #  has three more
+    refs_nb = {k_: e_ for k_, e_ in refs.items() if not k_.startswith("brake_100|express|")}
+    bus = resolve(allc["brake_100"], "express", "full", refs_nb)
+    _i, _s, note_bus = detail(bus, None, [], None, parts=pt, refs=refs_nb, allc=allc)
     refs_gap = {k_: e_ for k_, e_ in refs.items() if k_ != combo_key(good["id"], "corsa", "top")}
     gap = resolve(good, "corsa", "top", refs_gap)
     _i, _s, note_gap = detail(gap, None, [], None, parts=pt, refs=refs_gap, allc=allc)
@@ -2575,8 +2814,8 @@ def self_check(verbose: bool = True) -> bool:
         not un["available"] and note_un.startswith("NOT FOR THIS CAR")
         and note_un.endswith(". Pick another car above.")
         and [a for _, a in it_un] == ["set:ch_car", "set:ch_cfg", "ch_list"]
-        and not bus["available"] and note_bus.endswith("governed to 80 km/h: it never reaches "
-                                                       "100. Pick another car above.")
+        and not bus["available"] and note_bus.endswith(". Pick another car above.")
+        and "not measured yet" in note_bus
         and not gap["available"] and note_gap.endswith(" Pick another car or wing config above.")
         and other_configs(gap, refs_gap, allc) == ["full", "top_fixed", "top_fixed_side"],
         f"{note_bus} | {note_gap}")
@@ -2686,11 +2925,12 @@ def self_check(verbose: bool = True) -> bool:
     from .drive import engine_label
     sub_ok = class_text(ch)
     rep("the page's subtitle: the map, the car, the engine and the surface by name, not "
-        "the file's keys ('dragstrip mx5 stock dry'); an unknown map: the records' label",
-        ch["class"] == "dragstrip|mx5|stock|none"
-        and sub_ok == ("Dragstrip  ·  " + _cars_.car_name("mx5") + "  ·  "
-                       + engine_label("stock", _cars_.get("mx5")) + "  ·  Dry everywhere")
-        and "Drag" in sub_ok and "mx5" not in sub_ok.split()
+        "the file's keys ('dragstrip rally stock dry'); an unknown map: the records' label",
+        ch["class"] == "dragstrip|rally|stock|none"
+        and sub_ok == ("Dragstrip  ·  " + _cars_.car_name("rally") + "  ·  "
+                       + engine_label("stock", _cars_.get("rally")) + "  ·  Dry everywhere")
+        and "Drag" in sub_ok and "dragstrip" not in sub_ok.split()
+        and "none" not in sub_ok.split() and "stock" not in sub_ok.split()
         and class_text({"class": "moon|mx5|stock|none"}) == "moon  mx5  stock  dry",
         sub_ok)
     # the per-step guard: an attempt with T, a live change or slow motion in it is dropped
@@ -2879,7 +3119,7 @@ def self_check(verbose: bool = True) -> bool:
         and disk.section(SECTION)[ch["key"]] == dict(best=worse(t1), stars=0)
         and total_stars(disk, allc, fake)[0] == 0,
         f"{ru.note}  |  official {disk.section(SECTION)[ch['key']]}")
-    li = dict((a, t) for t, a in list_items(allc, disk, car="mx5", config="top", refs=fake))
+    li = dict((a, t) for t, a in list_items(allc, disk, car="rally", config="top", refs=fake))
     _i, secs_u, _n = detail(ch, dict(clean, unlimited=True, over_limits=st_u["over_limits"]),
                             [], disk)
     rep("the box, the list and the detail page show the Unlimited spot beside the official",
@@ -2887,7 +3127,7 @@ def self_check(verbose: bool = True) -> bool:
         and "unlimited [***]" in li[f"ch:{ch['id']}"]
         and ("unlimited", f"{fmt_value(ch['goal']['metric'], t3)}  [***]  not official")
         in dict(secs_u)["YOURS"] and any(k == "UNLIMITED" for k, _ in dict(secs_u)["RULES"])
-        and ov["text"].startswith(f"{_cars_.car_name('mx5')}, ONLY TOP. "),
+        and ov["text"].startswith(f"{_cars_.car_name('rally')}, ONLY TOP. "),
         ov["head"])
     import shutil
     shutil.rmtree(tmp, ignore_errors=True)

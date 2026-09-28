@@ -15,6 +15,8 @@ action, which the loop runs with what it already has:
 
     drive        today's first session (WELCOME / TIME TRIAL as always)
     challenges   a session that opens on the pause menu's Challenges page
+    leaderboards a session that opens on the LEADERBOARDS page (task 47):
+                 every map, car and wing mode, you against your bots
     garage       the garage (BACKSPACE / the touchpad also pick it)
     tutorial     a session that opens on the Tutorial page
     settings     a session that opens on the Settings page
@@ -26,11 +28,14 @@ pause page's Main menu row, the garage's, or Back / ESC on a page the title
 opened (drive.run_interactive_cli runs its pick as it does at launch).
 
 THE BACKGROUND. A live scene drawn by the game's own renderer: a random dressed
-circuit (`track.CIRCUITS`, never the skidpad or the dragstrip) and 1 to 5 cars
+circuit (`track.CIRCUITS`, never the skidpad or the dragstrip) and 1 to 4 cars
 of DISTINCT types -- at most one per `cars.CAR_ORDER` entry, the owner's rule
 -- each replaying its REFERENCE LAP (`medals.reference_trace`: the author lap
 the medals are measured from, key `<map>|<car>|<engine>|none`, the first of
-ENGINE_PREF that exists) in its own body and paint. A chase camera follows one
+ENGINE_PREF that exists) in its own body and paint (task 46: a car with no
+reference lap yet -- the rally Escort until `medals --build` has driven it --
+simply is not in a scene; the retired MX-5 and Citaro never are, their
+classes are not listed). A chase camera follows one
 car and cuts to the next every CAM_SWITCH_S s. No physics runs: the laps are
 replays, round and round (a flying lap ends where it starts, at speed).
 
@@ -83,6 +88,7 @@ from types import SimpleNamespace
 import numpy as np
 import pygame
 
+from . import branding
 from . import render as rnd
 from .menu import CLICK_GUARD_DRAWS, FONT_NAMES
 
@@ -100,31 +106,36 @@ C_SHADE = (9, 10, 13)            # the gradients laid over the scene
 
 #: the menu column, top to bottom: (label, action). The action is what
 #: `Title.run` returns; drive.run_interactive_cli does the rest
-ITEMS = (("Drive", "drive"), ("Challenges", "challenges"), ("Garage", "garage"),
+ITEMS = (("Drive", "drive"), ("Challenges", "challenges"), ("Leaderboards", "leaderboards"),
+         ("Garage", "garage"),
          ("Tutorial", "tutorial"), ("Settings", "settings"), ("Quit", "quit"))
 ACTIONS = tuple(a for _, a in ITEMS)
 #: the actions that are a session opened on a pause-menu page (Sim.open_page)
-PAGES = ("challenges", "tutorial", "settings")
+PAGES = ("challenges", "leaderboards", "tutorial", "settings")
 #: one line under the menu: what the highlighted row does
 HINTS = {
     "drive": "your car on your map: laps, the time trial, the wings",
     "challenges": "three stars each: you pick the car and the wings",
+    "leaderboards": "best times per map, car and wing mode: you vs your bots",
     "garage": "build the car: the side wings and the top wing, in 3-D",
     "tutorial": "learn it step by step: the car, then the wings",
     "settings": "map, car, paint, engine, gearbox, aids, camera, sound",
     "quit": "back to the desktop",
 }
-#: the game's name (the owner, 2026-09-27): "Alerón: Race Your Wing". The logo
-#: and the line under it are the owner's own art (2026-09-28: their
+#: the game's name lives in drive/branding.py (rename it there, nowhere else).
+#: The logo and the line under it are the owner's own art (2026-09-28: their
 #: myTitleV1.pdf and RaceYourWing.pdf, cut out of the white page): ALERON in
 #: blue pixel letters, an orange wing out of each side, over a blue rule, and
-#: RACE YOUR WING in blue and orange, fitted under that rule
-LOGO = "ALERÓN"
-SUBTITLE = "RACE YOUR WING"
-CAPTION = "Alerón: Race Your Wing"
+#: RACE YOUR WING in blue and orange, fitted under that rule. The art spells
+#: LOGO_ART_WORD / SUB_ART_TEXT: another word in branding.py is set in the
+#: menu's font until it has art of its own
+LOGO = branding.LOGO_WORD
+SUBTITLE = branding.SUBTITLE.upper()
+CAPTION = branding.caption()
 ART_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "art")
 LOGO_ART = os.path.join(ART_DIR, "logo.png")        # 833 x 150
 SUB_ART = os.path.join(ART_DIR, "subtitle.png")     # 1273 x 116
+LOGO_ART_WORD, SUB_ART_TEXT = "ALERON", "RACE YOUR WING"   # what the art spells (accents dropped)
 LOGO_W = 560                     # the logo's width, px at 1280x800 (the art's own 833: sharp to u 1.5)
 LOGO_RULE = (0.094, 0.923)       # the art's rule under the letters, fractions of its width
 SUB_SIZE = 22                    # the plain subtitle's px at 1280x800 (no art)
@@ -564,13 +575,18 @@ def logo_surfaces(u: float, ss: int | None = None):
     """(logo, shadow) at scale `u`: the owner's logo art (LOGO_ART) LOGO_W x u
     wide, its rule included, and its silhouette for the drop shadow. `ss` is
     kept for the callers (the art is drawn already). Raises if the art will
-    not load."""
+    not load or spells another word than LOGO (drive/branding.py)."""
+    if branding.ascii_name(LOGO).upper() != LOGO_ART_WORD:
+        raise ValueError(f"the logo art spells {LOGO_ART_WORD}, the name is {LOGO}")
     return _fit(_art(LOGO_ART), LOGO_W * u)
 
 
 def subtitle_surfaces(w: int):
     """(subtitle, shadow): the owner's RACE YOUR WING art (SUB_ART) `w` px
-    wide. Raises if it will not load."""
+    wide. Raises if it will not load or SUBTITLE (drive/branding.py) is
+    another line."""
+    if SUBTITLE != SUB_ART_TEXT:
+        raise ValueError(f"the subtitle art says {SUB_ART_TEXT}, the line is {SUBTITLE}")
     return _fit(_art(SUB_ART), w)
 
 
@@ -1120,8 +1136,8 @@ def self_check(verbose: bool = True, shots: str | None = None) -> bool:
     for size in ((1280, 800), (1920, 1080), (960, 600)):
         with quiet:
             t = Title(size, seed=7, headless=True, inp=_NoInput(),
-                      bottom=[("CAR", "Opel Corsa C 1.2"), ("MAP", "Linden park"),
-                              ("BUILD", "my corsa")])
+                      bottom=[("CAR", "Aurel Civetta 1.2"), ("MAP", "Linden park"),
+                              ("BUILD", "my civetta")])
         for _ in range(40):               # past the fade in
             t.frame(1.0 / 60.0)
         shot(t, f"title_{size[0]}x{size[1]}.png")
@@ -1146,7 +1162,7 @@ def self_check(verbose: bool = True, shots: str | None = None) -> bool:
         a = pygame.surfarray.pixels3d(t.screen)
         lum_l = float(a[int(436 * t.u):int(466 * t.u), int(300 * t.u):int(600 * t.u)].mean())
         del a
-        rep(f"layout {W}x{H}: six rows inside the window, clear of the logo and the bottom "
+        rep(f"layout {W}x{H}: {len(ITEMS)} rows inside the window, clear of the logo and the bottom "
             f"line; the menu reads on a dark side; the scene is live",
             inside and clear and wide and lum_l < 90.0 and t.mode == "live",
             f"menu {rows[0][1]}..{menu_bottom} px, bottom line at {foot_top}, "
@@ -1167,7 +1183,7 @@ def self_check(verbose: bool = True, shots: str | None = None) -> bool:
         t.idx = 0
         esc.append((t.handle(c), t.action()))
     rep("the keys: UP / DOWN move (wrapping), ENTER runs the row -- Drive, Challenges, "
-        "Garage, Tutorial, Settings, Quit; 'quit' (the window's close) quits; "
+        "Leaderboards, Garage, Tutorial, Settings, Quit; 'quit' (the window's close) quits; "
         "'menu' / 'back' (ESC, a right click, OPTIONS, CIRCLE) only move to Quit; "
         "BACKSPACE is the garage",
         got == list(ACTIONS) and wrap == "quit"
@@ -1179,8 +1195,8 @@ def self_check(verbose: bool = True, shots: str | None = None) -> bool:
     with quiet:
         t = Title((1280, 800), seed=3, headless=True, inp=_NoInput(), live=False)
     t.frame(0.0)
-    x2, y2 = t.row_centre(2)
-    x4, y4 = t.row_centre(4)
+    x2, y2 = t.row_centre(ACTIONS.index("garage"))       # task 47: Leaderboards is row 2
+    x4, y4 = t.row_centre(ACTIONS.index("settings"))
     early = (t.handle(f"click:{x2}:{y2}"), t.handle(f"release:{x2}:{y2}"))
     for _ in range(CLICK_GUARD_DRAWS):
         t.frame(0.0)
@@ -1195,25 +1211,39 @@ def self_check(verbose: bool = True, shots: str | None = None) -> bool:
         and drag == (None, None) and click == (None, "garage"),
         f"early {early}, hover -> {hov}, miss {miss}, drag {drag}, click {click}")
     t.close()
-    # 6 the picks over many seeds: a circuit, 1..5 cars, distinct types, every
-    # number and every type seen, each car with its own lap on that map
+    # 6 the picks over many seeds: a circuit, 1..N cars, distinct types, every
+    # number and every type seen, each car with its own lap on that map.
+    # Task 46: N is the cars that HAVE a reference lap somewhere -- a car
+    # added since the medal table was built (the rally Escort) has none yet
+    # and is simply not in a scene; the check names it
     picks = [pick_scene(s_) for s_ in range(300)]
     ns = [len(p["cars"]) for p in picks]
     maps_seen = sorted({p["track"] for p in picks})
     types = sorted({k for p in picks for k, _e, _a in p["cars"]})
+    with_lap = sorted({k for m_ in trk.CIRCUITS for k in available(m_)})
+    no_lap = [k for k in cars.CAR_ORDER if k not in with_lap]
+    n_max = len(with_lap)
     distinct = all(len({k for k, _e, _a in p["cars"]}) == len(p["cars"]) for p in picks)
     own = all(a.shape[1] == 9 and len(a) > 100 for p in picks for _k, _e, a in p["cars"])
-    rep("300 seeds: a dressed circuit, 1 to 5 cars, never two of one type; every number "
-        "of cars and every type seen",
+    rep("300 seeds: a dressed circuit, 1 to N cars, never two of one type; every number "
+        "of cars and every type with a reference lap seen",
         all(p["track"] in trk.CIRCUITS for p in picks) and min(ns) == 1
-        and max(ns) == len(cars.CAR_ORDER) and set(ns) == set(range(1, 6)) and distinct
-        and types == sorted(cars.CAR_ORDER) and own and set(maps_seen) == set(trk.CIRCUITS),
-        f"cars {dict((k, ns.count(k)) for k in range(1, 6))}, maps {maps_seen}")
-    # 7 a live scene of all five: every car in view drawn in its OWN body and
-    # paint, the render module's car and paint put back after each frame
-    pal = {"corsa": (40, 72, 186), "mx5": None, "540i": (226, 226, 220),
-           "express": (30, 92, 56), "bus": (112, 26, 44)}
-    s5 = next(s_ for s_ in range(300) if len(pick_scene(s_)["cars"]) == 5)
+        and max(ns) == n_max and set(ns) == set(range(1, n_max + 1)) and distinct
+        and types == with_lap and set(with_lap) <= set(cars.CAR_ORDER) and n_max >= 3
+        and own and set(maps_seen) == set(trk.CIRCUITS),
+        f"cars {dict((k, ns.count(k)) for k in range(1, n_max + 1))}, maps {maps_seen}"
+        + (f"; no reference lap yet for {', '.join(no_lap)} (python3 -m drive.medals "
+           f"--build), so not in a scene" if no_lap else "")
+        #  a circuit with no reference lap yet is never picked (task 46: a
+        #  new map has none until the medal table is rebuilt) -- say which
+        + "".join(f"; NO REFERENCE LAP on {m} (python3 -m drive.medals --build)"
+                  for m in trk.CIRCUITS if m not in maps_seen and not available(m)))
+    # 7 a live scene of every car with a lap: each car in view drawn in its
+    # OWN body and paint, the render module's car and paint put back after
+    # each frame (the rally car in its factory paint, None)
+    pal = {"corsa": (40, 72, 186), "rally": None, "540i": (226, 226, 220),
+           "express": (30, 92, 56)}
+    s5 = next(s_ for s_ in range(300) if len(pick_scene(s_)["cars"]) == n_max)
     car0, paint0 = rnd._CAR, rnd._PAINT
     with quiet:
         t = Title((1280, 800), seed=s5, headless=True, inp=_NoInput(), paint=pal.get)
@@ -1280,7 +1310,7 @@ def self_check(verbose: bool = True, shots: str | None = None) -> bool:
     live_ok = sum(1 for m in moved.values() if (True, False) in m and (False, True) in m) >= 3
     t.close()
     back = rnd._CAR is car0 and rnd._PAINT == paint0
-    rep("five cars: each drawn in its own body and paint (styles "
+    rep(f"{n_max} cars: each drawn in its own body and paint (styles "
         + ", ".join(sorted({s_ for s_, _p in seen.values()})) + "); several in one frame; "
         "the camera's car and paint left set between frames, the launch's back on close",
         styles_ok and len(seen) >= 3 and multi >= 2 and restored and back,
@@ -1315,7 +1345,7 @@ def self_check(verbose: bool = True, shots: str | None = None) -> bool:
         closest = min(closest, float(gaps.min()))
     rep("the chase camera cuts to the next car every 10 s (each car in turn); the train "
         "stays spaced -- never two cars within 12 m",
-        cuts == 5 and len(set(follows[:5])) == 5 and closest > 12.0 and ahead,
+        cuts == 5 and len(set(follows[:n_max])) == n_max and closest > 12.0 and ahead,
         f"{cuts} cuts, cameras {follows}, closest {closest:.1f} m")
     # 9 the fallback: no reference lap anywhere, a renderer that throws, the
     # live scene off -- the panorama (sky over grass), the menu still works
@@ -1352,7 +1382,8 @@ def self_check(verbose: bool = True, shots: str | None = None) -> bool:
     # 10 run(): the input stack's commands reach it; the pad comes back
     with quiet:
         tr_ = Title((960, 600), seed=2, headless=True, inp=_NoInput(), live=False)
-        act = tr_.run(script=lambda n: ["nav_down"] * 4 + ["select"] if n == 3 else [])
+        act = tr_.run(script=lambda n: (["nav_down"] * ACTIONS.index("settings") + ["select"])
+                      if n == 3 else [])
         tq = Title((960, 600), seed=2, headless=True, inp=_NoInput(), live=False)
         act_q = tq.run(script=lambda n: ["quit"] if n == 2 else [])
     rep("run(): the menu's commands pick Settings; the window's close quits; the input "
@@ -1385,7 +1416,7 @@ def self_check(verbose: bool = True, shots: str | None = None) -> bool:
                  "right click, ENTER": ("quit", "quit"), "ESC": ("drive", "quit"),
                  "ESC, ENTER": ("quit", "quit")},
         str(real))
-    # 12 the frame budget at 1280x800, five cars, the full look: the scene
+    # 12 the frame budget at 1280x800, every car, the full look: the scene
     # and the overlay together, load-normalised like every page's
     with quiet:
         tf = Title((1280, 800), seed=s5, headless=True, inp=_NoInput(), paint=pal.get)

@@ -157,7 +157,7 @@ class Swarm:
         self.track_kw = dict(track_kw or {})
         self.seed = int(seed)
         self.rng = np.random.default_rng(self.seed)
-        self.name = name or f"{track}_{car_name}_{time.strftime('%Y%m%d_%H%M%S')}"
+        self.name = name or f"{track}_{car_word(car_name)}_{time.strftime('%Y%m%d_%H%M%S')}"
         self.sigma = float(sigma)
         self.gen = 0
         self.next_id = 0
@@ -496,6 +496,26 @@ class Swarm:
         return path, measured
 
 
+def car_word(car_name) -> str:
+    """A car choice as a swarm's default name shows it (the SWARM overlay,
+    the save prompt, the RACE page's bot list): a stock car by its short
+    shown name (`drive.prerace.car_label`, e.g. 'n540' for the key '540i'),
+    plain ASCII, lower case -- never the key; any other choice (a saved
+    build's) as it is."""
+    try:
+        import unicodedata
+        import cars
+        if car_name in cars.CARS:
+            from ..prerace import car_label
+            w = unicodedata.normalize("NFKD", car_label(car_name))
+            w = "".join(ch for ch in w.encode("ascii", "ignore").decode().lower() if ch.isalnum())
+            if w:
+                return w
+    except Exception:                      # noqa: BLE001 -- a name is not a crash
+        pass
+    return str(car_name)
+
+
 def safe_name(name) -> str:
     """A bot name as a file stem: letters, digits, '-' and '_' only, 40 max."""
     if not name:
@@ -574,7 +594,7 @@ def main(argv=None) -> int:
     ap.add_argument("--track", default="arena")
     ap.add_argument("--wing", default="plate", choices=("off", "fin", "plate"))
     ap.add_argument("--car", default=None,
-                    help="corsa (default) | mx5 | 540i | express | bus")
+                    help="corsa (default) | rally | 540i | express")
     ap.add_argument("--seed", default="none",
                     help="'none', a seed-lap json the user drove (runs/swarm/seed_*.json), "
                          "or a Policy checkpoint to breed from")
@@ -607,6 +627,11 @@ def self_check(verbose: bool = True) -> bool:
         if verbose:
             print(f"  [{'ok' if cond else 'FAIL'}] {tag}  {msg}")
 
+    import cars
+    words = [car_word(k) for k in cars.CAR_ORDER]
+    rep("a default name shows each stock car by its shown name, never its key",
+        all(w and w != k and w.isascii() and w.isalnum() for w, k in zip(words, cars.CAR_ORDER))
+        and car_word("build:my van") == "build:my van", ", ".join(words))
     sw = Swarm(pop=6, track="arena", T=6.0, seed=1, workers=1, name="selfcheck")
     sw.seed_from("none")
     rep("seed 0 is the anchor", float(np.abs(sw.population[0]["theta"]).max()) == 0.0)

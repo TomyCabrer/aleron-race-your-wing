@@ -50,8 +50,9 @@ says why; the lap is simply not a record. A live change also RETARGETS the
 recorder: the engine is in the class. A write that fails keeps the book in
 memory and says NOT SAVED -- a record never stops the car.
 
-Tracks: the four circuits (`arena`, `linden`, `kestrel`, `ashdown` --
-track.CIRCUITS), `open` and `skidpad` (the standard 50 m pad) have laps. The
+Tracks: the five circuits (`arena`, `linden`, `kestrel`, `ashdown`,
+`fairfield` -- track.CIRCUITS), `open` and `skidpad` (the standard 50 m pad)
+have laps. The
 DRAGSTRIP has no finish time -- `LapTimer` never fires a lap on an open
 track -- and is EXCLUDED rather than given an invented finish line: a
 standing-start quarter mile is a different game mode, not a lap.
@@ -108,7 +109,7 @@ TOP_N = 5
 #: A literal, not track.CIRCUITS + ..., so this module stays importable
 #: without the track; track.py's names are what these must match (the
 #: self-check asserts it)
-LAP_TRACKS = ("arena", "linden", "kestrel", "ashdown", "open", "skidpad")
+LAP_TRACKS = ("arena", "linden", "kestrel", "ashdown", "fairfield", "open", "skidpad")
 #: a lap is filed only if the car went ROUND: every sector line in order and
 #: at least this much of the track's length of centreline progress
 LAP_MIN_FRACTION = 0.95
@@ -168,11 +169,17 @@ def class_file(key: str) -> str:
 
 
 def class_label(key: str) -> str:
-    """A short human label: 'arena  corsa  sport  wet patches'."""
+    """A short human label: 'arena  Aurel Civetta 1.2  sport  wet patches'
+    -- the car by its title (cars.CAR_TITLES), never its key, on screen."""
     try:
         t, c, e, s = split_key(key)
     except ValueError:
         return str(key)
+    try:
+        import cars as _cars
+        c = _cars.CAR_TITLES.get(c, c)
+    except Exception:                      # noqa: BLE001 -- the key's word will do
+        pass
     surf = {"patch": "wet patches", "none": "dry", "all": "wet"}.get(s, s)
     return f"{t}  {c}  {e}  {surf}"
 
@@ -220,9 +227,12 @@ def build_id(name, build_json) -> str:
 
 def build_car(build_json) -> str:
     """The car a build was made for (a `cars.py` key), "" for a build saved
-    before task 41 -- one made for ANY car -- or anything not a build."""
+    before task 41 -- one made for ANY car -- or anything not a build. A
+    retired car's tag (task 46: 'mx5', 'bus') reads as the Corsa's
+    (`cars.build_car_key`)."""
     c = build_json.get("car", "") if isinstance(build_json, dict) else ""
-    return c if isinstance(c, str) else ""
+    import cars as _cars
+    return _cars.build_car_key(c)
 
 
 def build_fits(build_json, car: str) -> bool:
@@ -1413,7 +1423,7 @@ def self_check(verbose: bool = True) -> bool:
         and not book2.set_best_medal(k, "bronze", ("gold", "silver", "bronze"))
         and book2.set_best_medal(k, "gold", ("gold", "silver", "bronze"))
         and RecordBook(root).load(k)["best_medal"] == "gold")
-    k2 = class_key("open", "mx5", "stock", "none")
+    k2 = class_key("open", "rally", "stock", "none")
     with open(book.path(k2), "w") as fh:
         fh.write("{ this is not json")
     b3 = RecordBook(root)
@@ -1439,31 +1449,38 @@ def self_check(verbose: bool = True) -> bool:
     #  before task 41 (its build has no car): every car may still open with
     #  it until that car has an entry of its own; a build tagged for another
     #  car is never handed out, whichever key holds it.
-    b3.set_last_build("arena", "bus wings", dict(version=2, name="bus wings", car="bus"),
-                      car="bus")
+    b3.set_last_build("arena", "rally wings", dict(version=2, name="rally wings", car="rally"),
+                      car="rally")
     b3.set_last_build("linden", "corsa fast", dict(version=2, name="corsa fast", car="corsa"),
                       car="corsa")
     b3.set_last_build("kestrel", "corsa own", dict(version=2, name="corsa own", car="corsa"),
                       car="corsa")
-    wrote_other = b3.set_last_build("kestrel", "picked", dict(version=2, name="picked", car="bus"),
-                                    car="corsa")   # a bus build the player drove on the Corsa
+    wrote_other = b3.set_last_build("kestrel", "picked", dict(version=2, name="picked", car="rally"),
+                                    car="corsa")   # a rally build the player drove on the Corsa
     b3.set_last_build("ashdown", "mine", dict(version=2, name="mine", car="corsa"),
                       car="corsa")
     b3.set_last_build("ashdown", "old any-car", dict(version=2, name="old any-car"))
     rb = RecordBook(root)
     lb = {(t, c): (rb.last_build(t, c) or {}).get("name")
-          for t in ("arena", "linden", "kestrel", "ashdown") for c in ("corsa", "bus")}
+          for t in ("arena", "linden", "kestrel", "ashdown") for c in ("corsa", "rally")}
     rep("last build per map AND car: each car its own; a pre-task-41 entry for any car "
         "until it has one; another car's build never -- not even written over the car's "
         "own entry (review finding 0)",
-        lb == {("arena", "corsa"): "fast one", ("arena", "bus"): "bus wings",
-               ("linden", "corsa"): "corsa fast", ("linden", "bus"): None,
-               ("kestrel", "corsa"): "corsa own", ("kestrel", "bus"): None,
-               ("ashdown", "corsa"): "mine", ("ashdown", "bus"): "old any-car"}
+        lb == {("arena", "corsa"): "fast one", ("arena", "rally"): "rally wings",
+               ("linden", "corsa"): "corsa fast", ("linden", "rally"): None,
+               ("kestrel", "corsa"): "corsa own", ("kestrel", "rally"): None,
+               ("ashdown", "corsa"): "mine", ("ashdown", "rally"): "old any-car"}
         and wrote_other is False
         and rb.last_build("arena")["name"] == "fast one"
-        and "arena|bus" in rb.last_builds() and "arena|corsa" not in rb.last_builds(),
+        and "arena|rally" in rb.last_builds() and "arena|corsa" not in rb.last_builds(),
         str(lb))
+    #  task 46: a build a RETIRED car ('bus', 'mx5') made is read as a Corsa
+    #  build: build_car / build_fits hand it to the Corsa, never to another car
+    rep("a retired car's build reads as the Corsa's",
+        build_car(dict(car="bus")) == "corsa" and build_car(dict(car="mx5")) == "corsa"
+        and build_fits(dict(car="bus"), "corsa") and not build_fits(dict(car="bus"), "rally")
+        and build_car(dict(car="")) == "" and build_car(dict(car=7)) == "",
+        "")
     #  a library rename moves the per-map memory with it (review finding 9):
     #  the entry's name and its build's name; an unknown name moves nothing
     moved = b3.rename_last_build("mine", "mine pro")
@@ -1520,7 +1537,7 @@ def self_check(verbose: bool = True) -> bool:
         os.chmod(ro, 0o700)
     # an unreadable file (a lock, a permission) is NOT corruption: kept, and
     # never written over this session
-    kr = class_key("arena", "mx5", "sport", "none")
+    kr = class_key("arena", "rally", "sport", "none")
     br0 = RecordBook(root)
     for t in (70.0, 71.0):
         br0.insert(kr, _fake_rec(t))
@@ -1554,7 +1571,7 @@ def self_check(verbose: bool = True) -> bool:
     # a live engine change retargets; a PREVIEWED map / car / surface does not
     rr = LapRecorder(RecordBook(root), class_key("arena", "corsa", "stock", "patch"), {}, 1.0)
     from types import SimpleNamespace as _NS
-    prev = _NS(track="open", car="mx5", engine="tuned", wet="all", abs=True, tc=False,
+    prev = _NS(track="open", car="rally", engine="tuned", wet="all", abs=True, tc=False,
                steer_aid=True, gearbox="auto", as_dict=lambda: dict(track="open"))
     rr.retarget(prev, {"track": "arena"})
     rep("a live engine change retargets the class, a previewed map does not",
@@ -1628,18 +1645,20 @@ def self_check(verbose: bool = True) -> bool:
 
     # -- a real lap: recorded, filed, re-simulated bit for bit ------------
     # (the full scripted 3-lap acceptance is drive.py's V31; this one is a
-    #  skidpad lap in a BALLASTED MX-5 with the ABS and TC on and a designed
+    #  skidpad lap in a BALLASTED rally car (task 46; it was the MX-5) with
+    #  the ABS and TC on and a designed
     #  panel, so the snapshot carries a CarSpec, the aids' memories and a
     #  DevAero)
     try:
         res = _replay_probe(root)
-        rep("a ballasted mx5 skidpad lap re-simulates bit for bit", res["exact"],
+        rep("a ballasted rally-car skidpad lap re-simulates bit for bit", res["exact"],
             f"lap {res['time']:.6f} s, replay {res['replay']:.6f} s, "
             f"{res['bytes'] / 1024:.0f} KB on disk, {res['n_log']} logged steps")
     except Exception as exc:               # noqa: BLE001
         import traceback
         traceback.print_exc()
-        rep("a ballasted mx5 skidpad lap re-simulates bit for bit", False, f"{type(exc).__name__}: {exc}")
+        rep("a ballasted rally-car skidpad lap re-simulates bit for bit", False,
+            f"{type(exc).__name__}: {exc}")
 
     if verbose:
         print(f"  {'ALL PASS' if ok else 'FAILURES ABOVE'}: {n_ok}/{n_all} checks")
@@ -1714,7 +1733,7 @@ def _replay_probe(root: str) -> dict:
     from .vehicle import Controls, Vehicle, VehicleConfig, DevAero
     from .drive import Sim, ScriptedInput, PathFollower
 
-    base = cars.get("mx5")
+    base = cars.get("rally")
     car = cars.with_masses(base, [cars.ballast_point(base, 75.0, "boot")])
     cfg = VehicleConfig(mu_scale=float(base.mu_scale), abs_on=True, tc_on=True, power_scale=1.5,
                         dev_left=DevAero.legacy("plate", 0.97, 0.90, 2.0),
@@ -1729,7 +1748,7 @@ def _replay_probe(root: str) -> dict:
     sim = Sim(veh, tr, ScriptedInput(drv), dt=0.001)
     sim.s = s0
     book = RecordBook(root)
-    key = class_key("skidpad", "mx5", "tuned", "patch")
+    key = class_key("skidpad", "rally", "tuned", "patch")
     rec = LapRecorder(book, key, dict(build_name="probe", build_json=None,
                                       assists=dict(abs=True, tc=True), settings={}),
                       expect_global_wet=1.0, dt=sim.dt)

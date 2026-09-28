@@ -175,7 +175,7 @@ OBJECTIVE_NOTE = {
                  "and to stall",
     "drag": "wants a force floor — the least drag is no wing at all",
     "laptime": ("WingLab's point-mass lap (cartrack) on carsim's {circuit} geometry with the "
-                "Corsa's mass, power and CdA; carsim's own two-track lap on Results is a "
+                "Civetta's mass, power and CdA; carsim's own two-track lap on Results is a "
                 "different model and will not match to the tenth"),
     "downforce_plus_drag": "a ratchet: without a ceiling it takes the whole area row",
 }
@@ -1606,7 +1606,7 @@ class WingModel:
 
     def band_source(self, label: str) -> str:
         """Who set a box row's band: "tip device: none" | "fixed from 2.8" |
-        "fixed" | "user" | "released" | "carsim packaging" | "slot" |
+        "fixed" | "user" | "released" | "car packaging" | "slot" |
         "AeroBO default"."""
         if label in bridge.tip_pins(self.choices):
             return TIP_PIN_SOURCE
@@ -1619,7 +1619,7 @@ class WingModel:
         if label in self.box:
             return "user"
         if label in (self.session.op.size_rows or {}):
-            return "carsim packaging"
+            return "car packaging"
         if label == "ride_height_m":
             return "slot"
         return "WingLab default"
@@ -2456,7 +2456,7 @@ class WingModel:
         if past is not None:
             k, lim = past
             self.msg = (f"'{spec.name}' ({float(spec.span):.2f} m) is past the {k} slot's "
-                        f"{lim:.2f} m span limit on the {s.car}: not saved (narrow the span row "
+                        f"{lim:.2f} m span limit on the {bridge.car_tag(s.car)}: not saved (narrow the span row "
                         f"of the Design box, or raise the slot; Settings > Wing limits: "
                         f"Unlimited allows it)")
             s.say(self.msg, "warning")
@@ -2483,6 +2483,9 @@ class WingModel:
                         lib.save_airfoil(a)
                         setattr(spec, attr, a.name)
             spec.builtin, spec.legacy = False, None
+            #  task 46: the car it was designed on, for the garage's Saved
+            #  wings page ('made on the Express'); a label, it flies the same
+            spec.made_for = str(s.car or "")
             lib.save_wing(spec.copy())
         except (OSError, ValueError) as exc:
             #  a full disk, a read-only runs/, a name another record's file
@@ -3464,7 +3467,7 @@ def self_check(verbose: bool = True) -> bool:
                 "fixed from 2.8",
                 tc_ok and bo.get("taper") == [0.5, 0.8] and "taper" not in bo_rel
                 and pin2.get("twist_root_deg") == 1.0 and "b_m" in bo
-                and src == ("fixed from 2.8", "user", "carsim packaging"),
+                and src == ("fixed from 2.8", "user", "car packaging"),
                 f"pin {pin}; sources {src}; flank size rows {bo.get('b_m')}, {bo.get('S_m2')}")
             #  ...and it is not the player's (owner, 2026-09-25): no box
             #  controls, and none of the switches' paths moves it
@@ -3788,23 +3791,24 @@ def self_check(verbose: bool = True) -> bool:
 
         # M33 (task 41) ------------------------------------------------------------
         def m33():
-            #  the session reads the host's CAR and Wing limits: the bus's flank
-            #  limit at h 0.90 is 2 (0.90 - 0.28) = 1.24 m (its own underbody),
-            #  its top wing flies over its own deck in its own band, its top span
-            #  row is 1.2 x its 2.55 m width; Unlimited opens the ceilings 3x but
-            #  not the default rows; the Corsa's default is task 41's 1.50 m
+            #  the session reads the host's CAR and Wing limits: the rally
+            #  car's flank limit at h 0.90 is 2 (0.90 - 0.19) = 1.42 m (its own
+            #  underbody, task 46: the retired bus's role), its top wing flies
+            #  over its own deck in its own band, its top span row is 1.2 x its
+            #  1.70 m width; Unlimited opens the ceilings 3x but not the default
+            #  rows; the Corsa's default is task 41's 1.50 m
             from . import bodies as _b
             hb = _Host(lib)
-            hb.car, hb.unlimited = "bus", False
+            hb.car, hb.unlimited = "rally", False
             fb, tb = DesignSession(hb, "left", pol), DesignSession(hb, "top", pol)
             hc = _Host(lib)
             fc = DesignSession(hc, "left", pol)
             hu = _Host(lib)
-            hu.car, hu.unlimited = "bus", True
+            hu.car, hu.unlimited = "rally", True
             fu = DesignSession(hu, "left", pol)
-            body = _b.body("bus")
-            band = _b.top_h_band("bus", hb.build.top.x)
-            rep("M33 task 41: the session is the host car's -- the bus's flank limit, top deck, "
+            body = _b.body("rally")
+            band = _b.top_h_band("rally", hb.build.top.x)
+            rep("M33 task 41: the session is the host car's -- the rally car's flank limit, top deck, "
                 "ride band and span row; Unlimited widens the ceilings only; the Corsa's 1.50 m",
                 abs(fb.op.limit - 2.0 * (0.90 - body.ground)) < 1e-12
                 and abs(fb.op.size_rows["b_m"][1] - fb.op.limit) < 1e-6
@@ -3814,8 +3818,8 @@ def self_check(verbose: bool = True) -> bool:
                 and fu.op.size_rows == fb.op.size_rows
                 and abs(fu.op.size_caps["b_m"] - 3.0 * fb.op.limit) < 1e-9
                 and abs(fc.op.limit - 1.50) < 1e-12 and fc.op.size_rows["b_m"][1] == 1.5
-                and fc.car == "corsa" and fb.car == "bus",
-                f"bus flank <= {fb.op.limit:.2f} m (rows {fb.op.size_rows['b_m']}), top deck "
+                and fc.car == "corsa" and fb.car == "rally",
+                f"rally flank <= {fb.op.limit:.2f} m (rows {fb.op.size_rows['b_m']}), top deck "
                 f"{tb.op.deck:.2f} band {tb.op.ride_band[0]:.2f}-{tb.op.ride_band[1]:.2f} b <= "
                 f"{tb.op.size_rows['b_m'][1]:.3f}; Unlimited cap {fu.op.size_caps['b_m']:.2f} m; "
                 f"Corsa {fc.op.limit:.2f} m")

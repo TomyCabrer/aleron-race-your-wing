@@ -141,7 +141,7 @@ LOCK_TEXT = "locked while the {evaluator} run is going — ■ Stop to change it
 HAZARD = "a run is in progress — stop it first"
 NOT_LIVE = ("state the mission first — every section and the wing are designed at the "
             "operating point it states")
-SESSION_LINE = ("carsim garage — WingLab's engine, on carsim's mission: state the mission, then "
+SESSION_LINE = ("Garage — WingLab's engine, on the car's mission: state the mission, then "
                 "the sections, then the wing. Budgets are WingLab's measured ones (164 a section, "
                 "53 the wing at balanced; 1 Mission ▸ Search & budget). Keys: TAB tree/tabs/work · "
                 "ENTER do it · F5 run · ESC stop/back · F1 all keys")
@@ -212,7 +212,7 @@ KEY_ROWS = (("TAB", "TRIANGLE", "tree → tabs → work area"),
             ("N", None, "rename"),
             ("H", None, "hide the tutorial box"),
             ("F1", None, "this list"))
-ABOUT_ROWS = (("1", "State the mission: a lap of one of carsim's circuits on a surface, for a "
+ABOUT_ROWS = (("1", "State the mission: a lap of one of the game's circuits on a surface, for a "
                     "slot. It sets WingLab's operating point — the design speed, the air, where "
                     "the wing sits."),
               ("2", "Choose the wing's section and the endplates' (symmetric): screen WingLab's "
@@ -2341,6 +2341,150 @@ def self_check(verbose: bool = True, only=None) -> bool:
                 and chips["r"] == score_text(s.wing.record.get("best_score"), s.wing.record.get("score_units")),
                 chips["r"])
             draw_views("post", STAGE_VIEWS["w"] + STAGE_VIEWS["r"])
+            if "r.summary" in keys:
+                # -- 4 Results ▸ Summary's "Best design in its box" (views_results.box_rows) --------------
+                from . import views_results as vr
+                syn = {"param_labels": ["a", "b", "c", "d", "e"], "best_x": [0.01, 1.97, 2.5, 0.5, 4.0],
+                       "bounds": [[0.0, 1.0], [0.0, 2.0], [0.0, 2.0], [0.5, 0.5], [0.0, 10.0]],
+                       "config": {"bounds_overrides": {"b": [0.0, 2.0], "d": [0.4, 0.6]}}, "pinned": {"d": 0.5}}
+                br = {r["label"]: r for r in vr.box_rows(syn)}
+                rep("the box card's rows are WingLab's design_box: riding low / high inside 2 %, outside, "
+                    "narrowed = in the run's overrides; a fixed row ([v, v]) is fixed, never ridden or narrowed",
+                    br["a"]["riding"] == "low" and br["b"]["riding"] == "high" and br["b"]["narrowed"]
+                    and not br["a"]["narrowed"] and br["c"]["outside"] and br["d"]["fixed"] == 0.5
+                    and br["d"]["frac"] is None and not br["d"]["riding"] and not br["d"]["narrowed"]
+                    and not br["d"]["outside"] and br["e"]["riding"] == "" and abs(br["e"]["frac"] - 0.4) < 1e-12,
+                    "; ".join(f"{k} {r['riding'] or '·'}" + " out" * r["outside"] + " narrowed" * r["narrowed"]
+                              + (" fixed" if r["fixed"] is not None else "") for k, r in br.items()))
+                bare = vr.box_rows({"param_labels": ["a", "b"], "best_x": [0.3, None]})
+                junk = [vr.box_rows(x) for x in (None, {}, {"best_x": 3.0},
+                                                 {"best_x": [1, "x", float("nan"), True], "config": "?",
+                                                  "bounds": [[0, 1], "no", [2, 1, 0]], "pinned": [1]})]
+                rep("a record with no box keeps its values and invents no bounds; junk never raises",
+                    [r["value"] for r in bare] == [0.3, None]
+                    and all(r["lo"] is None and r["frac"] is None and not r["riding"] and r["fixed"] is None
+                            for r in bare)
+                    and junk[:3] == [[], [], []] and [r["value"] for r in junk[3]] == [1.0, None, None, None]
+                    and junk[3][0]["label"] == "x0" and junk[3][0]["riding"] == "high", "")
+                rec0 = s.wing.record
+                rows0 = vr.box_rows(rec0)
+                src0 = vr.box_sources(s.wing, rows0) or {}
+                ov0 = set((rec0.get("config") or {}).get("bounds_overrides") or {})
+                #  the captured run fixed nothing: a row the box fixes now was fixed since
+                since = sorted(lab for lab in s.wing.pinned() if lab in (rec0.get("param_labels") or []))
+                s.wing.box["taper"] = [0.5, 0.8]                    # a band typed since the run
+                try:
+                    typed = vr.box_sources(s.wing, rows0) or {}
+                finally:
+                    s.wing.box.pop("taper", None)
+                #  a run that fixed a row by hand: named while the box holds it at that value
+                i_t = list(rec0.get("param_labels") or []).index("twist_root_deg")
+                x_held = [0.0 if i == i_t else v for i, v in enumerate(rec0["best_x"])]
+                held_rows = vr.box_rows(dict(rec0, pinned={"twist_root_deg": 0.0}, best_x=x_held))
+                held = {}
+                for v in (0.0, 1.0):
+                    s.wing.fixed["twist_root_deg"] = v
+                    try:
+                        held[v] = (vr.box_sources(s.wing, held_rows) or {}).get("twist_root_deg")
+                    finally:
+                        s.wing.fixed.pop("twist_root_deg", None)
+                rep("...on the finished run: a row per design variable, inside the box it searched; the car's "
+                    "size rows narrowed and named car packaging, the ride row the slot's; a row fixed or "
+                    "retyped since the run names nobody (the card says the box changed)",
+                    [r["label"] for r in rows0] == list(rec0.get("param_labels") or [])
+                    and all(r["lo"] is not None and not r["outside"] and r["fixed"] is None for r in rows0)
+                    and {r["label"] for r in rows0 if r["narrowed"]} == ov0 == {"b_m", "S_m2"}
+                    and src0.get("b_m") == src0.get("S_m2") == "car packaging"
+                    and src0.get("ride_height_m") == "slot" and src0.get("taper") == "WingLab default"
+                    and sorted(r["label"] for r in rows0 if r["label"] not in src0) == since
+                    and "taper" not in typed and typed.get("b_m") == "car packaging"
+                    and held_rows[i_t]["fixed"] == 0.0 and not held_rows[i_t]["outside"]
+                    and held == {0.0: "fixed", 1.0: None},
+                    ", ".join(f"{k} {v}" for k, v in src0.items() if v != "WingLab default")
+                    + f"; unnamed {[r['label'] for r in rows0 if r['label'] not in src0]}; fixed by hand {held}")
+
+                def summary_of(rec):
+                    """4 Results ▸ Summary drawn on `rec`: (the hints it said, its form, error)."""
+                    said, got = [], {}
+
+                    def fn(wu, ctx):
+                        real = wu.hint
+
+                        def hint(text, *a, **kw):
+                            said.append(str(text))
+                            return real(text, *a, **kw)
+                        wu.hint = hint
+                        got["form"] = wu.form
+                        vr.summary(wu, ctx)
+                    s.wing.record = rec
+                    try:
+                        _h, err_ = builders("r.summary", fn)
+                    finally:
+                        s.wing.record = rec0
+                    return said, got.get("form"), err_
+                i_r = next(i for i, r in enumerate(rows0) if r["frac"] is not None and not r["riding"])
+                said, form_, err_r = summary_of(dict(rec0, best_x=[r["hi"] if i == i_r else r["value"]
+                                                                   for i, r in enumerate(rows0)]))
+                link = (form_.extras.get("ui.res.box") if form_ is not None else None)
+                warned = [t for t in said if "ran into a bound" in t]
+                if link is not None:
+                    link.set(None)
+                rep("a winner riding its box edge: the card names the row and whose band it is, and its link "
+                    "opens 3 Wing ▸ Design box",
+                    not err_r and len(warned) == 1 and rows0[i_r]["label"] in warned[0]
+                    and link is not None and sh.stage == "w" and dp.nav.current() == "w.box",
+                    err_r or (warned[0][:90] if warned else "no warning"))
+                sh.select("r", "r.summary")
+                said, form_, err_n = summary_of(dict(rec0, bounds=None, pinned=None,
+                                                     config=dict(rec0.get("config") or {}, pinned=None)))
+                rep("a record with no box: its values only, and WingLab's sentence that there is no box to "
+                    "place them in", not err_n and vr.BOX_NONE in said
+                    and not any("ran into a bound" in t for t in said), err_n or "")
+                #  a winner at the car's span limit: the CAR bound it, whoever set the band -- the
+                #  slot's packaging row, the row released (its own band cut to the limit) or typed up
+                #  to it, Unlimited's ceiling; a typed band short of the limit is the player's own
+                w_, op_ = s.wing, s.wing.session.op
+                i_b = list(rec0.get("param_labels") or []).index("b_m")
+                lo_b, cap_b = rows0[i_b]["lo"], float((op_.size_caps or {})["b_m"])
+
+                def span_at_top(how):
+                    """(the record, b_m's source) with the winner at the top of b_m's band, set `how`."""
+                    w_.released.discard("b_m")
+                    w_.box.pop("b_m", None)
+                    if how == "released":
+                        w_.released.add("b_m")
+                    elif how in ("typed", "short"):
+                        w_.box["b_m"] = [lo_b, cap_b - (0.1 if how == "short" else 0.0)]
+                    band = [float(v) for v in w_.family_box()["b_m"]]
+                    rec = dict(rec0, bounds=[band if i == i_b else b for i, b in enumerate(rec0["bounds"])],
+                               best_x=[band[1] if i == i_b else v for i, v in enumerate(rec0["best_x"])])
+                    return rec, (vr.box_sources(w_, vr.box_rows(rec)) or {}).get("b_m")
+                was = (set(w_.released), {k: list(v) for k, v in w_.box.items()}, op_.unlimited)
+                capped, said_c, err_c = {}, [], "not drawn"
+                try:
+                    for how in ("packaging", "released", "typed", "short"):
+                        capped[how] = span_at_top(how)[1]
+                    op_.unlimited = True
+                    capped["unlimited"] = span_at_top("packaging")[1]
+                    op_.unlimited = was[2]
+                    rec_rel, _src = span_at_top("released")
+                    said_c, _form, err_c = summary_of(rec_rel)
+                finally:
+                    op_.unlimited = was[2]
+                    w_.released.clear()
+                    w_.released.update(was[0])
+                    w_.box.clear()
+                    w_.box.update(was[1])
+                warned_c = [t for t in said_c if "ran into a bound" in t]
+                rep("a winner at the car's span limit names the limit, not whoever set the band (packaging, "
+                    "released, typed up to it; Unlimited's ceiling) -- a band short of it stays the player's; "
+                    "the warning says the Design box cannot open it and gives the limit",
+                    capped == {"packaging": vr.CAP_WORDS["b_m"], "released": vr.CAP_WORDS["b_m"],
+                               "typed": vr.CAP_WORDS["b_m"], "short": "user", "unlimited": vr.UNLIMITED_CAP}
+                    and not err_c and len(warned_c) == 1 and f"b_m ({vr.CAP_WORDS['b_m']})" in warned_c[0]
+                    and "this car's ceiling" in warned_c[0] and "Widen" not in warned_c[0]
+                    and any(t.startswith("Span limit — ") for t in said_c),
+                    err_c or f"{capped}; cap {cap_b:.3g} m; " + (warned_c[0][:80] if warned_c else "no warning"))
 
             def wing_blocks(wu, ctx):
                 vc.convergence_card(wu, ctx.model.graph(), height=260)

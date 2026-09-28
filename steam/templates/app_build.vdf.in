@@ -1,0 +1,15 @@
+"AppBuild"
+{
+	// Rendered by steam/upload.sh into steam/out/ -- edit THIS template, not the output.
+	// The double-underscore placeholders below are filled in there.
+	"AppID" "__APPID__"
+	"Desc" "__DESC__"
+	"ContentRoot" "__CONTENT_ROOT__"
+	"BuildOutput" "__BUILD_OUTPUT__"
+	"Preview" "__PREVIEW__"
+	"SetLive" "__SETLIVE__"
+	"Depots"
+	{
+__DEPOTS__
+	}
+}

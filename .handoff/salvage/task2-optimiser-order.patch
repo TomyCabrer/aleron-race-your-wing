@@ -1,5 +1,5 @@
 --- drive/aero/optimize.py	2026-09-07 12:42:45
-+++ /Users/tolomeelsabio/.claude/worktrees/agent-ac24cf965d106b036/carsim/drive/aero/optimize.py	2026-09-12 12:42:08
++++ drive/aero/optimize.py	2026-09-12 12:42:08
 @@ -11,6 +11,15 @@
  `maximise(f, bounds, ...)`: f maps a design vector (real units) to a
  scalar; return -inf (or raise ValueError) for an infeasible design and it

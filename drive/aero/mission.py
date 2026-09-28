@@ -103,7 +103,7 @@ CAR = CorsaC()
 #: dragstrip is NOT here: it has no corner, so every wing on it is pure drag
 #: and the objective would rank them by drag alone. That is a real answer to a
 #: different question (`drive.drive --scripted accel`), not a wing mission.
-TRACKS = ("arena", "linden", "kestrel", "ashdown", "open", "skidpad")
+TRACKS = ("arena", "linden", "kestrel", "ashdown", "fairfield", "open", "skidpad")
 
 #: The top wing's one job that is not a circuit. The owner, 2026-09-25: "One
 #: more circuit should be added 'Stopping'. Left flank and right flank, should

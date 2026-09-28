@@ -891,7 +891,7 @@ MODULES = ("tyre", "powertrain", "track", "telemetry", "vehicle", "input", "pain
            "render", "menu", "garage", "aero.airfoil", "aero.panel2d", "aero.polar",
            "aero.xfoil", "aero.blend", "aero.vlm", "aero.wing", "aero.optimize",
            "aero.library", "aero.screen", "aero.section", "aero.mission",
-           "records", "prerace", "medals", "ghosts", "progress", "tutorial",
+           "records", "prerace", "leaderboard", "medals", "ghosts", "progress", "tutorial",
            "wing_tutorial", "challenges", "race_grid", "swarm_panel", "results", "airbrake", "controls_page",
            "scenery", "world", "props", "fx", "title",
            "cae.theme", "cae.widgets", "cae.plot", "cae.chrome", "design_jobs", "design_shell",
