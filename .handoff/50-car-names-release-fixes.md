@@ -100,3 +100,23 @@ done it but still need time to publish on steam".
   secrets / IPs / other projects anywhere in files or history; commits carry
   bc1923@ic.ac.uk (owner's call) and Claude co-author trailers.
 - Not done: commit / repo create / push -- waiting for the owner's OK.
+
+## Published on GitHub (2026-09-28, owner approved: public + builds, keep emails)
+
+- https://github.com/TomyCabrer/aleron-race-your-wing (public; only main
+  pushed; branch t44 + stash stay local). Commits 8316661 (tasks 46-50) and
+  4e08201 (README with the owner's saved builds + garage images, CI actions
+  bumped to checkout v7 / setup-python v7 / upload-artifact v7 /
+  download-artifact v8).
+- Tag v0.9.0: CI built and probed Windows, macOS arm64, macOS x64 and Linux
+  (all green -- first real Windows run) and made a DRAFT release with
+  Aleron-v0.9.0-{windows.zip 87 MB, macos-arm64.zip 62 MB, macos-x64.zip
+  67 MB, linux.tar.gz 109 MB}. Publish: `gh release edit v0.9.0 --draft=false`.
+  (The first tag push raced the workflow's registration; the tag was
+  re-pushed on the same commit.)
+- README images: `python3 docs/make_readme_images.py` (race frames of saved
+  builds) and `python3 steam/store/make_garage_shots.py` (garage, SAVED CARS,
+  WingLab) -- both render from a scratch copy of runs/, renaming "my corsa" /
+  "my express" builds to "my civetta" / "my courier" in the copy only.
+- Garage pages at 1920x1200 overlap (garage_ui.key_hint_bar fixed pixel
+  offsets) -- shots kept at 1280x800; a UI-scale bug worth fixing.
