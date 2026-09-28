@@ -9,12 +9,36 @@ won in the garage: shape movable side and top wings with a real aerodynamic opti
 bolt them on, and race the clock, your ghosts and bots you trained yourself.
 
 <p align="center">
-  <img src="steam/store/art/screenshot_02_kestrel_n540.jpg" alt="Nordwerk N540 on the Kestrel ring, race HUD, wings armed" width="32%">
-  <img src="steam/store/art/screenshot_03_ashdown_halcon.jpg" alt="Halcón RS18 rally car with side and top wings at Ashdown circuit" width="32%">
-  <img src="steam/store/art/screenshot_04_fairfield_courier.jpg" alt="Rivière Courier van on the Fairfield oval" width="32%">
+  <img src="docs/images/drive_civetta_kestrel.jpg" alt="Aurel Civetta 1.2 with the saved build 'my civetta' mid-corner on the Kestrel ring, outer side panel and top wing deployed" width="32%">
+  <img src="docs/images/drive_courier_ashdown.jpg" alt="Rivière Courier 1.4 with the saved build 'my courier (autosave)' and the WingLab side wing flank-winglab-2 at Ashdown circuit, race HUD" width="32%">
+  <img src="docs/images/drive_halcon_arena.jpg" alt="Halcón RS18 with the garage's current design, the WingLab side wing flank-winglab-4 and the rear-new top wing, at Arena circuit" width="32%">
 </p>
+<p align="center"><sub>
+  My own saved builds on each circuit's reference lap, wings in AUTO: the outer side panel and the top wing come out in the corner.<br>
+  <b>Kestrel ring:</b> Aurel Civetta 1.2, build "my civetta" (built-in Side plate side panels, my rear-new top wing).<br>
+  <b>Ashdown circuit:</b> Rivière Courier 1.4, build "my courier (autosave)" (my WingLab side wing flank-winglab-2, rear-new).<br>
+  <b>Arena circuit:</b> Halcón RS18, the garage's current design (flank-winglab-4, my newest WingLab side wing, rear-new).
+</sub></p>
 
 > **Status: Steam release in preparation** (build 0.9.0). Playable from source today.
+
+### The garage
+
+In the garage you design each car's side wings and top wing in **WingLab**, which runs AeroBO
+against the car's span limits and the circuit you pick, then place them on the car in 3-D and see
+what they are worth. Wings and whole builds are saved: a saved wing goes on any car whose span
+limit it fits, and a saved build loads with its car.
+
+<p align="center">
+  <img src="docs/images/garage_car.png" alt="The 3-D garage on the Halcón RS18: the WingLab side wing flank-winglab-4 mirrored and deployed, the rear-new top wing on two struts, and the side wing's force, drag and corner-speed gain" width="32%">
+  <img src="docs/images/garage_saved_cars.png" alt="SAVED CARS page: four saved builds, each drawn carrying its side and top wings" width="32%">
+  <img src="docs/images/winglab_summary.png" alt="WingLab, the in-game AeroBO designer: the finished 41-evaluation run behind flank-winglab-4, all constraints met" width="32%">
+</p>
+<p align="center"><sub>
+  <b>Garage:</b> the Halcón with flank-winglab-4 (mirrored, deployed) and rear-new; the side wing gives CL 0.85, 99 N for 7 N of drag at 105 km/h, +0.5 % corner speed in a 100 m corner.<br>
+  <b>Saved cars:</b> my four saved builds, each drawn with its wings.<br>
+  <b>WingLab:</b> the AeroBO run behind flank-winglab-4 (Arena, dry, section e63): 41/41 evaluations, 67.9 N of side force for 4.6 N of drag, all three constraints met.
+</sub></p>
 
 ### What it is
 

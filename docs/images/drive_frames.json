@@ -1,0 +1,71 @@
+{
+ "drive_civetta_kestrel": {
+  "file": "docs/images/drive_civetta_kestrel.jpg",
+  "track": "kestrel",
+  "car": "Aurel Civetta 1.2",
+  "build": "my civetta",
+  "build_file": "library/builds/my-corsa.json",
+  "side_wing": "plate",
+  "top_wing": "rear-new",
+  "ahead": [
+   "Halcón RS18 rally: my rally (side flank-winglab-4, top rear-new)"
+  ],
+  "moment": "corner",
+  "hud": "off",
+  "lap_time_s": 17.45,
+  "speed_kmh": 86,
+  "side_travel": 1.0,
+  "side": "right",
+  "top_travel": 1.0,
+  "drawn": [
+   "rally",
+   "corsa"
+  ]
+ },
+ "drive_halcon_arena": {
+  "file": "docs/images/drive_halcon_arena.jpg",
+  "track": "arena",
+  "car": "Halcón RS18 rally",
+  "build": "my rally",
+  "build_file": "garage_design.json",
+  "side_wing": "flank-winglab-4",
+  "top_wing": "rear-new",
+  "ahead": [
+   "Rivière Courier 1.4: my courier (autosave) (side flank-winglab-2, top rear-new)"
+  ],
+  "moment": "corner",
+  "hud": "off",
+  "lap_time_s": 54.55,
+  "speed_kmh": 98,
+  "side_travel": 1.0,
+  "side": "left",
+  "top_travel": 1.0,
+  "drawn": [
+   "express",
+   "rally"
+  ]
+ },
+ "drive_courier_ashdown": {
+  "file": "docs/images/drive_courier_ashdown.jpg",
+  "track": "ashdown",
+  "car": "Rivière Courier 1.4",
+  "build": "my courier (autosave)",
+  "build_file": "library/builds/my-express-autosave.json",
+  "side_wing": "flank-winglab-2",
+  "top_wing": "rear-new",
+  "ahead": [
+   "Aurel Civetta 1.2: my civetta (side plate, top rear-new)"
+  ],
+  "moment": "corner_left",
+  "hud": "minimal",
+  "lap_time_s": 41.05,
+  "speed_kmh": 107,
+  "side_travel": 1.0,
+  "side": "left",
+  "top_travel": 1.0,
+  "drawn": [
+   "corsa",
+   "express"
+  ]
+ }
+}
